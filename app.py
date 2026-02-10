@@ -1200,26 +1200,22 @@ class StateAwareOrchestrator:
                 "events": all_events
             })
 
-        @app.route('/delete/<subdir>', methods=['POST'])
+        @app.route('/delete/<path:subdir>', methods=['POST'])
         def delete_event(subdir):
             """Delete a specific event folder."""
-            # Reconstruct the full path from sanitized components
-            # This is safer than os.path.join which can be manipulated
             base_dir = os.path.realpath(storage_path)
-            
-            # Basic sanitization, though Flask's path converter helps
-            subdir = subdir.replace('..', '').replace('/', '').replace('\\', '')
+            # Securely join the path and resolve it to prevent traversal.
             folder_path = os.path.realpath(os.path.join(base_dir, subdir))
 
-
-            if folder_path.startswith(base_dir):
+            # The resolved path must be inside the storage directory and not be the directory itself.
+            if folder_path.startswith(base_dir) and folder_path != base_dir:
                 if os.path.exists(folder_path) and os.path.isdir(folder_path):
                     try:
                         shutil.rmtree(folder_path)
                         logger.info(f"User manually deleted: {subdir}")
                         return jsonify({
                             "status": "success",
-                            "message": f"Deleted {subdir}"
+                            "message": f"Deleted folder: {subdir}"
                         }), 200
                     except Exception as e:
                         logger.error(f"Error deleting {subdir}: {e}")
@@ -1227,6 +1223,8 @@ class StateAwareOrchestrator:
                             "status": "error",
                             "message": str(e)
                         }), 500
+                else:
+                    return jsonify({"status": "error", "message": "Folder not found"}), 404
 
             return jsonify({
                 "status": "error",
@@ -1236,17 +1234,16 @@ class StateAwareOrchestrator:
         @app.route('/files/<path:filename>')
         def serve_file(filename):
             """Serve stored files (clips are already transcoded to H.264)."""
-            base_dir = os.path.realpath(storage_path)
-            
-            # Sanitize filename to prevent path traversal
-            filename = filename.replace('..', '').replace('/', '').replace('\\', '')
-            file_path = os.path.realpath(os.path.join(base_dir, filename))
+            directory = os.path.realpath(storage_path)
+            # Securely join the path and resolve it to prevent traversal.
+            safe_path = os.path.realpath(os.path.join(directory, filename))
 
-
-            if not file_path.startswith(base_dir) or not os.path.exists(file_path):
+            # The resolved path must be inside the storage directory.
+            if not safe_path.startswith(directory):
                 return "File not found", 404
 
-            return send_from_directory(storage_path, filename)
+            # Use the directory and the original relative filename.
+            return send_from_directory(directory, filename)
 
         @app.route('/status')
         def status():

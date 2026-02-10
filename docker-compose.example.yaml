@@ -1,0 +1,53 @@
+version: '3.8'
+
+services:
+  frigate-buffer:
+    # --- Build Configuration ---
+    # Option 1 (default): Build from the local directory.
+    # This is used when you have cloned the repository to your machine.
+    build: .
+
+    # Option 2: Build directly from a private GitHub repository.
+    # This is useful for server environments like Dockge or Portainer.
+    # To use, comment out "build: ." above, uncomment the block below,
+    # and replace the placeholders with your GitHub username and a
+    # Personal Access Token (PAT) that has 'repo' scope.
+    # build:
+    #   context: https://YOUR_GITHUB_USERNAME:YOUR_GITHUB_PAT@github.com/jballard86/frigate-event-buffer.git#main
+
+    container_name: frigate_buffer
+    restart: unless-stopped
+    ports:
+      # Exposes the application's web server on port 5055.
+      # Format: <host_port>:<container_port>
+      - "5055:5055"
+    volumes:
+      # --- IMPORTANT: Update these paths to match your host system ---
+      # Maps the container's storage folder to a directory on your host.
+      # This is where clips, snapshots, and summaries will be saved.
+      - /path/to/your/appdata/frigate_buffer:/app/storage
+
+      # (Optional) Mount a config.yaml file for advanced camera/label filtering.
+      # Environment variables below will override settings in this file.
+      - /path/to/your/appdata/frigate_buffer/config.yaml:/app/config.yaml:ro
+
+      # (Optional) Map timezone so container logs match your local time.
+      - /etc/localtime:/etc/localtime:ro
+    environment:
+      # --- REQUIRED ---
+      # Your Home Assistant IP/hostname (used for notification URLs).
+      - HA_IP=YOUR_HOME_ASSISTANT_IP
+      # Your Frigate server URL.
+      - FRIGATE_URL=http://YOUR_FRIGATE_IP:5000
+      # Your MQTT Broker IP/hostname.
+      - MQTT_BROKER=YOUR_MQTT_BROKER_IP
+
+      # --- OPTIONAL (these will override settings in config.yaml) ---
+      - MQTT_PORT=1883
+      - RETENTION_DAYS=3
+      - LOG_LEVEL=INFO
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5055/status"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
