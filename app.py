@@ -75,7 +75,7 @@ def load_config() -> dict:
     }
 
     # Load from config.yaml if exists
-    config_paths = ['/app/config.yaml', './config.yaml', 'config.yaml']
+    config_paths = ['/app/config.yaml', '/app/storage/config.yaml', './config.yaml', 'config.yaml']
     config_loaded = False
 
     for path in config_paths:
