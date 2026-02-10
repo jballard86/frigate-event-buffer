@@ -1,0 +1,84 @@
+type: vertical-stack
+title: "Security Alerts"
+cards:
+  # --- Camera Selector ---
+  - type: entities
+    entities:
+      - entity: input_select.security_camera
+
+  # --- Part 1: The Pro Video Player ---
+  - type: conditional
+    conditions:
+      - entity: sensor.frigate_feed_raw
+        state_not: "0"
+    card:
+      type: 'custom:advanced-camera-card'
+      cameras:
+        - camera_entity: camera.doorbell  # Update to match your Frigate camera entity
+      view:
+        default: clip
+      menu:
+        style: hover
+        buttons:
+          download:
+            enabled: true
+      overrides:
+        - conditions:
+            - condition: view
+              views:
+                - clip
+          set:
+            url: >
+              {% set index = states('input_number.security_event_index') | int %}
+              {% set events = state_attr('sensor.frigate_feed_raw', 'events') %}
+              {{ states('input_text.frigate_buffer_url') }}{{ events[index].hosted_clip }}
+
+  # --- Part 2: AI Summary Block ---
+  - type: markdown
+    content: >
+      {% set index = states('input_number.security_event_index') | int %}
+      {% set events = state_attr('sensor.frigate_feed_raw', 'events') %}
+      {% if events and events | length > index %}
+      ### 🛡️ AI Analysis
+      **Camera:** {{ events[index].camera }}
+      {{ events[index].summary }}
+      {% else %}
+      ### 🛡️ No Events
+      No security events recorded.
+      _Last updated: {{ as_timestamp(now()) | timestamp_custom('%-I:%M %p') }}_
+      {% endif %}
+
+  # --- Part 3: Navigation & Download Controls ---
+  - type: horizontal-stack
+    cards:
+      - type: button
+        name: "Older"
+        icon: "mdi:chevron-left"
+        tap_action:
+          action: call-service
+          service: input_number.increment
+          target:
+            entity_id: input_number.security_event_index
+
+      - type: button
+        name: "Download"
+        icon: "mdi:download"
+        tap_action:
+          action: url
+          url_path: >
+            {% set index = states('input_number.security_event_index') | int %}
+            {% set events = state_attr('sensor.frigate_feed_raw', 'events') %}
+            {{ states('input_text.frigate_buffer_url') }}{{ events[index].hosted_clip }}
+
+      - type: button
+        name: "Newer"
+        icon: "mdi:chevron-right"
+        tap_action:
+          action: call-service
+          service: input_number.decrement
+          target:
+            entity_id: input_number.security_event_index
+
+# NOTE: The camera selector (input_select.security_camera) is for future filtering.
+# Currently shows all events across cameras. Per-camera filtering can be added
+# by switching to per-camera REST sensors (/events/<camera>).

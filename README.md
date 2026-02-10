@@ -12,6 +12,7 @@ A state-aware orchestrator that listens to Frigate NVR events via MQTT, tracks t
 - **Auto-Transcoding**: Downloads clips from Frigate and transcodes to H.264 for broad compatibility
 - **FFmpeg Safety**: 60-second timeout with graceful termination prevents zombie processes
 - **Rolling Retention**: Automatically cleans up events older than the retention period (default: 3 days)
+- **Notification Rate Limiting**: Max 2 notifications per 5 seconds with queue overflow protection
 - **REST API**: Serves events, clips, and snapshots to your Home Assistant dashboard
 - **Debug Logging**: Configurable log levels for troubleshooting
 
@@ -74,23 +75,25 @@ cp config.yaml.example config.yaml
 The config file structure:
 
 ```yaml
-# Camera filtering - only process events from these cameras
-# Leave empty or omit to allow all cameras
+# Camera configuration with per-camera label filtering
+# Only events from listed cameras will be processed
+# Omit a camera entirely to filter it out
 cameras:
-  allowed:
-    - "Doorbell"
-    - "Front_Yard"
-    - "Carport"
+  # Doorbell - only person and package events
+  - name: "Doorbell"
+    labels:
+      - "person"
+      - "package"
 
-# Label filtering - only process events with these labels
-# Leave empty or omit to allow all labels
-labels:
-  allowed:
-    - "person"
-    - "package"
-    - "car"
-    - "dog"
-    - "cat"
+  # Driveway - only vehicle events
+  - name: "Front_Yard"
+    labels:
+      - "car"
+      - "truck"
+
+  # Backyard - allow ALL labels (empty list)
+  - name: "Carport"
+    labels: []
 
 # Application settings
 settings:
@@ -126,33 +129,67 @@ Environment variables override config.yaml values:
 
 ## Camera/Label Filtering
 
-The orchestrator can filter events based on camera name and detected label:
+The orchestrator filters events on a per-camera basis:
 
-- **Empty lists = allow all**: If `allowed` is empty or omitted, all cameras/labels are processed
-- **Non-empty lists = whitelist**: Only cameras/labels in the list are processed
+- **Camera must be listed**: Cameras not in the config are filtered out entirely
+- **Per-camera labels**: Each camera can have its own label whitelist
+- **Empty labels = allow all**: If `labels: []` is empty, all labels are allowed for that camera
 - **Filtered events**: Events that don't match are silently ignored (visible in DEBUG logs)
 
-Example: Only process person and package events from the doorbell:
+Example: Different labels for different cameras:
 
 ```yaml
 cameras:
-  allowed:
-    - "Doorbell"
+  # Doorbell - only person and package events
+  - name: "Doorbell"
+    labels:
+      - "person"
+      - "package"
 
-labels:
-  allowed:
-    - "person"
-    - "package"
+  # Driveway - only vehicle events
+  - name: "Driveway"
+    labels:
+      - "car"
+
+  # Backyard - allow ALL labels
+  - name: "Backyard"
+    labels: []
 ```
 
 ## API Endpoints
 
+### GET /cameras
+
+List available cameras.
+
+```bash
+curl http://localhost:5055/cameras
+```
+
+Response:
+```json
+{
+  "cameras": ["doorbell", "front_yard"],
+  "default": "doorbell"
+}
+```
+
 ### GET /events
 
-List all stored events with summaries.
+List all events across all cameras (global view).
 
 ```bash
 curl http://localhost:5055/events
+```
+
+Response includes `camera` field for each event and `cameras` array.
+
+### GET /events/{camera}
+
+List events for a specific camera.
+
+```bash
+curl http://localhost:5055/events/doorbell
 ```
 
 ### GET /files/{path}
@@ -160,7 +197,7 @@ curl http://localhost:5055/events
 Serve stored files (clips, snapshots). Clips are already transcoded to H.264.
 
 ```bash
-curl http://localhost:5055/files/1234567890_eventid/clip.mp4 --output clip.mp4
+curl http://localhost:5055/files/doorbell/1234567890_eventid/clip.mp4 --output clip.mp4
 ```
 
 ### POST /delete/{folder}
@@ -168,7 +205,7 @@ curl http://localhost:5055/files/1234567890_eventid/clip.mp4 --output clip.mp4
 Manually delete an event folder.
 
 ```bash
-curl -X POST http://localhost:5055/delete/1234567890_eventid
+curl -X POST http://localhost:5055/delete/doorbell/1234567890_eventid
 ```
 
 ### GET /status
@@ -196,8 +233,13 @@ Response:
     "mqtt_broker": "192.168.x.x",
     "frigate_url": "http://192.168.x.x:5000",
     "retention_days": 3,
-    "allowed_cameras": ["Doorbell", "Front_Yard"],
-    "allowed_labels": ["person", "package"],
+    "camera_label_config": {
+      "Doorbell": ["person", "package"],
+      "Front_Yard": ["car"],
+      "Backyard": []
+    },
+    "allowed_cameras": ["Doorbell", "Front_Yard", "Backyard"],
+    "allowed_labels": ["person", "package", "car"],
     "log_level": "DEBUG",
     "ffmpeg_timeout": 60
   }
@@ -211,8 +253,8 @@ The orchestrator publishes notifications to `frigate/custom/notifications`:
 ```json
 {
   "event_id": "1234567890.123-abcdef",
-  "status": "new|described|finalized|clip_ready",
-  "phase": "NEW|DESCRIBED|FINALIZED",
+  "status": "new|described|finalized|clip_ready|overflow",
+  "phase": "NEW|DESCRIBED|FINALIZED|OVERFLOW",
   "camera": "Doorbell",
   "label": "person",
   "title": "Person at Front Door",
@@ -223,6 +265,26 @@ The orchestrator publishes notifications to `frigate/custom/notifications`:
   "timestamp": 1234567890.123
 }
 ```
+
+### Rate Limiting
+
+Notifications are rate-limited to prevent notification flooding:
+
+- **Max 2 notifications per 5 seconds** - Excess notifications are queued
+- **Queue size limit: 10** - When exceeded, queue is cleared and an overflow notification is sent
+- **Overflow notification** - Directs user to review events on the dashboard
+
+The overflow notification has `status: "overflow"` and `event_id: "overflow_summary"`.
+
+## Security
+
+This application includes several security measures to protect against common vulnerabilities:
+
+- **Path Traversal Protection**: The `/files` and `/delete` endpoints have been hardened to prevent path traversal attacks. All file and folder paths are resolved to their canonical form and checked to ensure they are within the designated storage directory.
+- **Information Leakage Prevention**: The `/status` endpoint has been updated to remove sensitive configuration details, such as the MQTT broker and Frigate URL, from the JSON response. This reduces the risk of information leakage.
+- **No Shell Injection**: The application uses `subprocess.Popen` without `shell=True`, which prevents shell injection attacks.
+
+It is recommended to run this application in a containerized environment and to restrict access to the API endpoints to trusted users and services.
 
 ## Home Assistant Integration
 
@@ -243,22 +305,121 @@ binary_sensor:
 
 ### Notification Automation
 
+This automation uses a dynamic phone target via a helper, includes validation, and supports optional priority/sound toggles:
+
 ```yaml
-automation:
-  - alias: "Frigate Event Notification"
-    trigger:
-      - platform: mqtt
-        topic: frigate/custom/notifications
-    action:
-      - service: notify.mobile_app_your_phone
+alias: "Frigate Orchestrator: Unified Notification"
+description: "Dumb terminal automation with validation and optional toggles."
+triggers:
+  - trigger: mqtt
+    topic: frigate/custom/notifications
+actions:
+  - variables:
+      # --- CONFIGURATION TOGGLES ---
+      use_high_priority: false
+      use_custom_sound: false
+
+      # --- DATA MAPPING ---
+      payload: "{{ trigger.payload_json }}"
+      target_phone: "{{ states('input_text.notification_target_phone') }}"
+
+  # Only proceed if the phone helper is set
+  - condition: template
+    value_template: "{{ target_phone | length > 0 }}"
+
+  - action: "notify.{{ target_phone }}"
+    data:
+      title: "{{ payload.title }}"
+      message: "{{ payload.message }}"
+      data:
+        tag: "{{ payload.tag }}"
+        url: "/lovelace/security-alert"
+        image: "{{ payload.image_url }}"
+        video: "{{ payload.video_url }}"
+        importance: "{{ 'high' if use_high_priority else 'default' }}"
+        ttl: "{{ 0 if use_high_priority else 3600 }}"
+        sticky: true
+        notification_icon: "mdi:shield-check"
+
+  # Refresh dashboard on finalized events
+  - if:
+      - condition: template
+        value_template: "{{ payload.status in ['clip_ready', 'finalized'] }}"
+    then:
+      - action: homeassistant.update_entity
+        target:
+          entity_id: sensor.frigate_feed_raw
+      - action: input_number.set_value
+        target:
+          entity_id: input_number.security_event_index
         data:
-          title: "{{ trigger.payload_json.title }}"
-          message: "{{ trigger.payload_json.message }}"
-          data:
-            image: "{{ trigger.payload_json.image_url }}"
-            video: "{{ trigger.payload_json.video_url }}"
-            tag: "{{ trigger.payload_json.tag }}"
-            notification_icon: "mdi:cctv"
+          value: 0
+```
+
+### Required Helpers
+
+Create these helpers at Settings > Devices & Services > Helpers:
+
+**1. Notification Target Phone** (Text)
+- **Entity ID**: `input_text.notification_target_phone`
+- **Value**: Your phone's service name (e.g., `mobile_app_sm_s928u`)
+
+**2. Frigate Buffer URL** (Text)
+- **Entity ID**: `input_text.frigate_buffer_url`
+- **Value**: `http://YOUR_FRIGATE_BUFFER_IP:5055`
+
+**3. Security Event Index** (Number)
+- **Entity ID**: `input_number.security_event_index`
+- **Min**: 0, **Max**: 100, **Step**: 1
+- Used for navigating between events in dashboard
+
+**4. Security Camera Selector** (Dropdown)
+- **Entity ID**: `input_select.security_camera`
+- **Options**: List your camera names (e.g., `doorbell`, `front_yard`, `carport`)
+- Used for filtering events by camera in dashboard
+
+### Events Sensor
+
+Create a REST sensor to fetch events for the dashboard. Use `scan_interval: 60` to reduce database writes.
+
+**Global Events Sensor** (all cameras):
+```yaml
+sensor:
+  - platform: rest
+    name: "Frigate Feed Raw"
+    resource: http://YOUR_FRIGATE_BUFFER_IP:5055/events
+    value_template: "{{ value_json.total_count }}"
+    json_attributes:
+      - events
+      - cameras
+    scan_interval: 60
+```
+
+**Per-Camera Sensor** (optional, for camera-specific views):
+```yaml
+sensor:
+  - platform: rest
+    name: "Frigate Doorbell Events"
+    resource: http://YOUR_FRIGATE_BUFFER_IP:5055/events/doorbell
+    value_template: "{{ value_json.events | length }}"
+    json_attributes:
+      - events
+    scan_interval: 60
+```
+
+### Cameras Endpoint
+
+Query available cameras:
+```bash
+curl http://YOUR_FRIGATE_BUFFER_IP:5055/cameras
+```
+
+Response:
+```json
+{
+  "cameras": ["doorbell", "front_yard", "carport"],
+  "default": "doorbell"
+}
 ```
 
 ## Docker Compose
@@ -327,15 +488,23 @@ The orchestrator includes safeguards against hung FFmpeg processes:
 
 ## Storage Structure
 
+Events are organized by camera:
+
 ```
 /app/storage/
-├── 1234567890_event-id-1/
-│   ├── clip.mp4          # H.264 transcoded video
-│   ├── snapshot.jpg      # Event snapshot
-│   └── summary.txt       # Event metadata
-├── 1234567891_event-id-2/
-│   └── ...
+├── doorbell/
+│   ├── 1234567890_event-id-1/
+│   │   ├── clip.mp4          # H.264 transcoded video
+│   │   ├── snapshot.jpg      # Event snapshot
+│   │   └── summary.txt       # Event metadata
+│   └── 1234567891_event-id-2/
+│       └── ...
+├── front_yard/
+│   └── 1234567892_event-id-3/
+│       └── ...
 ```
+
+Camera folder names are sanitized (lowercase, spaces to underscores).
 
 ## Troubleshooting
 
@@ -351,9 +520,11 @@ Check `/status` endpoint - `mqtt_connected` should be `true`. Verify:
 1. Enable debug logging: `LOG_LEVEL=DEBUG`
 2. Check for filter messages in logs:
    ```
-   Filtered out event from camera 'BackYard' (allowed: ['Doorbell'])
+   Filtered out event from camera 'BackYard' (not configured)
+   Filtered out 'car' on 'Doorbell' (allowed: ['person', 'package'])
    ```
-3. Verify camera/label names match exactly (case-sensitive)
+3. Verify camera names match exactly (case-sensitive)
+4. Check that the camera is listed in the `cameras` config
 
 ### Clips Not Downloading
 

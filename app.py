@@ -9,6 +9,7 @@ Configuration is loaded from config.yaml with environment variable overrides.
 """
 
 import os
+import re
 import sys
 import json
 import time
@@ -70,6 +71,7 @@ def load_config() -> dict:
         # Filtering defaults (empty = allow all)
         'ALLOWED_CAMERAS': [],
         'ALLOWED_LABELS': [],
+        'CAMERA_LABEL_MAP': {},
     }
 
     # Load from config.yaml if exists
@@ -83,12 +85,19 @@ def load_config() -> dict:
                 with open(path, 'r') as f:
                     yaml_config = yaml.safe_load(f) or {}
 
-                # Map YAML structure to flat config
-                if 'cameras' in yaml_config:
-                    config['ALLOWED_CAMERAS'] = yaml_config['cameras'].get('allowed', []) or []
+                # Build camera-to-labels mapping from per-camera config
+                if 'cameras' in yaml_config and isinstance(yaml_config['cameras'], list):
+                    for cam in yaml_config['cameras']:
+                        if isinstance(cam, dict) and 'name' in cam:
+                            camera_name = cam['name']
+                            labels = cam.get('labels', []) or []
+                            config['CAMERA_LABEL_MAP'][camera_name] = labels
 
-                if 'labels' in yaml_config:
-                    config['ALLOWED_LABELS'] = yaml_config['labels'].get('allowed', []) or []
+                    # Derive flat lists for status/logging
+                    config['ALLOWED_CAMERAS'] = list(config['CAMERA_LABEL_MAP'].keys())
+                    config['ALLOWED_LABELS'] = list(set(
+                        label for labels in config['CAMERA_LABEL_MAP'].values() for label in labels if labels
+                    ))
 
                 if 'settings' in yaml_config:
                     settings = yaml_config['settings']
@@ -324,12 +333,21 @@ class FileManager:
         logger.info(f"FileManager initialized: {storage_path}")
         logger.debug(f"FFmpeg timeout: {ffmpeg_timeout}s, Retention: {retention_days} days")
 
-    def create_event_folder(self, event_id: str, timestamp: float) -> str:
-        """Create folder for event: {timestamp}_{event_id}"""
+    def sanitize_camera_name(self, camera: str) -> str:
+        """Sanitize camera name for filesystem use."""
+        # Lowercase, replace spaces with underscores, remove special chars
+        sanitized = camera.lower().replace(' ', '_')
+        sanitized = re.sub(r'[^a-z0-9_]', '', sanitized)
+        return sanitized or 'unknown'
+
+    def create_event_folder(self, event_id: str, camera: str, timestamp: float) -> str:
+        """Create folder for event: {camera}/{timestamp}_{event_id}"""
+        sanitized_camera = self.sanitize_camera_name(camera)
         folder_name = f"{int(timestamp)}_{event_id}"
-        folder_path = os.path.join(self.storage_path, folder_name)
+        camera_path = os.path.join(self.storage_path, sanitized_camera)
+        folder_path = os.path.join(camera_path, folder_name)
         os.makedirs(folder_path, exist_ok=True)
-        logger.info(f"Created folder: {folder_name}")
+        logger.info(f"Created folder: {sanitized_camera}/{folder_name}")
         return folder_path
 
     def download_snapshot(self, event_id: str, folder_path: str) -> bool:
@@ -511,32 +529,59 @@ class FileManager:
         logger.debug(f"Running cleanup: cutoff={time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(cutoff))}")
 
         try:
-            for subdir in os.listdir(self.storage_path):
-                folder_path = os.path.join(self.storage_path, subdir)
+            # Iterate through camera subdirectories
+            for camera_dir in os.listdir(self.storage_path):
+                camera_path = os.path.join(self.storage_path, camera_dir)
 
-                if not os.path.isdir(folder_path):
+                if not os.path.isdir(camera_path):
                     continue
 
-                try:
-                    parts = subdir.split('_', 1)
-                    ts = float(parts[0])
-                    event_id = parts[1] if len(parts) > 1 else None
+                # Check if this is a camera folder (contains event folders)
+                # or a legacy flat event folder (for migration period)
+                first_item = camera_dir.split('_', 1)
+                if len(first_item) > 1 and first_item[0].isdigit():
+                    # Legacy flat structure: {timestamp}_{event_id}
+                    try:
+                        ts = float(first_item[0])
+                        event_id = first_item[1]
 
-                    # Skip if event is still active
-                    if event_id and event_id in active_event_ids:
-                        logger.debug(f"Skipping active event: {subdir}")
+                        if event_id and event_id in active_event_ids:
+                            continue
+
+                        if ts < cutoff:
+                            shutil.rmtree(camera_path)
+                            logger.info(f"Cleaned up legacy event: {camera_dir}")
+                            deleted_count += 1
+                    except (ValueError, IndexError):
+                        pass
+                    continue
+
+                # New structure: iterate through event folders in camera dir
+                for event_dir in os.listdir(camera_path):
+                    event_path = os.path.join(camera_path, event_dir)
+
+                    if not os.path.isdir(event_path):
                         continue
 
-                    # Delete if older than cutoff
-                    if ts < cutoff:
-                        shutil.rmtree(folder_path)
-                        logger.info(f"Cleaned up old event: {subdir}")
-                        deleted_count += 1
+                    try:
+                        parts = event_dir.split('_', 1)
+                        ts = float(parts[0])
+                        event_id = parts[1] if len(parts) > 1 else None
 
-                except (ValueError, IndexError):
-                    # Malformed folder name - skip
-                    logger.debug(f"Skipping malformed folder name: {subdir}")
-                    continue
+                        # Skip if event is still active
+                        if event_id and event_id in active_event_ids:
+                            logger.debug(f"Skipping active event: {camera_dir}/{event_dir}")
+                            continue
+
+                        # Delete if older than cutoff
+                        if ts < cutoff:
+                            shutil.rmtree(event_path)
+                            logger.info(f"Cleaned up old event: {camera_dir}/{event_dir}")
+                            deleted_count += 1
+
+                    except (ValueError, IndexError):
+                        logger.debug(f"Skipping malformed folder: {camera_dir}/{event_dir}")
+                        continue
 
         except Exception as e:
             logger.error(f"Cleanup error: {e}")
@@ -549,26 +594,152 @@ class FileManager:
 # =============================================================================
 
 class NotificationPublisher:
-    """Publishes notifications to frigate/custom/notifications."""
+    """Publishes notifications to frigate/custom/notifications with rate limiting."""
 
     TOPIC = "frigate/custom/notifications"
+
+    # Rate limiting: max notifications per time window
+    MAX_NOTIFICATIONS_PER_WINDOW = 2
+    RATE_WINDOW_SECONDS = 5.0
+    MAX_QUEUE_SIZE = 10
 
     def __init__(self, mqtt_client: mqtt.Client, ha_ip: str, flask_port: int):
         self.mqtt_client = mqtt_client
         self.ha_ip = ha_ip
         self.flask_port = flask_port
 
+        # Rate limiting state
+        self._notification_times: List[float] = []
+        self._pending_queue: List[tuple] = []  # (event, status, message)
+        self._lock = threading.Lock()
+        self._overflow_sent = False
+        self._queue_processor_running = False
+
+    def _clean_old_timestamps(self):
+        """Remove timestamps older than the rate window."""
+        cutoff = time.time() - self.RATE_WINDOW_SECONDS
+        self._notification_times = [t for t in self._notification_times if t > cutoff]
+
+    def _is_rate_limited(self) -> bool:
+        """Check if we've hit the rate limit."""
+        self._clean_old_timestamps()
+        return len(self._notification_times) >= self.MAX_NOTIFICATIONS_PER_WINDOW
+
+    def _record_notification(self):
+        """Record that a notification was sent."""
+        self._notification_times.append(time.time())
+
+    def _send_overflow_notification(self) -> bool:
+        """Send a summary notification when queue overflows."""
+        payload = {
+            "event_id": "overflow_summary",
+            "status": "overflow",
+            "phase": "OVERFLOW",
+            "camera": "multiple",
+            "label": "multiple",
+            "title": "Multiple Security Events",
+            "message": "Multiple notifications were queued. Click to review all events on your Security Alert Dashboard.",
+            "image_url": None,
+            "video_url": None,
+            "tag": "frigate_overflow",
+            "timestamp": time.time()
+        }
+
+        try:
+            result = self.mqtt_client.publish(
+                self.TOPIC,
+                json.dumps(payload),
+                retain=False
+            )
+            if result.rc == mqtt.MQTT_ERR_SUCCESS:
+                logger.info("Published overflow notification")
+                return True
+            else:
+                logger.warning(f"Failed to publish overflow notification: rc={result.rc}")
+                return False
+        except Exception as e:
+            logger.error(f"Error publishing overflow notification: {e}")
+            return False
+
+    def _process_queue(self):
+        """Background processor for queued notifications."""
+        while self._queue_processor_running:
+            time.sleep(1.0)  # Check every second
+
+            event = None
+            status = None
+            message = None
+
+            with self._lock:
+                if not self._pending_queue:
+                    continue
+
+                # Check if we can send (rate limit cleared)
+                if not self._is_rate_limited():
+                    # Pop oldest notification from queue
+                    event, status, message = self._pending_queue.pop(0)
+                    self._record_notification()
+
+                    # Reset overflow flag if queue is draining
+                    if len(self._pending_queue) < self.MAX_QUEUE_SIZE:
+                        self._overflow_sent = False
+
+            # Send outside the lock
+            if event:
+                self._send_notification_internal(event, status, message)
+
+    def start_queue_processor(self):
+        """Start the background queue processor thread."""
+        if not self._queue_processor_running:
+            self._queue_processor_running = True
+            threading.Thread(
+                target=self._process_queue,
+                daemon=True,
+                name="NotificationQueueProcessor"
+            ).start()
+            logger.info("Started notification queue processor")
+
+    def stop_queue_processor(self):
+        """Stop the background queue processor."""
+        self._queue_processor_running = False
+
     def publish_notification(self, event: EventState, status: str,
                             message: Optional[str] = None) -> bool:
-        """Publish event notification to MQTT."""
+        """Publish event notification with rate limiting and queue management."""
+        with self._lock:
+            # Check rate limit
+            if self._is_rate_limited():
+                # Add to queue
+                self._pending_queue.append((event, status, message))
+                logger.debug(f"Rate limited, queued notification for {event.event_id} (queue size: {len(self._pending_queue)})")
 
+                # Check for queue overflow
+                if len(self._pending_queue) > self.MAX_QUEUE_SIZE and not self._overflow_sent:
+                    logger.warning(f"Queue overflow ({len(self._pending_queue)} items), sending summary notification")
+                    self._pending_queue.clear()
+                    self._overflow_sent = True
+                    self._send_overflow_notification()
+
+                return True  # Queued successfully
+
+            # Not rate limited - send immediately
+            self._record_notification()
+
+        # Send outside the lock
+        return self._send_notification_internal(event, status, message)
+
+    def _send_notification_internal(self, event: EventState, status: str,
+                                    message: Optional[str] = None) -> bool:
+        """Internal method to actually send the notification to MQTT."""
         # Construct URLs for Home Assistant
         image_url = None
         video_url = None
 
         if event.folder_path:
             folder_name = os.path.basename(event.folder_path)
-            base_url = f"http://{self.ha_ip}:{self.flask_port}/files/{folder_name}"
+            # Get camera from folder path (parent directory)
+            camera_dir = os.path.basename(os.path.dirname(event.folder_path))
+            base_url = f"http://{self.ha_ip}:{self.flask_port}/files/{camera_dir}/{folder_name}"
             image_url = f"{base_url}/snapshot.jpg"
             video_url = f"{base_url}/clip.mp4"
 
@@ -737,17 +908,20 @@ class StateAwareOrchestrator:
             logger.debug("Skipping event: no event_id in payload")
             return
 
-        # Camera filtering
-        allowed_cameras = self.config.get('ALLOWED_CAMERAS', [])
-        if allowed_cameras and camera not in allowed_cameras:
-            logger.debug(f"Filtered out event from camera '{camera}' (allowed: {allowed_cameras})")
-            return
+        # Per-camera label filtering
+        camera_label_map = self.config.get('CAMERA_LABEL_MAP', {})
 
-        # Label filtering
-        allowed_labels = self.config.get('ALLOWED_LABELS', [])
-        if allowed_labels and label not in allowed_labels:
-            logger.debug(f"Filtered out event with label '{label}' (allowed: {allowed_labels})")
-            return
+        if camera_label_map:
+            # Camera must be in the map to be processed
+            if camera not in camera_label_map:
+                logger.debug(f"Filtered out event from camera '{camera}' (not configured)")
+                return
+
+            # Check labels for this specific camera
+            allowed_labels_for_camera = camera_label_map[camera]
+            if allowed_labels_for_camera and label not in allowed_labels_for_camera:
+                logger.debug(f"Filtered out '{label}' on '{camera}' (allowed: {allowed_labels_for_camera})")
+                return
 
         if event_type == "new":
             self._handle_event_new(
@@ -773,8 +947,8 @@ class StateAwareOrchestrator:
         # Create event state
         event = self.state_manager.create_event(event_id, camera, label, start_time)
 
-        # Create folder
-        folder_path = self.file_manager.create_event_folder(event_id, start_time)
+        # Create folder in camera subdirectory
+        folder_path = self.file_manager.create_event_folder(event_id, camera, start_time)
         event.folder_path = folder_path
 
         # Publish initial notification
@@ -904,57 +1078,141 @@ class StateAwareOrchestrator:
         """Create Flask app with all endpoints."""
         app = Flask(__name__)
         storage_path = self.config['STORAGE_PATH']
+        allowed_cameras = self.config.get('ALLOWED_CAMERAS', [])
         state_manager = self.state_manager
         file_manager = self.file_manager
 
-        @app.route('/events')
-        def list_events():
-            """List all stored events with summaries."""
+        def _get_events_for_camera(camera_name: str) -> list:
+            """Helper to get events for a specific camera."""
+            camera_path = os.path.join(storage_path, camera_name)
+            events = []
+
+            if not os.path.isdir(camera_path):
+                return events
+
+            subdirs = sorted(
+                [d for d in os.listdir(camera_path)
+                 if os.path.isdir(os.path.join(camera_path, d))],
+                reverse=True
+            )
+
+            for subdir in subdirs:
+                folder_path = os.path.join(camera_path, subdir)
+                summary_path = os.path.join(folder_path, 'summary.txt')
+
+                parts = subdir.split('_', 1)
+                ts = parts[0] if len(parts) > 0 else "0"
+                eid = parts[1] if len(parts) > 1 else subdir
+
+                summary_text = "Analysis pending..."
+                if os.path.exists(summary_path):
+                    with open(summary_path, 'r') as f:
+                        summary_text = f.read().strip()
+
+                events.append({
+                    "event_id": eid,
+                    "camera": camera_name,
+                    "timestamp": ts,
+                    "summary": summary_text,
+                    "hosted_clip": f"/files/{camera_name}/{subdir}/clip.mp4",
+                    "hosted_snapshot": f"/files/{camera_name}/{subdir}/snapshot.jpg"
+                })
+
+            return events
+
+        @app.route('/cameras')
+        def list_cameras():
+            """List available cameras from config."""
+            # Get cameras that have event folders
+            active_cameras = []
+            try:
+                for item in os.listdir(storage_path):
+                    item_path = os.path.join(storage_path, item)
+                    if os.path.isdir(item_path):
+                        # Check if it looks like a camera folder (not a timestamp)
+                        if not item.split('_')[0].isdigit():
+                            active_cameras.append(item)
+            except Exception as e:
+                logger.error(f"Error listing cameras: {e}")
+
+            # Merge with allowed cameras from config
+            all_cameras = list(set(active_cameras + [
+                file_manager.sanitize_camera_name(c) for c in allowed_cameras
+            ]))
+            all_cameras.sort()
+
+            return jsonify({
+                "cameras": all_cameras,
+                "default": all_cameras[0] if all_cameras else None
+            })
+
+        @app.route('/events/<camera>')
+        def list_camera_events(camera):
+            """List events for a specific camera."""
             # Run cleanup
             active_ids = state_manager.get_active_event_ids()
             file_manager.cleanup_old_events(active_ids)
 
-            events = []
+            sanitized = file_manager.sanitize_camera_name(camera)
+            events = _get_events_for_camera(sanitized)
+
+            return jsonify({
+                "camera": sanitized,
+                "events": events
+            })
+
+        @app.route('/events')
+        def list_events():
+            """List all events across all cameras (global view)."""
+            # Run cleanup
+            active_ids = state_manager.get_active_event_ids()
+            file_manager.cleanup_old_events(active_ids)
+
+            all_events = []
+            cameras_found = []
+
             try:
-                subdirs = sorted(
-                    [d for d in os.listdir(storage_path)
-                     if os.path.isdir(os.path.join(storage_path, d))],
-                    reverse=True
-                )
+                # Iterate through camera subdirectories
+                for camera_dir in os.listdir(storage_path):
+                    camera_path = os.path.join(storage_path, camera_dir)
 
-                for subdir in subdirs:
-                    folder_path = os.path.join(storage_path, subdir)
-                    summary_path = os.path.join(folder_path, 'summary.txt')
+                    if not os.path.isdir(camera_path):
+                        continue
 
-                    parts = subdir.split('_', 1)
-                    ts = parts[0] if len(parts) > 0 else "0"
-                    eid = parts[1] if len(parts) > 1 else subdir
+                    # Skip legacy flat structure (timestamp_eventid)
+                    if camera_dir.split('_')[0].isdigit():
+                        continue
 
-                    summary_text = "Analysis pending..."
-                    if os.path.exists(summary_path):
-                        with open(summary_path, 'r') as f:
-                            summary_text = f.read().strip()
+                    cameras_found.append(camera_dir)
+                    events = _get_events_for_camera(camera_dir)
+                    all_events.extend(events)
 
-                    events.append({
-                        "event_id": eid,
-                        "timestamp": ts,
-                        "summary": summary_text,
-                        "hosted_clip": f"/files/{subdir}/clip.mp4",
-                        "hosted_snapshot": f"/files/{subdir}/snapshot.jpg"
-                    })
+                # Sort all events by timestamp descending
+                all_events.sort(key=lambda x: x['timestamp'], reverse=True)
 
             except Exception as e:
                 logger.error(f"Error listing events: {e}")
                 return jsonify({"error": str(e)}), 500
 
-            return jsonify({"events": events})
+            return jsonify({
+                "cameras": sorted(cameras_found),
+                "total_count": len(all_events),
+                "events": all_events
+            })
 
         @app.route('/delete/<subdir>', methods=['POST'])
         def delete_event(subdir):
             """Delete a specific event folder."""
-            folder_path = os.path.join(storage_path, subdir)
+            # Reconstruct the full path from sanitized components
+            # This is safer than os.path.join which can be manipulated
+            base_dir = os.path.realpath(storage_path)
+            
+            # Basic sanitization, though Flask's path converter helps
+            subdir = subdir.replace('..', '').replace('/', '').replace('\\', '')
+            folder_path = os.path.realpath(os.path.join(base_dir, subdir))
 
-            if os.path.abspath(folder_path).startswith(os.path.abspath(storage_path)):
+
+            if folder_path.startswith(base_dir):
                 if os.path.exists(folder_path) and os.path.isdir(folder_path):
                     try:
                         shutil.rmtree(folder_path)
@@ -978,9 +1236,14 @@ class StateAwareOrchestrator:
         @app.route('/files/<path:filename>')
         def serve_file(filename):
             """Serve stored files (clips are already transcoded to H.264)."""
-            file_path = os.path.join(storage_path, filename)
+            base_dir = os.path.realpath(storage_path)
+            
+            # Sanitize filename to prevent path traversal
+            filename = filename.replace('..', '').replace('/', '').replace('\\', '')
+            file_path = os.path.realpath(os.path.join(base_dir, filename))
 
-            if not os.path.exists(file_path):
+
+            if not file_path.startswith(base_dir) or not os.path.exists(file_path):
                 return "File not found", 404
 
             return send_from_directory(storage_path, filename)
@@ -1006,11 +1269,7 @@ class StateAwareOrchestrator:
 
                 # Configuration (non-sensitive)
                 "config": {
-                    "mqtt_broker": self.config['MQTT_BROKER'],
-                    "frigate_url": self.config['FRIGATE_URL'],
                     "retention_days": self.config['RETENTION_DAYS'],
-                    "allowed_cameras": self.config.get('ALLOWED_CAMERAS', []),
-                    "allowed_labels": self.config.get('ALLOWED_LABELS', []),
                     "log_level": self.config.get('LOG_LEVEL', 'INFO'),
                     "ffmpeg_timeout": self.config.get('FFMPEG_TIMEOUT', 60)
                 }
@@ -1047,15 +1306,16 @@ class StateAwareOrchestrator:
         logger.info(f"FFmpeg Timeout: {self.config.get('FFMPEG_TIMEOUT', 60)}s")
         logger.info(f"Log Level: {self.config.get('LOG_LEVEL', 'INFO')}")
 
-        if self.config.get('ALLOWED_CAMERAS'):
-            logger.info(f"Allowed Cameras: {self.config['ALLOWED_CAMERAS']}")
+        camera_label_map = self.config.get('CAMERA_LABEL_MAP', {})
+        if camera_label_map:
+            logger.info("Camera/Label Configuration:")
+            for camera, labels in camera_label_map.items():
+                if labels:
+                    logger.info(f"  {camera}: {labels}")
+                else:
+                    logger.info(f"  {camera}: ALL labels")
         else:
-            logger.info("Allowed Cameras: ALL")
-
-        if self.config.get('ALLOWED_LABELS'):
-            logger.info(f"Allowed Labels: {self.config['ALLOWED_LABELS']}")
-        else:
-            logger.info("Allowed Labels: ALL")
+            logger.info("Camera/Label Filtering: DISABLED (all cameras and labels allowed)")
 
         logger.info("=" * 60)
 
@@ -1069,6 +1329,9 @@ class StateAwareOrchestrator:
             self.mqtt_client.loop_start()
         except Exception as e:
             logger.error(f"Failed to start MQTT client: {e}")
+
+        # Start notification queue processor
+        self.notifier.start_queue_processor()
 
         # Start scheduler thread
         self._scheduler_thread = threading.Thread(
@@ -1089,6 +1352,7 @@ class StateAwareOrchestrator:
         """Graceful shutdown."""
         logger.info("Shutting down orchestrator...")
         self._shutdown = True
+        self.notifier.stop_queue_processor()
         self.mqtt_client.loop_stop()
         self.mqtt_client.disconnect()
 
