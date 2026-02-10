@@ -11,118 +11,72 @@ from flask import Flask, jsonify, send_from_directory
 FRIGATE_URL = os.getenv('FRIGATE_URL', 'http://192.168.21.189:5000')
 MQTT_BROKER = os.getenv('MQTT_BROKER', '192.168.21.189')
 MQTT_PORT = int(os.getenv('MQTT_PORT', 1883))
+MQTT_TOPIC = "frigate/events/Doorbell"  # Listen only to Doorbell for now
 STORAGE_DIR = "/data"
 RETENTION_DAYS = int(os.getenv('RETENTION_DAYS', 3))
 
-# We now listen to Frigate's native topics
-MQTT_TOPIC = "frigate/events/#"
-
-print(f"Starting Native Frigate Listener...")
-print(f" - Frigate: {FRIGATE_URL}")
-print(f" - MQTT: {MQTT_BROKER} (Listening to {MQTT_TOPIC})")
-
 app = Flask(__name__)
 
-# --- CORS HEADER ---
+# --- CORS (Fixes Video Playback) ---
 @app.after_request
 def after_request(response):
     response.headers.add('Access-Control-Allow-Origin', '*')
-    response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
-    response.headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS')
     return response
 
-# --- SAVE EVENT LOGIC ---
+# --- ARCHIVE LOGIC ---
 def save_event(payload):
     try:
-        # Frigate Native Payload parsing
-        # We only care when the event ends (so we get the full clip and final description)
-        if payload.get('type') != 'end':
-            return
+        # We only save the clip when the event ends
+        if payload.get('type') != 'end': return
 
-        event_data = payload.get('after', {})
-        event_id = event_data.get('id')
-        camera = event_data.get('camera')
+        data = payload.get('after', {})
+        event_id = data.get('id')
+        description = data.get('sub_label', 'Doorbell Activity') # Get the Gemini text
         
-        # Only process Doorbell if that's your preference, or all cameras
-        # if camera != "Doorbell": return 
-
         if not event_id: return
-        
-        print(f"Processing Event: {event_id} ({camera})")
-        
-        # Try to find the GenAI description in the payload
-        # Frigate usually puts this in 'sub_label' or 'data' depending on version
-        summary = event_data.get('sub_label', '')
-        if not summary:
-            # Fallback: Check if it's in the 'data' dict
-            summary = event_data.get('data', {}).get('description', '')
-        
-        # Fallback: Just use the label (e.g., "Person") if AI didn't run
-        if not summary:
-            summary = f"{event_data.get('label', 'Unknown Event')} detected."
 
+        print(f"Archiving Event: {event_id} - {description}")
         timestamp = int(time.time())
         event_dir = os.path.join(STORAGE_DIR, f"{timestamp}_{event_id}")
         os.makedirs(event_dir, exist_ok=True)
 
-        # 1. Save JSON (Construct our own simple metadata)
+        # 1. Save Metadata
         meta = {
             "event_id": event_id,
-            "title": f"{camera} Alert",
-            "summary": summary,
+            "title": "Doorbell Alert",
+            "summary": description,
             "timestamp": timestamp
         }
         with open(os.path.join(event_dir, "data.json"), 'w') as f:
             json.dump(meta, f)
 
-        # 2. Download Clean Snapshot
-        snap_url = f"{FRIGATE_URL}/api/events/{event_id}/snapshot.jpg?bbox=0"
-        r_snap = requests.get(snap_url, timeout=15)
+        # 2. Save Clean Snapshot
+        r_snap = requests.get(f"{FRIGATE_URL}/api/events/{event_id}/snapshot.jpg?bbox=0")
         if r_snap.status_code == 200:
             with open(os.path.join(event_dir, "snapshot.jpg"), 'wb') as f:
                 f.write(r_snap.content)
 
-        # 3. Download Clip
-        clip_url = f"{FRIGATE_URL}/api/events/{event_id}/clip.mp4"
-        r_clip = requests.get(clip_url, timeout=45)
+        # 3. Save Clip
+        r_clip = requests.get(f"{FRIGATE_URL}/api/events/{event_id}/clip.mp4")
         if r_clip.status_code == 200:
             with open(os.path.join(event_dir, "clip.mp4"), 'wb') as f:
                 f.write(r_clip.content)
-            print(f"Saved event {event_id}")
 
     except Exception as e:
-        print(f"Error saving event: {e}")
+        print(f"Error: {e}")
 
-# --- CLEANUP LOGIC ---
-def cleanup_old_events():
-    cutoff = time.time() - (RETENTION_DAYS * 86400)
-    if not os.path.exists(STORAGE_DIR): return
-    for folder in os.listdir(STORAGE_DIR):
-        try:
-            if float(folder.split('_')[0]) < cutoff:
-                import shutil
-                shutil.rmtree(os.path.join(STORAGE_DIR, folder))
-        except: pass
-
-# --- MQTT WORKER ---
+# --- MQTT LISTENER ---
 def start_mqtt():
     def on_msg(c, u, m):
-        try:
-            threading.Thread(target=save_event, args=(json.loads(m.payload.decode()),)).start()
-        except: pass
+        threading.Thread(target=save_event, args=(json.loads(m.payload.decode()),)).start()
     
     client = mqtt.Client()
     client.on_connect = lambda c, u, f, rc: c.subscribe(MQTT_TOPIC)
     client.on_message = on_msg
-    
-    while True:
-        try:
-            client.connect(MQTT_BROKER, MQTT_PORT, 60)
-            client.loop_forever()
-        except:
-            time.sleep(10)
+    client.connect(MQTT_BROKER, MQTT_PORT, 60)
+    client.loop_forever()
 
-# --- FLASK API ---
+# --- WEB SERVER ---
 @app.route('/events')
 def get_events():
     events_list = []
@@ -143,6 +97,4 @@ def serve_file(filepath):
 
 if __name__ == "__main__":
     threading.Thread(target=start_mqtt, daemon=True).start()
-    schedule.every().hour.do(cleanup_old_events)
-    threading.Thread(target=lambda: [schedule.run_pending(), time.sleep(60)]).start()
-    app.run(host='0.0.0.0', port=5050)
+    app.run(host='0.0.0.0', port=5050) # Dockge maps this to 5055 externally
