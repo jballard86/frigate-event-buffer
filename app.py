@@ -404,11 +404,22 @@ class FileManager:
         process = None
 
         try:
-            # Download original clip
+            # Download original clip (retry on HTTP 400 — Frigate may not have clip ready yet)
             url = f"{self.frigate_url}/api/events/{event_id}/clip.mp4"
-            logger.debug(f"Downloading clip from {url}")
-            response = requests.get(url, timeout=120, stream=True)
-            response.raise_for_status()
+            response = None
+
+            for attempt in range(1, 4):
+                logger.debug(f"Downloading clip from {url} (attempt {attempt}/3)")
+                try:
+                    response = requests.get(url, timeout=120, stream=True)
+                    response.raise_for_status()
+                    break
+                except requests.exceptions.HTTPError:
+                    if response is not None and response.status_code == 400 and attempt < 3:
+                        logger.warning(f"Clip not ready for {event_id} (HTTP 400), retrying in 5s ({attempt}/3)")
+                        time.sleep(5)
+                        continue
+                    raise
 
             bytes_downloaded = 0
             with open(temp_path, 'wb') as f:
@@ -741,7 +752,9 @@ class NotificationPublisher:
             camera_dir = os.path.basename(os.path.dirname(event.folder_path))
             base_url = f"http://{self.ha_ip}:{self.flask_port}/files/{camera_dir}/{folder_name}"
             image_url = f"{base_url}/snapshot.jpg"
-            video_url = f"{base_url}/clip.mp4"
+            # Only include video URL if clip was actually downloaded
+            if event.clip_downloaded:
+                video_url = f"{base_url}/clip.mp4"
 
         # Build title based on phase
         title = self._build_title(event)
@@ -793,7 +806,7 @@ class NotificationPublisher:
         return f"{label_display} detected at {camera_display}"
 
     def _build_message(self, event: EventState, status: str) -> str:
-        """Build notification message."""
+        """Build notification message with phase-specific context."""
         if event.genai_description:
             return event.genai_description
 
@@ -803,7 +816,17 @@ class NotificationPublisher:
         camera_display = event.camera.replace('_', ' ').title()
         label_display = event.label.title()
 
-        return f"{label_display} detected by {camera_display}"
+        if status == "clip_ready":
+            if event.clip_downloaded:
+                return f"Clip available for {label_display} at {camera_display}"
+            else:
+                return f"Clip unavailable for {label_display} at {camera_display}"
+        elif status == "described":
+            return f"{label_display} detected by {camera_display} (details updating)"
+        elif status == "finalized":
+            return f"Event complete: {label_display} at {camera_display}"
+        else:
+            return f"{label_display} detected by {camera_display}"
 
 
 # =============================================================================
@@ -1005,6 +1028,13 @@ class StateAwareOrchestrator:
 
     def _handle_tracked_update(self, payload: dict, topic: str):
         """Handle AI description update (Phase 2)."""
+        # Frigate 0.17 sends multiple types on this topic: description, face, lpr, classification
+        # Only process description-type messages for AI descriptions
+        update_type = payload.get("type")
+        if update_type and update_type != "description":
+            logger.debug(f"Skipping tracked update type: {update_type}")
+            return
+
         # Extract camera from topic: frigate/{camera}/tracked_object_update
         parts = topic.split("/")
         if len(parts) >= 2:
@@ -1013,8 +1043,7 @@ class StateAwareOrchestrator:
             camera = "unknown"
 
         event_id = payload.get("id")
-        # AI description may be in sub_label or description field
-        description = payload.get("sub_label") or payload.get("description")
+        description = payload.get("description")
 
         if not event_id or not description:
             logger.debug(f"Skipping tracked update: event_id={event_id}, has_description={bool(description)}")
@@ -1034,7 +1063,7 @@ class StateAwareOrchestrator:
         """Handle review/genai update (Phase 3)."""
         event_type = payload.get("type")
 
-        if event_type not in ["update", "end"]:
+        if event_type not in ["update", "end", "genai"]:
             logger.debug(f"Skipping review with type: {event_type}")
             return
 
@@ -1043,18 +1072,26 @@ class StateAwareOrchestrator:
         # Extract detections and genai data
         data = review_data.get("data", {})
         detections = data.get("detections", [])
-        genai = data.get("genai", {})
         severity = review_data.get("severity", "detection")
 
-        logger.debug(f"Processing review: {len(detections)} detections, severity={severity}")
+        # Frigate 0.17: GenAI data is in data.metadata (type: "genai")
+        # Legacy: GenAI data was in data.genai
+        genai = data.get("metadata") or data.get("genai") or {}
+
+        logger.debug(f"Processing review: type={event_type}, {len(detections)} detections, severity={severity}")
 
         for event_id in detections:
-            logger.info(f"Review for {event_id}: {genai.get('title', 'N/A')}")
+            # Frigate 0.17 uses "title" and "shortSummary" in metadata
+            # Legacy used "title" and "description" in genai
+            title = genai.get("title")
+            description = genai.get("shortSummary") or genai.get("description")
+
+            logger.info(f"Review for {event_id}: title={title or 'N/A'}, has_description={bool(description)}")
 
             if self.state_manager.set_genai_metadata(
                 event_id,
-                genai.get("title"),
-                genai.get("description"),
+                title,
+                description,
                 severity
             ):
                 event = self.state_manager.get_event(event_id)
