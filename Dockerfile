@@ -38,7 +38,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application and example config
 COPY app.py .
-COPY config.yaml.example .
+COPY config.example.yaml .
 
 # Create storage directory
 RUN mkdir -p /app/storage
