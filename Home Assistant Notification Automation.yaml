@@ -1,0 +1,65 @@
+alias: "Frigate Orchestrator: Phone Notifications"
+description: "Terminal automation with validation and optional toggles."
+triggers:
+  - trigger: mqtt
+    topic: frigate/custom/notifications
+actions:
+  - variables:
+      # --- CONFIGURATION TOGGLES ---
+      # Set these to true/false as needed
+      use_high_priority: false
+      use_custom_sound: false
+      
+      # --- DATA MAPPING ---
+      payload: "{{ trigger.payload_json }}"
+      target_phone: "{{ states('input_text.notification_target_phone') }}"
+
+  # --- Point 1: Validation ---
+  # Only proceed if the phone helper is actually set
+  - condition: template
+    value_template: "{{ target_phone | length > 0 }}"
+
+  - action: "notify.{{ target_phone }}"
+    data:
+      title: "{{ payload.title }}"
+      message: "{{ payload.message }}"
+      data:
+        # Point 5: Tagging manages sticky accumulation per event
+        tag: "{{ payload.tag }}" 
+        
+        # Point 2: Standardized Click Behavior
+        # Removing clickAction: "none" to ensure the URL opens correctly
+        url: "/lovelace/security-alert"
+        
+        # Phase-based Media
+        image: "{{ payload.image_url }}"
+        video: "{{ payload.video_url }}"
+        
+        # Point 3 & 4: Optional Toggles
+        importance: "{{ 'high' if use_high_priority else 'default' }}"
+        ttl: "{{ 0 if use_high_priority else 3600 }}"
+        sound: "{{ 'default' if not use_custom_sound else 'security_alert.mp3' }}"
+        
+        # Persistence settings
+        sticky: true
+        notification_icon: "mdi:shield-check"
+
+  # --- Dashboard Refresh Logic ---
+  - if:
+      - condition: template
+        value_template: "{{ payload.status in ['clip_ready', 'finalized'] }}"
+    then:
+      - action: homeassistant.update_entity
+        target:
+          entity_id: sensor.frigate_feed_raw
+      - action: input_number.set_value
+        target:
+          entity_id: input_number.security_event_index
+        data:
+          value: 0
+
+#Helper Creation instructions:
+  #First, go to Settings > Devices & Services > Helpers and create a new Text helper:
+  #Name: Notification Target Phone
+  #Entity ID: input_text.notification_target_phone
+  #Value: mobile_app_sm_s928u (or your current phone's service name)

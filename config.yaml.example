@@ -8,25 +8,25 @@
 # Sensitive values can also be set via environment variables,
 # which always override values in this file.
 
-# Camera filtering - only process events from these cameras
-# Leave empty or omit to allow all cameras
+# Camera configuration with per-camera label filtering
+# Only events from listed cameras will be processed
+# Omit a camera entirely to filter it out
 cameras:
-  allowed:
-    - "YOUR_CAMERA_1"
-    - "YOUR_CAMERA_2"
-    # - "Doorbell"
-    # - "Front_Yard"
-    # - "Carport"
+  # Example: Doorbell - only person and package events
+  - name: "YOUR_CAMERA_1"
+    labels:
+      - "person"
+      - "package"
 
-# Label filtering - only process events with these labels
-# Leave empty or omit to allow all labels
-labels:
-  allowed:
-    - "person"
-    - "package"
-    - "car"
-    - "dog"
-    - "cat"
+  # Example: Driveway - only vehicle events
+  - name: "YOUR_CAMERA_2"
+    labels:
+      - "car"
+      - "truck"
+
+  # Example: Backyard - allow ALL labels (empty list)
+  # - name: "YOUR_CAMERA_3"
+  #   labels: []
 
 # Application settings
 settings:
