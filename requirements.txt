@@ -2,3 +2,4 @@ flask
 paho-mqtt
 requests
 schedule
+pyyaml

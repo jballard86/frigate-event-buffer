@@ -1,0 +1,47 @@
+# Environment files (contains secrets)
+.env
+*.env
+.env.*
+
+# Config file with real values (use config.yaml.example as template)
+config.yaml
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+eggs/
+*.egg
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Local testing
+storage/
+*.log
+
+# Docker
+*.tar
+
+# Temporary files
+*.tmp
+*.temp
