@@ -1,100 +1,120 @@
 import os
-import json
+import subprocess
 import time
-import threading
-import schedule
-import requests
-import paho.mqtt.client as mqtt
-from flask import Flask, jsonify, send_from_directory
-
-# --- CONFIGURATION ---
-FRIGATE_URL = os.getenv('FRIGATE_URL', 'http://192.168.21.189:5000')
-MQTT_BROKER = os.getenv('MQTT_BROKER', '192.168.21.189')
-MQTT_PORT = int(os.getenv('MQTT_PORT', 1883))
-MQTT_TOPIC = "frigate/events/Doorbell"  # Listen only to Doorbell for now
-STORAGE_DIR = "/data"
-RETENTION_DAYS = int(os.getenv('RETENTION_DAYS', 3))
+import shutil
+from flask import Flask, Response, send_from_directory, jsonify
+import shutil
 
 app = Flask(__name__)
 
-# --- CORS (Fixes Video Playback) ---
-@app.after_request
-def after_request(response):
-    response.headers.add('Access-Control-Allow-Origin', '*')
-    return response
+# --- CONFIGURATION ---
+STORAGE_PATH = '/app/storage'
+RETENTION_DAYS = 3  # Matches your "Last 3 Days" dashboard title
 
-# --- ARCHIVE LOGIC ---
-def save_event(payload):
-    try:
-        # We only save the clip when the event ends
-        if payload.get('type') != 'end': return
-
-        data = payload.get('after', {})
-        event_id = data.get('id')
-        description = data.get('sub_label', 'Doorbell Activity') # Get the Gemini text
-        
-        if not event_id: return
-
-        print(f"Archiving Event: {event_id} - {description}")
-        timestamp = int(time.time())
-        event_dir = os.path.join(STORAGE_DIR, f"{timestamp}_{event_id}")
-        os.makedirs(event_dir, exist_ok=True)
-
-        # 1. Save Metadata
-        meta = {
-            "event_id": event_id,
-            "title": "Doorbell Alert",
-            "summary": description,
-            "timestamp": timestamp
-        }
-        with open(os.path.join(event_dir, "data.json"), 'w') as f:
-            json.dump(meta, f)
-
-        # 2. Save Clean Snapshot
-        r_snap = requests.get(f"{FRIGATE_URL}/api/events/{event_id}/snapshot.jpg?bbox=0")
-        if r_snap.status_code == 200:
-            with open(os.path.join(event_dir, "snapshot.jpg"), 'wb') as f:
-                f.write(r_snap.content)
-
-        # 3. Save Clip
-        r_clip = requests.get(f"{FRIGATE_URL}/api/events/{event_id}/clip.mp4")
-        if r_clip.status_code == 200:
-            with open(os.path.join(event_dir, "clip.mp4"), 'wb') as f:
-                f.write(r_clip.content)
-
-    except Exception as e:
-        print(f"Error: {e}")
-
-# --- MQTT LISTENER ---
-def start_mqtt():
-    def on_msg(c, u, m):
-        threading.Thread(target=save_event, args=(json.loads(m.payload.decode()),)).start()
+def cleanup_old_events():
+    """Deletes folders older than RETENTION_DAYS."""
+    now = time.time()
+    cutoff = now - (RETENTION_DAYS * 86400)
     
-    client = mqtt.Client()
-    client.on_connect = lambda c, u, f, rc: c.subscribe(MQTT_TOPIC)
-    client.on_message = on_msg
-    client.connect(MQTT_BROKER, MQTT_PORT, 60)
-    client.loop_forever()
+    try:
+        for subdir in os.listdir(STORAGE_PATH):
+            folder_path = os.path.join(STORAGE_PATH, subdir)
+            if os.path.isdir(folder_path):
+                # Folders are named 'timestamp_eventid'
+                try:
+                    ts = float(subdir.split('_')[0])
+                    if ts < cutoff:
+                        print(f"Cleaning up old event: {subdir}")
+                        shutil.rmtree(folder_path)
+                except (ValueError, IndexError):
+                    continue
+    except Exception as e:
+        print(f"Cleanup error: {e}")
 
-# --- WEB SERVER ---
 @app.route('/events')
-def get_events():
-    events_list = []
-    if os.path.exists(STORAGE_DIR):
-        for folder in sorted(os.listdir(STORAGE_DIR), reverse=True):
+def list_events():
+    # Run cleanup every time the list is requested
+    cleanup_old_events()
+    
+    events = []
+    try:
+        subdirs = sorted([d for d in os.listdir(STORAGE_PATH) if os.path.isdir(os.path.join(STORAGE_PATH, d))], reverse=True)
+        for subdir in subdirs:
+            folder_path = os.path.join(STORAGE_PATH, subdir)
+            summary_path = os.path.join(folder_path, 'summary.txt')
+            
             try:
-                with open(os.path.join(STORAGE_DIR, folder, "data.json"), 'r') as f:
-                    d = json.load(f)
-                    d['hosted_snapshot'] = f"/files/{folder}/snapshot.jpg"
-                    d['hosted_clip'] = f"/files/{folder}/clip.mp4"
-                    events_list.append(d)
-            except: pass
-    return jsonify({"events": events_list})
+                ts, eid = subdir.split('_')
+            except ValueError:
+                continue
 
-@app.route('/files/<path:filepath>')
-def serve_file(filepath):
-    return send_from_directory(STORAGE_DIR, filepath)
+            summary_text = "Analysis pending..."
+            if os.path.exists(summary_path):
+                with open(summary_path, 'r') as f:
+                    summary_text = f.read().strip()
 
-if __name__ == "__main__":
-    threading.Thread(target=start_mqtt, daemon=True).start()
-    app.run(host='0.0.0.0', port=5050) # Dockge maps this to 5055 externally
+            events.append({
+                "event_id": eid,
+                "timestamp": ts,
+                "summary": summary_text,
+                "hosted_clip": f"/files/{subdir}/clip.mp4",
+                "hosted_snapshot": f"/files/{subdir}/snapshot.jpg"
+            })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+    return jsonify({"events": events})
+
+@app.route('/delete/<subdir>', methods=['POST'])
+def delete_event(subdir):
+    """Deletes a specific event folder manually from the dashboard."""
+    folder_path = os.path.join(STORAGE_PATH, subdir)
+    
+    # Security check: Ensure we are only deleting folders within our storage path
+    if os.path.abspath(folder_path).startswith(os.path.abspath(STORAGE_PATH)):
+        if os.path.exists(folder_path) and os.path.isdir(folder_path):
+            try:
+                shutil.rmtree(folder_path)
+                print(f"User manually deleted: {subdir}")
+                return jsonify({"status": "success", "message": f"Deleted {subdir}"}), 200
+            except Exception as e:
+                return jsonify({"status": "error", "message": str(e)}), 500
+    
+    return jsonify({"status": "error", "message": "Invalid folder or path"}), 400
+
+@app.route('/files/<path:filename>')
+def serve_file(filename):
+    file_path = os.path.join(STORAGE_PATH, filename)
+    if not os.path.exists(file_path):
+        return "File not found", 404
+
+    # On-the-fly transcoding for H.264 compatibility
+    if filename.endswith('.mp4'):
+        command = [
+            'ffmpeg',
+            '-i', file_path,
+            '-c:v', 'libx264',
+            '-preset', 'ultrafast',
+            '-crf', '24',
+            '-c:a', 'copy',
+            '-movflags', 'frag_keyframe+empty_moov+default_base_moof',
+            '-f', 'mp4',
+            '-'
+        ]
+        
+        def generate():
+            process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            try:
+                while True:
+                    data = process.stdout.read(1024 * 128)
+                    if not data:
+                        break
+                    yield data
+            finally:
+                process.kill()
+        return Response(generate(), mimetype='video/mp4')
+
+    return send_from_directory(STORAGE_PATH, filename)
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=5055, threaded=True)
