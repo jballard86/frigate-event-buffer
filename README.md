@@ -1,15 +1,18 @@
 # Frigate Event Buffer
 
-A state-aware orchestrator that listens to Frigate NVR events via MQTT, tracks them through their lifecycle, sends Ring-style sequential notifications to Home Assistant, and maintains a rolling 3-day evidence locker.
+A state-aware orchestrator that listens to Frigate NVR events via MQTT, tracks them through their lifecycle, sends Ring-style sequential notifications to Home Assistant, and maintains a rolling 3-day evidence locker. Compatible with **Frigate 0.17+**.
 
 ## Features
 
+- **Frigate 0.17 Compatible**: Supports Frigate 0.17's new MQTT payload structure including `type: "genai"` review messages and `data.metadata` fields
 - **MQTT Event Tracking**: Subscribes to Frigate's MQTT topics to detect and track events in real-time
 - **Three-Phase Lifecycle**: Tracks events through NEW → DESCRIBED → FINALIZED phases
-- **Ring-Style Notifications**: Sends progressive updates to Home Assistant as event details emerge
+- **Ring-Style Notifications**: Sends progressive updates to Home Assistant with phase-specific messages as event details emerge
+- **GenAI Integration**: Captures Frigate's GenAI titles and descriptions (via `data.metadata` in reviews and `description` type in tracked object updates)
 - **Camera/Label Filtering**: Only process events from specific cameras or with specific labels
 - **Multi-Camera Support**: Handles events from multiple cameras simultaneously without state collision
 - **Auto-Transcoding**: Downloads clips from Frigate and transcodes to H.264 for broad compatibility
+- **Clip Download Retry**: Retries clip downloads up to 3 times on HTTP 400 (Frigate not ready), with 5-second delays
 - **FFmpeg Safety**: 60-second timeout with graceful termination prevents zombie processes
 - **Rolling Retention**: Automatically cleans up events older than the retention period (default: 3 days)
 - **Notification Rate Limiting**: Max 2 notifications per 5 seconds with queue overflow protection
@@ -46,7 +49,6 @@ docker run -d \
   --name frigate-buffer \
   -p 5055:5055 \
   -v /mnt/user/appdata/frigate_buffer:/app/storage \
-  -v /mnt/user/appdata/frigate_buffer/config.yaml:/app/config.yaml:ro \
   frigate-buffer
 ```
 
@@ -61,8 +63,10 @@ curl http://localhost:5055/status
 Configuration is loaded from three sources (in order of priority):
 
 1. **Environment variables** (highest priority)
-2. **config.yaml** file
+2. **config.yaml** file (searched at `/app/config.yaml`, `/app/storage/config.yaml`, `./config.yaml`)
 3. **Default values** (lowest priority)
+
+Place your `config.yaml` in the storage volume directory — it will be found automatically at `/app/storage/config.yaml` without needing a separate file bind mount.
 
 ### config.yaml
 
@@ -258,6 +262,19 @@ The orchestrator publishes notifications to `frigate/custom/notifications`:
 }
 ```
 
+### Phase-Specific Messages
+
+When GenAI descriptions are available (Frigate 0.17 with GenAI configured), they are used as the notification title and message. When not available, each phase shows distinct fallback text:
+
+| Status | Fallback Message |
+|--------|-----------------|
+| `new` | "Person detected by Doorbell" |
+| `clip_ready` | "Clip available for Person at Doorbell" (or "Clip unavailable..." if download failed) |
+| `described` | "Person detected by Doorbell (details updating)" |
+| `finalized` | "Event complete: Person at Doorbell" |
+
+The `video_url` field is only included when the clip was successfully downloaded. If the clip download failed, `video_url` will be `null` and the notification will show the snapshot image instead.
+
 ### Rate Limiting
 
 Notifications are rate-limited to prevent notification flooding:
@@ -418,8 +435,6 @@ Response:
 ## Docker Compose
 
 ```yaml
-version: '3.8'
-
 services:
   frigate-buffer:
     build: .
@@ -429,8 +444,11 @@ services:
       - "5055:5055"
     volumes:
       - /mnt/user/appdata/frigate_buffer:/app/storage
-      - /mnt/user/appdata/frigate_buffer/config.yaml:/app/config.yaml:ro
+      - /etc/localtime:/etc/localtime:ro
     environment:
+      - MQTT_BROKER=YOUR_MQTT_BROKER_IP
+      - FRIGATE_URL=http://YOUR_FRIGATE_IP:5000
+      - HA_IP=YOUR_HOME_ASSISTANT_IP
       - LOG_LEVEL=DEBUG  # Optional: override config.yaml
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:5055/status"]
@@ -438,6 +456,8 @@ services:
       timeout: 10s
       retries: 3
 ```
+
+Place your `config.yaml` inside the storage volume (e.g., `/mnt/user/appdata/frigate_buffer/config.yaml`) — the app will find it automatically. No separate file bind mount needed.
 
 ## Debug Logging
 
@@ -475,10 +495,10 @@ The orchestrator includes safeguards against hung FFmpeg processes:
 | Time | MQTT Topic | Phase | Action |
 |------|------------|-------|--------|
 | T+0s | `frigate/events` (type=new) | NEW | Create folder, send initial notification |
-| T+5s | `frigate/{camera}/tracked_object_update` | DESCRIBED | Update with AI description |
-| T+30s | `frigate/events` (type=end) | - | Download snapshot & clip, transcode |
+| T+5s | `frigate/{camera}/tracked_object_update` (type=description) | DESCRIBED | Update with AI description |
+| T+30s | `frigate/events` (type=end) | - | Download snapshot & clip (with retry), transcode |
 | T+35s | *(background processing)* | - | Write summary, send `clip_ready` notification |
-| T+45s | `frigate/reviews` | FINALIZED | Update with GenAI metadata, send final notification |
+| T+45s | `frigate/reviews` (type=genai) | FINALIZED | Update with GenAI metadata from `data.metadata`, send final notification |
 
 ## Storage Structure
 
@@ -522,9 +542,10 @@ Check `/status` endpoint - `mqtt_connected` should be `true`. Verify:
 
 ### Clips Not Downloading
 
-Verify:
-- `FRIGATE_URL` is correct and accessible
-- Frigate API is responding: `curl http://your-frigate-ip:5000/api/events`
+The app retries clip downloads up to 3 times with 5-second delays when Frigate returns HTTP 400 (clip not yet processed). If clips still fail:
+- Check logs for retry attempts: `Clip not ready for ... (HTTP 400), retrying`
+- Verify `FRIGATE_URL` is correct and accessible
+- Verify Frigate API is responding: `curl http://your-frigate-ip:5000/api/events`
 
 ### FFmpeg Timeouts
 
