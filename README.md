@@ -24,9 +24,10 @@ A state-aware orchestrator that listens to Frigate NVR events via MQTT, tracks t
 ├─────────────────────────────────────────────────────────┤
 │  MQTT Client          EventStateManager    Flask API    │
 │  ├─ frigate/events    ├─ active_events     ├─ /events   │
-│  ├─ frigate/+/        ├─ phase tracking    ├─ /delete   │
-│  │   tracked_object   │   (NEW→DESCRIBED   ├─ /files    │
-│  └─ frigate/reviews   │    →FINALIZED)     └─ /status   │
+│  ├─ frigate/+/        ├─ phase tracking    ├─ /cameras  │
+│  │   tracked_object   │   (NEW→DESCRIBED   ├─ /delete   │
+│  └─ frigate/reviews   │    →FINALIZED)     ├─ /files    │
+│                       │                    └─ /status   │
 └─────────────────────────────────────────────────────────┘
 ```
 
@@ -68,7 +69,7 @@ Configuration is loaded from three sources (in order of priority):
 Copy the example config and customize it:
 
 ```bash
-cp config.yaml.example config.yaml
+cp config.example.yaml config.yaml
 # Edit config.yaml with your values
 ```
 
@@ -230,16 +231,7 @@ Response:
     "by_camera": {"Doorbell": 2}
   },
   "config": {
-    "mqtt_broker": "YOUR_LOCAL_IP",
-    "frigate_url": "http://YOUR_LOCAL_IP:5000",
     "retention_days": 3,
-    "camera_label_config": {
-      "Doorbell": ["person", "package"],
-      "Front_Yard": ["car"],
-      "Backyard": []
-    },
-    "allowed_cameras": ["Doorbell", "Front_Yard", "Backyard"],
-    "allowed_labels": ["person", "package", "car"],
     "log_level": "DEBUG",
     "ffmpeg_timeout": 60
   }
@@ -259,8 +251,8 @@ The orchestrator publishes notifications to `frigate/custom/notifications`:
   "label": "person",
   "title": "Person at Front Door",
   "message": "A person in blue jacket approaching the door",
-  "image_url": "http://YOUR_HA_IP:5055/files/1234567890_eventid/snapshot.jpg",
-  "video_url": "http://YOUR_HA_IP:5055/files/1234567890_eventid/clip.mp4",
+  "image_url": "http://YOUR_HA_IP:5055/files/doorbell/1234567890_eventid/snapshot.jpg",
+  "video_url": "http://YOUR_HA_IP:5055/files/doorbell/1234567890_eventid/clip.mp4",
   "tag": "frigate_1234567890.123-abcdef",
   "timestamp": 1234567890.123
 }
@@ -308,8 +300,8 @@ binary_sensor:
 This automation uses a dynamic phone target via a helper, includes validation, and supports optional priority/sound toggles:
 
 ```yaml
-alias: "Frigate Orchestrator: Unified Notification"
-description: "Dumb terminal automation with validation and optional toggles."
+alias: "Frigate Orchestrator: Phone Notifications"
+description: "Terminal automation with validation and optional toggles."
 triggers:
   - trigger: mqtt
     topic: frigate/custom/notifications
@@ -338,6 +330,7 @@ actions:
         video: "{{ payload.video_url }}"
         importance: "{{ 'high' if use_high_priority else 'default' }}"
         ttl: "{{ 0 if use_high_priority else 3600 }}"
+        sound: "{{ 'default' if not use_custom_sound else 'security_alert.mp3' }}"
         sticky: true
         notification_icon: "mdi:shield-check"
 
@@ -484,7 +477,8 @@ The orchestrator includes safeguards against hung FFmpeg processes:
 | T+0s | `frigate/events` (type=new) | NEW | Create folder, send initial notification |
 | T+5s | `frigate/{camera}/tracked_object_update` | DESCRIBED | Update with AI description |
 | T+30s | `frigate/events` (type=end) | - | Download snapshot & clip, transcode |
-| T+45s | `frigate/reviews` | FINALIZED | Write summary, send final notification |
+| T+35s | *(background processing)* | - | Write summary, send `clip_ready` notification |
+| T+45s | `frigate/reviews` | FINALIZED | Update with GenAI metadata, send final notification |
 
 ## Storage Structure
 
