@@ -1,0 +1,54 @@
+# Frigate Event Buffer Configuration
+# ===================================
+#
+# Copy this file to config.yaml and update with your values:
+#   cp config.yaml.example config.yaml
+#
+# This file contains non-sensitive application settings.
+# Sensitive values can also be set via environment variables,
+# which always override values in this file.
+
+# Camera filtering - only process events from these cameras
+# Leave empty or omit to allow all cameras
+cameras:
+  allowed:
+    - "YOUR_CAMERA_1"
+    - "YOUR_CAMERA_2"
+    # - "Doorbell"
+    # - "Front_Yard"
+    # - "Carport"
+
+# Label filtering - only process events with these labels
+# Leave empty or omit to allow all labels
+labels:
+  allowed:
+    - "person"
+    - "package"
+    - "car"
+    - "dog"
+    - "cat"
+
+# Application settings
+settings:
+  # How many days to keep event recordings
+  retention_days: 3
+
+  # How often to run cleanup (in hours)
+  cleanup_interval_hours: 1
+
+  # FFmpeg transcode timeout in seconds (kills hung processes)
+  ffmpeg_timeout_seconds: 60
+
+  # Logging level: DEBUG, INFO, WARNING, ERROR
+  log_level: "INFO"
+
+# Network configuration
+# These can be overridden by environment variables:
+#   MQTT_BROKER, MQTT_PORT, FRIGATE_URL, HA_IP, FLASK_PORT, STORAGE_PATH
+network:
+  mqtt_broker: "YOUR_MQTT_BROKER_IP"
+  mqtt_port: 1883
+  frigate_url: "http://YOUR_FRIGATE_IP:5000"
+  ha_ip: "YOUR_HOME_ASSISTANT_IP"
+  flask_port: 5055
+  storage_path: "/app/storage"

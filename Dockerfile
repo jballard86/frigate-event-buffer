@@ -1,21 +1,53 @@
-# Use a lightweight Python image
+# Frigate Event Buffer - State-Aware Orchestrator
+# ================================================
+#
+# Environment Variables (override config.yaml):
+#   MQTT_BROKER     - MQTT broker IP (required)
+#   MQTT_PORT       - MQTT broker port (default: 1883)
+#   HA_IP           - Home Assistant IP (required)
+#   FRIGATE_URL     - Frigate API base URL (required)
+#   STORAGE_PATH    - Storage directory (default: /app/storage)
+#   RETENTION_DAYS  - Days to retain events (default: 3)
+#   FLASK_PORT      - Flask server port (default: 5055)
+#   LOG_LEVEL       - Logging level: DEBUG, INFO, WARNING, ERROR (default: INFO)
+#
+# Volume Mounts:
+#   /app/storage     - Event storage (clips, snapshots, summaries)
+#   /app/config.yaml - Configuration file (optional, for camera/label filtering)
+#
+# Example Docker Run:
+#   docker run -d \
+#     -p 5055:5055 \
+#     -v /mnt/user/appdata/frigate_buffer:/app/storage \
+#     -v /mnt/user/appdata/frigate_buffer/config.yaml:/app/config.yaml:ro \
+#     frigate-buffer
+
 FROM python:3.9-slim
 
-# Set the working directory inside the container
+# Install ffmpeg for video transcoding
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends ffmpeg && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 
-# Copy the dependency list and install them
+# Copy and install dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy the actual application code
+# Copy application and example config
 COPY app.py .
+COPY config.yaml.example .
 
-# Create the storage directory (Unraid will map this to your array)
-RUN mkdir -p /data
+# Create storage directory
+RUN mkdir -p /app/storage
 
-# Tell Docker we use port 5050
-EXPOSE 5050
+# Expose Flask port
+EXPOSE 5055
 
-# Run the app
+# Health check
+HEALTHCHECK --interval=60s --timeout=10s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:5055/status || exit 1
+
 CMD ["python", "app.py"]
