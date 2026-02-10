@@ -33,20 +33,19 @@ def cleanup_old_events():
 
 @app.route('/events')
 def list_events():
-    # Run cleanup every time the list is requested
     cleanup_old_events()
-    
     events = []
     try:
+        # Get all subdirectories
         subdirs = sorted([d for d in os.listdir(STORAGE_PATH) if os.path.isdir(os.path.join(STORAGE_PATH, d))], reverse=True)
         for subdir in subdirs:
             folder_path = os.path.join(STORAGE_PATH, subdir)
             summary_path = os.path.join(folder_path, 'summary.txt')
             
-            try:
-                ts, eid = subdir.split('_')
-            except ValueError:
-                continue
+            # More robust splitting
+            parts = subdir.split('_')
+            ts = parts[0] if len(parts) > 0 else "0"
+            eid = parts[1] if len(parts) > 1 else subdir # Fallback to folder name if no underscore
 
             summary_text = "Analysis pending..."
             if os.path.exists(summary_path):
@@ -62,7 +61,6 @@ def list_events():
             })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-
     return jsonify({"events": events})
 
 @app.route('/delete/<subdir>', methods=['POST'])
