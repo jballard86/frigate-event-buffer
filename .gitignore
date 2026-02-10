@@ -5,6 +5,7 @@
 
 # Config file with real values (use config.yaml.example as template)
 config.yaml
+docker-compose.yaml
 
 # Python
 __pycache__/
