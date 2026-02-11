@@ -355,15 +355,16 @@ The orchestrator publishes notifications to `frigate/custom/notifications`:
 
 When GenAI descriptions are available (Frigate 0.17 with GenAI configured), they are used as the notification title and message. When not available, each phase shows distinct fallback text:
 
-| Status | Fallback Message |
-|--------|-----------------|
-| `new` | "Person detected by Doorbell" |
-| `clip_ready` | "Clip available for Person at Doorbell" (or "Clip unavailable..." if download failed) |
-| `described` | "Person detected by Doorbell (details updating)" |
-| `finalized` | "Event complete: Person at Doorbell" |
+| Status | Message Content |
+|--------|----------------|
+| `new` | Best description available, or `"Person detected at Doorbell"` |
+| `snapshot_ready` | Best description available, or `"Person detected at Doorbell"` |
+| `described` | AI description (this IS the new content) |
+| `clip_ready` | `"Video available. {best description}"` — combines status context with description |
+| `finalized` | GenAI description (this IS the new content) |
 | `summarized` | First meaningful line from review summary (truncated to 200 chars) |
 
-The `video_url` field is only included when the clip was successfully downloaded. If the clip download failed, `video_url` will be `null` and the notification will show the snapshot image instead.
+Every notification includes an `image_url` (Frigate API snapshot with `snapshot=true`, or local snapshot once downloaded). The `video_url` field is included once the clip is downloaded.
 
 ### Rate Limiting
 

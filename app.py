@@ -850,16 +850,17 @@ class NotificationPublisher:
         image_url = None
         video_url = None
 
+        # Always include Frigate API snapshot as baseline (with snapshot=true, always available)
+        if self.frigate_url:
+            image_url = f"{self.frigate_url}/api/events/{event.event_id}/snapshot.jpg"
+
         if event.folder_path:
             folder_name = os.path.basename(event.folder_path)
-            # Get camera from folder path (parent directory)
             camera_dir = os.path.basename(os.path.dirname(event.folder_path))
             base_url = f"http://{self.buffer_ip}:{self.flask_port}/files/{camera_dir}/{folder_name}"
-            # Include image URL: prefer local snapshot, fallback to Frigate API
+            # Prefer local snapshot over Frigate API
             if event.snapshot_downloaded:
                 image_url = f"{base_url}/snapshot.jpg"
-            elif self.frigate_url:
-                image_url = f"{self.frigate_url}/api/events/{event.event_id}/snapshot.jpg"
             if event.clip_downloaded:
                 video_url = f"{base_url}/clip.mp4"
 
@@ -918,34 +919,34 @@ class NotificationPublisher:
         return f"{label_display} detected at {camera_display}"
 
     def _build_message(self, event: EventState, status: str) -> str:
-        """Build notification message with phase-specific context."""
+        """Build notification message combining status context with best available description."""
+        # Best available description at this moment
+        best_desc = event.genai_description or event.ai_description
+        camera_display = event.camera.replace('_', ' ').title()
+        label_display = event.label.title()
+        fallback = f"{label_display} detected at {camera_display}"
+
         if status == "summarized" and event.review_summary:
-            # Extract first meaningful line (skip markdown headers)
             lines = [l.strip() for l in event.review_summary.split('\n')
                      if l.strip() and not l.strip().startswith('#')]
             excerpt = lines[0] if lines else "Review summary available"
             return excerpt[:200] + ("..." if len(excerpt) > 200 else "")
 
-        if event.genai_description:
-            return event.genai_description
-
-        if event.ai_description:
-            return event.ai_description
-
-        camera_display = event.camera.replace('_', ' ').title()
-        label_display = event.label.title()
-
         if status == "clip_ready":
+            desc = best_desc or fallback
             if event.clip_downloaded:
-                return f"Clip available for {label_display} at {camera_display}"
+                return f"Video available. {desc}"
             else:
-                return f"Clip unavailable for {label_display} at {camera_display}"
-        elif status == "described":
-            return f"{label_display} detected by {camera_display} (details updating)"
-        elif status == "finalized":
-            return f"Event complete: {label_display} at {camera_display}"
-        else:
-            return f"{label_display} detected by {camera_display}"
+                return f"Video unavailable. {desc}"
+
+        if status == "finalized":
+            return best_desc or f"Event complete: {fallback}"
+
+        if status == "described":
+            return event.ai_description or f"{fallback} (details updating)"
+
+        # new, snapshot_ready, or any other status
+        return best_desc or fallback
 
 
 # =============================================================================
