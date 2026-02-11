@@ -27,7 +27,7 @@ import yaml
 import paho.mqtt.client as mqtt
 import requests
 import schedule
-from flask import Flask, send_from_directory, jsonify
+from flask import Flask, send_from_directory, jsonify, render_template
 
 # =============================================================================
 # CONFIGURATION
@@ -863,7 +863,7 @@ class StateAwareOrchestrator:
         )
 
         # Setup MQTT client
-        self.mqtt_client = mqtt.Client(client_id="frigate-event-buffer")
+        self.mqtt_client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id="frigate-event-buffer")
         self.mqtt_client.on_connect = self._on_mqtt_connect
         self.mqtt_client.on_disconnect = self._on_mqtt_disconnect
         self.mqtt_client.on_message = self._on_mqtt_message
@@ -887,9 +887,9 @@ class StateAwareOrchestrator:
         self._request_count = 0
         self._request_count_lock = threading.Lock()
 
-    def _on_mqtt_connect(self, client, userdata, flags, rc):
+    def _on_mqtt_connect(self, client, userdata, flags, reason_code, properties):
         """Handle MQTT connection."""
-        if rc == 0:
+        if reason_code == 0:
             self.mqtt_connected = True
             logger.info(f"Connected to MQTT broker {self.config['MQTT_BROKER']}")
 
@@ -898,13 +898,13 @@ class StateAwareOrchestrator:
                 client.subscribe(topic, qos)
                 logger.info(f"Subscribed to: {topic}")
         else:
-            logger.error(f"MQTT connection failed with code: {rc}")
+            logger.error(f"MQTT connection failed with code: {reason_code}")
 
-    def _on_mqtt_disconnect(self, client, userdata, rc):
+    def _on_mqtt_disconnect(self, client, userdata, flags, reason_code, properties):
         """Handle MQTT disconnection."""
         self.mqtt_connected = False
-        if rc != 0:
-            logger.warning(f"Unexpected MQTT disconnect (rc={rc}), reconnecting...")
+        if reason_code != 0:
+            logger.warning(f"Unexpected MQTT disconnect (rc={reason_code}), reconnecting...")
         else:
             logger.info("MQTT disconnected")
 
@@ -1119,7 +1119,7 @@ class StateAwareOrchestrator:
             title = genai.get("title")
             description = genai.get("shortSummary") or genai.get("description")
 
-            logger.info(f"Review for {event_id}: title={title or 'N/A'}, has_description={bool(description)}")
+            logger.info(f"Review for {event_id}: title={title or 'N/A'}, description={description or 'N/A'}")
 
             # Only finalize when actual GenAI data is present
             if not title and not description:
@@ -1163,6 +1163,20 @@ class StateAwareOrchestrator:
             with orchestrator._request_count_lock:
                 orchestrator._request_count += 1
 
+        @app.route('/player')
+        def player():
+            """Serve the event viewer page."""
+            return render_template('player.html')
+
+        def _parse_summary(summary_text: str) -> dict:
+            """Parse key-value pairs from summary.txt format."""
+            parsed = {}
+            for line in summary_text.split('\n'):
+                if ':' in line:
+                    key, _, value = line.partition(':')
+                    parsed[key.strip()] = value.strip()
+            return parsed
+
         def _get_events_for_camera(camera_name: str) -> list:
             """Helper to get events for a specific camera."""
             camera_path = os.path.join(storage_path, camera_name)
@@ -1186,15 +1200,26 @@ class StateAwareOrchestrator:
                 eid = parts[1] if len(parts) > 1 else subdir
 
                 summary_text = "Analysis pending..."
+                parsed = {}
                 if os.path.exists(summary_path):
                     with open(summary_path, 'r') as f:
                         summary_text = f.read().strip()
+                    parsed = _parse_summary(summary_text)
+
+                clip_path = os.path.join(folder_path, 'clip.mp4')
+                snapshot_path = os.path.join(folder_path, 'snapshot.jpg')
 
                 events.append({
                     "event_id": eid,
                     "camera": camera_name,
                     "timestamp": ts,
                     "summary": summary_text,
+                    "title": parsed.get("Title"),
+                    "description": parsed.get("Description") or parsed.get("AI Description"),
+                    "label": parsed.get("Label", "unknown"),
+                    "severity": parsed.get("Severity"),
+                    "has_clip": os.path.exists(clip_path),
+                    "has_snapshot": os.path.exists(snapshot_path),
                     "hosted_clip": f"/files/{camera_name}/{subdir}/clip.mp4",
                     "hosted_snapshot": f"/files/{camera_name}/{subdir}/snapshot.jpg"
                 })

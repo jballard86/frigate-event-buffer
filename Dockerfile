@@ -36,8 +36,9 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy application and example config
+# Copy application, templates, and example config
 COPY app.py .
+COPY templates/ ./templates/
 COPY config.example.yaml .
 
 # Create storage directory
