@@ -4,7 +4,7 @@
 # Environment Variables (override config.yaml):
 #   MQTT_BROKER     - MQTT broker IP (required)
 #   MQTT_PORT       - MQTT broker port (default: 1883)
-#   HA_IP           - Home Assistant IP (required)
+#   BUFFER_IP       - Buffer container's reachable IP (required, used in notification URLs)
 #   FRIGATE_URL     - Frigate API base URL (required)
 #   STORAGE_PATH    - Storage directory (default: /app/storage)
 #   RETENTION_DAYS  - Days to retain events (default: 3)

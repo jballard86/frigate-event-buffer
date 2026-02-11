@@ -39,21 +39,22 @@ settings:
   # FFmpeg transcode timeout in seconds (kills hung processes)
   ffmpeg_timeout_seconds: 60
 
-  # Delay before sending the first notification (seconds)
-  # Allows Frigate to capture a better snapshot frame before notifying
-  # Set to 0 for instant notifications (without snapshot)
-  notification_delay_seconds: 5
+  # Delay before fetching snapshot after initial notification (seconds)
+  # Notification is sent instantly; this delay lets Frigate select a better frame
+  # before the snapshot update. Set to 0 to fetch immediately.
+  notification_delay_seconds: 2
 
   # Logging level: DEBUG, INFO, WARNING, ERROR
   log_level: "INFO"
 
 # Network configuration
 # These can be overridden by environment variables:
-#   MQTT_BROKER, MQTT_PORT, FRIGATE_URL, HA_IP, FLASK_PORT, STORAGE_PATH
+#   MQTT_BROKER, MQTT_PORT, FRIGATE_URL, BUFFER_IP, FLASK_PORT, STORAGE_PATH
 network:
   mqtt_broker: "YOUR_MQTT_BROKER_IP"
   mqtt_port: 1883
   frigate_url: "http://YOUR_FRIGATE_IP:5000"
-  ha_ip: "YOUR_HOME_ASSISTANT_IP"
+  # IP/hostname where this buffer container is reachable (used in notification image/video URLs)
+  buffer_ip: "YOUR_BUFFER_IP"
   flask_port: 5055
   storage_path: "/app/storage"

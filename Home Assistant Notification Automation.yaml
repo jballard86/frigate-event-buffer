@@ -22,9 +22,9 @@ actions:
         # Point 5: Tagging manages sticky accumulation per event
         tag: "{{ payload.tag }}" 
         
-        # Point 2: Standardized Click Behavior
-        # Removing clickAction: "none" to ensure the URL opens correctly
-        url: "/lovelace/security-alert"
+        # Clicking the notification opens the event viewer
+        url: "{{ states('input_text.frigate_buffer_url') }}/player"
+        clickAction: "{{ states('input_text.frigate_buffer_url') }}/player"
         
         # Phase-based Media
         image: "{{ payload.image_url }}"

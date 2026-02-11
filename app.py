@@ -50,7 +50,7 @@ def load_config() -> dict:
     2. config.yaml
     3. Default values
 
-    Note: MQTT_BROKER, FRIGATE_URL, and HA_IP are REQUIRED and must be
+    Note: MQTT_BROKER, FRIGATE_URL, and BUFFER_IP are REQUIRED and must be
     provided via config.yaml or environment variables.
     """
     config = {
@@ -58,7 +58,7 @@ def load_config() -> dict:
         'MQTT_BROKER': None,
         'MQTT_PORT': 1883,
         'FRIGATE_URL': None,
-        'HA_IP': None,
+        'BUFFER_IP': None,
         'FLASK_PORT': 5055,
         'STORAGE_PATH': '/app/storage',
 
@@ -66,7 +66,7 @@ def load_config() -> dict:
         'RETENTION_DAYS': 3,
         'CLEANUP_INTERVAL_HOURS': 1,
         'FFMPEG_TIMEOUT': 60,
-        'NOTIFICATION_DELAY': 5,
+        'NOTIFICATION_DELAY': 2,
         'LOG_LEVEL': 'INFO',
 
         # Filtering defaults (empty = allow all)
@@ -113,7 +113,7 @@ def load_config() -> dict:
                     config['MQTT_BROKER'] = network.get('mqtt_broker', config['MQTT_BROKER'])
                     config['MQTT_PORT'] = network.get('mqtt_port', config['MQTT_PORT'])
                     config['FRIGATE_URL'] = network.get('frigate_url', config['FRIGATE_URL'])
-                    config['HA_IP'] = network.get('ha_ip', config['HA_IP'])
+                    config['BUFFER_IP'] = network.get('buffer_ip') or network.get('ha_ip') or config['BUFFER_IP']
                     config['FLASK_PORT'] = network.get('flask_port', config['FLASK_PORT'])
                     config['STORAGE_PATH'] = network.get('storage_path', config['STORAGE_PATH'])
 
@@ -131,7 +131,7 @@ def load_config() -> dict:
     config['MQTT_PORT'] = int(os.getenv('MQTT_PORT', str(config['MQTT_PORT'])))
     frigate_url = os.getenv('FRIGATE_URL') or config['FRIGATE_URL']
     config['FRIGATE_URL'] = frigate_url.rstrip('/') if frigate_url else None
-    config['HA_IP'] = os.getenv('HA_IP') or config['HA_IP']
+    config['BUFFER_IP'] = os.getenv('BUFFER_IP') or os.getenv('HA_IP') or config['BUFFER_IP']
     config['FLASK_PORT'] = int(os.getenv('FLASK_PORT', str(config['FLASK_PORT'])))
     config['STORAGE_PATH'] = os.getenv('STORAGE_PATH', config['STORAGE_PATH'])
     config['RETENTION_DAYS'] = int(os.getenv('RETENTION_DAYS', str(config['RETENTION_DAYS'])))
@@ -143,8 +143,8 @@ def load_config() -> dict:
         missing.append('MQTT_BROKER (network.mqtt_broker)')
     if not config['FRIGATE_URL']:
         missing.append('FRIGATE_URL (network.frigate_url)')
-    if not config['HA_IP']:
-        missing.append('HA_IP (network.ha_ip)')
+    if not config['BUFFER_IP']:
+        missing.append('BUFFER_IP (network.buffer_ip)')
 
     if missing:
         raise ValueError(
@@ -619,9 +619,9 @@ class NotificationPublisher:
     RATE_WINDOW_SECONDS = 5.0
     MAX_QUEUE_SIZE = 10
 
-    def __init__(self, mqtt_client: mqtt.Client, ha_ip: str, flask_port: int):
+    def __init__(self, mqtt_client: mqtt.Client, buffer_ip: str, flask_port: int):
         self.mqtt_client = mqtt_client
-        self.ha_ip = ha_ip
+        self.buffer_ip = buffer_ip
         self.flask_port = flask_port
 
         # Rate limiting state
@@ -755,7 +755,7 @@ class NotificationPublisher:
             folder_name = os.path.basename(event.folder_path)
             # Get camera from folder path (parent directory)
             camera_dir = os.path.basename(os.path.dirname(event.folder_path))
-            base_url = f"http://{self.ha_ip}:{self.flask_port}/files/{camera_dir}/{folder_name}"
+            base_url = f"http://{self.buffer_ip}:{self.flask_port}/files/{camera_dir}/{folder_name}"
             # Only include URLs when files actually exist
             if event.snapshot_downloaded:
                 image_url = f"{base_url}/snapshot.jpg"
@@ -769,6 +769,8 @@ class NotificationPublisher:
         if not message:
             message = self._build_message(event, status)
 
+        player_url = f"http://{self.buffer_ip}:{self.flask_port}/player"
+
         payload = {
             "event_id": event.event_id,
             "status": status,
@@ -779,6 +781,7 @@ class NotificationPublisher:
             "message": message,
             "image_url": image_url,
             "video_url": video_url,
+            "player_url": player_url,
             "tag": f"frigate_{event.event_id}",
             "timestamp": event.created_at
         }
@@ -873,7 +876,7 @@ class StateAwareOrchestrator:
         # Notification publisher (initialized after MQTT setup)
         self.notifier = NotificationPublisher(
             self.mqtt_client,
-            config['HA_IP'],
+            config['BUFFER_IP'],
             config['FLASK_PORT']
         )
 
@@ -993,22 +996,25 @@ class StateAwareOrchestrator:
         ).start()
 
     def _send_initial_notification(self, event: EventState, delay: float):
-        """Fetch snapshot after brief delay, then send initial notification with image."""
+        """Send notification immediately, then fetch snapshot and silently update."""
         try:
+            # Send notification instantly (no image yet)
+            self.notifier.publish_notification(event, "new")
+
+            # Brief delay for Frigate to select a better snapshot frame
             if delay > 0:
                 time.sleep(delay)
 
-            # Download snapshot from Frigate (available immediately on event start)
+            # Download snapshot and silently update notification with image
             if event.folder_path:
                 event.snapshot_downloaded = self.file_manager.download_snapshot(
                     event.event_id, event.folder_path
                 )
-
-            self.notifier.publish_notification(event, "new")
+                if event.snapshot_downloaded:
+                    # Silent update (status != "new" so HA automation won't play sound)
+                    self.notifier.publish_notification(event, "snapshot_ready")
         except Exception as e:
-            logger.error(f"Error sending initial notification for {event.event_id}: {e}")
-            # Still try to send notification without snapshot
-            self.notifier.publish_notification(event, "new")
+            logger.error(f"Error in initial notification flow for {event.event_id}: {e}")
 
     def _handle_event_end(self, event_id: str, end_time: float,
                           has_clip: bool, has_snapshot: bool):
