@@ -16,6 +16,7 @@ A state-aware orchestrator that listens to Frigate NVR events via MQTT, tracks t
 - **FFmpeg Safety**: 60-second timeout with graceful termination prevents zombie processes
 - **Rolling Retention**: Automatically cleans up events older than the retention period (default: 3 days)
 - **Notification Rate Limiting**: Max 2 notifications per 5 seconds with queue overflow protection
+- **Built-in Event Viewer**: Self-contained web page at `/player` with video playback, AI analysis, event navigation, and download — embeddable as an HA iframe
 - **REST API**: Serves events, clips, and snapshots to your Home Assistant dashboard
 - **Debug Logging**: Configurable log levels for troubleshooting
 
@@ -26,9 +27,9 @@ A state-aware orchestrator that listens to Frigate NVR events via MQTT, tracks t
 │              State-Aware Orchestrator                    │
 ├─────────────────────────────────────────────────────────┤
 │  MQTT Client          EventStateManager    Flask API    │
-│  ├─ frigate/events    ├─ active_events     ├─ /events   │
-│  ├─ frigate/+/        ├─ phase tracking    ├─ /cameras  │
-│  │   tracked_object   │   (NEW→DESCRIBED   ├─ /delete   │
+│  ├─ frigate/events    ├─ active_events     ├─ /player   │
+│  ├─ frigate/+/        ├─ phase tracking    ├─ /events   │
+│  │   tracked_object   │   (NEW→DESCRIBED   ├─ /cameras  │
 │  └─ frigate/reviews   │    →FINALIZED)     ├─ /files    │
 │                       │                    └─ /status   │
 └─────────────────────────────────────────────────────────┘
@@ -164,6 +165,23 @@ cameras:
 
 ## API Endpoints
 
+### GET /player
+
+Built-in event viewer web page. Open in a browser or embed as an HA iframe card.
+
+Features:
+- HTML5 video player with snapshot poster
+- GenAI title and full description display
+- Event metadata (camera, label, timestamp)
+- Camera filter dropdown
+- Prev/Next event navigation
+- Download and delete buttons
+- Dark theme, responsive layout (mobile/tablet/desktop)
+
+```
+http://YOUR_BUFFER_IP:5055/player
+```
+
 ### GET /cameras
 
 List available cameras.
@@ -188,7 +206,29 @@ List all events across all cameras (global view).
 curl http://localhost:5055/events
 ```
 
-Response includes `camera` field for each event and `cameras` array.
+Response:
+```json
+{
+  "cameras": ["doorbell", "front_yard"],
+  "total_count": 5,
+  "events": [
+    {
+      "event_id": "1234567890.123-abcdef",
+      "camera": "doorbell",
+      "timestamp": "1234567890",
+      "label": "person",
+      "title": "Person at Front Door",
+      "description": "A person in blue jacket approaching the door",
+      "severity": "alert",
+      "summary": "Event ID: ...\nCamera: ...",
+      "has_clip": true,
+      "has_snapshot": true,
+      "hosted_clip": "/files/doorbell/1234567890_eventid/clip.mp4",
+      "hosted_snapshot": "/files/doorbell/1234567890_eventid/snapshot.jpg"
+    }
+  ]
+}
+```
 
 ### GET /events/{camera}
 
@@ -362,33 +402,28 @@ actions:
           value: 0
 ```
 
-### Required Helpers
+### Dashboard Card (iframe)
 
-Create these helpers at Settings > Devices & Services > Helpers:
+The simplest dashboard setup uses the built-in event viewer via an iframe card. The viewer handles camera selection, event navigation, AI summaries, video playback, and downloads — no HA helpers or sensors needed.
+
+```yaml
+type: iframe
+url: "http://YOUR_BUFFER_IP:5055/player"
+aspect_ratio: "16:9"
+```
+
+### Required Helpers
 
 **1. Notification Target Phone** (Text)
 - **Entity ID**: `input_text.notification_target_phone`
 - **Value**: Your phone's service name (e.g., `mobile_app_sm_s928u`)
 
-**2. Frigate Buffer URL** (Text)
-- **Entity ID**: `input_text.frigate_buffer_url`
-- **Value**: `http://YOUR_FRIGATE_BUFFER_IP:5055`
+Create at Settings > Devices & Services > Helpers.
 
-**3. Security Event Index** (Number)
-- **Entity ID**: `input_number.security_event_index`
-- **Min**: 0, **Max**: 100, **Step**: 1
-- Used for navigating between events in dashboard
+### Events Sensor (optional)
 
-**4. Security Camera Selector** (Dropdown)
-- **Entity ID**: `input_select.security_camera`
-- **Options**: List your camera names (e.g., `doorbell`, `front_yard`, `carport`)
-- Used for filtering events by camera in dashboard
+If you need event data in HA automations or template sensors, create a REST sensor:
 
-### Events Sensor
-
-Create a REST sensor to fetch events for the dashboard. Use `scan_interval: 60` to reduce database writes.
-
-**Global Events Sensor** (all cameras):
 ```yaml
 sensor:
   - platform: rest
@@ -399,33 +434,6 @@ sensor:
       - events
       - cameras
     scan_interval: 60
-```
-
-**Per-Camera Sensor** (optional, for camera-specific views):
-```yaml
-sensor:
-  - platform: rest
-    name: "Frigate Doorbell Events"
-    resource: http://YOUR_FRIGATE_BUFFER_IP:5055/events/doorbell
-    value_template: "{{ value_json.events | length }}"
-    json_attributes:
-      - events
-    scan_interval: 60
-```
-
-### Cameras Endpoint
-
-Query available cameras:
-```bash
-curl http://YOUR_FRIGATE_BUFFER_IP:5055/cameras
-```
-
-Response:
-```json
-{
-  "cameras": ["doorbell", "front_yard", "carport"],
-  "default": "doorbell"
-}
 ```
 
 ## Docker Compose
