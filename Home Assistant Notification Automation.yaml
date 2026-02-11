@@ -1,5 +1,5 @@
 alias: "Frigate Orchestrator: Phone Notifications"
-description: "Terminal automation with validation and optional toggles."
+description: "Terminal automation with validation, optional toggles, and threat level support."
 triggers:
   - trigger: mqtt
     topic: frigate/custom/notifications
@@ -8,8 +8,10 @@ actions:
       # --- DATA MAPPING ---
       payload: "{{ trigger.payload_json }}"
       target_phone: "{{ states('input_text.notification_target_phone') }}"
+      is_critical: "{{ payload.critical | default(false) }}"
+      is_new: "{{ payload.status == 'new' }}"
 
-  # --- Point 1: Validation ---
+  # --- Validation ---
   # Only proceed if the phone helper is actually set
   - condition: template
     value_template: "{{ target_phone | length > 0 }}"
@@ -19,32 +21,45 @@ actions:
       title: "{{ payload.title }}"
       message: "{{ payload.message }}"
       data:
-        # Point 5: Tagging manages sticky accumulation per event
-        tag: "{{ payload.tag }}" 
-        
+        # Tagging manages sticky accumulation per event
+        tag: "{{ payload.tag }}"
+
         # Clicking the notification opens the event viewer
         url: "{{ states('input_text.frigate_buffer_url') }}/player"
         clickAction: "{{ states('input_text.frigate_buffer_url') }}/player"
-        
+
         # Phase-based Media (omit field when null to avoid "None" string)
         image: >-
           {% if payload.image_url %}{{ payload.image_url }}{% endif %}
         video: >-
           {% if payload.video_url %}{{ payload.video_url }}{% endif %}
 
-        # Sound only on first notification, silent updates thereafter
-        importance: "{{ 'high' if payload.status == 'new' else 'low' }}"
+        # Threat level 2 (critical): ALL notifications are audible and bypass DND
+        # Normal (0-1): only "new" status gets sound
+        importance: >-
+          {% if is_critical %}max{% elif is_new %}high{% else %}low{% endif %}
         ttl: 0
-        sound: "{{ 'default' if payload.status == 'new' else 'none' }}"
-        
+        sound: >-
+          {% if is_critical or is_new %}default{% else %}none{% endif %}
+
+        # Critical alerts: use alarm channel (Android) to bypass DND/volume
+        channel: >-
+          {% if is_critical %}alarm{% else %}general{% endif %}
+
+        # iOS critical alert support
+        push:
+          interruption-level: >-
+            {% if is_critical %}critical{% elif is_new %}time-sensitive{% else %}passive{% endif %}
+
         # Persistence settings
         sticky: true
-        notification_icon: "mdi:shield-check"
+        notification_icon: >-
+          {% if is_critical %}mdi:shield-alert{% else %}mdi:shield-check{% endif %}
 
   # --- Dashboard Refresh Logic ---
   - if:
       - condition: template
-        value_template: "{{ payload.status in ['clip_ready', 'finalized'] }}"
+        value_template: "{{ payload.status in ['clip_ready', 'finalized', 'summarized'] }}"
     then:
       - action: homeassistant.update_entity
         target:

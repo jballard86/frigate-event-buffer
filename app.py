@@ -68,6 +68,8 @@ def load_config() -> dict:
         'FFMPEG_TIMEOUT': 60,
         'NOTIFICATION_DELAY': 2,
         'LOG_LEVEL': 'INFO',
+        'SUMMARY_PADDING_BEFORE': 15,
+        'SUMMARY_PADDING_AFTER': 15,
 
         # Filtering defaults (empty = allow all)
         'ALLOWED_CAMERAS': [],
@@ -107,6 +109,8 @@ def load_config() -> dict:
                     config['FFMPEG_TIMEOUT'] = settings.get('ffmpeg_timeout_seconds', config['FFMPEG_TIMEOUT'])
                     config['NOTIFICATION_DELAY'] = settings.get('notification_delay_seconds', config['NOTIFICATION_DELAY'])
                     config['LOG_LEVEL'] = settings.get('log_level', config['LOG_LEVEL'])
+                    config['SUMMARY_PADDING_BEFORE'] = settings.get('summary_padding_before', config['SUMMARY_PADDING_BEFORE'])
+                    config['SUMMARY_PADDING_AFTER'] = settings.get('summary_padding_after', config['SUMMARY_PADDING_AFTER'])
 
                 if 'network' in yaml_config:
                     network = yaml_config['network']
@@ -178,6 +182,7 @@ class EventPhase(Enum):
     NEW = auto()        # Phase 1: Initial detection from frigate/events type=new
     DESCRIBED = auto()  # Phase 2: AI description received from tracked_object_update
     FINALIZED = auto()  # Phase 3: GenAI metadata received from frigate/reviews
+    SUMMARIZED = auto() # Phase 4: Review summary received from Frigate API
 
 
 @dataclass
@@ -196,12 +201,17 @@ class EventState:
     genai_title: Optional[str] = None
     genai_description: Optional[str] = None
     severity: Optional[str] = None
+    threat_level: int = 0  # 0=normal, 1=suspicious, 2=critical
+
+    # Phase 4 data (from review summary API)
+    review_summary: Optional[str] = None
 
     # File management
     folder_path: Optional[str] = None
     clip_downloaded: bool = False
     snapshot_downloaded: bool = False
     summary_written: bool = False
+    review_summary_written: bool = False
 
     # Event end tracking
     end_time: Optional[float] = None
@@ -262,7 +272,8 @@ class EventStateManager:
             return False
 
     def set_genai_metadata(self, event_id: str, title: Optional[str],
-                           description: Optional[str], severity: str) -> bool:
+                           description: Optional[str], severity: str,
+                           threat_level: int = 0) -> bool:
         """Set GenAI review metadata and advance to FINALIZED phase."""
         with self._lock:
             event = self._events.get(event_id)
@@ -270,11 +281,24 @@ class EventStateManager:
                 event.genai_title = title
                 event.genai_description = description
                 event.severity = severity
+                event.threat_level = threat_level
                 event.phase = EventPhase.FINALIZED
-                logger.info(f"Event {event_id} advanced to FINALIZED phase")
+                logger.info(f"Event {event_id} advanced to FINALIZED (threat_level={threat_level})")
                 logger.debug(f"GenAI title: {title}, severity: {severity}")
                 return True
             logger.debug(f"Cannot set GenAI metadata: event {event_id} not found")
+            return False
+
+    def set_review_summary(self, event_id: str, summary: str) -> bool:
+        """Set review summary and advance to SUMMARIZED phase."""
+        with self._lock:
+            event = self._events.get(event_id)
+            if event:
+                event.review_summary = summary
+                event.phase = EventPhase.SUMMARIZED
+                logger.info(f"Event {event_id} advanced to SUMMARIZED phase")
+                return True
+            logger.debug(f"Cannot set review summary: event {event_id} not found")
             return False
 
     def mark_event_ended(self, event_id: str, end_time: float,
@@ -526,6 +550,14 @@ class FileManager:
             if event.severity:
                 lines.append(f"Severity: {event.severity}")
 
+            if event.threat_level > 0:
+                level_names = {0: "Normal", 1: "Suspicious", 2: "Critical"}
+                lines.append(f"Threat Level: {event.threat_level} ({level_names.get(event.threat_level, 'Unknown')})")
+
+            if event.review_summary:
+                lines.append("")
+                lines.append("Review Summary: See review_summary.md")
+
             with open(summary_path, 'w') as f:
                 f.write('\n'.join(lines))
 
@@ -535,6 +567,71 @@ class FileManager:
         except Exception as e:
             logger.error(f"Failed to write summary: {e}")
             return False
+
+    def write_review_summary(self, folder_path: str, summary_markdown: str) -> bool:
+        """Write review_summary.md with the Frigate review summary."""
+        try:
+            summary_path = os.path.join(folder_path, "review_summary.md")
+            with open(summary_path, 'w') as f:
+                f.write(summary_markdown)
+            logger.debug(f"Written review summary to {folder_path}")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to write review summary: {e}")
+            return False
+
+    def write_metadata_json(self, folder_path: str, event: EventState) -> bool:
+        """Write machine-readable metadata.json for the event."""
+        try:
+            meta_path = os.path.join(folder_path, "metadata.json")
+            metadata = {
+                "event_id": event.event_id,
+                "camera": event.camera,
+                "label": event.label,
+                "created_at": event.created_at,
+                "end_time": event.end_time,
+                "threat_level": event.threat_level,
+                "severity": event.severity,
+                "genai_title": event.genai_title,
+                "genai_description": event.genai_description,
+                "phase": event.phase.name,
+            }
+            with open(meta_path, 'w') as f:
+                json.dump(metadata, f, indent=2)
+            return True
+        except Exception as e:
+            logger.error(f"Failed to write metadata.json: {e}")
+            return False
+
+    def fetch_review_summary(self, start_ts: float, end_ts: float,
+                             padding_before: float, padding_after: float) -> Optional[str]:
+        """Fetch review summary from Frigate API with time padding."""
+        padded_start = int(start_ts - padding_before)
+        padded_end = int(end_ts + padding_after)
+
+        url = f"{self.frigate_url}/api/review/summarize/start/{padded_start}/end/{padded_end}"
+        logger.info(f"Fetching review summary: {url}")
+
+        try:
+            response = requests.post(url, timeout=30)
+            response.raise_for_status()
+            data = response.json()
+            summary = data.get("summary", "")
+            if summary:
+                logger.info(f"Review summary received ({len(summary)} chars)")
+                return summary
+            else:
+                logger.warning("Review summary API returned empty summary")
+                return None
+        except requests.exceptions.Timeout:
+            logger.error("Timeout fetching review summary")
+            return None
+        except requests.exceptions.HTTPError as e:
+            logger.error(f"HTTP error fetching review summary: {e}")
+            return None
+        except Exception as e:
+            logger.exception(f"Failed to fetch review summary: {e}")
+            return None
 
     def cleanup_old_events(self, active_event_ids: List[str]) -> int:
         """Delete folders older than retention period. Returns count deleted."""
@@ -787,7 +884,9 @@ class NotificationPublisher:
             "video_url": video_url,
             "player_url": player_url,
             "tag": f"frigate_{event.event_id}",
-            "timestamp": event.created_at
+            "timestamp": event.created_at,
+            "threat_level": event.threat_level,
+            "critical": event.threat_level >= 2
         }
 
         try:
@@ -820,6 +919,13 @@ class NotificationPublisher:
 
     def _build_message(self, event: EventState, status: str) -> str:
         """Build notification message with phase-specific context."""
+        if status == "summarized" and event.review_summary:
+            # Extract first meaningful line (skip markdown headers)
+            lines = [l.strip() for l in event.review_summary.split('\n')
+                     if l.strip() and not l.strip().startswith('#')]
+            excerpt = lines[0] if lines else "Review summary available"
+            return excerpt[:200] + ("..." if len(excerpt) > 200 else "")
+
         if event.genai_description:
             return event.genai_description
 
@@ -1129,8 +1235,10 @@ class StateAwareOrchestrator:
             # Legacy used "title" and "description" in genai
             title = genai.get("title")
             description = genai.get("shortSummary") or genai.get("description")
+            threat_level = int(genai.get("potential_threat_level", 0))
 
-            logger.info(f"Review for {event_id}: title={title or 'N/A'}, description={description or 'N/A'}")
+            logger.info(f"Review for {event_id}: title={title or 'N/A'}, "
+                        f"threat_level={threat_level}")
 
             # Only finalize when actual GenAI data is present
             if not title and not description:
@@ -1141,24 +1249,79 @@ class StateAwareOrchestrator:
                 event_id,
                 title,
                 description,
-                severity
+                severity,
+                threat_level
             ):
                 event = self.state_manager.get_event(event_id)
                 if event:
-                    # Write final summary
+                    # Write final summary and metadata
                     if event.folder_path:
                         event.summary_written = self.file_manager.write_summary(
                             event.folder_path, event
                         )
+                        self.file_manager.write_metadata_json(event.folder_path, event)
 
-                    # Publish final notification
+                    # Publish finalized notification
                     self.notifier.publish_notification(event, "finalized")
 
-                    # Schedule event removal after grace period
-                    threading.Timer(
-                        60.0,  # 1 minute grace period
-                        lambda eid=event_id: self.state_manager.remove_event(eid)
+                    # Fetch review summary in background, then schedule removal
+                    threading.Thread(
+                        target=self._fetch_and_store_review_summary,
+                        args=(event,),
+                        daemon=True
                     ).start()
+
+    def _fetch_and_store_review_summary(self, event: EventState):
+        """Background: fetch review summary from Frigate API, store, notify, then cleanup."""
+        try:
+            # Wait for end_time if not yet available
+            max_wait = 30
+            waited = 0
+            while event.end_time is None and waited < max_wait:
+                time.sleep(2)
+                waited += 2
+
+            if event.end_time is None:
+                logger.warning(f"No end_time for {event.event_id} after {max_wait}s, "
+                               f"using created_at + 60s as fallback")
+                effective_end = event.created_at + 60
+            else:
+                effective_end = event.end_time
+
+            # Brief delay to let Frigate's LLM finish processing
+            time.sleep(5)
+
+            padding_before = self.config.get('SUMMARY_PADDING_BEFORE', 15)
+            padding_after = self.config.get('SUMMARY_PADDING_AFTER', 15)
+
+            summary = self.file_manager.fetch_review_summary(
+                event.created_at, effective_end,
+                padding_before, padding_after
+            )
+
+            if summary:
+                self.state_manager.set_review_summary(event.event_id, summary)
+
+                if event.folder_path:
+                    event.review_summary_written = self.file_manager.write_review_summary(
+                        event.folder_path, summary
+                    )
+                    # Update summary.txt and metadata.json with new phase
+                    self.file_manager.write_summary(event.folder_path, event)
+                    self.file_manager.write_metadata_json(event.folder_path, event)
+
+                self.notifier.publish_notification(event, "summarized")
+            else:
+                logger.warning(f"No review summary obtained for {event.event_id}")
+
+        except Exception as e:
+            logger.exception(f"Error fetching review summary for {event.event_id}: {e}")
+        finally:
+            # Schedule event removal after grace period
+            threading.Timer(
+                60.0,
+                lambda eid=event.event_id: self.state_manager.remove_event(eid)
+            ).start()
 
     def _create_flask_app(self) -> Flask:
         """Create Flask app with all endpoints."""
@@ -1217,6 +1380,23 @@ class StateAwareOrchestrator:
                         summary_text = f.read().strip()
                     parsed = _parse_summary(summary_text)
 
+                # Read metadata.json for structured data (threat_level, etc.)
+                metadata_path = os.path.join(folder_path, 'metadata.json')
+                metadata = {}
+                if os.path.exists(metadata_path):
+                    try:
+                        with open(metadata_path, 'r') as f:
+                            metadata = json.load(f)
+                    except Exception:
+                        pass
+
+                # Read review summary markdown if available
+                review_summary_path = os.path.join(folder_path, 'review_summary.md')
+                review_summary = None
+                if os.path.exists(review_summary_path):
+                    with open(review_summary_path, 'r') as f:
+                        review_summary = f.read().strip()
+
                 clip_path = os.path.join(folder_path, 'clip.mp4')
                 snapshot_path = os.path.join(folder_path, 'snapshot.jpg')
                 viewed_path = os.path.join(folder_path, '.viewed')
@@ -1226,10 +1406,12 @@ class StateAwareOrchestrator:
                     "camera": camera_name,
                     "timestamp": ts,
                     "summary": summary_text,
-                    "title": parsed.get("Title"),
-                    "description": parsed.get("Description") or parsed.get("AI Description"),
-                    "label": parsed.get("Label", "unknown"),
-                    "severity": parsed.get("Severity"),
+                    "title": metadata.get("genai_title") or parsed.get("Title"),
+                    "description": metadata.get("genai_description") or parsed.get("Description") or parsed.get("AI Description"),
+                    "label": metadata.get("label") or parsed.get("Label", "unknown"),
+                    "severity": metadata.get("severity") or parsed.get("Severity"),
+                    "threat_level": metadata.get("threat_level", 0),
+                    "review_summary": review_summary,
                     "has_clip": os.path.exists(clip_path),
                     "has_snapshot": os.path.exists(snapshot_path),
                     "viewed": os.path.exists(viewed_path),
@@ -1453,7 +1635,9 @@ class StateAwareOrchestrator:
                 "config": {
                     "retention_days": self.config['RETENTION_DAYS'],
                     "log_level": self.config.get('LOG_LEVEL', 'INFO'),
-                    "ffmpeg_timeout": self.config.get('FFMPEG_TIMEOUT', 60)
+                    "ffmpeg_timeout": self.config.get('FFMPEG_TIMEOUT', 60),
+                    "summary_padding_before": self.config.get('SUMMARY_PADDING_BEFORE', 15),
+                    "summary_padding_after": self.config.get('SUMMARY_PADDING_AFTER', 15)
                 }
             })
 
