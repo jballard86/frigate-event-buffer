@@ -16,7 +16,8 @@ A state-aware orchestrator that listens to Frigate NVR events via MQTT, tracks t
 - **FFmpeg Safety**: 60-second timeout with graceful termination prevents zombie processes
 - **Rolling Retention**: Automatically cleans up events older than the retention period (default: 3 days)
 - **Notification Rate Limiting**: Max 2 notifications per 5 seconds with queue overflow protection
-- **Built-in Event Viewer**: Self-contained web page at `/player` with video playback, AI analysis, event navigation, and download — embeddable as an HA iframe
+- **Built-in Event Viewer**: Self-contained web page at `/player` with video playback, AI analysis, event navigation, reviewed/unreviewed filtering, and download — embeddable as an HA iframe
+- **Event Review Tracking**: Mark events as reviewed with per-event or bulk "mark all" controls; defaults to showing unreviewed events
 - **REST API**: Serves events, clips, and snapshots to your Home Assistant dashboard
 - **Debug Logging**: Configurable log levels for troubleshooting
 
@@ -106,7 +107,7 @@ settings:
   retention_days: 3
   cleanup_interval_hours: 1
   ffmpeg_timeout_seconds: 60
-  notification_delay_seconds: 5  # Delay before first notification (for snapshot)
+  notification_delay_seconds: 2  # Delay before fetching snapshot after initial notification
   log_level: "DEBUG"  # DEBUG, INFO, WARNING, ERROR
 
 # Network configuration (REQUIRED - no defaults)
@@ -170,13 +171,17 @@ cameras:
 Built-in event viewer web page. Open in a browser or embed as an HA iframe card.
 
 Features:
+- Single-column responsive layout (scales to any device)
 - HTML5 video player with snapshot poster
 - GenAI title and full description display
 - Event metadata (camera, label, timestamp)
 - Camera filter dropdown
+- Reviewed/Unreviewed/All filter (defaults to unreviewed)
+- "Mark Reviewed" per-event and "Mark All Reviewed" bulk action
 - Prev/Next event navigation
 - Download and delete buttons
-- Dark theme, responsive layout (mobile/tablet/desktop)
+- Auto-refresh every 30 seconds (pauses during video playback)
+- Dark theme optimized for HA dark mode
 
 ```
 http://YOUR_BUFFER_IP:5055/player
@@ -202,8 +207,14 @@ Response:
 
 List all events across all cameras (global view).
 
+**Query Parameters:**
+- `?filter=unreviewed` (default) — only unreviewed events
+- `?filter=reviewed` — only reviewed events
+- `?filter=all` — all events
+
 ```bash
 curl http://localhost:5055/events
+curl http://localhost:5055/events?filter=all
 ```
 
 Response:
@@ -223,6 +234,7 @@ Response:
       "summary": "Event ID: ...\nCamera: ...",
       "has_clip": true,
       "has_snapshot": true,
+      "viewed": false,
       "hosted_clip": "/files/doorbell/1234567890_eventid/clip.mp4",
       "hosted_snapshot": "/files/doorbell/1234567890_eventid/snapshot.jpg"
     }
@@ -252,6 +264,30 @@ Manually delete an event folder.
 
 ```bash
 curl -X POST http://localhost:5055/delete/doorbell/1234567890_eventid
+```
+
+### POST /viewed/{camera}/{subdir}
+
+Mark a specific event as reviewed.
+
+```bash
+curl -X POST http://localhost:5055/viewed/doorbell/1234567890_eventid
+```
+
+### DELETE /viewed/{camera}/{subdir}
+
+Remove the reviewed marker from an event.
+
+```bash
+curl -X DELETE http://localhost:5055/viewed/doorbell/1234567890_eventid
+```
+
+### POST /viewed/all
+
+Mark all events across all cameras as reviewed.
+
+```bash
+curl -X POST http://localhost:5055/viewed/all
 ```
 
 ### GET /status
@@ -298,6 +334,7 @@ The orchestrator publishes notifications to `frigate/custom/notifications`:
   "message": "A person in blue jacket approaching the door",
   "image_url": "http://YOUR_BUFFER_IP:5055/files/doorbell/1234567890_eventid/snapshot.jpg",
   "video_url": "http://YOUR_BUFFER_IP:5055/files/doorbell/1234567890_eventid/clip.mp4",
+  "player_url": "http://YOUR_BUFFER_IP:5055/player",
   "tag": "frigate_1234567890.123-abcdef",
   "timestamp": 1234567890.123
 }
@@ -378,9 +415,12 @@ actions:
       message: "{{ payload.message }}"
       data:
         tag: "{{ payload.tag }}"
-        url: "/lovelace/security-alert"
-        image: "{{ payload.image_url }}"
-        video: "{{ payload.video_url }}"
+        url: "{{ states('input_text.frigate_buffer_url') }}/player"
+        clickAction: "{{ states('input_text.frigate_buffer_url') }}/player"
+        image: >-
+          {% if payload.image_url %}{{ payload.image_url }}{% endif %}
+        video: >-
+          {% if payload.video_url %}{{ payload.video_url }}{% endif %}
         importance: "{{ 'high' if payload.status == 'new' else 'low' }}"
         ttl: 0
         sound: "{{ 'default' if payload.status == 'new' else 'none' }}"
@@ -414,11 +454,15 @@ aspect_ratio: "16:9"
 
 ### Required Helpers
 
+Create at Settings > Devices & Services > Helpers.
+
 **1. Notification Target Phone** (Text)
 - **Entity ID**: `input_text.notification_target_phone`
 - **Value**: Your phone's service name (e.g., `mobile_app_sm_s928u`)
 
-Create at Settings > Devices & Services > Helpers.
+**2. Frigate Buffer URL** (Text)
+- **Entity ID**: `input_text.frigate_buffer_url`
+- **Value**: Base URL of the buffer (e.g., `http://REDACTED_LOCAL_IP:5055`)
 
 ### Events Sensor (optional)
 
@@ -498,7 +542,7 @@ The orchestrator includes safeguards against hung FFmpeg processes:
 
 | Time | MQTT Topic | Phase | Action |
 |------|------------|-------|--------|
-| T+0s | `frigate/events` (type=new) | NEW | Create folder, wait delay, fetch snapshot, send notification with image |
+| T+0s | `frigate/events` (type=new) | NEW | Create folder, send instant notification (Frigate snapshot fallback), then fetch local snapshot after delay |
 | T+5s | `frigate/{camera}/tracked_object_update` (type=description) | DESCRIBED | Update with AI description |
 | T+30s | `frigate/events` (type=end) | - | Download snapshot & clip (with retry), transcode |
 | T+35s | *(background processing)* | - | Write summary, send `clip_ready` notification |
@@ -514,7 +558,8 @@ Events are organized by camera:
 │   ├── 1234567890_event-id-1/
 │   │   ├── clip.mp4          # H.264 transcoded video
 │   │   ├── snapshot.jpg      # Event snapshot
-│   │   └── summary.txt       # Event metadata
+│   │   ├── summary.txt       # Event metadata
+│   │   └── .viewed           # Review marker (created when marked as reviewed)
 │   └── 1234567891_event-id-2/
 │       └── ...
 ├── front_yard/

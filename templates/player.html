@@ -17,13 +17,13 @@
   /* Header */
   .header {
     background: #16213e;
-    padding: 12px 20px;
+    padding: 12px 16px;
     display: flex;
     align-items: center;
     justify-content: space-between;
     border-bottom: 1px solid #0f3460;
     flex-wrap: wrap;
-    gap: 10px;
+    gap: 8px;
   }
 
   .header h1 {
@@ -35,7 +35,8 @@
   .header-controls {
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: 8px;
+    flex-wrap: wrap;
   }
 
   select {
@@ -44,29 +45,17 @@
     border: 1px solid #533483;
     border-radius: 6px;
     padding: 6px 10px;
-    font-size: 0.9rem;
+    font-size: 0.85rem;
     cursor: pointer;
   }
 
   select:focus { outline: 2px solid #e94560; }
 
-  /* Main layout */
+  /* Main single-column layout */
   .main {
-    display: flex;
-    gap: 20px;
-    padding: 20px;
-    max-width: 1400px;
+    max-width: 800px;
     margin: 0 auto;
-  }
-
-  .video-section {
-    flex: 1;
-    min-width: 0;
-  }
-
-  .info-section {
-    width: 360px;
-    flex-shrink: 0;
+    padding: 16px;
   }
 
   /* Video player */
@@ -74,10 +63,10 @@
     background: #000;
     border-radius: 8px;
     overflow: hidden;
-    position: relative;
   }
 
-  .video-container video {
+  .video-container video,
+  .video-container img {
     width: 100%;
     display: block;
   }
@@ -86,7 +75,7 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    min-height: 300px;
+    min-height: 240px;
     color: #666;
     font-size: 1.1rem;
   }
@@ -96,8 +85,9 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    margin-top: 12px;
+    margin-top: 10px;
     gap: 8px;
+    flex-wrap: wrap;
   }
 
   .nav-bar .event-counter {
@@ -116,7 +106,7 @@
     color: #e0e0e0;
     border: 1px solid #533483;
     border-radius: 6px;
-    padding: 8px 16px;
+    padding: 7px 14px;
     font-size: 0.85rem;
     cursor: pointer;
     transition: background 0.15s;
@@ -126,51 +116,44 @@
   button:hover:not(:disabled) { background: #533483; }
   button:disabled { opacity: 0.4; cursor: not-allowed; }
 
-  .btn-danger {
-    background: #5c1a1a;
-    border-color: #8b2020;
-  }
+  .btn-danger { background: #5c1a1a; border-color: #8b2020; }
   .btn-danger:hover:not(:disabled) { background: #8b2020; }
 
-  .btn-download {
-    background: #1a4a1a;
-    border-color: #2d7a2d;
-  }
+  .btn-download { background: #1a4a1a; border-color: #2d7a2d; }
   .btn-download:hover { background: #2d7a2d; }
 
-  /* Info panel */
+  .btn-success { background: #1a4a1a; border-color: #2d7a2d; }
+  .btn-success:hover:not(:disabled) { background: #2d7a2d; }
+
+  .btn-mark-all { background: #4a3a1a; border-color: #7a6a2d; }
+  .btn-mark-all:hover:not(:disabled) { background: #7a6a2d; }
+
+  /* Info cards */
   .info-card {
     background: #16213e;
     border: 1px solid #0f3460;
     border-radius: 8px;
-    padding: 16px;
-    margin-bottom: 12px;
+    padding: 14px;
+    margin-top: 10px;
   }
 
   .info-card h2 {
-    font-size: 1rem;
+    font-size: 0.95rem;
     color: #e94560;
-    margin-bottom: 10px;
+    margin-bottom: 8px;
     border-bottom: 1px solid #0f3460;
-    padding-bottom: 8px;
+    padding-bottom: 6px;
   }
 
   .meta-grid {
     display: grid;
     grid-template-columns: auto 1fr;
-    gap: 6px 12px;
+    gap: 4px 12px;
     font-size: 0.9rem;
   }
 
-  .meta-label {
-    color: #888;
-    font-weight: 500;
-  }
-
-  .meta-value {
-    color: #e0e0e0;
-    word-break: break-word;
-  }
+  .meta-label { color: #888; font-weight: 500; }
+  .meta-value { color: #e0e0e0; word-break: break-word; }
 
   .description-text {
     font-size: 0.9rem;
@@ -179,11 +162,10 @@
     white-space: pre-wrap;
   }
 
-  .snapshot-preview {
-    width: 100%;
-    border-radius: 6px;
-    margin-top: 8px;
-    cursor: pointer;
+  .ai-title {
+    font-weight: 600;
+    margin-bottom: 6px;
+    color: #e0e0e0;
   }
 
   /* Empty state */
@@ -206,35 +188,42 @@
     color: #888;
   }
 
-  /* Responsive: tablet */
-  @media (max-width: 960px) {
-    .main {
-      flex-direction: column;
-    }
-    .info-section {
-      width: 100%;
-    }
+  /* Updated flash */
+  .flash {
+    position: fixed;
+    top: 8px;
+    right: 8px;
+    background: #2d7a2d;
+    color: #fff;
+    padding: 6px 14px;
+    border-radius: 6px;
+    font-size: 0.8rem;
+    opacity: 0;
+    transition: opacity 0.3s;
+    pointer-events: none;
+    z-index: 100;
+  }
+
+  .flash.show { opacity: 1; }
+
+  /* Viewed badge */
+  .viewed-badge {
+    display: inline-block;
+    background: #2d7a2d;
+    color: #fff;
+    font-size: 0.7rem;
+    padding: 2px 6px;
+    border-radius: 4px;
+    margin-left: 8px;
+    vertical-align: middle;
   }
 
   /* Responsive: mobile */
   @media (max-width: 600px) {
-    .header {
-      padding: 10px 12px;
-    }
-    .header h1 {
-      font-size: 0.95rem;
-    }
-    .main {
-      padding: 12px;
-      gap: 12px;
-    }
-    button {
-      padding: 6px 10px;
-      font-size: 0.8rem;
-    }
-    .info-section {
-      width: 100%;
-    }
+    .header { padding: 10px 12px; }
+    .header h1 { font-size: 0.95rem; }
+    .main { padding: 10px; }
+    button { padding: 6px 10px; font-size: 0.8rem; }
   }
 </style>
 </head>
@@ -246,8 +235,16 @@
     <select id="cameraSelect">
       <option value="">All Cameras</option>
     </select>
+    <select id="filterSelect">
+      <option value="unreviewed">Unreviewed</option>
+      <option value="all">All Events</option>
+      <option value="reviewed">Reviewed</option>
+    </select>
+    <button class="btn-mark-all" id="btnMarkAll">Mark All Reviewed</button>
   </div>
 </div>
+
+<div class="flash" id="flash"></div>
 
 <div id="mainContent" class="main">
   <div class="loading">Loading events...</div>
@@ -259,9 +256,21 @@
 
   let events = [];
   let currentIndex = 0;
+  let refreshTimer = null;
+  let videoPlaying = false;
 
   const cameraSelect = document.getElementById('cameraSelect');
+  const filterSelect = document.getElementById('filterSelect');
   const mainContent = document.getElementById('mainContent');
+  const btnMarkAll = document.getElementById('btnMarkAll');
+  const flashEl = document.getElementById('flash');
+
+  // --- Flash ---
+  function showFlash(msg) {
+    flashEl.textContent = msg;
+    flashEl.classList.add('show');
+    setTimeout(() => flashEl.classList.remove('show'), 1500);
+  }
 
   // --- API ---
   async function fetchCameras() {
@@ -279,17 +288,41 @@
     }
   }
 
-  async function fetchEvents(camera) {
+  async function fetchEvents(opts) {
+    const camera = cameraSelect.value;
+    const filter = filterSelect.value;
+    const silent = opts && opts.silent;
+
     try {
-      const url = camera ? `/events/${encodeURIComponent(camera)}` : '/events';
-      const resp = await fetch(url);
+      const base = camera ? `/events/${encodeURIComponent(camera)}` : '/events';
+      const resp = await fetch(`${base}?filter=${filter}`);
       const data = await resp.json();
-      events = data.events || [];
-      currentIndex = 0;
+      const newEvents = data.events || [];
+
+      if (silent) {
+        // Preserve position by event_id
+        const currentId = events[currentIndex] ? events[currentIndex].event_id : null;
+        events = newEvents;
+        if (currentId) {
+          const idx = events.findIndex(e => e.event_id === currentId);
+          currentIndex = idx >= 0 ? idx : 0;
+        } else {
+          currentIndex = 0;
+        }
+        if (newEvents.length !== events.length) {
+          showFlash('Updated');
+        }
+      } else {
+        events = newEvents;
+        currentIndex = 0;
+      }
+
       render();
     } catch (e) {
       console.error('Failed to fetch events:', e);
-      mainContent.innerHTML = '<div class="empty-state"><h2>Error loading events</h2><p>Could not connect to the API.</p></div>';
+      if (!silent) {
+        mainContent.innerHTML = '<div class="empty-state"><h2>Error loading events</h2><p>Could not connect to the API.</p></div>';
+      }
     }
   }
 
@@ -309,13 +342,48 @@
     }
   }
 
+  async function markViewed(camera, subdir) {
+    try {
+      await fetch(`/viewed/${camera}/${subdir}`, { method: 'POST' });
+      // If viewing unreviewed, remove from list; otherwise update in place
+      if (filterSelect.value === 'unreviewed') {
+        events.splice(currentIndex, 1);
+        if (currentIndex >= events.length) currentIndex = Math.max(0, events.length - 1);
+      } else {
+        events[currentIndex].viewed = true;
+      }
+      render();
+    } catch (e) {
+      console.error('Error marking viewed:', e);
+    }
+  }
+
+  async function markAllViewed() {
+    if (!confirm('Mark all events as reviewed?')) return;
+    try {
+      const resp = await fetch('/viewed/all', { method: 'POST' });
+      if (resp.ok) {
+        if (filterSelect.value === 'unreviewed') {
+          events = [];
+          currentIndex = 0;
+        } else {
+          events.forEach(e => e.viewed = true);
+        }
+        render();
+        showFlash('All marked reviewed');
+      }
+    } catch (e) {
+      console.error('Error marking all viewed:', e);
+    }
+  }
+
   // --- Render ---
   function render() {
     if (events.length === 0) {
       mainContent.innerHTML = `
         <div class="empty-state">
           <h2>No Events Found</h2>
-          <p>No security events recorded${cameraSelect.value ? ' for this camera' : ''}.</p>
+          <p>No ${filterSelect.value === 'reviewed' ? 'reviewed' : filterSelect.value === 'unreviewed' ? 'unreviewed' : ''} events${cameraSelect.value ? ' for this camera' : ''}.</p>
         </div>`;
       return;
     }
@@ -323,76 +391,78 @@
     const ev = events[currentIndex];
     const ts = ev.timestamp ? new Date(parseInt(ev.timestamp) * 1000) : null;
     const timeStr = ts ? ts.toLocaleString() : 'Unknown';
-    const title = ev.title || ev.label.replace(/\b\w/g, c => c.toUpperCase()) + ' Detected';
+    const title = ev.title || (ev.label || 'Event').replace(/\b\w/g, c => c.toUpperCase()) + ' Detected';
     const description = ev.description || ev.summary || 'No description available.';
     const cameraDisplay = ev.camera.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
     const labelDisplay = (ev.label || 'unknown').replace(/\b\w/g, c => c.toUpperCase());
-
-    // Build the subdir for delete (timestamp_eventid)
-    const subdir = ev.hosted_clip.split('/').slice(-2, -1)[0]; // e.g. "1234567890_eventid"
+    const subdir = ev.hosted_clip.split('/').slice(-2, -1)[0];
 
     mainContent.innerHTML = `
-      <div class="video-section">
-        <div class="video-container">
-          ${ev.has_clip
-            ? `<video id="videoPlayer" controls preload="metadata"
-                 poster="${ev.has_snapshot ? ev.hosted_snapshot : ''}"
-                 src="${ev.hosted_clip}">
-                 Your browser does not support the video tag.
-               </video>`
-            : ev.has_snapshot
-              ? `<img src="${ev.hosted_snapshot}" style="width:100%;display:block;border-radius:8px;" alt="Snapshot">`
-              : `<div class="no-video">No media available</div>`
-          }
+      <div class="video-container">
+        ${ev.has_clip
+          ? `<video id="videoPlayer" controls preload="metadata"
+               poster="${ev.has_snapshot ? ev.hosted_snapshot : ''}"
+               src="${ev.hosted_clip}">
+               Your browser does not support the video tag.
+             </video>`
+          : ev.has_snapshot
+            ? `<img src="${ev.hosted_snapshot}" alt="Snapshot">`
+            : `<div class="no-video">No media available</div>`
+        }
+      </div>
+
+      <div class="nav-bar">
+        <div class="nav-buttons">
+          <button id="btnNewer" ${currentIndex <= 0 ? 'disabled' : ''}>&#9664; Newer</button>
+          <button id="btnOlder" ${currentIndex >= events.length - 1 ? 'disabled' : ''}>Older &#9654;</button>
         </div>
-        <div class="nav-bar">
-          <div class="nav-buttons">
-            <button id="btnNewer" ${currentIndex <= 0 ? 'disabled' : ''}>&#9664; Newer</button>
-            <button id="btnOlder" ${currentIndex >= events.length - 1 ? 'disabled' : ''}>Older &#9654;</button>
-          </div>
-          <span class="event-counter">${currentIndex + 1} / ${events.length}</span>
-          <div class="nav-buttons">
-            ${ev.has_clip ? `<a href="${ev.hosted_clip}" download style="text-decoration:none;"><button class="btn-download">Download</button></a>` : ''}
-            <button class="btn-danger" id="btnDelete">Delete</button>
-          </div>
+        <span class="event-counter">${currentIndex + 1} / ${events.length}${ev.viewed ? '<span class="viewed-badge">Reviewed</span>' : ''}</span>
+        <div class="nav-buttons">
+          ${!ev.viewed ? `<button class="btn-success" id="btnMarkReviewed">Reviewed</button>` : ''}
+          ${ev.has_clip ? `<a href="${ev.hosted_clip}" download style="text-decoration:none;"><button class="btn-download">Download</button></a>` : ''}
+          <button class="btn-danger" id="btnDelete">Delete</button>
         </div>
       </div>
-      <div class="info-section">
-        <div class="info-card">
-          <h2>AI Analysis</h2>
-          ${ev.title ? `<p style="font-weight:600;margin-bottom:8px;color:#e0e0e0;">${escapeHtml(ev.title)}</p>` : ''}
-          <p class="description-text">${escapeHtml(description)}</p>
+
+      <div class="info-card">
+        <h2>AI Analysis</h2>
+        ${ev.title ? `<p class="ai-title">${escapeHtml(ev.title)}</p>` : ''}
+        <p class="description-text">${escapeHtml(description)}</p>
+      </div>
+
+      <div class="info-card">
+        <h2>Event Details</h2>
+        <div class="meta-grid">
+          <span class="meta-label">Camera</span>
+          <span class="meta-value">${escapeHtml(cameraDisplay)}</span>
+          <span class="meta-label">Label</span>
+          <span class="meta-value">${escapeHtml(labelDisplay)}</span>
+          <span class="meta-label">Time</span>
+          <span class="meta-value">${escapeHtml(timeStr)}</span>
+          ${ev.severity ? `<span class="meta-label">Severity</span><span class="meta-value">${escapeHtml(ev.severity)}</span>` : ''}
+          <span class="meta-label">Event ID</span>
+          <span class="meta-value" style="font-size:0.8rem;color:#888;">${escapeHtml(ev.event_id)}</span>
         </div>
-        <div class="info-card">
-          <h2>Event Details</h2>
-          <div class="meta-grid">
-            <span class="meta-label">Camera</span>
-            <span class="meta-value">${escapeHtml(cameraDisplay)}</span>
-            <span class="meta-label">Label</span>
-            <span class="meta-value">${escapeHtml(labelDisplay)}</span>
-            <span class="meta-label">Time</span>
-            <span class="meta-value">${escapeHtml(timeStr)}</span>
-            <span class="meta-label">Event ID</span>
-            <span class="meta-value" style="font-size:0.8rem;color:#888;">${escapeHtml(ev.event_id)}</span>
-            ${ev.severity ? `<span class="meta-label">Severity</span><span class="meta-value">${escapeHtml(ev.severity)}</span>` : ''}
-          </div>
-        </div>
-        ${ev.has_snapshot ? `
-        <div class="info-card">
-          <h2>Snapshot</h2>
-          <img class="snapshot-preview" src="${ev.hosted_snapshot}" alt="Snapshot"
-               onclick="document.getElementById('videoPlayer')&&document.getElementById('videoPlayer').play()">
-        </div>` : ''}
       </div>`;
 
     // Bind navigation
     const btnNewer = document.getElementById('btnNewer');
     const btnOlder = document.getElementById('btnOlder');
     const btnDelete = document.getElementById('btnDelete');
+    const btnMarkReviewed = document.getElementById('btnMarkReviewed');
+    const video = document.getElementById('videoPlayer');
 
     if (btnNewer) btnNewer.addEventListener('click', () => { if (currentIndex > 0) { currentIndex--; render(); } });
     if (btnOlder) btnOlder.addEventListener('click', () => { if (currentIndex < events.length - 1) { currentIndex++; render(); } });
     if (btnDelete) btnDelete.addEventListener('click', () => deleteEvent(ev.camera, subdir));
+    if (btnMarkReviewed) btnMarkReviewed.addEventListener('click', () => markViewed(ev.camera, subdir));
+
+    // Track video playing state for auto-refresh
+    if (video) {
+      video.addEventListener('play', () => { videoPlaying = true; });
+      video.addEventListener('pause', () => { videoPlaying = false; });
+      video.addEventListener('ended', () => { videoPlaying = false; });
+    }
   }
 
   function escapeHtml(str) {
@@ -402,10 +472,24 @@
     return div.innerHTML;
   }
 
+  // --- Auto-refresh ---
+  function startAutoRefresh() {
+    if (refreshTimer) clearInterval(refreshTimer);
+    refreshTimer = setInterval(() => {
+      if (!videoPlaying) {
+        fetchEvents({ silent: true });
+      }
+    }, 30000);
+  }
+
   // --- Init ---
-  cameraSelect.addEventListener('change', () => fetchEvents(cameraSelect.value));
+  cameraSelect.addEventListener('change', () => fetchEvents());
+  filterSelect.addEventListener('change', () => fetchEvents());
+  btnMarkAll.addEventListener('click', markAllViewed);
+
   fetchCameras();
-  fetchEvents('');
+  fetchEvents();
+  startAutoRefresh();
 })();
 </script>
 </body>
