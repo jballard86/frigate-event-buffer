@@ -27,7 +27,7 @@ import yaml
 import paho.mqtt.client as mqtt
 import requests
 import schedule
-from flask import Flask, send_from_directory, jsonify, render_template
+from flask import Flask, send_from_directory, jsonify, render_template, request
 
 # =============================================================================
 # CONFIGURATION
@@ -619,10 +619,12 @@ class NotificationPublisher:
     RATE_WINDOW_SECONDS = 5.0
     MAX_QUEUE_SIZE = 10
 
-    def __init__(self, mqtt_client: mqtt.Client, buffer_ip: str, flask_port: int):
+    def __init__(self, mqtt_client: mqtt.Client, buffer_ip: str, flask_port: int,
+                 frigate_url: str = ""):
         self.mqtt_client = mqtt_client
         self.buffer_ip = buffer_ip
         self.flask_port = flask_port
+        self.frigate_url = frigate_url.rstrip('/')
 
         # Rate limiting state
         self._notification_times: List[float] = []
@@ -756,9 +758,11 @@ class NotificationPublisher:
             # Get camera from folder path (parent directory)
             camera_dir = os.path.basename(os.path.dirname(event.folder_path))
             base_url = f"http://{self.buffer_ip}:{self.flask_port}/files/{camera_dir}/{folder_name}"
-            # Only include URLs when files actually exist
+            # Include image URL: prefer local snapshot, fallback to Frigate API
             if event.snapshot_downloaded:
                 image_url = f"{base_url}/snapshot.jpg"
+            elif self.frigate_url:
+                image_url = f"{self.frigate_url}/api/events/{event.event_id}/snapshot.jpg"
             if event.clip_downloaded:
                 video_url = f"{base_url}/clip.mp4"
 
@@ -877,7 +881,8 @@ class StateAwareOrchestrator:
         self.notifier = NotificationPublisher(
             self.mqtt_client,
             config['BUFFER_IP'],
-            config['FLASK_PORT']
+            config['FLASK_PORT'],
+            config.get('FRIGATE_URL', '')
         )
 
         # Flask app
@@ -1214,6 +1219,7 @@ class StateAwareOrchestrator:
 
                 clip_path = os.path.join(folder_path, 'clip.mp4')
                 snapshot_path = os.path.join(folder_path, 'snapshot.jpg')
+                viewed_path = os.path.join(folder_path, '.viewed')
 
                 events.append({
                     "event_id": eid,
@@ -1226,6 +1232,7 @@ class StateAwareOrchestrator:
                     "severity": parsed.get("Severity"),
                     "has_clip": os.path.exists(clip_path),
                     "has_snapshot": os.path.exists(snapshot_path),
+                    "viewed": os.path.exists(viewed_path),
                     "hosted_clip": f"/files/{camera_name}/{subdir}/clip.mp4",
                     "hosted_snapshot": f"/files/{camera_name}/{subdir}/snapshot.jpg"
                 })
@@ -1258,6 +1265,16 @@ class StateAwareOrchestrator:
                 "default": all_cameras[0] if all_cameras else None
             })
 
+        def _filter_events(events: list) -> list:
+            """Apply ?filter= query param: unreviewed (default), reviewed, all."""
+            f = request.args.get('filter', 'unreviewed')
+            if f == 'reviewed':
+                return [e for e in events if e.get('viewed')]
+            elif f == 'all':
+                return events
+            else:  # unreviewed (default)
+                return [e for e in events if not e.get('viewed')]
+
         @app.route('/events/<camera>')
         def list_camera_events(camera):
             """List events for a specific camera."""
@@ -1266,7 +1283,7 @@ class StateAwareOrchestrator:
             file_manager.cleanup_old_events(active_ids)
 
             sanitized = file_manager.sanitize_camera_name(camera)
-            events = _get_events_for_camera(sanitized)
+            events = _filter_events(_get_events_for_camera(sanitized))
 
             return jsonify({
                 "camera": sanitized,
@@ -1306,10 +1323,11 @@ class StateAwareOrchestrator:
                 logger.error(f"Error listing events: {e}")
                 return jsonify({"error": str(e)}), 500
 
+            filtered = _filter_events(all_events)
             return jsonify({
                 "cameras": sorted(cameras_found),
-                "total_count": len(all_events),
-                "events": all_events
+                "total_count": len(filtered),
+                "events": filtered
             })
 
         @app.route('/delete/<path:subdir>', methods=['POST'])
@@ -1342,6 +1360,61 @@ class StateAwareOrchestrator:
                 "status": "error",
                 "message": "Invalid folder or path"
             }), 400
+
+        @app.route('/viewed/<camera>/<subdir>', methods=['POST'])
+        def mark_viewed(camera, subdir):
+            """Mark a specific event as viewed."""
+            base_dir = os.path.realpath(storage_path)
+            folder_path = os.path.realpath(os.path.join(base_dir, camera, subdir))
+
+            if not folder_path.startswith(base_dir) or folder_path == base_dir:
+                return jsonify({"status": "error", "message": "Invalid path"}), 400
+
+            if not os.path.isdir(folder_path):
+                return jsonify({"status": "error", "message": "Event not found"}), 404
+
+            viewed_path = os.path.join(folder_path, '.viewed')
+            try:
+                open(viewed_path, 'a').close()
+                return jsonify({"status": "success"}), 200
+            except Exception as e:
+                return jsonify({"status": "error", "message": str(e)}), 500
+
+        @app.route('/viewed/<camera>/<subdir>', methods=['DELETE'])
+        def unmark_viewed(camera, subdir):
+            """Remove viewed marker from a specific event."""
+            base_dir = os.path.realpath(storage_path)
+            folder_path = os.path.realpath(os.path.join(base_dir, camera, subdir))
+
+            if not folder_path.startswith(base_dir) or folder_path == base_dir:
+                return jsonify({"status": "error", "message": "Invalid path"}), 400
+
+            viewed_path = os.path.join(folder_path, '.viewed')
+            if os.path.exists(viewed_path):
+                os.remove(viewed_path)
+            return jsonify({"status": "success"}), 200
+
+        @app.route('/viewed/all', methods=['POST'])
+        def mark_all_viewed():
+            """Mark ALL events across all cameras as viewed."""
+            count = 0
+            try:
+                for camera_dir in os.listdir(storage_path):
+                    camera_path = os.path.join(storage_path, camera_dir)
+                    if not os.path.isdir(camera_path) or camera_dir.split('_')[0].isdigit():
+                        continue
+                    for subdir in os.listdir(camera_path):
+                        folder_path = os.path.join(camera_path, subdir)
+                        if os.path.isdir(folder_path):
+                            viewed_path = os.path.join(folder_path, '.viewed')
+                            if not os.path.exists(viewed_path):
+                                open(viewed_path, 'a').close()
+                                count += 1
+            except Exception as e:
+                logger.error(f"Error marking all viewed: {e}")
+                return jsonify({"status": "error", "message": str(e)}), 500
+
+            return jsonify({"status": "success", "marked": count}), 200
 
         @app.route('/files/<path:filename>')
         def serve_file(filename):

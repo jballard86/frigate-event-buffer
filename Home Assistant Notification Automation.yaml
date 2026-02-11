@@ -26,9 +26,11 @@ actions:
         url: "{{ states('input_text.frigate_buffer_url') }}/player"
         clickAction: "{{ states('input_text.frigate_buffer_url') }}/player"
         
-        # Phase-based Media
-        image: "{{ payload.image_url }}"
-        video: "{{ payload.video_url }}"
+        # Phase-based Media (omit field when null to avoid "None" string)
+        image: >-
+          {% if payload.image_url %}{{ payload.image_url }}{% endif %}
+        video: >-
+          {% if payload.video_url %}{{ payload.video_url }}{% endif %}
 
         # Sound only on first notification, silent updates thereafter
         importance: "{{ 'high' if payload.status == 'new' else 'low' }}"
