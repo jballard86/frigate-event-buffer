@@ -39,6 +39,11 @@ settings:
   # FFmpeg transcode timeout in seconds (kills hung processes)
   ffmpeg_timeout_seconds: 60
 
+  # Delay before sending the first notification (seconds)
+  # Allows Frigate to capture a better snapshot frame before notifying
+  # Set to 0 for instant notifications (without snapshot)
+  notification_delay_seconds: 5
+
   # Logging level: DEBUG, INFO, WARNING, ERROR
   log_level: "INFO"
 
