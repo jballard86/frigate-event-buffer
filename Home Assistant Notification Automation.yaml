@@ -5,11 +5,6 @@ triggers:
     topic: frigate/custom/notifications
 actions:
   - variables:
-      # --- CONFIGURATION TOGGLES ---
-      # Set these to true/false as needed
-      use_high_priority: false
-      use_custom_sound: false
-      
       # --- DATA MAPPING ---
       payload: "{{ trigger.payload_json }}"
       target_phone: "{{ states('input_text.notification_target_phone') }}"
@@ -34,11 +29,11 @@ actions:
         # Phase-based Media
         image: "{{ payload.image_url }}"
         video: "{{ payload.video_url }}"
-        
-        # Point 3 & 4: Optional Toggles
-        importance: "{{ 'high' if use_high_priority else 'default' }}"
-        ttl: "{{ 0 if use_high_priority else 3600 }}"
-        sound: "{{ 'default' if not use_custom_sound else 'security_alert.mp3' }}"
+
+        # Sound only on first notification, silent updates thereafter
+        importance: "{{ 'high' if payload.status == 'new' else 'low' }}"
+        ttl: 0
+        sound: "{{ 'default' if payload.status == 'new' else 'none' }}"
         
         # Persistence settings
         sticky: true

@@ -66,6 +66,7 @@ def load_config() -> dict:
         'RETENTION_DAYS': 3,
         'CLEANUP_INTERVAL_HOURS': 1,
         'FFMPEG_TIMEOUT': 60,
+        'NOTIFICATION_DELAY': 5,
         'LOG_LEVEL': 'INFO',
 
         # Filtering defaults (empty = allow all)
@@ -104,6 +105,7 @@ def load_config() -> dict:
                     config['RETENTION_DAYS'] = settings.get('retention_days', config['RETENTION_DAYS'])
                     config['CLEANUP_INTERVAL_HOURS'] = settings.get('cleanup_interval_hours', config['CLEANUP_INTERVAL_HOURS'])
                     config['FFMPEG_TIMEOUT'] = settings.get('ffmpeg_timeout_seconds', config['FFMPEG_TIMEOUT'])
+                    config['NOTIFICATION_DELAY'] = settings.get('notification_delay_seconds', config['NOTIFICATION_DELAY'])
                     config['LOG_LEVEL'] = settings.get('log_level', config['LOG_LEVEL'])
 
                 if 'network' in yaml_config:
@@ -160,6 +162,9 @@ def setup_logging(log_level: str):
     # Reconfigure the root logger
     logging.getLogger().setLevel(level)
     logger.setLevel(level)
+
+    # Suppress werkzeug per-request logging (floods logs with GET /events)
+    logging.getLogger('werkzeug').setLevel(logging.WARNING)
 
     logger.info(f"Log level set to {log_level.upper()}")
 
@@ -751,8 +756,9 @@ class NotificationPublisher:
             # Get camera from folder path (parent directory)
             camera_dir = os.path.basename(os.path.dirname(event.folder_path))
             base_url = f"http://{self.ha_ip}:{self.flask_port}/files/{camera_dir}/{folder_name}"
-            image_url = f"{base_url}/snapshot.jpg"
-            # Only include video URL if clip was actually downloaded
+            # Only include URLs when files actually exist
+            if event.snapshot_downloaded:
+                image_url = f"{base_url}/snapshot.jpg"
             if event.clip_downloaded:
                 video_url = f"{base_url}/clip.mp4"
 
@@ -877,6 +883,10 @@ class StateAwareOrchestrator:
         # Scheduler thread
         self._scheduler_thread = None
 
+        # Request counter for periodic logging
+        self._request_count = 0
+        self._request_count_lock = threading.Lock()
+
     def _on_mqtt_connect(self, client, userdata, flags, rc):
         """Handle MQTT connection."""
         if rc == 0:
@@ -974,8 +984,31 @@ class StateAwareOrchestrator:
         folder_path = self.file_manager.create_event_folder(event_id, camera, start_time)
         event.folder_path = folder_path
 
-        # Publish initial notification
-        self.notifier.publish_notification(event, "new")
+        # Delay, fetch snapshot, then notify (Ring-style: image-first notification)
+        delay = self.config.get('NOTIFICATION_DELAY', 5)
+        threading.Thread(
+            target=self._send_initial_notification,
+            args=(event, delay),
+            daemon=True
+        ).start()
+
+    def _send_initial_notification(self, event: EventState, delay: float):
+        """Fetch snapshot after brief delay, then send initial notification with image."""
+        try:
+            if delay > 0:
+                time.sleep(delay)
+
+            # Download snapshot from Frigate (available immediately on event start)
+            if event.folder_path:
+                event.snapshot_downloaded = self.file_manager.download_snapshot(
+                    event.event_id, event.folder_path
+                )
+
+            self.notifier.publish_notification(event, "new")
+        except Exception as e:
+            logger.error(f"Error sending initial notification for {event.event_id}: {e}")
+            # Still try to send notification without snapshot
+            self.notifier.publish_notification(event, "new")
 
     def _handle_event_end(self, event_id: str, end_time: float,
                           has_clip: bool, has_snapshot: bool):
@@ -1088,6 +1121,11 @@ class StateAwareOrchestrator:
 
             logger.info(f"Review for {event_id}: title={title or 'N/A'}, has_description={bool(description)}")
 
+            # Only finalize when actual GenAI data is present
+            if not title and not description:
+                logger.debug(f"Skipping finalization for {event_id}: no GenAI data yet")
+                continue
+
             if self.state_manager.set_genai_metadata(
                 event_id,
                 title,
@@ -1118,6 +1156,12 @@ class StateAwareOrchestrator:
         allowed_cameras = self.config.get('ALLOWED_CAMERAS', [])
         state_manager = self.state_manager
         file_manager = self.file_manager
+        orchestrator = self
+
+        @app.before_request
+        def _count_request():
+            with orchestrator._request_count_lock:
+                orchestrator._request_count += 1
 
         def _get_events_for_camera(camera_name: str) -> list:
             """Helper to get events for a specific camera."""
@@ -1315,11 +1359,20 @@ class StateAwareOrchestrator:
         """Background thread for scheduled tasks."""
         cleanup_hours = self.config.get('CLEANUP_INTERVAL_HOURS', 1)
         schedule.every(cleanup_hours).hours.do(self._hourly_cleanup)
+        schedule.every(5).minutes.do(self._log_request_stats)
         logger.info(f"Scheduled cleanup every {cleanup_hours} hour(s)")
 
         while not self._shutdown:
             schedule.run_pending()
             time.sleep(60)  # Check every minute
+
+    def _log_request_stats(self):
+        """Log API request count every 5 minutes."""
+        with self._request_count_lock:
+            count = self._request_count
+            self._request_count = 0
+        active = self.state_manager.get_active_event_count() if hasattr(self.state_manager, 'get_active_event_count') else len(self.state_manager._events)
+        logger.info(f"API stats (5m): {count} requests, {active} active events, MQTT {'connected' if self.mqtt_connected else 'disconnected'}")
 
     def _hourly_cleanup(self):
         """Hourly cleanup task."""

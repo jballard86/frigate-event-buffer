@@ -105,6 +105,7 @@ settings:
   retention_days: 3
   cleanup_interval_hours: 1
   ffmpeg_timeout_seconds: 60
+  notification_delay_seconds: 5  # Delay before first notification (for snapshot)
   log_level: "DEBUG"  # DEBUG, INFO, WARNING, ERROR
 
 # Network configuration (REQUIRED - no defaults)
@@ -314,21 +315,16 @@ binary_sensor:
 
 ### Notification Automation
 
-This automation uses a dynamic phone target via a helper, includes validation, and supports optional priority/sound toggles:
+This automation uses a dynamic phone target via a helper. Sound plays only on the initial detection; subsequent updates (clip, AI description) silently replace the notification:
 
 ```yaml
 alias: "Frigate Orchestrator: Phone Notifications"
-description: "Terminal automation with validation and optional toggles."
+description: "Ring-style notifications with sound on first alert, silent updates."
 triggers:
   - trigger: mqtt
     topic: frigate/custom/notifications
 actions:
   - variables:
-      # --- CONFIGURATION TOGGLES ---
-      use_high_priority: false
-      use_custom_sound: false
-
-      # --- DATA MAPPING ---
       payload: "{{ trigger.payload_json }}"
       target_phone: "{{ states('input_text.notification_target_phone') }}"
 
@@ -345,9 +341,9 @@ actions:
         url: "/lovelace/security-alert"
         image: "{{ payload.image_url }}"
         video: "{{ payload.video_url }}"
-        importance: "{{ 'high' if use_high_priority else 'default' }}"
-        ttl: "{{ 0 if use_high_priority else 3600 }}"
-        sound: "{{ 'default' if not use_custom_sound else 'security_alert.mp3' }}"
+        importance: "{{ 'high' if payload.status == 'new' else 'low' }}"
+        ttl: 0
+        sound: "{{ 'default' if payload.status == 'new' else 'none' }}"
         sticky: true
         notification_icon: "mdi:shield-check"
 
@@ -494,7 +490,7 @@ The orchestrator includes safeguards against hung FFmpeg processes:
 
 | Time | MQTT Topic | Phase | Action |
 |------|------------|-------|--------|
-| T+0s | `frigate/events` (type=new) | NEW | Create folder, send initial notification |
+| T+0s | `frigate/events` (type=new) | NEW | Create folder, wait delay, fetch snapshot, send notification with image |
 | T+5s | `frigate/{camera}/tracked_object_update` (type=description) | DESCRIBED | Update with AI description |
 | T+30s | `frigate/events` (type=end) | - | Download snapshot & clip (with retry), transcode |
 | T+35s | *(background processing)* | - | Write summary, send `clip_ready` notification |
