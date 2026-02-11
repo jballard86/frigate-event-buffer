@@ -218,6 +218,60 @@
     vertical-align: middle;
   }
 
+  /* Threat level badges */
+  .threat-badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    margin-left: 8px;
+    vertical-align: middle;
+  }
+  .threat-0 { background: #1a4a1a; color: #7dde7d; }
+  .threat-1 { background: #4a3a1a; color: #deb87d; }
+  .threat-2 { background: #5c1a1a; color: #ff6b6b; animation: pulse-red 1.5s infinite; }
+  @keyframes pulse-red {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.7; }
+  }
+
+  /* Collapsible review summary */
+  .summary-excerpt {
+    font-size: 0.9rem;
+    line-height: 1.5;
+    color: #ccc;
+  }
+  .summary-full {
+    display: none;
+    margin-top: 8px;
+  }
+  .summary-full.expanded { display: block; }
+  .btn-expand {
+    background: none;
+    border: 1px solid #533483;
+    color: #e94560;
+    padding: 4px 12px;
+    font-size: 0.8rem;
+    margin-top: 8px;
+    cursor: pointer;
+  }
+  .btn-expand:hover { background: #0f3460; }
+
+  /* Rendered markdown content */
+  .markdown-content h1, .markdown-content h2, .markdown-content h3 {
+    color: #e94560;
+    margin: 12px 0 6px 0;
+  }
+  .markdown-content h1 { font-size: 1.05rem; }
+  .markdown-content h2 { font-size: 0.95rem; }
+  .markdown-content h3 { font-size: 0.9rem; }
+  .markdown-content p { margin: 6px 0; line-height: 1.5; color: #ccc; }
+  .markdown-content ul, .markdown-content ol { margin: 6px 0 6px 20px; color: #ccc; }
+  .markdown-content li { margin: 3px 0; }
+  .markdown-content strong { color: #fff; }
+  .markdown-content hr { border-color: #0f3460; margin: 10px 0; }
+
   /* Responsive: mobile */
   @media (max-width: 600px) {
     .header { padding: 10px 12px; }
@@ -226,6 +280,8 @@
     button { padding: 6px 10px; font-size: 0.8rem; }
   }
 </style>
+<script src="/static/marked.min.js"></script>
+<script src="/static/purify.min.js"></script>
 </head>
 <body>
 
@@ -396,6 +452,11 @@
     const cameraDisplay = ev.camera.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
     const labelDisplay = (ev.label || 'unknown').replace(/\b\w/g, c => c.toUpperCase());
     const subdir = ev.hosted_clip.split('/').slice(-2, -1)[0];
+    const threatLevel = ev.threat_level || 0;
+    const threatLabels = {0: 'Normal', 1: 'Suspicious', 2: 'Critical'};
+    const threatBadge = threatLevel > 0
+      ? ` <span class="threat-badge threat-${threatLevel}">${threatLabels[threatLevel]}</span>`
+      : '';
 
     mainContent.innerHTML = `
       <div class="video-container">
@@ -425,9 +486,14 @@
       </div>
 
       <div class="info-card">
-        <h2>AI Analysis</h2>
+        <h2>AI Analysis${threatBadge}</h2>
         ${ev.title ? `<p class="ai-title">${escapeHtml(ev.title)}</p>` : ''}
-        <p class="description-text">${escapeHtml(description)}</p>
+        ${ev.review_summary
+          ? `<div class="summary-excerpt" id="summaryExcerpt"></div>
+             <button class="btn-expand" id="btnExpandSummary">Expand Full Report</button>
+             <div class="summary-full" id="summaryFull"></div>`
+          : `<p class="description-text">${escapeHtml(description)}</p>`
+        }
       </div>
 
       <div class="info-card">
@@ -440,6 +506,7 @@
           <span class="meta-label">Time</span>
           <span class="meta-value">${escapeHtml(timeStr)}</span>
           ${ev.severity ? `<span class="meta-label">Severity</span><span class="meta-value">${escapeHtml(ev.severity)}</span>` : ''}
+          ${threatLevel > 0 ? `<span class="meta-label">Threat Level</span><span class="meta-value"><span class="threat-badge threat-${threatLevel}">${threatLabels[threatLevel]}</span></span>` : ''}
           <span class="meta-label">Event ID</span>
           <span class="meta-value" style="font-size:0.8rem;color:#888;">${escapeHtml(ev.event_id)}</span>
         </div>
@@ -462,6 +529,30 @@
       video.addEventListener('play', () => { videoPlaying = true; });
       video.addEventListener('pause', () => { videoPlaying = false; });
       video.addEventListener('ended', () => { videoPlaying = false; });
+    }
+
+    // Render collapsible review summary as markdown
+    if (ev.review_summary && typeof marked !== 'undefined') {
+      const rawHtml = marked.parse(ev.review_summary);
+      const safeHtml = typeof DOMPurify !== 'undefined' ? DOMPurify.sanitize(rawHtml) : rawHtml;
+
+      // Excerpt: first 2-3 meaningful lines
+      const lines = ev.review_summary.split('\n').filter(l => l.trim() && !l.trim().startsWith('#'));
+      const excerpt = lines.slice(0, 3).join(' ').substring(0, 200);
+      const excerptEl = document.getElementById('summaryExcerpt');
+      const fullEl = document.getElementById('summaryFull');
+      const btnExpand = document.getElementById('btnExpandSummary');
+
+      if (excerptEl) excerptEl.textContent = excerpt + (excerpt.length >= 200 ? '...' : '');
+      if (fullEl) { fullEl.innerHTML = '<div class="markdown-content">' + safeHtml + '</div>'; }
+      if (btnExpand) {
+        btnExpand.addEventListener('click', () => {
+          const isExpanded = fullEl.classList.toggle('expanded');
+          btnExpand.textContent = isExpanded ? 'Collapse Report' : 'Expand Full Report';
+          if (isExpanded && excerptEl) excerptEl.style.display = 'none';
+          if (!isExpanded && excerptEl) excerptEl.style.display = '';
+        });
+      }
     }
   }
 

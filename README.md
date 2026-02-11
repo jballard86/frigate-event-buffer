@@ -1,14 +1,16 @@
 # Frigate Event Buffer
 
-A state-aware orchestrator that listens to Frigate NVR events via MQTT, tracks them through their lifecycle, sends Ring-style sequential notifications to Home Assistant, and maintains a rolling 3-day evidence locker. Compatible with **Frigate 0.17+**.
+A state-aware orchestrator that listens to Frigate NVR events via MQTT, tracks them through their lifecycle, sends Ring-style sequential notifications to Home Assistant, and maintains a rolling 3-day evidence locker. Compatible with **Frigate 0.17+** with full GenAI review integration.
 
 ## Features
 
 - **Frigate 0.17 Compatible**: Supports Frigate 0.17's new MQTT payload structure including `type: "genai"` review messages and `data.metadata` fields
 - **MQTT Event Tracking**: Subscribes to Frigate's MQTT topics to detect and track events in real-time
-- **Three-Phase Lifecycle**: Tracks events through NEW → DESCRIBED → FINALIZED phases
+- **Four-Phase Lifecycle**: Tracks events through NEW → DESCRIBED → FINALIZED → SUMMARIZED phases
 - **Ring-Style Notifications**: Sends progressive updates to Home Assistant with phase-specific messages as event details emerge
-- **GenAI Integration**: Captures Frigate's GenAI titles and descriptions (via `data.metadata` in reviews and `description` type in tracked object updates)
+- **GenAI Integration**: Captures Frigate's GenAI titles, descriptions, and threat levels (via `data.metadata` in reviews and `description` type in tracked object updates)
+- **Review Summaries**: Fetches rich markdown security reports from Frigate's review summary API with cross-camera context, timeline, and assessments
+- **Threat Level Alerts**: Three-tier threat classification (0=Normal, 1=Suspicious, 2=Critical) — Level 2 alerts bypass phone volume/DND and keep all follow-up notifications audible
 - **Camera/Label Filtering**: Only process events from specific cameras or with specific labels
 - **Multi-Camera Support**: Handles events from multiple cameras simultaneously without state collision
 - **Auto-Transcoding**: Downloads clips from Frigate and transcodes to H.264 for broad compatibility
@@ -31,7 +33,8 @@ A state-aware orchestrator that listens to Frigate NVR events via MQTT, tracks t
 │  ├─ frigate/events    ├─ active_events     ├─ /player   │
 │  ├─ frigate/+/        ├─ phase tracking    ├─ /events   │
 │  │   tracked_object   │   (NEW→DESCRIBED   ├─ /cameras  │
-│  └─ frigate/reviews   │    →FINALIZED)     ├─ /files    │
+│  └─ frigate/reviews   │    →FINALIZED      ├─ /files    │
+│                       │    →SUMMARIZED)    │            │
 │                       │                    └─ /status   │
 └─────────────────────────────────────────────────────────┘
 ```
@@ -109,6 +112,8 @@ settings:
   ffmpeg_timeout_seconds: 60
   notification_delay_seconds: 2  # Delay before fetching snapshot after initial notification
   log_level: "DEBUG"  # DEBUG, INFO, WARNING, ERROR
+  summary_padding_before: 15   # Seconds before event start for review summary
+  summary_padding_after: 15    # Seconds after event end for review summary
 
 # Network configuration (REQUIRED - no defaults)
 network:
@@ -231,6 +236,8 @@ Response:
       "title": "Person at Front Door",
       "description": "A person in blue jacket approaching the door",
       "severity": "alert",
+      "threat_level": 0,
+      "review_summary": "# Security Summary...",
       "summary": "Event ID: ...\nCamera: ...",
       "has_clip": true,
       "has_snapshot": true,
@@ -308,13 +315,15 @@ Response:
   "started_at": "2024-01-15 10:30:00",
   "active_events": {
     "total_active": 2,
-    "by_phase": {"NEW": 1, "DESCRIBED": 1, "FINALIZED": 0},
+    "by_phase": {"NEW": 1, "DESCRIBED": 1, "FINALIZED": 0, "SUMMARIZED": 0},
     "by_camera": {"Doorbell": 2}
   },
   "config": {
     "retention_days": 3,
     "log_level": "DEBUG",
-    "ffmpeg_timeout": 60
+    "ffmpeg_timeout": 60,
+    "summary_padding_before": 15,
+    "summary_padding_after": 15
   }
 }
 ```
@@ -326,8 +335,8 @@ The orchestrator publishes notifications to `frigate/custom/notifications`:
 ```json
 {
   "event_id": "1234567890.123-abcdef",
-  "status": "new|described|finalized|clip_ready|overflow",
-  "phase": "NEW|DESCRIBED|FINALIZED|OVERFLOW",
+  "status": "new|described|finalized|clip_ready|summarized|overflow",
+  "phase": "NEW|DESCRIBED|FINALIZED|SUMMARIZED|OVERFLOW",
   "camera": "Doorbell",
   "label": "person",
   "title": "Person at Front Door",
@@ -336,7 +345,9 @@ The orchestrator publishes notifications to `frigate/custom/notifications`:
   "video_url": "http://YOUR_BUFFER_IP:5055/files/doorbell/1234567890_eventid/clip.mp4",
   "player_url": "http://YOUR_BUFFER_IP:5055/player",
   "tag": "frigate_1234567890.123-abcdef",
-  "timestamp": 1234567890.123
+  "timestamp": 1234567890.123,
+  "threat_level": 0,
+  "critical": false
 }
 ```
 
@@ -350,6 +361,7 @@ When GenAI descriptions are available (Frigate 0.17 with GenAI configured), they
 | `clip_ready` | "Clip available for Person at Doorbell" (or "Clip unavailable..." if download failed) |
 | `described` | "Person detected by Doorbell (details updating)" |
 | `finalized` | "Event complete: Person at Doorbell" |
+| `summarized` | First meaningful line from review summary (truncated to 200 chars) |
 
 The `video_url` field is only included when the clip was successfully downloaded. If the clip download failed, `video_url` will be `null` and the notification will show the snapshot image instead.
 
@@ -392,11 +404,11 @@ binary_sensor:
 
 ### Notification Automation
 
-This automation uses a dynamic phone target via a helper. Sound plays only on the initial detection; subsequent updates (clip, AI description) silently replace the notification:
+This automation uses a dynamic phone target via a helper. Sound plays only on the initial detection; subsequent updates (clip, AI description) silently replace the notification. **Level 2 (critical) threats bypass phone volume/DND and keep all updates audible.**
 
 ```yaml
 alias: "Frigate Orchestrator: Phone Notifications"
-description: "Ring-style notifications with sound on first alert, silent updates."
+description: "Ring-style notifications with threat level support."
 triggers:
   - trigger: mqtt
     topic: frigate/custom/notifications
@@ -404,8 +416,9 @@ actions:
   - variables:
       payload: "{{ trigger.payload_json }}"
       target_phone: "{{ states('input_text.notification_target_phone') }}"
+      is_critical: "{{ payload.critical | default(false) }}"
+      is_new: "{{ payload.status == 'new' }}"
 
-  # Only proceed if the phone helper is set
   - condition: template
     value_template: "{{ target_phone | length > 0 }}"
 
@@ -421,16 +434,25 @@ actions:
           {% if payload.image_url %}{{ payload.image_url }}{% endif %}
         video: >-
           {% if payload.video_url %}{{ payload.video_url }}{% endif %}
-        importance: "{{ 'high' if payload.status == 'new' else 'low' }}"
+        # Critical (level 2): always audible, bypasses DND
+        # Normal: only "new" gets sound
+        importance: >-
+          {% if is_critical %}max{% elif is_new %}high{% else %}low{% endif %}
         ttl: 0
-        sound: "{{ 'default' if payload.status == 'new' else 'none' }}"
+        sound: >-
+          {% if is_critical or is_new %}default{% else %}none{% endif %}
+        channel: >-
+          {% if is_critical %}alarm{% else %}general{% endif %}
+        push:
+          interruption-level: >-
+            {% if is_critical %}critical{% elif is_new %}time-sensitive{% else %}passive{% endif %}
         sticky: true
-        notification_icon: "mdi:shield-check"
+        notification_icon: >-
+          {% if is_critical %}mdi:shield-alert{% else %}mdi:shield-check{% endif %}
 
-  # Refresh dashboard on finalized events
   - if:
       - condition: template
-        value_template: "{{ payload.status in ['clip_ready', 'finalized'] }}"
+        value_template: "{{ payload.status in ['clip_ready', 'finalized', 'summarized'] }}"
     then:
       - action: homeassistant.update_entity
         target:
@@ -462,7 +484,7 @@ Create at Settings > Devices & Services > Helpers.
 
 **2. Frigate Buffer URL** (Text)
 - **Entity ID**: `input_text.frigate_buffer_url`
-- **Value**: Base URL of the buffer (e.g., `http://192.168.21.189:5055`)
+- **Value**: Base URL of the buffer (e.g., `http://YOUR_BUFFER_IP:5055`)
 
 ### Events Sensor (optional)
 
@@ -546,7 +568,20 @@ The orchestrator includes safeguards against hung FFmpeg processes:
 | T+5s | `frigate/{camera}/tracked_object_update` (type=description) | DESCRIBED | Update with AI description |
 | T+30s | `frigate/events` (type=end) | - | Download snapshot & clip (with retry), transcode |
 | T+35s | *(background processing)* | - | Write summary, send `clip_ready` notification |
-| T+45s | `frigate/reviews` (type=genai) | FINALIZED | Update with GenAI metadata from `data.metadata`, send final notification |
+| T+45s | `frigate/reviews` (type=genai) | FINALIZED | Update with GenAI metadata (title, description, threat_level) from `data.metadata` |
+| T+55s | Frigate Review Summary API | SUMMARIZED | Fetch cross-camera review summary with configurable time padding, write `review_summary.md` |
+
+### Threat Level Behavior
+
+Events with `potential_threat_level: 2` (Critical) receive special notification handling:
+
+| Threat Level | Initial Alert | Follow-up Updates | DND/Volume |
+|-------------|--------------|-------------------|------------|
+| 0 (Normal) | Audible | Silent | Respects settings |
+| 1 (Suspicious) | Audible | Silent | Respects settings |
+| 2 (Critical) | Audible + alarm channel | **All audible** | **Bypasses DND** |
+
+The threat level is determined by Frigate's GenAI analysis based on the `activity_context_prompt` in your Frigate configuration.
 
 ## Storage Structure
 
@@ -556,10 +591,12 @@ Events are organized by camera:
 /app/storage/
 ├── doorbell/
 │   ├── 1234567890_event-id-1/
-│   │   ├── clip.mp4          # H.264 transcoded video
-│   │   ├── snapshot.jpg      # Event snapshot
-│   │   ├── summary.txt       # Event metadata
-│   │   └── .viewed           # Review marker (created when marked as reviewed)
+│   │   ├── clip.mp4            # H.264 transcoded video
+│   │   ├── snapshot.jpg        # Event snapshot
+│   │   ├── summary.txt         # Event metadata (human-readable)
+│   │   ├── metadata.json       # Structured metadata (threat_level, etc.)
+│   │   ├── review_summary.md   # Frigate review summary (markdown)
+│   │   └── .viewed             # Review marker (created when marked as reviewed)
 │   └── 1234567891_event-id-2/
 │       └── ...
 ├── front_yard/

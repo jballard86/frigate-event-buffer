@@ -47,6 +47,12 @@ settings:
   # Logging level: DEBUG, INFO, WARNING, ERROR
   log_level: "INFO"
 
+  # Review summary time padding (seconds)
+  # Controls the time window sent to Frigate's review summary API
+  # Covers activity from all GenAI-equipped cameras in the time range
+  summary_padding_before: 15   # seconds before event start
+  summary_padding_after: 15    # seconds after event end
+
 # Network configuration
 # These can be overridden by environment variables:
 #   MQTT_BROKER, MQTT_PORT, FRIGATE_URL, BUFFER_IP, FLASK_PORT, STORAGE_PATH
