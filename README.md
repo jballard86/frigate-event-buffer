@@ -114,7 +114,7 @@ network:
   mqtt_broker: "YOUR_MQTT_BROKER_IP"
   mqtt_port: 1883
   frigate_url: "http://YOUR_FRIGATE_IP:5000"
-  ha_ip: "YOUR_HOME_ASSISTANT_IP"
+  buffer_ip: "YOUR_BUFFER_IP"  # IP where this container is reachable
   flask_port: 5055
   storage_path: "/app/storage"
 ```
@@ -127,7 +127,7 @@ Environment variables override config.yaml values:
 |----------|---------|-------------|
 | `MQTT_BROKER` | *(required)* | MQTT broker IP address |
 | `MQTT_PORT` | `1883` | MQTT broker port |
-| `HA_IP` | *(required)* | Home Assistant IP (used in notification URLs) |
+| `BUFFER_IP` | *(required)* | Buffer container's reachable IP (used in notification image/video URLs) |
 | `FRIGATE_URL` | *(required)* | Frigate API base URL |
 | `STORAGE_PATH` | `/app/storage` | Storage directory inside container |
 | `RETENTION_DAYS` | `3` | Days to retain event folders |
@@ -296,8 +296,8 @@ The orchestrator publishes notifications to `frigate/custom/notifications`:
   "label": "person",
   "title": "Person at Front Door",
   "message": "A person in blue jacket approaching the door",
-  "image_url": "http://YOUR_HA_IP:5055/files/doorbell/1234567890_eventid/snapshot.jpg",
-  "video_url": "http://YOUR_HA_IP:5055/files/doorbell/1234567890_eventid/clip.mp4",
+  "image_url": "http://YOUR_BUFFER_IP:5055/files/doorbell/1234567890_eventid/snapshot.jpg",
+  "video_url": "http://YOUR_BUFFER_IP:5055/files/doorbell/1234567890_eventid/clip.mp4",
   "tag": "frigate_1234567890.123-abcdef",
   "timestamp": 1234567890.123
 }
@@ -452,7 +452,7 @@ services:
     environment:
       - MQTT_BROKER=YOUR_MQTT_BROKER_IP
       - FRIGATE_URL=http://YOUR_FRIGATE_IP:5000
-      - HA_IP=YOUR_HOME_ASSISTANT_IP
+      - BUFFER_IP=YOUR_BUFFER_IP
       - LOG_LEVEL=DEBUG  # Optional: override config.yaml
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:5055/status"]

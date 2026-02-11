@@ -35,8 +35,8 @@ services:
       - /etc/localtime:/etc/localtime:ro
     environment:
       # --- REQUIRED ---
-      # Your Home Assistant IP/hostname (used for notification URLs).
-      - HA_IP=YOUR_HOME_ASSISTANT_IP
+      # The IP/hostname where this container is reachable (used in notification image/video URLs).
+      - BUFFER_IP=YOUR_BUFFER_IP
       # Your Frigate server URL.
       - FRIGATE_URL=http://YOUR_FRIGATE_IP:5000
       # Your MQTT Broker IP/hostname.
