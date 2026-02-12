@@ -42,7 +42,7 @@ settings:
   # Delay before fetching snapshot after initial notification (seconds)
   # Notification is sent instantly; this delay lets Frigate select a better frame
   # before the snapshot update. Set to 0 to fetch immediately.
-  notification_delay_seconds: 2
+  notification_delay_seconds: 1
 
   # Logging level: DEBUG, INFO, WARNING, ERROR
   log_level: "INFO"
@@ -64,7 +64,9 @@ settings:
   daily_review_schedule_hour: 1
 
   # Consolidated event series
-  # Seconds of no activity before a new Frigate event starts a new consolidated event
+  # Time since last event before the next one starts a NEW consolidated group.
+  # If no events for 120s, the next event is new. If an event occurs within
+  # this gap, it continues the group and the gap resets.
   event_gap_seconds: 120
   # Export time range buffers (seconds)
   export_buffer_before: 5

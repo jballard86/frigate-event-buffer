@@ -280,6 +280,7 @@ class EventState:
     # Phase 3 data (from frigate/reviews)
     genai_title: Optional[str] = None
     genai_description: Optional[str] = None
+    genai_scene: Optional[str] = None  # Longer narrative from Frigate metadata.scene
     severity: Optional[str] = None
     threat_level: int = 0  # 0=normal, 1=suspicious, 2=critical
 
@@ -353,13 +354,16 @@ class EventStateManager:
 
     def set_genai_metadata(self, event_id: str, title: Optional[str],
                            description: Optional[str], severity: str,
-                           threat_level: int = 0) -> bool:
+                           threat_level: int = 0,
+                           scene: Optional[str] = None) -> bool:
         """Set GenAI review metadata and advance to FINALIZED phase."""
         with self._lock:
             event = self._events.get(event_id)
             if event:
                 event.genai_title = title
                 event.genai_description = description
+                if scene is not None:
+                    event.genai_scene = scene
                 event.severity = severity
                 event.threat_level = threat_level
                 event.phase = EventPhase.FINALIZED
@@ -455,6 +459,10 @@ class ConsolidatedEvent:
     snapshot_downloaded: bool = False
     clip_downloaded: bool = False
 
+    # Notification tracking (avoid duplicate sends per group)
+    clip_ready_sent: bool = False
+    finalized_sent: bool = False
+
     # Legacy-compat: expose as EventState-like for notifier
     @property
     def event_id(self) -> str:
@@ -529,13 +537,16 @@ class ConsolidatedEventManager:
     ) -> tuple:
         """
         Get existing consolidated event or create new. Returns (ConsolidatedEvent, is_new).
-        Groups by event_gap_seconds. For new events, folder_path must already exist.
+        event_gap_seconds: time since last event before next starts a NEW group.
+        If an event occurs within the gap, it continues the group and the gap resets.
         """
         now = time.time()
         with self._lock:
             if self._active_ce_id:
                 ce = self._events.get(self._active_ce_id)
-                if ce and (now - ce.last_activity_time) < self.event_gap_seconds:
+                # Only add to existing CE if same camera and within time gap
+                if (ce and ce.primary_camera == camera and
+                        (now - ce.last_activity_time) < self.event_gap_seconds):
                     ce.frigate_event_ids.append(event_id)
                     ce.last_activity_time = now
                     if camera not in ce.cameras:
@@ -818,6 +829,9 @@ class FileManager:
 
             if event.genai_description:
                 lines.append(f"Description: {event.genai_description}")
+
+            if event.genai_scene:
+                lines.append(f"Scene: {event.genai_scene}")
             elif event.ai_description:
                 lines.append(f"AI Description: {event.ai_description}")
 
@@ -892,6 +906,7 @@ class FileManager:
                 "severity": event.severity,
                 "genai_title": event.genai_title,
                 "genai_description": event.genai_description,
+                "genai_scene": event.genai_scene,
                 "phase": event.phase.name,
             }
             with open(meta_path, 'w') as f:
@@ -1359,7 +1374,11 @@ class NotificationPublisher:
         if not message:
             message = self._build_message(event, status)
 
-        player_url = f"http://{self.buffer_ip}:{self.flask_port}/player"
+        # Deep-link to specific event when folder_path available
+        if event.folder_path:
+            player_url = f"http://{self.buffer_ip}:{self.flask_port}/player?camera={camera_dir}&subdir={folder_name}"
+        else:
+            player_url = f"http://{self.buffer_ip}:{self.flask_port}/player"
 
         payload = {
             "event_id": event.event_id,
@@ -1463,6 +1482,9 @@ class StateAwareOrchestrator:
 
         # Initialize components
         self.state_manager = EventStateManager()
+        self.consolidated_manager = ConsolidatedEventManager(
+            event_gap_seconds=config.get('EVENT_GAP_SECONDS', 120)
+        )
         self.file_manager = FileManager(
             config['STORAGE_PATH'],
             config['FRIGATE_URL'],
@@ -1644,6 +1666,14 @@ class StateAwareOrchestrator:
                 mqtt_payload, "Event new (from Frigate)"
             )
 
+        # Consolidation: group events by time gap; only notify for new groups
+        ce, is_new = self.consolidated_manager.get_or_create(
+            event_id, camera, label, start_time, folder_path
+        )
+        if not is_new:
+            logger.info(f"Event {event_id} grouped into consolidated event {ce.consolidated_id}, suppressing duplicate notification")
+            return
+
         # Delay, fetch snapshot, then notify (Ring-style: image-first notification)
         delay = self.config.get('NOTIFICATION_DELAY', 5)
         threading.Thread(
@@ -1717,8 +1747,19 @@ class StateAwareOrchestrator:
             # Write initial summary
             self.file_manager.write_summary(event.folder_path, event)
 
-            # Publish update notification
-            self.notifier.publish_notification(event, "clip_ready")
+            # Publish clip_ready: for consolidated events, only send once (primary event)
+            ce = self.consolidated_manager.get_by_frigate_event(event.event_id)
+            should_send_clip = True
+            if ce:
+                if ce.primary_event_id != event.event_id:
+                    should_send_clip = False
+                    logger.debug(f"Suppressing clip_ready for {event.event_id} (non-primary in CE {ce.consolidated_id})")
+                elif ce.clip_ready_sent:
+                    should_send_clip = False
+                else:
+                    ce.clip_ready_sent = True
+            if should_send_clip:
+                self.notifier.publish_notification(event, "clip_ready")
 
             # Run cleanup check
             active_ids = self.state_manager.get_active_event_ids()
@@ -1799,10 +1840,11 @@ class StateAwareOrchestrator:
                     event.folder_path, "frigate/reviews",
                     payload, f"Review update (type={event_type})"
                 )
-            # Frigate 0.17 uses "title" and "shortSummary" in metadata
+            # Frigate 0.17 uses "title", "shortSummary", "scene" in metadata
             # Legacy used "title" and "description" in genai
             title = genai.get("title")
             description = genai.get("shortSummary") or genai.get("description")
+            scene = genai.get("scene")
             threat_level = int(genai.get("potential_threat_level", 0))
 
             # Only log at INFO when GenAI data is present; suppress title=N/A noise
@@ -1822,10 +1864,16 @@ class StateAwareOrchestrator:
                 title,
                 description,
                 severity,
-                threat_level
+                threat_level,
+                scene=scene
             ):
                 event = self.state_manager.get_event(event_id)
                 if event:
+                    # Update consolidated event best_* if this event is in a group
+                    self.consolidated_manager.update_best(
+                        event_id, title=title, description=description, threat_level=threat_level
+                    )
+
                     # Write final summary and metadata
                     if event.folder_path:
                         event.summary_written = self.file_manager.write_summary(
@@ -1833,8 +1881,20 @@ class StateAwareOrchestrator:
                         )
                         self.file_manager.write_metadata_json(event.folder_path, event)
 
-                    # Publish finalized notification
-                    self.notifier.publish_notification(event, "finalized")
+                    # Publish finalized: once per consolidated group (use CE if grouped)
+                    ce = self.consolidated_manager.get_by_frigate_event(event_id)
+                    if ce and ce.finalized_sent:
+                        logger.debug(f"Suppressing finalized for {event_id} (CE {ce.consolidated_id} already sent)")
+                    else:
+                        notify_target = ce if ce else event
+                        if ce:
+                            ce.finalized_sent = True
+                            # Sync media status from primary event for notification URLs
+                            primary = self.state_manager.get_event(ce.primary_event_id)
+                            if primary:
+                                ce.snapshot_downloaded = primary.snapshot_downloaded
+                                ce.clip_downloaded = primary.clip_downloaded
+                        self.notifier.publish_notification(notify_target, "finalized")
 
                     # Fetch review summary in background, then schedule removal
                     threading.Thread(
@@ -2062,6 +2122,7 @@ class StateAwareOrchestrator:
                     "summary": summary_text,
                     "title": metadata.get("genai_title") or parsed.get("Title"),
                     "description": metadata.get("genai_description") or parsed.get("Description") or parsed.get("AI Description"),
+                    "scene": metadata.get("genai_scene") or parsed.get("Scene"),
                     "label": metadata.get("label") or parsed.get("Label", "unknown"),
                     "severity": metadata.get("severity") or parsed.get("Severity"),
                     "threat_level": metadata.get("threat_level", 0),

@@ -36,6 +36,18 @@
   }
   a:hover { text-decoration: underline; }
 
+  select, button {
+    background: #0f3460;
+    color: #e0e0e0;
+    border: 1px solid #533483;
+    border-radius: 6px;
+    padding: 6px 10px;
+    font-size: 0.85rem;
+    cursor: pointer;
+  }
+  select:focus, button:focus { outline: 2px solid #e94560; }
+  button:hover { background: #533483; }
+
   .main {
     max-width: 900px;
     margin: 0 auto;
@@ -122,7 +134,7 @@
 
 <div class="header">
   <h1>Notification Timeline</h1>
-  <a href="/player?camera={{ camera }}&subdir={{ subdir }}">Back to Player</a>
+  <a href="/player?camera={{ camera }}&subdir={{ subdir }}" style="text-decoration:none;"><button>Back to Player</button></a>
   <a href="/files/{{ camera }}/{{ subdir }}/notification_timeline.json" download="notification_timeline.json" style="text-decoration:none;"><button style="background:#1a4a1a;border-color:#2d7a2d;color:#7dde7d;padding:6px 12px;border-radius:6px;cursor:pointer;font-size:0.85rem;">Download Timeline</button></a>
 </div>
 
