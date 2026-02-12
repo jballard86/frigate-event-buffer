@@ -650,6 +650,7 @@
         <div class="nav-buttons">
           ${!ev.viewed ? `<button class="btn-success" id="btnMarkReviewed">Reviewed</button>` : ''}
           ${ev.has_clip ? `<a href="${ev.hosted_clip}" download style="text-decoration:none;"><button class="btn-download">Download</button></a>` : ''}
+          <a href="/events/${escapeHtml(ev.camera)}/${escapeHtml(subdir)}/timeline" style="text-decoration:none;"><button>View Timeline</button></a>
           <button class="btn-danger" id="btnDelete">Delete</button>
         </div>
       </div>
