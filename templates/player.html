@@ -181,6 +181,26 @@
     margin-bottom: 10px;
   }
 
+  .empty-state .stats-below { margin-top: 24px; }
+
+  /* Stats panel */
+  .stats-panel { margin-top: 16px; }
+  .stats-panel .info-card { margin-top: 12px; }
+  .stats-panel .info-card:first-of-type { margin-top: 0; }
+  .stats-panel .stats-row { display: flex; flex-wrap: wrap; gap: 16px 24px; margin: 8px 0; font-size: 0.9rem; }
+  .stats-panel .stats-item { display: flex; gap: 6px; }
+  .stats-panel .stats-item strong { color: #e94560; min-width: 4ch; }
+  .stats-panel .errors-list {
+    max-height: 200px; overflow-y: auto; font-size: 0.8rem; font-family: monospace;
+    background: #0f3460; border-radius: 4px; padding: 8px; margin: 8px 0;
+  }
+  .stats-panel .errors-list .err-item { margin: 6px 0; padding: 4px 0; border-bottom: 1px solid #1a1a2e; word-break: break-word; }
+  .stats-panel .errors-list .err-ts { color: #888; margin-right: 8px; }
+  .stats-panel .errors-footer { font-size: 0.8rem; color: #666; margin-top: 8px; }
+  .stats-panel .camera-table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+  .stats-panel .camera-table td { padding: 4px 8px; border-bottom: 1px solid #0f3460; }
+  .stats-panel .camera-table .meta-label { padding-right: 12px; }
+
   /* Loading */
   .loading {
     text-align: center;
@@ -295,8 +315,10 @@
       <option value="unreviewed">Unreviewed</option>
       <option value="all">All Events</option>
       <option value="reviewed">Reviewed</option>
+      <option value="stats">Stats</option>
     </select>
     <button class="btn-mark-all" id="btnMarkAll">Mark All Reviewed</button>
+    <button id="btnRefreshStats" style="display:none;">Refresh Stats</button>
   </div>
 </div>
 
@@ -319,7 +341,9 @@
   const filterSelect = document.getElementById('filterSelect');
   const mainContent = document.getElementById('mainContent');
   const btnMarkAll = document.getElementById('btnMarkAll');
+  const btnRefreshStats = document.getElementById('btnRefreshStats');
   const flashEl = document.getElementById('flash');
+  let statsRefreshTimer = null;
 
   // --- Flash ---
   function showFlash(msg) {
@@ -344,10 +368,128 @@
     }
   }
 
+  async function fetchStats() {
+    try {
+      const resp = await fetch('/stats');
+      const data = await resp.json();
+      renderStats(data);
+    } catch (e) {
+      console.error('Failed to fetch stats:', e);
+      const container = document.getElementById('statsContainer');
+      const target = container || mainContent;
+      target.innerHTML = '<p style="color:#e94560;">Failed to load stats.</p>';
+    }
+  }
+
+  function renderStats(data) {
+    const c = data.events || {};
+    const s = data.storage || {};
+    const errs = data.errors || [];
+    const lc = data.last_cleanup;
+    const mr = data.most_recent;
+    const sys = data.system || {};
+
+    const fmtStorage = (cam) => {
+      if (!cam) return '-';
+      if (cam.gb != null) return cam.gb + ' GB';
+      if (cam.mb != null) return cam.mb + ' MB';
+      return '-';
+    };
+    const totalStorage = s.total_gb != null ? s.total_gb + ' GB' : (s.total_mb != null ? s.total_mb + ' MB' : '-');
+
+    const byCam = c.by_camera || {};
+    const camRows = Object.entries(byCam).map(([name, count]) =>
+      `<tr><td class="meta-label">${escapeHtml(name.replace(/_/g, ' '))}</td><td>${count}</td></tr>`
+    ).join('');
+
+    const storageRows = Object.entries(s.by_camera || {}).map(([name, val]) =>
+      `<tr><td class="meta-label">${escapeHtml(name.replace(/_/g, ' '))}</td><td>${fmtStorage(val)}</td></tr>`
+    ).join('');
+
+    const bd = s.breakdown || {};
+    const errItems = errs.slice(0, 10).map(e =>
+      `<div class="err-item"><span class="err-ts">${escapeHtml(e.ts || '')}</span>${escapeHtml((e.message || '').substring(0, 300))}</div>`
+    ).join('');
+
+    const uptime = sys.uptime_seconds != null ? Math.floor(sys.uptime_seconds / 60) + ' min' : '-';
+
+    let html = `
+      <div class="stats-panel" id="statsContainer">
+        <div class="info-card">
+          <h2>Event Counts</h2>
+          <div class="stats-row">
+            <span class="stats-item"><strong>Today:</strong> ${c.today ?? 0}</span>
+            <span class="stats-item"><strong>This Week:</strong> ${c.this_week ?? 0}</span>
+            <span class="stats-item"><strong>This Month:</strong> ${c.this_month ?? 0}</span>
+          </div>
+          <div class="stats-row">
+            <span class="stats-item"><strong>Reviewed:</strong> ${c.total_reviewed ?? 0}</span>
+            <span class="stats-item"><strong>Unreviewed:</strong> ${c.total_unreviewed ?? 0}</span>
+          </div>
+        </div>
+        <div class="info-card">
+          <h2>Events by Camera</h2>
+          <table class="camera-table"><tbody>${camRows || '<tr><td>No cameras</td></tr>'}</tbody></table>
+        </div>
+        <div class="info-card">
+          <h2>Storage</h2>
+          <div class="stats-row">
+            <span class="stats-item"><strong>Total:</strong> ${totalStorage}</span>
+          </div>
+          <div class="stats-row" style="margin-top:8px;">
+            <span class="meta-label">Clips:</span> ${bd.clips_mb ?? 0} MB |
+            <span class="meta-label">Snapshots:</span> ${bd.snapshots_mb ?? 0} MB |
+            <span class="meta-label">Descriptions:</span> ${bd.descriptions_mb ?? 0} MB
+          </div>
+          ${storageRows ? `<table class="camera-table" style="margin-top:8px;"><tbody>${storageRows}</tbody></table>` : ''}
+        </div>
+        <div class="info-card">
+          <h2>Recent Activity</h2>
+          <div class="stats-row">
+            ${lc ? `<span class="stats-item"><strong>Last cleanup:</strong> ${escapeHtml(lc.at)} (deleted ${lc.deleted})</span>` : '<span class="stats-item">No cleanup recorded yet</span>'}
+          </div>
+          ${mr ? `<div class="stats-row"><a href="${escapeHtml(mr.url)}" style="color:#e94560;">View most recent notification</a></div>` : ''}
+        </div>
+        <div class="info-card">
+          <h2>Errors</h2>
+          ${errItems ? `<div class="errors-list">${errItems}</div><p class="errors-footer">See container logs for full error history.</p>` : '<p>No recent errors.</p>'}
+        </div>
+        <div class="info-card">
+          <h2>System</h2>
+          <div class="meta-grid">
+            <span class="meta-label">Uptime</span>
+            <span class="meta-value">${uptime}</span>
+            <span class="meta-label">MQTT</span>
+            <span class="meta-value">${sys.mqtt_connected ? 'Connected' : 'Disconnected'}</span>
+            <span class="meta-label">Active events</span>
+            <span class="meta-value">${sys.active_events ?? 0}</span>
+            <span class="meta-label">Retention</span>
+            <span class="meta-value">${sys.retention_days ?? '-'} days</span>
+            <span class="meta-label">Cleanup interval</span>
+            <span class="meta-value">${sys.cleanup_interval_hours ?? '-'} hrs</span>
+            ${sys.storage_path ? `<span class="meta-label">Storage path</span><span class="meta-value" style="font-size:0.8rem;">${escapeHtml(sys.storage_path)}</span>` : ''}
+          </div>
+        </div>
+      </div>`;
+
+    const container = document.getElementById('statsContainer');
+    if (container) {
+      container.outerHTML = html;
+    } else {
+      mainContent.innerHTML = html;
+    }
+  }
+
   async function fetchEvents(opts) {
     const camera = cameraSelect.value;
     const filter = filterSelect.value;
     const silent = opts && opts.silent;
+
+    if (filter === 'stats') {
+      mainContent.innerHTML = '<div class="loading">Loading stats...</div>';
+      await fetchStats();
+      return;
+    }
 
     try {
       const base = camera ? `/events/${encodeURIComponent(camera)}` : '/events';
@@ -435,12 +577,20 @@
 
   // --- Render ---
   function render() {
+    const filter = filterSelect.value;
+    if (filter === 'stats') {
+      mainContent.innerHTML = '<div class="loading">Loading stats...</div>';
+      fetchStats();
+      return;
+    }
     if (events.length === 0) {
       mainContent.innerHTML = `
         <div class="empty-state">
           <h2>No Events Found</h2>
-          <p>No ${filterSelect.value === 'reviewed' ? 'reviewed' : filterSelect.value === 'unreviewed' ? 'unreviewed' : ''} events${cameraSelect.value ? ' for this camera' : ''}.</p>
+          <p>No ${filter === 'reviewed' ? 'reviewed' : filter === 'unreviewed' ? 'unreviewed' : ''} events${cameraSelect.value ? ' for this camera' : ''}.</p>
+          <div class="stats-below"><div id="statsContainer"><span class="loading">Loading stats...</span></div></div>
         </div>`;
+      fetchStats();
       return;
     }
 
@@ -573,13 +723,24 @@
     }, 30000);
   }
 
+  function updateHeaderForFilter() {
+    const isStats = filterSelect.value === 'stats';
+    btnMarkAll.style.display = isStats ? 'none' : '';
+    btnRefreshStats.style.display = isStats ? '' : 'none';
+  }
+
   // --- Init ---
   cameraSelect.addEventListener('change', () => fetchEvents());
-  filterSelect.addEventListener('change', () => fetchEvents());
+  filterSelect.addEventListener('change', () => {
+    updateHeaderForFilter();
+    fetchEvents();
+  });
   btnMarkAll.addEventListener('click', markAllViewed);
+  btnRefreshStats.addEventListener('click', () => fetchStats());
 
   fetchCameras();
   fetchEvents();
+  updateHeaderForFilter();
   startAutoRefresh();
 })();
 </script>

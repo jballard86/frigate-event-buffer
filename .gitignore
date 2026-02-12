@@ -3,7 +3,7 @@
 *.env
 .env.*
 
-# Config file with real values (use config.yaml.example as template)
+# Config file with real values (use config.example.yaml as template)
 config.yaml
 docker-compose.yaml
 
