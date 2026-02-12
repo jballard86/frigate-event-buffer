@@ -711,11 +711,145 @@ class FileManager:
             except OSError:
                 pass  # Process already gone
 
-    def download_and_transcode_clip(self, event_id: str, folder_path: str) -> bool:
-        """Download clip from Frigate and transcode to H.264 with timeout protection."""
+    def export_and_transcode_clip(
+        self,
+        event_id: str,
+        folder_path: str,
+        camera: str,
+        start_time: float,
+        end_time: float,
+        export_buffer_before: int,
+        export_buffer_after: int,
+    ) -> bool:
+        """
+        Request clip export from Frigate's Export API for the full event duration
+        (with buffer), then download and transcode to H.264.
+
+        Uses buffer-assigned event time range: start_ts = start_time - buffer_before,
+        end_ts = end_time + buffer_after. Falls back to events API if export fails.
+        """
+        # Compute export time range (Unix epoch seconds)
+        start_ts = int(start_time - export_buffer_before)
+        end_ts = int(end_time + export_buffer_after)
+
+        # Frigate Export API expects camera name as used in config (e.g. "Doorbell")
+        export_url = f"{self.frigate_url}/api/export/{camera}/start/{start_ts}/end/{end_ts}"
+        exports_list_url = f"{self.frigate_url}/api/exports"
+
         temp_path = os.path.join(folder_path, "clip_original.mp4")
         final_path = os.path.join(folder_path, "clip.mp4")
         process = None
+
+        try:
+            # 1. Trigger export via POST
+            logger.info(f"Requesting clip export: {export_url}")
+            resp = requests.post(export_url, timeout=30)
+            resp.raise_for_status()
+
+            # 2. Get export filename: try response body first, else poll /api/exports
+            export_filename = None
+            if resp.headers.get("content-type", "").startswith("application/json"):
+                try:
+                    data = resp.json()
+                    export_filename = data.get("export") or data.get("filename") or data.get("name")
+                except Exception:
+                    pass
+
+            if not export_filename:
+                # Poll exports list until our export appears (newest matching time range)
+                for _ in range(24):  # 24 * 2.5s = 60s max
+                    time.sleep(2.5)
+                    try:
+                        list_resp = requests.get(exports_list_url, timeout=10)
+                        list_resp.raise_for_status()
+                        exports = list_resp.json() if list_resp.content else []
+                        if isinstance(exports, list) and exports:
+                            # Use newest export (likely ours)
+                            newest = max(
+                                exports,
+                                key=lambda e: e.get("created", 0) or e.get("start_time", 0)
+                            )
+                            export_filename = newest.get("export") or newest.get("filename") or newest.get("name")
+                        elif isinstance(exports, dict):
+                            export_filename = exports.get("export") or exports.get("filename")
+                        if export_filename:
+                            break
+                    except Exception as e:
+                        logger.debug(f"Exports poll: {e}")
+
+            if not export_filename:
+                logger.warning("Could not determine export filename, falling back to events API")
+                return self.download_and_transcode_clip(event_id, folder_path)
+
+            # 3. Download from Frigate exports (web server path, not /api/)
+            download_url = f"{self.frigate_url}/exports/{export_filename}"
+            logger.info(f"Downloading export clip from {download_url}")
+            dl_resp = requests.get(download_url, timeout=120, stream=True)
+            dl_resp.raise_for_status()
+
+            bytes_downloaded = 0
+            with open(temp_path, "wb") as f:
+                for chunk in dl_resp.iter_content(chunk_size=8192):
+                    f.write(chunk)
+                    bytes_downloaded += len(chunk)
+
+            logger.info(f"Downloaded export clip for {event_id} ({bytes_downloaded} bytes), transcoding...")
+
+            # 4. Transcode (same logic as download_and_transcode_clip)
+            return self._transcode_clip_to_h264(event_id, temp_path, final_path)
+
+        except requests.exceptions.RequestException as e:
+            logger.warning(f"Export API failed for {event_id}: {e}, falling back to events API")
+            return self.download_and_transcode_clip(event_id, folder_path)
+        except Exception as e:
+            logger.exception(f"Export clip failed for {event_id}: {e}")
+            if os.path.exists(temp_path):
+                try:
+                    os.remove(temp_path)
+                except OSError:
+                    pass
+            return False
+
+    def _transcode_clip_to_h264(self, event_id: str, temp_path: str, final_path: str) -> bool:
+        """Transcode clip_original.mp4 to H.264 clip.mp4. Removes temp on success."""
+        process = None
+        try:
+            command = [
+                "ffmpeg", "-y",
+                "-i", temp_path,
+                "-c:v", "libx264",
+                "-preset", "fast",
+                "-crf", "23",
+                "-c:a", "aac",
+                "-movflags", "+faststart",
+                final_path,
+            ]
+            process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            stdout, stderr = process.communicate(timeout=self.ffmpeg_timeout)
+            if process.returncode == 0:
+                os.remove(temp_path)
+                logger.info(f"Transcoded clip for {event_id}")
+                return True
+            logger.error(f"FFmpeg error for {event_id}: {stderr.decode()[:500]}")
+            if os.path.exists(temp_path):
+                os.rename(temp_path, final_path)
+            return True
+        except subprocess.TimeoutExpired:
+            self._terminate_process_gracefully(process, event_id)
+            if os.path.exists(temp_path):
+                os.rename(temp_path, final_path)
+            return True
+        except Exception as e:
+            logger.exception(f"Transcode failed for {event_id}: {e}")
+            self._terminate_process_gracefully(process, event_id)
+            if os.path.exists(temp_path):
+                os.rename(temp_path, final_path)
+            return True
+
+    def download_and_transcode_clip(self, event_id: str, folder_path: str) -> bool:
+        """Download clip from Frigate events API and transcode to H.264 (fallback when Export API fails)."""
+        temp_path = os.path.join(folder_path, "clip_original.mp4")
+        final_path = os.path.join(folder_path, "clip.mp4")
 
         try:
             # Download original clip (retry on HTTP 400 — Frigate may not have clip ready yet)
@@ -742,65 +876,20 @@ class FileManager:
                     bytes_downloaded += len(chunk)
 
             logger.debug(f"Downloaded clip for {event_id} ({bytes_downloaded} bytes), starting transcode...")
-
-            # Transcode with timeout protection
-            command = [
-                'ffmpeg', '-y',
-                '-i', temp_path,
-                '-c:v', 'libx264',
-                '-preset', 'fast',
-                '-crf', '23',
-                '-c:a', 'aac',
-                '-movflags', '+faststart',
-                final_path
-            ]
-
-            logger.debug(f"FFmpeg command: {' '.join(command)}")
-
-            process = subprocess.Popen(
-                command,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE
-            )
-
-            try:
-                stdout, stderr = process.communicate(timeout=self.ffmpeg_timeout)
-
-                if process.returncode == 0:
-                    os.remove(temp_path)
-                    final_size = os.path.getsize(final_path) if os.path.exists(final_path) else 0
-                    logger.info(f"Transcoded clip for {event_id} ({final_size} bytes)")
-                    return True
-                else:
-                    logger.error(f"FFmpeg error for {event_id}: {stderr.decode()[:500]}")
-                    if os.path.exists(temp_path):
-                        os.rename(temp_path, final_path)
-                        logger.warning(f"Using original clip for {event_id} due to transcode failure")
-                    return True
-
-            except subprocess.TimeoutExpired:
-                logger.error(f"FFmpeg timeout ({self.ffmpeg_timeout}s) for {event_id}")
-                self._terminate_process_gracefully(process, event_id)
-                if os.path.exists(temp_path):
-                    os.rename(temp_path, final_path)
-                    logger.warning(f"Using original clip for {event_id} due to timeout")
-                return True
+            return self._transcode_clip_to_h264(event_id, temp_path, final_path)
 
         except requests.exceptions.Timeout:
             logger.error(f"Timeout downloading clip for {event_id}")
-            self._terminate_process_gracefully(process, event_id)
             if os.path.exists(temp_path):
                 os.remove(temp_path)
             return False
         except requests.exceptions.HTTPError as e:
             logger.error(f"HTTP error downloading clip for {event_id}: {e}")
-            self._terminate_process_gracefully(process, event_id)
             if os.path.exists(temp_path):
                 os.remove(temp_path)
             return False
         except Exception as e:
             logger.exception(f"Failed to download/transcode clip for {event_id}: {e}")
-            self._terminate_process_gracefully(process, event_id)
             if os.path.exists(temp_path):
                 os.remove(temp_path)
             return False
@@ -1733,15 +1822,48 @@ class StateAwareOrchestrator:
     def _process_event_end(self, event: EventState):
         """Background processing when event ends."""
         try:
-            # Download files
+            # Download snapshot
             if event.has_snapshot:
                 event.snapshot_downloaded = self.file_manager.download_snapshot(
                     event.event_id, event.folder_path
                 )
 
-            if event.has_clip:
-                event.clip_downloaded = self.file_manager.download_and_transcode_clip(
-                    event.event_id, event.folder_path
+            # Clip: use Export API for full event duration (with buffer), then send as final video update
+            if event.has_clip and event.folder_path:
+                export_before = self.config.get('EXPORT_BUFFER_BEFORE', 5)
+                export_after = self.config.get('EXPORT_BUFFER_AFTER', 30)
+                start_ts = int(event.created_at - export_before)
+                end_ts = int((event.end_time or event.created_at) + export_after)
+
+                # Log clip export request to timeline
+                self._timeline_log_frigate_api(
+                    event.folder_path, 'out',
+                    'Clip export request (to Frigate API)',
+                    {
+                        'url': f"{self.config.get('FRIGATE_URL', '')}/api/export/{event.camera}/start/{start_ts}/end/{end_ts}",
+                        'params': {
+                            'camera': event.camera,
+                            'start': start_ts,
+                            'end': end_ts,
+                        },
+                    },
+                )
+
+                event.clip_downloaded = self.file_manager.export_and_transcode_clip(
+                    event.event_id,
+                    event.folder_path,
+                    camera=event.camera,
+                    start_time=event.created_at,
+                    end_time=event.end_time or event.created_at,
+                    export_buffer_before=export_before,
+                    export_buffer_after=export_after,
+                )
+
+                # Log clip export response to timeline (success = clip saved, either from export or fallback)
+                self._timeline_log_frigate_api(
+                    event.folder_path, 'in',
+                    'Clip export response (from Frigate API)',
+                    {'success': event.clip_downloaded},
                 )
 
             # Write initial summary
