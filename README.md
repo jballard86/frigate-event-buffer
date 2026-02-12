@@ -1,6 +1,6 @@
 # Frigate Event Buffer
 
-A state-aware orchestrator that listens to Frigate NVR events via MQTT, tracks them through their lifecycle, sends Ring-style sequential notifications to Home Assistant, and maintains a rolling 3-day evidence locker. Compatible with **Frigate 0.17+** with full GenAI review integration.
+A state-aware orchestrator that listens to Frigate NVR events via MQTT, tracks them through their lifecycle, sends Ring-style sequential notifications to Home Assistant, and maintains a configurable rolling evidence locker (default 3 days). Includes a built-in event viewer and daily review summaries. Compatible with **Frigate 0.17+** with full GenAI review integration.
 
 ## Features
 
@@ -72,10 +72,10 @@ curl http://localhost:5055/status
 Configuration is loaded from three sources (in order of priority):
 
 1. **Environment variables** (highest priority)
-2. **config.yaml** file (searched at `/app/config.yaml`, `/app/storage/config.yaml`, `./config.yaml`)
+2. **config.yaml** file (searched at `/app/config.yaml`, `/app/storage/config.yaml`, `./config.yaml`, and `config.yaml` in the current working directory)
 3. **Default values** (lowest priority)
 
-Place your `config.yaml` in the storage volume directory — it will be found automatically at `/app/storage/config.yaml` without needing a separate file bind mount.
+Place your `config.yaml` in the storage volume directory — it will be found automatically at `/app/storage/config.yaml` without needing a separate file bind mount. You can optionally bind-mount a config file to `/app/config.yaml` instead.
 
 ### config.yaml
 
@@ -121,6 +121,9 @@ settings:
   stats_refresh_seconds: 60    # Stats panel auto-refresh interval (seconds)
   daily_review_retention_days: 90   # How long to keep saved daily reviews (days)
   daily_review_schedule_hour: 1     # Hour (0-23) to fetch previous day's review
+  event_gap_seconds: 120      # (Planned) Seconds of no activity before new consolidated event
+  export_buffer_before: 5    # (Planned) Seconds before event start for export
+  export_buffer_after: 30    # (Planned) Seconds after event end for export
 
 # Network configuration (REQUIRED - no defaults)
 network:
@@ -141,6 +144,7 @@ Environment variables override config.yaml values:
 | `MQTT_BROKER` | *(required)* | MQTT broker IP address |
 | `MQTT_PORT` | `1883` | MQTT broker port |
 | `BUFFER_IP` | *(required)* | Buffer container's reachable IP (used in notification image/video URLs) |
+| `HA_IP` | *(optional)* | Fallback for BUFFER_IP if set (for compatibility) |
 | `FRIGATE_URL` | *(required)* | Frigate API base URL |
 | `STORAGE_PATH` | `/app/storage` | Storage directory inside container |
 | `RETENTION_DAYS` | `3` | Days to retain event folders |
@@ -149,6 +153,9 @@ Environment variables override config.yaml values:
 | `STATS_REFRESH_SECONDS` | `60` | Stats panel auto-refresh interval (seconds) |
 | `DAILY_REVIEW_RETENTION_DAYS` | `90` | Days to retain saved daily reviews |
 | `DAILY_REVIEW_SCHEDULE_HOUR` | `1` | Hour (0-23) to run daily review fetch for previous day |
+| `EVENT_GAP_SECONDS` | `120` | (Planned) Seconds without activity before new consolidated event |
+| `EXPORT_BUFFER_BEFORE` | `5` | (Planned) Seconds before event start for export time range |
+| `EXPORT_BUFFER_AFTER` | `30` | (Planned) Seconds after event end for export time range |
 
 ## Daily Review
 
@@ -212,6 +219,10 @@ cameras:
 ### GET /events/<camera>/<subdir>/timeline
 
 Per-event notification timeline page. Shows data received from Frigate (MQTT), requests/responses to Frigate Review Summarize API, and payloads sent to Home Assistant. Rendered from `notification_timeline.json` in the event folder.
+
+- **Back to Player** — links to `/player?camera=X&subdir=Y` so the player opens on the same event
+- **Download Timeline** — downloads `notification_timeline.json`
+- **Event Files** — download links for each file in the event folder (clip, snapshot, summary, metadata, etc.)
 
 ### GET /player
 
@@ -278,6 +289,7 @@ Response:
     {
       "event_id": "1234567890.123-abcdef",
       "camera": "doorbell",
+      "subdir": "1234567890_1234567890.123-abcdef",
       "timestamp": "1234567890",
       "label": "person",
       "title": "Person at Front Door",
@@ -300,8 +312,14 @@ Response:
 
 List events for a specific camera.
 
+**Query Parameters:**
+- `?filter=unreviewed` (default) — only unreviewed events
+- `?filter=reviewed` — only reviewed events
+- `?filter=all` — all events
+
 ```bash
 curl http://localhost:5055/events/doorbell
+curl http://localhost:5055/events/doorbell?filter=all
 ```
 
 ### GET /files/{path}
@@ -619,7 +637,7 @@ services:
       retries: 3
 ```
 
-Place your `config.yaml` inside the storage volume (e.g., `/mnt/user/appdata/frigate_buffer/config.yaml`) — the app will find it automatically. No separate file bind mount needed.
+Optional env vars (e.g. `RETENTION_DAYS`, `MQTT_PORT`) can be set as in `docker-compose.example.yaml`. Place your `config.yaml` inside the storage volume (e.g., `/mnt/user/appdata/frigate_buffer/config.yaml`) — the app will find it automatically. No separate file bind mount needed. You can optionally bind-mount a config file to `/app/config.yaml` instead.
 
 ## Debug Logging
 
@@ -677,12 +695,12 @@ The threat level is determined by Frigate's GenAI analysis based on the `activit
 
 ## Storage Structure
 
-Events are organized by camera:
+Events are organized by camera. Event subdir format: `{timestamp}_{frigate_event_id}` (e.g. Frigate event ID `1234567890.123-abcdef` becomes subdir `1234567890_1234567890.123-abcdef`).
 
 ```
 /app/storage/
 ├── doorbell/
-│   ├── 1234567890_event-id-1/
+│   ├── 1234567890_1234567890.123-abcdef/
 │   │   ├── clip.mp4                # H.264 transcoded video
 │   │   ├── snapshot.jpg            # Event snapshot
 │   │   ├── summary.txt             # Event metadata (human-readable)
@@ -690,10 +708,10 @@ Events are organized by camera:
 │   │   ├── review_summary.md       # Frigate review summary (markdown)
 │   │   ├── notification_timeline.json  # Data pipeline log (Frigate MQTT, API, HA)
 │   │   └── .viewed                 # Review marker (created when marked as reviewed)
-│   └── 1234567891_event-id-2/
+│   └── 1234567891_1234567891.456-ghijkl/
 │       └── ...
 ├── front_yard/
-│   └── 1234567892_event-id-3/
+│   └── 1234567892_1234567892.789-mnopqr/
 │       └── ...
 ```
 

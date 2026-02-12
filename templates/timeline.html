@@ -122,7 +122,8 @@
 
 <div class="header">
   <h1>Notification Timeline</h1>
-  <a href="/player">Back to Player</a>
+  <a href="/player?camera={{ camera }}&subdir={{ subdir }}">Back to Player</a>
+  <a href="/files/{{ camera }}/{{ subdir }}/notification_timeline.json" download="notification_timeline.json" style="text-decoration:none;"><button style="background:#1a4a1a;border-color:#2d7a2d;color:#7dde7d;padding:6px 12px;border-radius:6px;cursor:pointer;font-size:0.85rem;">Download Timeline</button></a>
 </div>
 
 <div class="main">
@@ -148,6 +149,17 @@
   <div class="empty-state">
     <p>No timeline data yet.</p>
     <p style="margin-top:8px;font-size:0.9rem;">Data will appear as the event is processed.</p>
+  </div>
+  {% endif %}
+
+  {% if event_files %}
+  <div class="info-section" style="margin-top:24px;">
+    <h2 style="font-size:1rem;color:#e94560;margin-bottom:12px;border-bottom:1px solid #0f3460;padding-bottom:6px;">Event Files</h2>
+    <ul style="list-style:none;">
+    {% for f in event_files %}
+      <li style="margin:6px 0;"><a href="/files/{{ camera }}/{{ subdir }}/{{ f }}" download="{{ f }}" style="color:#7db3e8;">{{ f }}</a></li>
+    {% endfor %}
+    </ul>
   </div>
   {% endif %}
 </div>

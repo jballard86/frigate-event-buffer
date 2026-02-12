@@ -18,6 +18,7 @@ import shutil
 import logging
 import threading
 import subprocess
+import uuid
 from enum import Enum, auto
 from dataclasses import dataclass, field
 from datetime import timedelta, date, datetime
@@ -86,6 +87,9 @@ def load_config() -> dict:
         'STATS_REFRESH_SECONDS': 60,
         'DAILY_REVIEW_RETENTION_DAYS': 90,
         'DAILY_REVIEW_SCHEDULE_HOUR': 1,
+        'EVENT_GAP_SECONDS': 120,
+        'EXPORT_BUFFER_BEFORE': 5,
+        'EXPORT_BUFFER_AFTER': 30,
 
         # Filtering defaults (empty = allow all)
         'ALLOWED_CAMERAS': [],
@@ -130,6 +134,9 @@ def load_config() -> dict:
                     config['STATS_REFRESH_SECONDS'] = settings.get('stats_refresh_seconds', config['STATS_REFRESH_SECONDS'])
                     config['DAILY_REVIEW_RETENTION_DAYS'] = settings.get('daily_review_retention_days', config['DAILY_REVIEW_RETENTION_DAYS'])
                     config['DAILY_REVIEW_SCHEDULE_HOUR'] = settings.get('daily_review_schedule_hour', config['DAILY_REVIEW_SCHEDULE_HOUR'])
+                    config['EVENT_GAP_SECONDS'] = settings.get('event_gap_seconds', config['EVENT_GAP_SECONDS'])
+                    config['EXPORT_BUFFER_BEFORE'] = settings.get('export_buffer_before', config['EXPORT_BUFFER_BEFORE'])
+                    config['EXPORT_BUFFER_AFTER'] = settings.get('export_buffer_after', config['EXPORT_BUFFER_AFTER'])
 
                 if 'network' in yaml_config:
                     network = yaml_config['network']
@@ -162,6 +169,9 @@ def load_config() -> dict:
     config['STATS_REFRESH_SECONDS'] = int(os.getenv('STATS_REFRESH_SECONDS', str(config['STATS_REFRESH_SECONDS'])))
     config['DAILY_REVIEW_RETENTION_DAYS'] = int(os.getenv('DAILY_REVIEW_RETENTION_DAYS', str(config['DAILY_REVIEW_RETENTION_DAYS'])))
     config['DAILY_REVIEW_SCHEDULE_HOUR'] = int(os.getenv('DAILY_REVIEW_SCHEDULE_HOUR', str(config['DAILY_REVIEW_SCHEDULE_HOUR'])))
+    config['EVENT_GAP_SECONDS'] = int(os.getenv('EVENT_GAP_SECONDS', str(config['EVENT_GAP_SECONDS'])))
+    config['EXPORT_BUFFER_BEFORE'] = int(os.getenv('EXPORT_BUFFER_BEFORE', str(config['EXPORT_BUFFER_BEFORE'])))
+    config['EXPORT_BUFFER_AFTER'] = int(os.getenv('EXPORT_BUFFER_AFTER', str(config['EXPORT_BUFFER_AFTER'])))
 
     # Validate required settings
     missing = []
@@ -413,6 +423,192 @@ class EventStateManager:
             }
 
 
+def _generate_consolidated_id(start_ts: float) -> tuple:
+    """Generate our internal consolidated event ID. Returns (full_id, folder_name)."""
+    ts_int = int(start_ts)
+    short_uuid = uuid.uuid4().hex[:8]
+    full_id = f"ce_{ts_int}_{short_uuid}"
+    folder_name = f"{ts_int}_{short_uuid}"
+    return full_id, folder_name
+
+
+@dataclass
+class ConsolidatedEvent:
+    """A consolidated event grouping multiple Frigate events (same real-world activity)."""
+
+    consolidated_id: str
+    folder_name: str
+    folder_path: str
+    start_time: float
+    last_activity_time: float
+    cameras: List[str] = field(default_factory=list)
+    frigate_event_ids: List[str] = field(default_factory=list)
+
+    # Best-so-far (never regress)
+    best_title: Optional[str] = None
+    best_description: Optional[str] = None
+    best_threat_level: int = 0
+
+    # Primary (first) Frigate event for immediate clip/snapshot
+    primary_event_id: Optional[str] = None
+    primary_camera: Optional[str] = None
+    snapshot_downloaded: bool = False
+    clip_downloaded: bool = False
+
+    # Legacy-compat: expose as EventState-like for notifier
+    @property
+    def event_id(self) -> str:
+        return self.consolidated_id
+
+    @property
+    def camera(self) -> str:
+        return self.primary_camera or (self.cameras[0] if self.cameras else "unknown")
+
+    @property
+    def label(self) -> str:
+        return "person"  # Aggregated; use best_description for display
+
+    @property
+    def created_at(self) -> float:
+        return self.start_time
+
+    @property
+    def phase(self):
+        return EventPhase.SUMMARIZED  # Simplified for notification
+
+    @property
+    def genai_title(self) -> Optional[str]:
+        return self.best_title
+
+    @property
+    def genai_description(self) -> Optional[str]:
+        return self.best_description
+
+    @property
+    def threat_level(self) -> int:
+        return self.best_threat_level
+
+    @property
+    def severity(self) -> Optional[str]:
+        return "detection"
+
+    @property
+    def review_summary(self) -> Optional[str]:
+        return None  # Set when we get full-event summary
+
+    @property
+    def end_time(self) -> Optional[float]:
+        return self.last_activity_time
+
+    @property
+    def has_clip(self) -> bool:
+        return self.clip_downloaded
+
+    @property
+    def has_snapshot(self) -> bool:
+        return self.snapshot_downloaded
+
+
+class ConsolidatedEventManager:
+    """Manages consolidated events (time-gap grouped)."""
+
+    def __init__(self, event_gap_seconds: int = 120):
+        self._events: Dict[str, ConsolidatedEvent] = {}
+        self._frigate_to_ce: Dict[str, str] = {}  # frigate_event_id -> consolidated_id
+        self._active_ce_id: Optional[str] = None  # Currently active (receiving new sub-events)
+        self._lock = threading.RLock()
+        self.event_gap_seconds = event_gap_seconds
+
+    def get_or_create(
+        self,
+        event_id: str,
+        camera: str,
+        label: str,
+        start_time: float,
+        folder_path: str,
+    ) -> tuple:
+        """
+        Get existing consolidated event or create new. Returns (ConsolidatedEvent, is_new).
+        Groups by event_gap_seconds. For new events, folder_path must already exist.
+        """
+        now = time.time()
+        with self._lock:
+            if self._active_ce_id:
+                ce = self._events.get(self._active_ce_id)
+                if ce and (now - ce.last_activity_time) < self.event_gap_seconds:
+                    ce.frigate_event_ids.append(event_id)
+                    ce.last_activity_time = now
+                    if camera not in ce.cameras:
+                        ce.cameras.append(camera)
+                    self._frigate_to_ce[event_id] = ce.consolidated_id
+                    return ce, False
+
+            # New consolidated event (folder_path provided by caller after create_consolidated_event_folder)
+            full_id, folder_name = _generate_consolidated_id(start_time)
+            ce = ConsolidatedEvent(
+                consolidated_id=full_id,
+                folder_name=folder_name,
+                folder_path=folder_path,
+                start_time=start_time,
+                last_activity_time=now,
+                cameras=[camera],
+                frigate_event_ids=[event_id],
+                primary_event_id=event_id,
+                primary_camera=camera,
+            )
+            self._events[full_id] = ce
+            self._frigate_to_ce[event_id] = full_id
+            self._active_ce_id = full_id
+            return ce, True
+
+    def get_by_frigate_event(self, event_id: str) -> Optional[ConsolidatedEvent]:
+        with self._lock:
+            ce_id = self._frigate_to_ce.get(event_id)
+            return self._events.get(ce_id) if ce_id else None
+
+    def update_activity(self, event_id: str, activity_time: Optional[float] = None) -> None:
+        with self._lock:
+            ce_id = self._frigate_to_ce.get(event_id)
+            if ce_id and ce_id in self._events:
+                ce = self._events[ce_id]
+                ce.last_activity_time = activity_time or time.time()
+
+    def update_best(self, event_id: str, title: Optional[str] = None,
+                    description: Optional[str] = None, threat_level: Optional[int] = None) -> None:
+        with self._lock:
+            ce = self.get_by_frigate_event(event_id)
+            if ce:
+                if title and (not ce.best_title or len(str(title)) > len(str(ce.best_title or ""))):
+                    ce.best_title = title
+                if description and (not ce.best_description or len(str(description)) > len(str(ce.best_description or ""))):
+                    ce.best_description = description
+                if threat_level is not None and threat_level > ce.best_threat_level:
+                    ce.best_threat_level = threat_level
+
+    def mark_inactive(self, consolidated_id: str) -> None:
+        with self._lock:
+            if self._active_ce_id == consolidated_id:
+                self._active_ce_id = None
+
+    def remove(self, consolidated_id: str) -> Optional[ConsolidatedEvent]:
+        with self._lock:
+            ce = self._events.pop(consolidated_id, None)
+            if ce:
+                for fid in ce.frigate_event_ids:
+                    self._frigate_to_ce.pop(fid, None)
+                if self._active_ce_id == consolidated_id:
+                    self._active_ce_id = None
+            return ce
+
+    def get_active_consolidated_ids(self) -> List[str]:
+        with self._lock:
+            return list(self._events.keys())
+
+    def get_all(self) -> List[ConsolidatedEvent]:
+        with self._lock:
+            return list(self._events.values())
+
+
 # =============================================================================
 # FILE MANAGER
 # =============================================================================
@@ -440,13 +636,21 @@ class FileManager:
         return sanitized or 'unknown'
 
     def create_event_folder(self, event_id: str, camera: str, timestamp: float) -> str:
-        """Create folder for event: {camera}/{timestamp}_{event_id}"""
+        """Create folder for event: {camera}/{timestamp}_{event_id} (legacy)"""
         sanitized_camera = self.sanitize_camera_name(camera)
         folder_name = f"{int(timestamp)}_{event_id}"
         camera_path = os.path.join(self.storage_path, sanitized_camera)
         folder_path = os.path.join(camera_path, folder_name)
         os.makedirs(folder_path, exist_ok=True)
         logger.info(f"Created folder: {sanitized_camera}/{folder_name}")
+        return folder_path
+
+    def create_consolidated_event_folder(self, folder_name: str) -> str:
+        """Create folder for consolidated event: events/{folder_name}"""
+        events_dir = os.path.join(self.storage_path, "events")
+        folder_path = os.path.join(events_dir, folder_name)
+        os.makedirs(folder_path, exist_ok=True)
+        logger.info(f"Created consolidated folder: events/{folder_name}")
         return folder_path
 
     def download_snapshot(self, event_id: str, folder_path: str) -> bool:
@@ -1853,6 +2057,7 @@ class StateAwareOrchestrator:
                 events.append({
                     "event_id": eid,
                     "camera": camera_name,
+                    "subdir": subdir,
                     "timestamp": ts,
                     "summary": summary_text,
                     "title": metadata.get("genai_title") or parsed.get("Title"),
@@ -2076,12 +2281,24 @@ class StateAwareOrchestrator:
             entries = timeline_data.get("entries", [])
             entries.sort(key=lambda e: e.get("ts", ""), reverse=True)
 
+            # List all files in event folder for download links
+            event_files = []
+            try:
+                for f in os.listdir(folder_path):
+                    fp = os.path.join(folder_path, f)
+                    if os.path.isfile(fp):
+                        event_files.append(f)
+                event_files.sort()
+            except OSError:
+                pass
+
             return render_template(
                 'timeline.html',
                 event_id=timeline_data.get("event_id", subdir),
                 camera=camera,
                 subdir=subdir,
-                entries=entries
+                entries=entries,
+                event_files=event_files
             )
 
         @app.route('/files/<path:filename>')
