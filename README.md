@@ -115,6 +115,7 @@ settings:
   log_level: "DEBUG"  # DEBUG, INFO, WARNING, ERROR
   summary_padding_before: 15   # Seconds before event start for review summary
   summary_padding_after: 15    # Seconds after event end for review summary
+  stats_refresh_seconds: 60    # Stats panel auto-refresh interval (seconds)
 
 # Network configuration (REQUIRED - no defaults)
 network:
@@ -140,6 +141,7 @@ Environment variables override config.yaml values:
 | `RETENTION_DAYS` | `3` | Days to retain event folders |
 | `FLASK_PORT` | `5055` | Flask server port |
 | `LOG_LEVEL` | `INFO` | Logging level (DEBUG, INFO, WARNING, ERROR) |
+| `STATS_REFRESH_SECONDS` | `60` | Stats panel auto-refresh interval (seconds) |
 
 ## Camera/Label Filtering
 
@@ -184,11 +186,13 @@ Features:
 - Camera filter dropdown
 - Reviewed/Unreviewed/All/Stats filter (defaults to unreviewed)
 - Stats dashboard when "Stats" is selected or when no events: event counts (today, week, month), reviewed/unreviewed totals, events per camera, storage by camera (clips, snapshots, descriptions), recent errors (last 10), last cleanup time, link to most recent notification, system info (uptime, MQTT, retention, etc.)
+- "View most recent notification" link loads `/player?filter=all` so the most recent event is shown first (ignores reviewed/unreviewed filter)
+- Stats layout: centered and symmetrical
 - "Mark Reviewed" per-event and "Mark All Reviewed" bulk action
 - Prev/Next event navigation
 - Download and delete buttons
 - Auto-refresh every 30 seconds (pauses during video playback)
-- Stats view: 30s auto-refresh plus manual Refresh button
+- Stats view: configurable auto-refresh (default 60s via `stats_refresh_seconds`) plus manual Refresh button
 - Dark theme optimized for HA dark mode
 
 ```
@@ -329,19 +333,20 @@ Response:
     {"ts": "2025-02-12 10:30:00", "level": "ERROR", "message": "FFmpeg timeout for event xyz"}
   ],
   "last_cleanup": {"at": "2025-02-12 09:00:00", "deleted": 5},
-  "most_recent": {"event_id": "abc123", "camera": "doorbell", "url": "/player", "timestamp": 1707742800},
+  "most_recent": {"event_id": "abc123", "camera": "doorbell", "url": "/player?filter=all", "timestamp": 1707742800},
   "system": {
     "uptime_seconds": 3600,
     "mqtt_connected": true,
     "active_events": 2,
     "retention_days": 3,
     "cleanup_interval_hours": 1,
+    "stats_refresh_seconds": 60,
     "storage_path": "/app/storage"
   }
 }
 ```
 
-Errors are limited to the last 10 (see container logs for full history). Storage is shown in MB or GB (GB when over 1 GB per camera).
+Errors are limited to the last 10 (see container logs for full history). Storage is shown in MB or GB (GB when over 1 GB per camera). The `most_recent.url` links to `/player?filter=all` so the most recent event is shown first when the page loads.
 
 ### GET /status
 

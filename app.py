@@ -70,6 +70,7 @@ def load_config() -> dict:
         'LOG_LEVEL': 'INFO',
         'SUMMARY_PADDING_BEFORE': 15,
         'SUMMARY_PADDING_AFTER': 15,
+        'STATS_REFRESH_SECONDS': 60,
 
         # Filtering defaults (empty = allow all)
         'ALLOWED_CAMERAS': [],
@@ -111,6 +112,7 @@ def load_config() -> dict:
                     config['LOG_LEVEL'] = settings.get('log_level', config['LOG_LEVEL'])
                     config['SUMMARY_PADDING_BEFORE'] = settings.get('summary_padding_before', config['SUMMARY_PADDING_BEFORE'])
                     config['SUMMARY_PADDING_AFTER'] = settings.get('summary_padding_after', config['SUMMARY_PADDING_AFTER'])
+                    config['STATS_REFRESH_SECONDS'] = settings.get('stats_refresh_seconds', config['STATS_REFRESH_SECONDS'])
 
                 if 'network' in yaml_config:
                     network = yaml_config['network']
@@ -140,6 +142,7 @@ def load_config() -> dict:
     config['STORAGE_PATH'] = os.getenv('STORAGE_PATH', config['STORAGE_PATH'])
     config['RETENTION_DAYS'] = int(os.getenv('RETENTION_DAYS', str(config['RETENTION_DAYS'])))
     config['LOG_LEVEL'] = os.getenv('LOG_LEVEL', config['LOG_LEVEL'])
+    config['STATS_REFRESH_SECONDS'] = int(os.getenv('STATS_REFRESH_SECONDS', str(config['STATS_REFRESH_SECONDS'])))
 
     # Validate required settings
     missing = []
@@ -1452,7 +1455,8 @@ class StateAwareOrchestrator:
         @app.route('/player')
         def player():
             """Serve the event viewer page."""
-            return render_template('player.html')
+            return render_template('player.html',
+                stats_refresh_seconds=self.config.get('STATS_REFRESH_SECONDS', 60))
 
         def _parse_summary(summary_text: str) -> dict:
             """Parse key-value pairs from summary.txt format."""
@@ -1809,7 +1813,7 @@ class StateAwareOrchestrator:
                 most_recent_out = {
                     'event_id': most_recent['event_id'],
                     'camera': most_recent['camera'],
-                    'url': '/player',
+                    'url': '/player?filter=all',
                     'timestamp': most_recent['timestamp']
                 }
 
@@ -1844,7 +1848,8 @@ class StateAwareOrchestrator:
                     'active_events': len(self.state_manager.get_active_event_ids()),
                     'retention_days': self.config['RETENTION_DAYS'],
                     'cleanup_interval_hours': self.config.get('CLEANUP_INTERVAL_HOURS', 1),
-                    'storage_path': self.config['STORAGE_PATH']
+                    'storage_path': self.config['STORAGE_PATH'],
+                    'stats_refresh_seconds': self.config.get('STATS_REFRESH_SECONDS', 60)
                 }
             })
 

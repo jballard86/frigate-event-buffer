@@ -53,6 +53,10 @@ settings:
   summary_padding_before: 15   # seconds before event start
   summary_padding_after: 15    # seconds after event end
 
+  # Stats panel auto-refresh interval (seconds)
+  # How often the Stats view refreshes when displayed
+  stats_refresh_seconds: 60
+
 # Network configuration
 # These can be overridden by environment variables:
 #   MQTT_BROKER, MQTT_PORT, FRIGATE_URL, BUFFER_IP, FLASK_PORT, STORAGE_PATH
