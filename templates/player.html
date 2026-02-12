@@ -162,6 +162,15 @@
     white-space: pre-wrap;
   }
 
+  .scene-text {
+    font-size: 0.9rem;
+    line-height: 1.5;
+    color: #aaa;
+    margin-top: 10px;
+    padding-top: 10px;
+    border-top: 1px solid #333;
+  }
+
   .ai-title {
     font-weight: 600;
     margin-bottom: 6px;
@@ -625,6 +634,7 @@
     const timeStr = ts ? ts.toLocaleString() : 'Unknown';
     const title = ev.title || (ev.label || 'Event').replace(/\b\w/g, c => c.toUpperCase()) + ' Detected';
     const description = ev.description || ev.summary || 'No description available.';
+    const scene = ev.scene || '';
     const cameraDisplay = ev.camera.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
     const labelDisplay = (ev.label || 'unknown').replace(/\b\w/g, c => c.toUpperCase());
     const subdir = ev.subdir || ev.hosted_clip.split('/').slice(-2, -1)[0];
@@ -669,7 +679,7 @@
           ? `<div class="summary-excerpt" id="summaryExcerpt"></div>
              <button class="btn-expand" id="btnExpandSummary">Expand Full Report</button>
              <div class="summary-full" id="summaryFull"></div>`
-          : `<p class="description-text">${escapeHtml(description)}</p>`
+          : `<p class="description-text">${escapeHtml(description)}</p>${scene ? `<p class="scene-text">${escapeHtml(scene)}</p>` : ''}`
         }
       </div>
 
