@@ -19,6 +19,7 @@ A state-aware orchestrator that listens to Frigate NVR events via MQTT, tracks t
 - **Rolling Retention**: Automatically cleans up events older than the retention period (default: 3 days)
 - **Notification Rate Limiting**: Max 2 notifications per 5 seconds with queue overflow protection
 - **Built-in Event Viewer**: Self-contained web page at `/player` with video playback, AI analysis, event navigation, reviewed/unreviewed filtering, and download — embeddable as an HA iframe
+- **Stats Dashboard**: "Stats" filter option and stats panel when no events — event counts (today/week/month), storage by camera, recent errors, last cleanup, system info; auto-refresh every 30s with manual Refresh button
 - **Event Review Tracking**: Mark events as reviewed with per-event or bulk "mark all" controls; defaults to showing unreviewed events
 - **REST API**: Serves events, clips, and snapshots to your Home Assistant dashboard
 - **Debug Logging**: Configurable log levels for troubleshooting
@@ -34,7 +35,7 @@ A state-aware orchestrator that listens to Frigate NVR events via MQTT, tracks t
 │  ├─ frigate/+/        ├─ phase tracking    ├─ /events   │
 │  │   tracked_object   │   (NEW→DESCRIBED   ├─ /cameras  │
 │  └─ frigate/reviews   │    →FINALIZED      ├─ /files    │
-│                       │    →SUMMARIZED)    │            │
+│                       │    →SUMMARIZED)    ├─ /stats    │
 │                       │                    └─ /status   │
 └─────────────────────────────────────────────────────────┘
 ```
@@ -181,11 +182,13 @@ Features:
 - GenAI title and full description display
 - Event metadata (camera, label, timestamp)
 - Camera filter dropdown
-- Reviewed/Unreviewed/All filter (defaults to unreviewed)
+- Reviewed/Unreviewed/All/Stats filter (defaults to unreviewed)
+- Stats dashboard when "Stats" is selected or when no events: event counts (today, week, month), reviewed/unreviewed totals, events per camera, storage by camera (clips, snapshots, descriptions), recent errors (last 10), last cleanup time, link to most recent notification, system info (uptime, MQTT, retention, etc.)
 - "Mark Reviewed" per-event and "Mark All Reviewed" bulk action
 - Prev/Next event navigation
 - Download and delete buttons
 - Auto-refresh every 30 seconds (pauses during video playback)
+- Stats view: 30s auto-refresh plus manual Refresh button
 - Dark theme optimized for HA dark mode
 
 ```
@@ -296,6 +299,49 @@ Mark all events across all cameras as reviewed.
 ```bash
 curl -X POST http://localhost:5055/viewed/all
 ```
+
+### GET /stats
+
+Get statistics for the player dashboard (events, storage, errors, system). Used by the Stats view in the player.
+
+```bash
+curl http://localhost:5055/stats
+```
+
+Response:
+```json
+{
+  "events": {
+    "today": 12,
+    "this_week": 45,
+    "this_month": 120,
+    "total_reviewed": 80,
+    "total_unreviewed": 40,
+    "by_camera": {"doorbell": 60, "front_yard": 60}
+  },
+  "storage": {
+    "total_mb": 1250,
+    "total_gb": 1.22,
+    "by_camera": {"doorbell": {"mb": 600, "gb": null}, "front_yard": {"mb": null, "gb": 1.2}},
+    "breakdown": {"clips_mb": 1100, "snapshots_mb": 80, "descriptions_mb": 2}
+  },
+  "errors": [
+    {"ts": "2025-02-12 10:30:00", "level": "ERROR", "message": "FFmpeg timeout for event xyz"}
+  ],
+  "last_cleanup": {"at": "2025-02-12 09:00:00", "deleted": 5},
+  "most_recent": {"event_id": "abc123", "camera": "doorbell", "url": "/player", "timestamp": 1707742800},
+  "system": {
+    "uptime_seconds": 3600,
+    "mqtt_connected": true,
+    "active_events": 2,
+    "retention_days": 3,
+    "cleanup_interval_hours": 1,
+    "storage_path": "/app/storage"
+  }
+}
+```
+
+Errors are limited to the last 10 (see container logs for full history). Storage is shown in MB or GB (GB when over 1 GB per camera).
 
 ### GET /status
 

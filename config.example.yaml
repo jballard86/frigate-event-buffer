@@ -2,7 +2,7 @@
 # ===================================
 #
 # Copy this file to config.yaml and update with your values:
-#   cp config.yaml.example config.yaml
+#   cp config.example.yaml config.yaml
 #
 # This file contains non-sensitive application settings.
 # Sensitive values can also be set via environment variables,

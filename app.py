@@ -159,6 +159,51 @@ def load_config() -> dict:
     return config
 
 
+# =============================================================================
+# ERROR BUFFER (for stats dashboard)
+# =============================================================================
+
+class ErrorBuffer:
+    """Thread-safe rotating buffer of recent ERROR/WARNING log records (max 10)."""
+
+    def __init__(self, max_size: int = 10):
+        self._entries: List[dict] = []
+        self._max_size = max_size
+        self._lock = threading.Lock()
+
+    def append(self, timestamp: str, level: str, message: str) -> None:
+        with self._lock:
+            self._entries.append({
+                "ts": timestamp,
+                "level": level,
+                "message": message[:500] if message else ""
+            })
+            if len(self._entries) > self._max_size:
+                self._entries.pop(0)
+
+    def get_all(self) -> List[dict]:
+        with self._lock:
+            return list(reversed(self._entries))
+
+
+class ErrorBufferHandler(logging.Handler):
+    """Logging handler that writes ERROR/WARNING to ErrorBuffer."""
+
+    def __init__(self, buffer: ErrorBuffer):
+        super().__init__(level=logging.WARNING)
+        self._buffer = buffer
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            ts = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(record.created))
+            self._buffer.append(ts, record.levelname, record.getMessage())
+        except Exception:
+            self.handleError(record)
+
+
+error_buffer = ErrorBuffer(max_size=10)
+
+
 def setup_logging(log_level: str):
     """Configure logging with the specified level."""
     level = getattr(logging, log_level.upper(), logging.INFO)
@@ -166,6 +211,9 @@ def setup_logging(log_level: str):
     # Reconfigure the root logger
     logging.getLogger().setLevel(level)
     logger.setLevel(level)
+
+    # Add error buffer handler for stats dashboard
+    logger.addHandler(ErrorBufferHandler(error_buffer))
 
     # Suppress werkzeug per-request logging (floods logs with GET /events)
     logging.getLogger('werkzeug').setLevel(logging.WARNING)
@@ -701,6 +749,63 @@ class FileManager:
 
         return deleted_count
 
+    def compute_storage_stats(self) -> dict:
+        """Compute storage usage by camera and type. Returns bytes."""
+        clips = 0
+        snapshots = 0
+        descriptions = 0
+        by_camera = {}
+
+        try:
+            for camera_dir in os.listdir(self.storage_path):
+                camera_path = os.path.join(self.storage_path, camera_dir)
+
+                if not os.path.isdir(camera_path):
+                    continue
+                if camera_dir.split('_')[0].isdigit():
+                    continue
+
+                cam_clips = cam_snapshots = cam_descriptions = 0
+
+                for event_dir in os.listdir(camera_path):
+                    event_path = os.path.join(camera_path, event_dir)
+                    if not os.path.isdir(event_path):
+                        continue
+
+                    clip_path = os.path.join(event_path, 'clip.mp4')
+                    snapshot_path = os.path.join(event_path, 'snapshot.jpg')
+                    for f in ('summary.txt', 'review_summary.md', 'metadata.json'):
+                        p = os.path.join(event_path, f)
+                        if os.path.exists(p):
+                            cam_descriptions += os.path.getsize(p)
+                    if os.path.exists(clip_path):
+                        cam_clips += os.path.getsize(clip_path)
+                    if os.path.exists(snapshot_path):
+                        cam_snapshots += os.path.getsize(snapshot_path)
+
+                cam_total = cam_clips + cam_snapshots + cam_descriptions
+                if cam_total > 0:
+                    by_camera[camera_dir] = {
+                        'clips': cam_clips,
+                        'snapshots': cam_snapshots,
+                        'descriptions': cam_descriptions,
+                        'total': cam_total
+                    }
+                clips += cam_clips
+                snapshots += cam_snapshots
+                descriptions += cam_descriptions
+
+        except Exception as e:
+            logger.error(f"Error computing storage stats: {e}")
+
+        return {
+            'clips': clips,
+            'snapshots': snapshots,
+            'descriptions': descriptions,
+            'total': clips + snapshots + descriptions,
+            'by_camera': by_camera
+        }
+
 
 # =============================================================================
 # NOTIFICATION PUBLISHER
@@ -1002,6 +1107,10 @@ class StateAwareOrchestrator:
         self._request_count = 0
         self._request_count_lock = threading.Lock()
 
+        # Last cleanup tracking (for stats dashboard)
+        self._last_cleanup_time: Optional[float] = None
+        self._last_cleanup_deleted: int = 0
+
     def _on_mqtt_connect(self, client, userdata, flags, reason_code, properties):
         """Handle MQTT connection."""
         if reason_code == 0:
@@ -1171,6 +1280,8 @@ class StateAwareOrchestrator:
             # Run cleanup check
             active_ids = self.state_manager.get_active_event_ids()
             deleted = self.file_manager.cleanup_old_events(active_ids)
+            self._last_cleanup_time = time.time()
+            self._last_cleanup_deleted = deleted
             if deleted > 0:
                 logger.info(f"Cleaned up {deleted} old event folders")
 
@@ -1463,7 +1574,9 @@ class StateAwareOrchestrator:
             """List events for a specific camera."""
             # Run cleanup
             active_ids = state_manager.get_active_event_ids()
-            file_manager.cleanup_old_events(active_ids)
+            deleted = file_manager.cleanup_old_events(active_ids)
+            self._last_cleanup_time = time.time()
+            self._last_cleanup_deleted = deleted
 
             sanitized = file_manager.sanitize_camera_name(camera)
             events = _filter_events(_get_events_for_camera(sanitized))
@@ -1478,7 +1591,9 @@ class StateAwareOrchestrator:
             """List all events across all cameras (global view)."""
             # Run cleanup
             active_ids = state_manager.get_active_event_ids()
-            file_manager.cleanup_old_events(active_ids)
+            deleted = file_manager.cleanup_old_events(active_ids)
+            self._last_cleanup_time = time.time()
+            self._last_cleanup_deleted = deleted
 
             all_events = []
             cameras_found = []
@@ -1613,6 +1728,126 @@ class StateAwareOrchestrator:
             # Use the directory and the original relative filename.
             return send_from_directory(directory, filename)
 
+        @app.route('/stats')
+        def stats():
+            """Return stats for the player dashboard (events, storage, errors, system)."""
+            now = time.time()
+            day_start = now - 86400
+            week_start = now - 604800
+            month_start = now - 2592000
+
+            events_today = events_week = events_month = 0
+            total_reviewed = total_unreviewed = 0
+            by_camera = {}
+            most_recent = None
+
+            try:
+                for camera_dir in os.listdir(storage_path):
+                    camera_path = os.path.join(storage_path, camera_dir)
+                    if not os.path.isdir(camera_path) or camera_dir.split('_')[0].isdigit():
+                        continue
+
+                    count = 0
+                    for event_dir in os.listdir(camera_path):
+                        event_path = os.path.join(camera_path, event_dir)
+                        if not os.path.isdir(event_path):
+                            continue
+                        try:
+                            parts = event_dir.split('_', 1)
+                            ts = float(parts[0])
+                        except (ValueError, IndexError):
+                            continue
+
+                        viewed = os.path.exists(os.path.join(event_path, '.viewed'))
+                        if viewed:
+                            total_reviewed += 1
+                        else:
+                            total_unreviewed += 1
+
+                        count += 1
+                        if ts >= day_start:
+                            events_today += 1
+                        if ts >= week_start:
+                            events_week += 1
+                        if ts >= month_start:
+                            events_month += 1
+
+                        if most_recent is None or ts > most_recent['timestamp']:
+                            most_recent = {
+                                'event_id': parts[1] if len(parts) > 1 else event_dir,
+                                'camera': camera_dir,
+                                'subdir': event_dir,
+                                'timestamp': ts
+                            }
+
+                    by_camera[camera_dir] = count
+            except Exception as e:
+                logger.error(f"Error scanning events for stats: {e}")
+
+            storage_raw = file_manager.compute_storage_stats()
+            mb = 1024 * 1024
+
+            def fmt_size(b):
+                if b >= 1024 * mb:
+                    return {'gb': round(b / (1024 * mb), 2), 'mb': None}
+                return {'mb': round(b / mb, 2), 'gb': None}
+
+            by_camera_storage = {}
+            for cam, data in storage_raw.get('by_camera', {}).items():
+                total = data['total']
+                by_camera_storage[cam] = fmt_size(total)
+
+            total_bytes = storage_raw.get('total', 0)
+            breakdown = {
+                'clips_mb': round(storage_raw.get('clips', 0) / mb, 2),
+                'snapshots_mb': round(storage_raw.get('snapshots', 0) / mb, 2),
+                'descriptions_mb': round(storage_raw.get('descriptions', 0) / mb, 2)
+            }
+
+            most_recent_out = None
+            if most_recent:
+                most_recent_out = {
+                    'event_id': most_recent['event_id'],
+                    'camera': most_recent['camera'],
+                    'url': '/player',
+                    'timestamp': most_recent['timestamp']
+                }
+
+            last_cleanup = None
+            if self._last_cleanup_time is not None:
+                last_cleanup = {
+                    'at': time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(self._last_cleanup_time)),
+                    'deleted': self._last_cleanup_deleted
+                }
+
+            return jsonify({
+                'events': {
+                    'today': events_today,
+                    'this_week': events_week,
+                    'this_month': events_month,
+                    'total_reviewed': total_reviewed,
+                    'total_unreviewed': total_unreviewed,
+                    'by_camera': by_camera
+                },
+                'storage': {
+                    'total_mb': round(total_bytes / mb, 2),
+                    'total_gb': round(total_bytes / (1024 * mb), 2) if total_bytes >= 1024 * mb else None,
+                    'by_camera': by_camera_storage,
+                    'breakdown': breakdown
+                },
+                'errors': error_buffer.get_all(),
+                'last_cleanup': last_cleanup,
+                'most_recent': most_recent_out,
+                'system': {
+                    'uptime_seconds': int(time.time() - self._start_time),
+                    'mqtt_connected': self.mqtt_connected,
+                    'active_events': len(self.state_manager.get_active_event_ids()),
+                    'retention_days': self.config['RETENTION_DAYS'],
+                    'cleanup_interval_hours': self.config.get('CLEANUP_INTERVAL_HOURS', 1),
+                    'storage_path': self.config['STORAGE_PATH']
+                }
+            })
+
         @app.route('/status')
         def status():
             """Return orchestrator status for monitoring."""
@@ -1668,6 +1903,8 @@ class StateAwareOrchestrator:
         logger.info("Running scheduled cleanup...")
         active_ids = self.state_manager.get_active_event_ids()
         deleted = self.file_manager.cleanup_old_events(active_ids)
+        self._last_cleanup_time = time.time()
+        self._last_cleanup_deleted = deleted
         logger.info(f"Scheduled cleanup complete. Deleted {deleted} folders.")
 
     def start(self):
