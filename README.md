@@ -19,7 +19,8 @@ A state-aware orchestrator that listens to Frigate NVR events via MQTT, tracks t
 - **Rolling Retention**: Automatically cleans up events older than the retention period (default: 3 days)
 - **Notification Rate Limiting**: Max 2 notifications per 5 seconds with queue overflow protection
 - **Built-in Event Viewer**: Self-contained web page at `/player` with video playback, AI analysis, event navigation, reviewed/unreviewed filtering, and download — embeddable as an HA iframe
-- **Stats Dashboard**: "Stats" filter option and stats panel when no events — event counts (today/week/month), storage by camera, recent errors, last cleanup, system info; auto-refresh every 30s with manual Refresh button
+- **Stats Dashboard**: "Stats" filter option and stats panel when no events — event counts (today/week/month), storage by camera, recent errors, last cleanup, system info; configurable auto-refresh with manual Refresh button
+- **Daily Review**: Frigate review summarize integration — scheduled fetch at 1am for previous day, 90-day retention (configurable), date selector, "Current Day Review" for midnight-to-now; markdown rendering
 - **Event Review Tracking**: Mark events as reviewed with per-event or bulk "mark all" controls; defaults to showing unreviewed events
 - **REST API**: Serves events, clips, and snapshots to your Home Assistant dashboard
 - **Debug Logging**: Configurable log levels for troubleshooting
@@ -36,6 +37,8 @@ A state-aware orchestrator that listens to Frigate NVR events via MQTT, tracks t
 │  │   tracked_object   │   (NEW→DESCRIBED   ├─ /cameras  │
 │  └─ frigate/reviews   │    →FINALIZED      ├─ /files    │
 │                       │    →SUMMARIZED)    ├─ /stats    │
+│                       │                    ├─ /daily-   │
+│                       │                    │   review   │
 │                       │                    └─ /status   │
 └─────────────────────────────────────────────────────────┘
 ```
@@ -116,6 +119,8 @@ settings:
   summary_padding_before: 15   # Seconds before event start for review summary
   summary_padding_after: 15    # Seconds after event end for review summary
   stats_refresh_seconds: 60    # Stats panel auto-refresh interval (seconds)
+  daily_review_retention_days: 90   # How long to keep saved daily reviews (days)
+  daily_review_schedule_hour: 1     # Hour (0-23) to fetch previous day's review
 
 # Network configuration (REQUIRED - no defaults)
 network:
@@ -142,6 +147,36 @@ Environment variables override config.yaml values:
 | `FLASK_PORT` | `5055` | Flask server port |
 | `LOG_LEVEL` | `INFO` | Logging level (DEBUG, INFO, WARNING, ERROR) |
 | `STATS_REFRESH_SECONDS` | `60` | Stats panel auto-refresh interval (seconds) |
+| `DAILY_REVIEW_RETENTION_DAYS` | `90` | Days to retain saved daily reviews |
+| `DAILY_REVIEW_SCHEDULE_HOUR` | `1` | Hour (0-23) to run daily review fetch for previous day |
+
+## Daily Review
+
+The Daily Review feature integrates with [Frigate's Review Summarize API](https://docs.frigate.video/configuration/genai/genai_review) to fetch and display AI-generated security summaries. The buffer stores these reviews separately from event clips (90-day retention by default).
+
+### GET /daily-review
+
+Web page with date selector and formatted markdown review. Opens from the "Daily Review" button in the player header.
+
+- **Date dropdown**: Select any available date; defaults to previous day
+- **Load Review**: Fetch/cache review for selected date from Frigate
+- **Current Day Review**: Fetch today's review (midnight to current time) from Frigate
+
+### GET /api/daily-review/dates
+
+List available cached review dates.
+
+### GET /api/daily-review/{date}
+
+Get review for date (YYYY-MM-DD). Fetches from Frigate if not cached. Use `?force=1` to re-fetch.
+
+### GET /api/daily-review/current
+
+Fetch current day review (midnight to now) from Frigate. Saves as partial review for today.
+
+### Scheduled Job
+
+At the configured hour (default 1am), the buffer fetches the previous day's review from Frigate and saves it. Old reviews are removed based on `daily_review_retention_days`.
 
 ## Camera/Label Filtering
 
