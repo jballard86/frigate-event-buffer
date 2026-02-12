@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Daily Review - Frigate Event Buffer</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: #1a1a2e;
+    color: #e0e0e0;
+    min-height: 100vh;
+  }
+
+  .header {
+    background: #16213e;
+    padding: 12px 16px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    border-bottom: 1px solid #0f3460;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .header h1 {
+    font-size: 1.1rem;
+    color: #e94560;
+    white-space: nowrap;
+  }
+
+  .header-controls {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  select, button {
+    background: #0f3460;
+    color: #e0e0e0;
+    border: 1px solid #533483;
+    border-radius: 6px;
+    padding: 6px 10px;
+    font-size: 0.85rem;
+    cursor: pointer;
+  }
+
+  select:focus, button:focus { outline: 2px solid #e94560; }
+
+  button:hover { background: #533483; }
+
+  a { text-decoration: none; color: inherit; }
+
+  .main {
+    max-width: 900px;
+    margin: 0 auto;
+    padding: 16px;
+  }
+
+  .review-controls {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 16px;
+    flex-wrap: wrap;
+  }
+
+  .review-controls label { font-size: 0.9rem; color: #888; }
+
+  .btn-fetch {
+    background: #1a4a1a;
+    border-color: #2d7a2d;
+  }
+  .btn-fetch:hover { background: #2d7a2d; }
+
+  .loading {
+    text-align: center;
+    padding: 40px;
+    color: #888;
+  }
+
+  .error {
+    color: #e94560;
+    padding: 16px;
+    background: #2d1a1a;
+    border-radius: 8px;
+    margin-bottom: 16px;
+  }
+
+  .review-content {
+    background: #16213e;
+    border: 1px solid #0f3460;
+    border-radius: 8px;
+    padding: 20px;
+  }
+
+  .review-content h1, .review-content h2, .review-content h3 {
+    color: #e94560;
+    margin: 16px 0 8px 0;
+  }
+  .review-content h1 { font-size: 1.2rem; }
+  .review-content h2 { font-size: 1.05rem; }
+  .review-content h3 { font-size: 1rem; }
+  .review-content h1:first-child, .review-content h2:first-child { margin-top: 0; }
+
+  .review-content p { margin: 8px 0; line-height: 1.6; color: #ccc; }
+  .review-content ul, .review-content ol { margin: 8px 0 8px 20px; color: #ccc; }
+  .review-content li { margin: 4px 0; }
+  .review-content strong { color: #fff; }
+  .review-content hr { border-color: #0f3460; margin: 16px 0; }
+
+  .review-content blockquote, .review-content pre {
+    background: #0f3460;
+    padding: 12px;
+    border-radius: 6px;
+    margin: 12px 0;
+    overflow-x: auto;
+  }
+
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 0.8rem; margin-right: 6px; }
+  .badge-review { background: #4a3a1a; color: #deb87d; }
+  .badge-concern { background: #5c1a1a; color: #ff6b6b; }
+</style>
+<script src="/static/marked.min.js"></script>
+<script src="/static/purify.min.js"></script>
+</head>
+<body>
+
+<div class="header">
+  <h1>Daily Review</h1>
+  <div class="header-controls">
+    <a href="/player"><button>Back to Events</button></a>
+  </div>
+</div>
+
+<div class="main">
+  <div class="review-controls">
+    <label for="dateSelect">Select date:</label>
+    <select id="dateSelect">
+      <option value="">Loading...</option>
+    </select>
+    <button id="btnLoad">Load Review</button>
+    <button class="btn-fetch" id="btnCurrentDay">Current Day Review</button>
+  </div>
+
+  <div id="errorMsg" class="error" style="display:none;"></div>
+  <div id="loading" class="loading" style="display:none;">Fetching review...</div>
+  <div id="reviewContent" class="review-content"></div>
+</div>
+
+<script>
+(function() {
+  'use strict';
+
+  const dateSelect = document.getElementById('dateSelect');
+  const btnLoad = document.getElementById('btnLoad');
+  const btnCurrentDay = document.getElementById('btnCurrentDay');
+  const errorMsg = document.getElementById('errorMsg');
+  const loading = document.getElementById('loading');
+  const reviewContent = document.getElementById('reviewContent');
+
+  function hideError() {
+    errorMsg.style.display = 'none';
+  }
+
+  function showError(msg) {
+    errorMsg.textContent = msg;
+    errorMsg.style.display = 'block';
+  }
+
+  function setLoading(on) {
+    loading.style.display = on ? 'block' : 'none';
+  }
+
+  function formatDateLabel(d) {
+    const date = new Date(d + 'T12:00:00');
+    return date.toLocaleDateString(undefined, { weekday: 'short', year: 'numeric', month: 'short', day: 'numeric' });
+  }
+
+  async function loadDates() {
+    try {
+      const resp = await fetch('/api/daily-review/dates');
+      const data = await resp.json();
+      const dates = data.dates || [];
+
+      const yesterday = new Date();
+      yesterday.setDate(yesterday.getDate() - 1);
+      const yesterdayStr = yesterday.toISOString().slice(0, 10);
+
+      const today = new Date();
+      const todayStr = today.toISOString().slice(0, 10);
+
+      const allDates = new Set(dates);
+      if (!allDates.has(yesterdayStr)) allDates.add(yesterdayStr);
+      if (!allDates.has(todayStr)) allDates.add(todayStr);
+
+      const sorted = Array.from(allDates).sort().reverse();
+
+      dateSelect.innerHTML = '';
+      sorted.forEach(d => {
+        const opt = document.createElement('option');
+        opt.value = d;
+        opt.textContent = formatDateLabel(d) + (d === todayStr ? ' (today)' : '');
+        dateSelect.appendChild(opt);
+      });
+
+      dateSelect.value = yesterdayStr;
+      return yesterdayStr;
+    } catch (e) {
+      console.error('Failed to load dates:', e);
+      showError('Failed to load dates.');
+      dateSelect.innerHTML = '<option value="">Error</option>';
+      return null;
+    }
+  }
+
+  async function loadReview(dateStr, showLoading = true) {
+    if (!dateStr) {
+      showError('Please select a date.');
+      return;
+    }
+    hideError();
+    if (showLoading) setLoading(true);
+    try {
+      const resp = await fetch(`/api/daily-review/${dateStr}`);
+      const data = await resp.json();
+      if (!resp.ok) {
+        throw new Error(data.error || 'Failed to load review');
+      }
+      renderReview(data);
+    } catch (e) {
+      showError(e.message || 'Failed to load review.');
+      reviewContent.innerHTML = '';
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function fetchCurrentDay() {
+    hideError();
+    setLoading(true);
+    try {
+      const resp = await fetch('/api/daily-review/current');
+      const data = await resp.json();
+      if (!resp.ok) {
+        throw new Error(data.error || 'Failed to fetch current day review');
+      }
+      renderReview(data);
+      await loadDates();
+      const today = new Date().toISOString().slice(0, 10);
+      dateSelect.value = today;
+    } catch (e) {
+      showError(e.message || 'Failed to fetch current day review.');
+      reviewContent.innerHTML = '';
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function renderReview(data) {
+    const summary = data.summary || '';
+    let html = '';
+    if (typeof marked !== 'undefined') {
+      const rawHtml = marked.parse(summary);
+      html = typeof DOMPurify !== 'undefined' ? DOMPurify.sanitize(rawHtml) : rawHtml;
+    } else {
+      html = summary.replace(/\n/g, '<br>').replace(/^# (.*)$/gm, '<h1>$1</h1>')
+        .replace(/^## (.*)$/gm, '<h2>$1</h2>').replace(/^### (.*)$/gm, '<h3>$1</h3>');
+    }
+    reviewContent.innerHTML = '<div class="markdown-content">' + html + '</div>';
+  }
+
+  btnLoad.addEventListener('click', () => loadReview(dateSelect.value));
+  btnCurrentDay.addEventListener('click', fetchCurrentDay);
+  dateSelect.addEventListener('change', () => loadReview(dateSelect.value));
+
+  loadDates().then((defaultDate) => {
+    const sel = dateSelect.value || defaultDate;
+    if (sel) loadReview(sel, false);
+  });
+})();
+</script>
+</body>
+</html>

@@ -57,6 +57,12 @@ settings:
   # How often the Stats view refreshes when displayed
   stats_refresh_seconds: 60
 
+  # Daily Review (Frigate review summarize API)
+  # How long to keep saved daily reviews (days)
+  daily_review_retention_days: 90
+  # Hour (0-23) to run daily review fetch for previous day
+  daily_review_schedule_hour: 1
+
 # Network configuration
 # These can be overridden by environment variables:
 #   MQTT_BROKER, MQTT_PORT, FRIGATE_URL, BUFFER_IP, FLASK_PORT, STORAGE_PATH

@@ -20,7 +20,7 @@ import threading
 import subprocess
 from enum import Enum, auto
 from dataclasses import dataclass, field
-from datetime import timedelta
+from datetime import timedelta, date, datetime
 from typing import Dict, Optional, List
 
 import yaml
@@ -71,6 +71,8 @@ def load_config() -> dict:
         'SUMMARY_PADDING_BEFORE': 15,
         'SUMMARY_PADDING_AFTER': 15,
         'STATS_REFRESH_SECONDS': 60,
+        'DAILY_REVIEW_RETENTION_DAYS': 90,
+        'DAILY_REVIEW_SCHEDULE_HOUR': 1,
 
         # Filtering defaults (empty = allow all)
         'ALLOWED_CAMERAS': [],
@@ -113,6 +115,8 @@ def load_config() -> dict:
                     config['SUMMARY_PADDING_BEFORE'] = settings.get('summary_padding_before', config['SUMMARY_PADDING_BEFORE'])
                     config['SUMMARY_PADDING_AFTER'] = settings.get('summary_padding_after', config['SUMMARY_PADDING_AFTER'])
                     config['STATS_REFRESH_SECONDS'] = settings.get('stats_refresh_seconds', config['STATS_REFRESH_SECONDS'])
+                    config['DAILY_REVIEW_RETENTION_DAYS'] = settings.get('daily_review_retention_days', config['DAILY_REVIEW_RETENTION_DAYS'])
+                    config['DAILY_REVIEW_SCHEDULE_HOUR'] = settings.get('daily_review_schedule_hour', config['DAILY_REVIEW_SCHEDULE_HOUR'])
 
                 if 'network' in yaml_config:
                     network = yaml_config['network']
@@ -143,6 +147,8 @@ def load_config() -> dict:
     config['RETENTION_DAYS'] = int(os.getenv('RETENTION_DAYS', str(config['RETENTION_DAYS'])))
     config['LOG_LEVEL'] = os.getenv('LOG_LEVEL', config['LOG_LEVEL'])
     config['STATS_REFRESH_SECONDS'] = int(os.getenv('STATS_REFRESH_SECONDS', str(config['STATS_REFRESH_SECONDS'])))
+    config['DAILY_REVIEW_RETENTION_DAYS'] = int(os.getenv('DAILY_REVIEW_RETENTION_DAYS', str(config['DAILY_REVIEW_RETENTION_DAYS'])))
+    config['DAILY_REVIEW_SCHEDULE_HOUR'] = int(os.getenv('DAILY_REVIEW_SCHEDULE_HOUR', str(config['DAILY_REVIEW_SCHEDULE_HOUR'])))
 
     # Validate required settings
     missing = []
@@ -811,6 +817,135 @@ class FileManager:
 
 
 # =============================================================================
+# DAILY REVIEW MANAGER
+# =============================================================================
+
+class DailyReviewManager:
+    """Fetches and stores Frigate daily review summaries (POST /api/review/summarize/start/{start}/end/{end})."""
+
+    def __init__(self, storage_path: str, frigate_url: str, retention_days: int):
+        self.reviews_dir = os.path.join(storage_path, 'daily_reviews')
+        self.frigate_url = frigate_url.rstrip('/')
+        self.retention_days = retention_days
+        os.makedirs(self.reviews_dir, exist_ok=True)
+        logger.info(f"DailyReviewManager: {self.reviews_dir}, retention={retention_days} days")
+
+    def _date_to_ts_range(self, d: date, end_now: bool = False) -> tuple:
+        """Return (start_ts, end_ts) for a date. end_now=True uses current time for end."""
+        start_dt = datetime.combine(d, datetime.min.time())
+        end_dt = datetime.now() if end_now else datetime.combine(d, datetime.max.time().replace(microsecond=0))
+        return (int(start_dt.timestamp()), int(end_dt.timestamp()))
+
+    def _date_str(self, d: date) -> str:
+        return d.strftime('%Y-%m-%d')
+
+    def _path_for_date(self, d: date) -> str:
+        return os.path.join(self.reviews_dir, f"{self._date_str(d)}.json")
+
+    def fetch_from_frigate(self, start_ts: int, end_ts: int) -> Optional[dict]:
+        """Fetch review summary from Frigate API."""
+        url = f"{self.frigate_url}/api/review/summarize/start/{start_ts}/end/{end_ts}"
+        logger.info(f"Fetching daily review from Frigate: {url}")
+        try:
+            resp = requests.post(url, timeout=120)
+            resp.raise_for_status()
+            data = resp.json()
+            if data.get('success') and 'summary' in data:
+                return data
+            logger.warning(f"Frigate returned success=false or no summary: {data}")
+            return None
+        except requests.exceptions.Timeout:
+            logger.error("Timeout fetching daily review from Frigate")
+            return None
+        except requests.exceptions.HTTPError as e:
+            logger.error(f"HTTP error fetching daily review: {e}")
+            return None
+        except Exception as e:
+            logger.exception(f"Error fetching daily review: {e}")
+            return None
+
+    def fetch_and_save(self, d: date, end_now: bool = False) -> Optional[dict]:
+        """Fetch from Frigate and save to disk. Returns the response dict or None."""
+        start_ts, end_ts = self._date_to_ts_range(d, end_now=end_now)
+        data = self.fetch_from_frigate(start_ts, end_ts)
+        if data:
+            data['start_ts'] = start_ts
+            data['end_ts'] = end_ts
+            data['date'] = self._date_str(d)
+            data['end_now'] = end_now
+            path = self._path_for_date(d)
+            if end_now:
+                path = path.replace('.json', '_partial.json')
+            try:
+                with open(path, 'w') as f:
+                    json.dump(data, f, indent=2)
+                logger.info(f"Saved daily review to {path}")
+                return data
+            except Exception as e:
+                logger.error(f"Failed to save daily review: {e}")
+        return None
+
+    def get_cached(self, d: date, allow_partial: bool = False) -> Optional[dict]:
+        """Get cached review for date. allow_partial also checks _partial.json for today."""
+        path = self._path_for_date(d)
+        if os.path.exists(path):
+            try:
+                with open(path, 'r') as f:
+                    return json.load(f)
+            except Exception as e:
+                logger.error(f"Error reading cached review: {e}")
+        if allow_partial:
+            partial_path = path.replace('.json', '_partial.json')
+            if os.path.exists(partial_path):
+                try:
+                    with open(partial_path, 'r') as f:
+                        return json.load(f)
+                except Exception as e:
+                    logger.error(f"Error reading partial review: {e}")
+        return None
+
+    def get_or_fetch(self, d: date, force_refresh: bool = False, end_now: bool = False) -> Optional[dict]:
+        """Get cached review or fetch from Frigate. end_now only applies when force_refresh."""
+        if not force_refresh:
+            cached = self.get_cached(d, allow_partial=(d == date.today()))
+            if cached:
+                return cached
+        return self.fetch_and_save(d, end_now=end_now)
+
+    def list_dates(self) -> List[str]:
+        """Return sorted list of available date strings (YYYY-MM-DD), newest first."""
+        dates = set()
+        for f in os.listdir(self.reviews_dir):
+            if not f.endswith('.json'):
+                continue
+            date_str = f.replace('_partial.json', '').replace('.json', '')
+            if len(date_str) == 10 and date_str[4] == '-' and date_str[7] == '-':
+                dates.add(date_str)
+        return sorted(dates, reverse=True)
+
+    def cleanup_old(self) -> int:
+        """Remove reviews older than retention. Returns count deleted."""
+        cutoff = date.today() - timedelta(days=self.retention_days)
+        deleted = 0
+        for f in os.listdir(self.reviews_dir):
+            if not f.endswith('.json'):
+                continue
+            date_str = f.replace('.json', '').replace('_partial', '')
+            if len(date_str) != 10:
+                continue
+            try:
+                d = datetime.strptime(date_str, '%Y-%m-%d').date()
+                if d < cutoff:
+                    path = os.path.join(self.reviews_dir, f)
+                    os.remove(path)
+                    deleted += 1
+                    logger.info(f"Cleaned up old daily review: {f}")
+            except ValueError:
+                pass
+        return deleted
+
+
+# =============================================================================
 # NOTIFICATION PUBLISHER
 # =============================================================================
 
@@ -1098,6 +1233,13 @@ class StateAwareOrchestrator:
             config['BUFFER_IP'],
             config['FLASK_PORT'],
             config.get('FRIGATE_URL', '')
+        )
+
+        # Daily review manager (Frigate review summarize API)
+        self.daily_review_manager = DailyReviewManager(
+            config['STORAGE_PATH'],
+            config['FRIGATE_URL'],
+            config.get('DAILY_REVIEW_RETENTION_DAYS', 90)
         )
 
         # Flask app
@@ -1457,6 +1599,39 @@ class StateAwareOrchestrator:
             """Serve the event viewer page."""
             return render_template('player.html',
                 stats_refresh_seconds=self.config.get('STATS_REFRESH_SECONDS', 60))
+
+        @app.route('/daily-review')
+        def daily_review_page():
+            """Serve the daily review page."""
+            return render_template('daily_review.html')
+
+        @app.route('/api/daily-review/dates')
+        def daily_review_dates():
+            """List available daily review dates."""
+            dates = self.daily_review_manager.list_dates()
+            return jsonify({"dates": dates})
+
+        @app.route('/api/daily-review/current')
+        def daily_review_current():
+            """Fetch current day review (midnight to now)."""
+            today = date.today()
+            data = self.daily_review_manager.fetch_and_save(today, end_now=True)
+            if data:
+                return jsonify(data)
+            return jsonify({"error": "Failed to fetch current day review"}), 503
+
+        @app.route('/api/daily-review/<date_str>')
+        def daily_review_get(date_str):
+            """Get cached review for date, or fetch if missing. date_str: YYYY-MM-DD."""
+            try:
+                d = datetime.strptime(date_str, '%Y-%m-%d').date()
+            except ValueError:
+                return jsonify({"error": "Invalid date format"}), 400
+            force = request.args.get('force') == '1'
+            data = self.daily_review_manager.get_or_fetch(d, force_refresh=force)
+            if data:
+                return jsonify(data)
+            return jsonify({"error": "Failed to fetch review"}), 503
 
         def _parse_summary(summary_text: str) -> dict:
             """Parse key-value pairs from summary.txt format."""
@@ -1889,6 +2064,11 @@ class StateAwareOrchestrator:
         cleanup_hours = self.config.get('CLEANUP_INTERVAL_HOURS', 1)
         schedule.every(cleanup_hours).hours.do(self._hourly_cleanup)
         schedule.every(5).minutes.do(self._log_request_stats)
+
+        review_hour = self.config.get('DAILY_REVIEW_SCHEDULE_HOUR', 1)
+        schedule.every().day.at(f"{review_hour:02d}:00").do(self._daily_review_job)
+        logger.info(f"Scheduled daily review at {review_hour:02d}:00")
+
         logger.info(f"Scheduled cleanup every {cleanup_hours} hour(s)")
 
         while not self._shutdown:
@@ -1902,6 +2082,19 @@ class StateAwareOrchestrator:
             self._request_count = 0
         active = self.state_manager.get_active_event_count() if hasattr(self.state_manager, 'get_active_event_count') else len(self.state_manager._events)
         logger.info(f"API stats (5m): {count} requests, {active} active events, MQTT {'connected' if self.mqtt_connected else 'disconnected'}")
+
+    def _daily_review_job(self):
+        """Fetch yesterday's review from Frigate and save. Runs at configured hour (default 1am)."""
+        yesterday = date.today() - timedelta(days=1)
+        logger.info(f"Running daily review job for {yesterday}")
+        result = self.daily_review_manager.fetch_and_save(yesterday)
+        if result:
+            logger.info("Daily review saved successfully")
+        else:
+            logger.warning("Daily review fetch failed or returned no data")
+        deleted = self.daily_review_manager.cleanup_old()
+        if deleted > 0:
+            logger.info(f"Cleaned up {deleted} old daily reviews")
 
     def _hourly_cleanup(self):
         """Hourly cleanup task."""
