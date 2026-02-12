@@ -18,7 +18,7 @@ A state-aware orchestrator that listens to Frigate NVR events via MQTT, tracks t
 - **FFmpeg Safety**: 60-second timeout with graceful termination prevents zombie processes
 - **Rolling Retention**: Automatically cleans up events older than the retention period (default: 3 days)
 - **Notification Rate Limiting**: Max 2 notifications per 5 seconds with queue overflow protection
-- **Built-in Event Viewer**: Self-contained web page at `/player` with video playback, AI analysis, event navigation, reviewed/unreviewed filtering, and download — embeddable as an HA iframe
+- **Built-in Event Viewer**: Self-contained web page at `/player` with video playback, AI analysis, event navigation, reviewed/unreviewed filtering, download, and **View Timeline** (per-event data pipeline log) — embeddable as an HA iframe
 - **Stats Dashboard**: "Stats" filter option and stats panel when no events — event counts (today/week/month), storage by camera, recent errors, last cleanup, system info; configurable auto-refresh with manual Refresh button
 - **Daily Review**: Frigate review summarize integration — scheduled fetch at 1am for previous day, 90-day retention (configurable), date selector, "Current Day Review" for midnight-to-now; markdown rendering
 - **Event Review Tracking**: Mark events as reviewed with per-event or bulk "mark all" controls; defaults to showing unreviewed events
@@ -209,6 +209,10 @@ cameras:
 
 ## API Endpoints
 
+### GET /events/<camera>/<subdir>/timeline
+
+Per-event notification timeline page. Shows data received from Frigate (MQTT), requests/responses to Frigate Review Summarize API, and payloads sent to Home Assistant. Rendered from `notification_timeline.json` in the event folder.
+
 ### GET /player
 
 Built-in event viewer web page. Open in a browser or embed as an HA iframe card.
@@ -226,6 +230,7 @@ Features:
 - "Mark Reviewed" per-event and "Mark All Reviewed" bulk action
 - Prev/Next event navigation
 - Download and delete buttons
+- **View Timeline** link — opens per-event page showing data from Frigate, Frigate API requests/responses, and HA notification payloads (saved as `notification_timeline.json`)
 - Auto-refresh every 30 seconds (pauses during video playback)
 - Stats view: configurable auto-refresh (default 60s via `stats_refresh_seconds`) plus manual Refresh button
 - Dark theme optimized for HA dark mode
@@ -448,9 +453,9 @@ When GenAI descriptions are available (Frigate 0.17 with GenAI configured), they
 | `described` | AI description (this IS the new content) |
 | `clip_ready` | `"Video available. {best description}"` — combines status context with description |
 | `finalized` | GenAI description (this IS the new content) |
-| `summarized` | First meaningful line from review summary (truncated to 200 chars) |
+| `summarized` | First meaningful line from review summary (truncated to 200 chars) — **skipped** when GenAI returns "No Concerns were found during this time period" |
 
-Every notification includes an `image_url` (Frigate API snapshot with `snapshot=true`, or local snapshot once downloaded). The `video_url` field is included once the clip is downloaded.
+Every notification includes an `image_url` that is always buffer-based for Companion app reachability: local snapshot once downloaded, or a proxy to Frigate (`/api/events/{event_id}/snapshot.jpg`). The `video_url` field is included once the clip is downloaded.
 
 ### Rate Limiting
 
@@ -571,7 +576,7 @@ Create at Settings > Devices & Services > Helpers.
 
 **2. Frigate Buffer URL** (Text)
 - **Entity ID**: `input_text.frigate_buffer_url`
-- **Value**: Base URL of the buffer (e.g., `http://YOUR_BUFFER_IP:5055`)
+- **Value**: Base URL of the buffer (e.g., `http://YOUR_BUFFER_IP:5055`) — **must be reachable from the Companion app** (VPN, Nabu Casa, or same network). Notification images use this base; the buffer proxies snapshots from Frigate when needed.
 
 ### Events Sensor (optional)
 
@@ -678,12 +683,13 @@ Events are organized by camera:
 /app/storage/
 ├── doorbell/
 │   ├── 1234567890_event-id-1/
-│   │   ├── clip.mp4            # H.264 transcoded video
-│   │   ├── snapshot.jpg        # Event snapshot
-│   │   ├── summary.txt         # Event metadata (human-readable)
-│   │   ├── metadata.json       # Structured metadata (threat_level, etc.)
-│   │   ├── review_summary.md   # Frigate review summary (markdown)
-│   │   └── .viewed             # Review marker (created when marked as reviewed)
+│   │   ├── clip.mp4                # H.264 transcoded video
+│   │   ├── snapshot.jpg            # Event snapshot
+│   │   ├── summary.txt             # Event metadata (human-readable)
+│   │   ├── metadata.json           # Structured metadata (threat_level, etc.)
+│   │   ├── review_summary.md       # Frigate review summary (markdown)
+│   │   ├── notification_timeline.json  # Data pipeline log (Frigate MQTT, API, HA)
+│   │   └── .viewed                 # Review marker (created when marked as reviewed)
 │   └── 1234567891_event-id-2/
 │       └── ...
 ├── front_yard/
@@ -712,6 +718,14 @@ Check `/status` endpoint - `mqtt_connected` should be `true`. Verify:
    ```
 3. Verify camera names match exactly (case-sensitive)
 4. Check that the camera is listed in the `cameras` config
+
+### Screenshots Not Showing in Notifications
+
+Notification images use buffer URLs (local file or `/api/events/{event_id}/snapshot.jpg` proxy). The Companion app must be able to reach `input_text.frigate_buffer_url` to fetch images. Ensure:
+- **Same network**: Phone and buffer on same LAN, or
+- **VPN / exit node**: Phone routes through a server that can reach the buffer, or
+- **Nabu Casa / reverse proxy**: Buffer URL points to a publicly reachable address
+- Enable `LOG_LEVEL: DEBUG` to verify `image_url` in published payloads
 
 ### Clips Not Downloading
 

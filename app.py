@@ -27,7 +27,7 @@ import yaml
 import paho.mqtt.client as mqtt
 import requests
 import schedule
-from flask import Flask, send_from_directory, jsonify, render_template, request
+from flask import Flask, Response, send_from_directory, jsonify, render_template, request
 
 # =============================================================================
 # CONFIGURATION
@@ -40,6 +40,19 @@ logging.basicConfig(
     handlers=[logging.StreamHandler(sys.stdout)]
 )
 logger = logging.getLogger('frigate-buffer')
+
+# Patterns that indicate "no concerns" from GenAI review summary (skip summarized notification)
+NO_CONCERNS_PATTERNS = (
+    "no concerns were found during this time period",
+    "no concerns were found",
+    "no concerns",
+)
+
+
+def _is_no_concerns(summary: str) -> bool:
+    """Return True if the summary indicates no concerns (skip summarized notification)."""
+    normalized = (summary or "").strip().lower()
+    return any(p in normalized for p in NO_CONCERNS_PATTERNS)
 
 
 def load_config() -> dict:
@@ -637,6 +650,30 @@ class FileManager:
             logger.error(f"Failed to write review summary: {e}")
             return False
 
+    def append_timeline_entry(self, folder_path: str, entry: dict) -> None:
+        """Append an entry to notification_timeline.json in the event folder."""
+        timeline_path = os.path.join(folder_path, "notification_timeline.json")
+        entry = dict(entry)
+        entry["ts"] = entry.get("ts") or datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+        try:
+            data = {"event_id": None, "entries": []}
+            if os.path.exists(timeline_path):
+                with open(timeline_path, 'r') as f:
+                    data = json.load(f)
+            if not data.get("event_id"):
+                folder_name = os.path.basename(folder_path)
+                parts = folder_name.split("_", 1)
+                if len(parts) > 1:
+                    data["event_id"] = parts[1]
+                elif entry.get("data", {}).get("event_id"):
+                    data["event_id"] = entry["data"]["event_id"]
+            data["entries"] = data.get("entries", [])
+            data["entries"].append(entry)
+            with open(timeline_path, 'w') as f:
+                json.dump(data, f, indent=2)
+        except Exception as e:
+            logger.debug(f"Failed to append timeline entry: {e}")
+
     def write_metadata_json(self, folder_path: str, event: EventState) -> bool:
         """Write machine-readable metadata.json for the event."""
         try:
@@ -965,6 +1002,7 @@ class NotificationPublisher:
         self.buffer_ip = buffer_ip
         self.flask_port = flask_port
         self.frigate_url = frigate_url.rstrip('/')
+        self.timeline_callback = None  # Optional: (event, status, payload) -> None
 
         # Rate limiting state
         self._notification_times: List[float] = []
@@ -1089,23 +1127,26 @@ class NotificationPublisher:
     def _send_notification_internal(self, event: EventState, status: str,
                                     message: Optional[str] = None) -> bool:
         """Internal method to actually send the notification to MQTT."""
-        # Construct URLs for Home Assistant
+        # Construct URLs for Home Assistant - always use buffer base URL for Companion app reachability
         image_url = None
         video_url = None
 
-        # Always include Frigate API snapshot as baseline (with snapshot=true, always available)
-        if self.frigate_url:
-            image_url = f"{self.frigate_url}/api/events/{event.event_id}/snapshot.jpg"
+        buffer_base = f"http://{self.buffer_ip}:{self.flask_port}"
 
         if event.folder_path:
             folder_name = os.path.basename(event.folder_path)
             camera_dir = os.path.basename(os.path.dirname(event.folder_path))
-            base_url = f"http://{self.buffer_ip}:{self.flask_port}/files/{camera_dir}/{folder_name}"
-            # Prefer local snapshot over Frigate API
+            base_url = f"{buffer_base}/files/{camera_dir}/{folder_name}"
             if event.snapshot_downloaded:
                 image_url = f"{base_url}/snapshot.jpg"
+            else:
+                # Use buffer proxy to Frigate so image_url is always reachable
+                image_url = f"{buffer_base}/api/events/{event.event_id}/snapshot.jpg"
             if event.clip_downloaded:
                 video_url = f"{base_url}/clip.mp4"
+        elif self.frigate_url:
+            # Fallback: no folder yet, use buffer proxy
+            image_url = f"{buffer_base}/api/events/{event.event_id}/snapshot.jpg"
 
         # Build title based on phase
         title = self._build_title(event)
@@ -1132,6 +1173,12 @@ class NotificationPublisher:
             "threat_level": event.threat_level,
             "critical": event.threat_level >= 2
         }
+
+        if self.timeline_callback and event.folder_path:
+            try:
+                self.timeline_callback(event, status, payload)
+            except Exception as e:
+                logger.debug(f"Timeline callback error: {e}")
 
         try:
             result = self.mqtt_client.publish(
@@ -1234,6 +1281,7 @@ class StateAwareOrchestrator:
             config['FLASK_PORT'],
             config.get('FRIGATE_URL', '')
         )
+        self.notifier.timeline_callback = self._timeline_log_ha
 
         # Daily review manager (Frigate review summarize API)
         self.daily_review_manager = DailyReviewManager(
@@ -1276,6 +1324,37 @@ class StateAwareOrchestrator:
             logger.warning(f"Unexpected MQTT disconnect (rc={reason_code}), reconnecting...")
         else:
             logger.info("MQTT disconnected")
+
+    def _timeline_log_ha(self, event, status: str, payload: dict) -> None:
+        """Log HA notification payload to event timeline."""
+        if event and event.folder_path:
+            self.file_manager.append_timeline_entry(event.folder_path, {
+                "source": "ha_notification",
+                "direction": "out",
+                "label": f"Sent to Home Assistant: {status}",
+                "data": payload
+            })
+
+    def _timeline_log_mqtt(self, folder_path: str, topic: str, payload: dict, label: str) -> None:
+        """Log MQTT payload from Frigate to event timeline."""
+        if folder_path:
+            self.file_manager.append_timeline_entry(folder_path, {
+                "source": "frigate_mqtt",
+                "direction": "in",
+                "label": label,
+                "data": {"topic": topic, "payload": payload}
+            })
+
+    def _timeline_log_frigate_api(self, folder_path: str, direction: str,
+                                   label: str, data: dict) -> None:
+        """Log Frigate API request/response to event timeline. direction: 'in' or 'out'."""
+        if folder_path:
+            self.file_manager.append_timeline_entry(folder_path, {
+                "source": "frigate_api",
+                "direction": direction,
+                "label": label,
+                "data": data
+            })
 
     def _on_mqtt_message(self, client, userdata, msg):
         """Route incoming MQTT messages to appropriate handlers."""
@@ -1330,7 +1409,8 @@ class StateAwareOrchestrator:
                 event_id=event_id,
                 camera=camera,
                 label=label,
-                start_time=after_data.get("start_time", time.time())
+                start_time=after_data.get("start_time", time.time()),
+                mqtt_payload=payload
             )
 
         elif event_type == "end":
@@ -1338,11 +1418,12 @@ class StateAwareOrchestrator:
                 event_id=event_id,
                 end_time=after_data.get("end_time", time.time()),
                 has_clip=after_data.get("has_clip", False),
-                has_snapshot=after_data.get("has_snapshot", False)
+                has_snapshot=after_data.get("has_snapshot", False),
+                mqtt_payload=payload
             )
 
     def _handle_event_new(self, event_id: str, camera: str, label: str,
-                          start_time: float):
+                          start_time: float, mqtt_payload: Optional[dict] = None):
         """Handle new event detection (Phase 1)."""
         logger.info(f"New event: {event_id} - {label} on {camera}")
 
@@ -1352,6 +1433,12 @@ class StateAwareOrchestrator:
         # Create folder in camera subdirectory
         folder_path = self.file_manager.create_event_folder(event_id, camera, start_time)
         event.folder_path = folder_path
+
+        if mqtt_payload:
+            self._timeline_log_mqtt(
+                folder_path, "frigate/events",
+                mqtt_payload, "Event new (from Frigate)"
+            )
 
         # Delay, fetch snapshot, then notify (Ring-style: image-first notification)
         delay = self.config.get('NOTIFICATION_DELAY', 5)
@@ -1383,13 +1470,20 @@ class StateAwareOrchestrator:
             logger.error(f"Error in initial notification flow for {event.event_id}: {e}")
 
     def _handle_event_end(self, event_id: str, end_time: float,
-                          has_clip: bool, has_snapshot: bool):
+                          has_clip: bool, has_snapshot: bool,
+                          mqtt_payload: Optional[dict] = None):
         """Handle event end - trigger downloads/transcoding."""
         logger.info(f"Event ended: {event_id}")
 
         event = self.state_manager.mark_event_ended(
             event_id, end_time, has_clip, has_snapshot
         )
+
+        if event and event.folder_path and mqtt_payload:
+            self._timeline_log_mqtt(
+                event.folder_path, "frigate/events",
+                mqtt_payload, "Event end (from Frigate)"
+            )
 
         if not event or not event.folder_path:
             logger.warning(f"Unknown event ended: {event_id}")
@@ -1456,6 +1550,13 @@ class StateAwareOrchestrator:
             logger.debug(f"Skipping tracked update: event_id={event_id}, has_description={bool(description)}")
             return
 
+        event = self.state_manager.get_event(event_id)
+        if event and event.folder_path:
+            self._timeline_log_mqtt(
+                event.folder_path, topic,
+                payload, "Tracked object update (AI description)"
+            )
+
         logger.info(f"Tracked update for {event_id}: {description[:50]}..." if len(str(description)) > 50 else f"Tracked update for {event_id}: {description}")
 
         if self.state_manager.set_ai_description(event_id, description):
@@ -1488,14 +1589,24 @@ class StateAwareOrchestrator:
         logger.debug(f"Processing review: type={event_type}, {len(detections)} detections, severity={severity}")
 
         for event_id in detections:
+            event = self.state_manager.get_event(event_id)
+            if event and event.folder_path:
+                self._timeline_log_mqtt(
+                    event.folder_path, "frigate/reviews",
+                    payload, f"Review update (type={event_type})"
+                )
             # Frigate 0.17 uses "title" and "shortSummary" in metadata
             # Legacy used "title" and "description" in genai
             title = genai.get("title")
             description = genai.get("shortSummary") or genai.get("description")
             threat_level = int(genai.get("potential_threat_level", 0))
 
-            logger.info(f"Review for {event_id}: title={title or 'N/A'}, "
-                        f"threat_level={threat_level}")
+            # Only log at INFO when GenAI data is present; suppress title=N/A noise
+            if title or description:
+                logger.info(f"Review for {event_id}: title={title or 'N/A'}, "
+                            f"threat_level={threat_level}")
+            else:
+                logger.debug(f"Review for {event_id}: title=N/A, threat_level={threat_level}")
 
             # Only finalize when actual GenAI data is present
             if not title and not description:
@@ -1551,10 +1662,34 @@ class StateAwareOrchestrator:
             padding_before = self.config.get('SUMMARY_PADDING_BEFORE', 15)
             padding_after = self.config.get('SUMMARY_PADDING_AFTER', 15)
 
+            padded_start = int(event.created_at - padding_before)
+            padded_end = int(effective_end + padding_after)
+            url = f"{self.config.get('FRIGATE_URL', '')}/api/review/summarize/start/{padded_start}/end/{padded_end}"
+            params = {
+                "start": padded_start,
+                "end": padded_end,
+                "padding_before": padding_before,
+                "padding_after": padding_after
+            }
+
+            if event.folder_path:
+                self._timeline_log_frigate_api(
+                    event.folder_path, "out",
+                    "Review summarize request (to Frigate API)",
+                    {"url": url, "params": params}
+                )
+
             summary = self.file_manager.fetch_review_summary(
                 event.created_at, effective_end,
                 padding_before, padding_after
             )
+
+            if event.folder_path:
+                self._timeline_log_frigate_api(
+                    event.folder_path, "in",
+                    "Review summarize response (from Frigate API)",
+                    {"url": url, "params": params, "response": summary or "(empty or error)"}
+                )
 
             if summary:
                 self.state_manager.set_review_summary(event.event_id, summary)
@@ -1567,7 +1702,11 @@ class StateAwareOrchestrator:
                     self.file_manager.write_summary(event.folder_path, event)
                     self.file_manager.write_metadata_json(event.folder_path, event)
 
-                self.notifier.publish_notification(event, "summarized")
+                # Skip summarized notification when GenAI returns "No Concerns"
+                if not _is_no_concerns(summary):
+                    self.notifier.publish_notification(event, "summarized")
+                else:
+                    logger.info(f"Skipping summarized notification for {event.event_id} (no concerns)")
             else:
                 logger.warning(f"No review summary obtained for {event.event_id}")
 
@@ -1599,6 +1738,25 @@ class StateAwareOrchestrator:
             """Serve the event viewer page."""
             return render_template('player.html',
                 stats_refresh_seconds=self.config.get('STATS_REFRESH_SECONDS', 60))
+
+        @app.route('/api/events/<event_id>/snapshot.jpg')
+        def proxy_snapshot(event_id):
+            """Proxy snapshot from Frigate so image_url is always buffer-based (Companion app reachability)."""
+            frigate_url = self.config.get('FRIGATE_URL', '').rstrip('/')
+            if not frigate_url:
+                return "Frigate URL not configured", 503
+            url = f"{frigate_url}/api/events/{event_id}/snapshot.jpg"
+            try:
+                resp = requests.get(url, timeout=15, stream=True)
+                resp.raise_for_status()
+                return Response(
+                    resp.iter_content(chunk_size=8192),
+                    content_type=resp.headers.get('Content-Type', 'image/jpeg'),
+                    status=resp.status_code
+                )
+            except requests.RequestException as e:
+                logger.debug(f"Snapshot proxy error for {event_id}: {e}")
+                return "Snapshot unavailable", 502
 
         @app.route('/daily-review')
         def daily_review_page():
@@ -1892,6 +2050,39 @@ class StateAwareOrchestrator:
                 return jsonify({"status": "error", "message": str(e)}), 500
 
             return jsonify({"status": "success", "marked": count}), 200
+
+        @app.route('/events/<camera>/<subdir>/timeline')
+        def event_timeline(camera, subdir):
+            """Serve the notification timeline page for an event (most recent first)."""
+            base_dir = os.path.realpath(storage_path)
+            folder_path = os.path.realpath(os.path.join(base_dir, camera, subdir))
+
+            if not folder_path.startswith(base_dir) or folder_path == base_dir:
+                return "Invalid path", 400
+
+            if not os.path.isdir(folder_path):
+                return "Event not found", 404
+
+            timeline_path = os.path.join(folder_path, "notification_timeline.json")
+            timeline_data = {"event_id": None, "entries": []}
+            if os.path.exists(timeline_path):
+                try:
+                    with open(timeline_path, 'r') as f:
+                        timeline_data = json.load(f)
+                except Exception as e:
+                    logger.debug(f"Error reading timeline: {e}")
+
+            # Sort entries most recent first (by ts)
+            entries = timeline_data.get("entries", [])
+            entries.sort(key=lambda e: e.get("ts", ""), reverse=True)
+
+            return render_template(
+                'timeline.html',
+                event_id=timeline_data.get("event_id", subdir),
+                camera=camera,
+                subdir=subdir,
+                entries=entries
+            )
 
         @app.route('/files/<path:filename>')
         def serve_file(filename):
