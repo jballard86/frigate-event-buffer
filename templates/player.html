@@ -280,6 +280,11 @@
     50% { opacity: 0.7; }
   }
 
+  /* AI Analysis expandable blocks */
+  .ai-block { margin-bottom: 14px; padding-bottom: 10px; border-bottom: 1px solid #0f3460; }
+  .ai-block:last-child { border-bottom: none; margin-bottom: 0; }
+  .ai-block-label { font-weight: 600; color: #e94560; font-size: 0.85rem; margin-bottom: 6px; }
+
   /* Collapsible review summary */
   .summary-excerpt {
     font-size: 0.9rem;
@@ -610,6 +615,46 @@
     }
   }
 
+  // Renders all GenAI response blocks (summary, scene, review) as separate expandable sections.
+  // Returns { html, blocks } so render() can bind expand handlers with full content.
+  function renderAiAnalysisBlocks(ev) {
+    const parts = [];
+    const blockData = [];
+    let blockIdx = 0;
+
+    // Block 1: GenAI Summary (title + shortSummary/description)
+    const summaryContent = (ev.title || ev.description)
+      ? (ev.title ? escapeHtml(ev.title) : '') + (ev.description ? (ev.title ? ' — ' : '') + escapeHtml(ev.description) : '')
+      : null;
+    if (summaryContent) {
+      const excerpt = summaryContent.length > 200 ? summaryContent.substring(0, 200) + '...' : summaryContent;
+      const idBase = 'aiBlock' + blockIdx++;
+      parts.push(`<div class="ai-block"><div class="ai-block-label">GenAI Summary</div><div class="summary-excerpt" id="${idBase}Excerpt">${excerpt}</div><button class="btn-expand" id="${idBase}Btn" type="button">Expand</button><div class="summary-full" id="${idBase}Full"></div></div>`);
+      blockData.push({ id: idBase, content: summaryContent, format: 'html' });
+    }
+
+    // Block 2: GenAI Scene (longer narrative)
+    if (ev.scene) {
+      const excerpt = ev.scene.length > 200 ? escapeHtml(ev.scene.substring(0, 200) + '...') : escapeHtml(ev.scene);
+      const idBase = 'aiBlock' + blockIdx++;
+      parts.push(`<div class="ai-block"><div class="ai-block-label">GenAI Scene</div><div class="summary-excerpt" id="${idBase}Excerpt">${excerpt}</div><button class="btn-expand" id="${idBase}Btn" type="button">Expand</button><div class="summary-full" id="${idBase}Full"></div></div>`);
+      blockData.push({ id: idBase, content: ev.scene, format: 'text' });
+    }
+
+    // Block 3: Cross-Camera Review Summary (markdown)
+    if (ev.review_summary) {
+      const lines = ev.review_summary.split('\n').filter(l => l.trim() && !l.trim().startsWith('#'));
+      const rawExcerpt = lines.slice(0, 3).join(' ').substring(0, 200);
+      const excerpt = escapeHtml(rawExcerpt + (rawExcerpt.length >= 200 ? '...' : ''));
+      const idBase = 'aiBlock' + blockIdx++;
+      parts.push(`<div class="ai-block"><div class="ai-block-label">Cross-Camera Review</div><div class="summary-excerpt" id="${idBase}Excerpt">${excerpt}</div><button class="btn-expand" id="${idBase}Btn" type="button">Expand</button><div class="summary-full" id="${idBase}Full"></div></div>`);
+      blockData.push({ id: idBase, content: ev.review_summary, format: 'markdown' });
+    }
+
+    if (parts.length === 0) return { html: '<p class="description-text">No AI analysis available.</p>', blocks: [] };
+    return { html: parts.join(''), blocks: blockData };
+  }
+
   // --- Render ---
   function render() {
     const filter = filterSelect.value;
@@ -674,13 +719,7 @@
 
       <div class="info-card">
         <h2>AI Analysis${threatBadge}</h2>
-        ${ev.title ? `<p class="ai-title">${escapeHtml(ev.title)}</p>` : ''}
-        ${ev.review_summary
-          ? `<div class="summary-excerpt" id="summaryExcerpt"></div>
-             <button class="btn-expand" id="btnExpandSummary">Expand Full Report</button>
-             <div class="summary-full" id="summaryFull"></div>`
-          : `<p class="description-text">${escapeHtml(description)}</p>${scene ? `<p class="scene-text">${escapeHtml(scene)}</p>` : ''}`
-        }
+        <div id="aiAnalysisContainer"></div>
       </div>
 
       <div class="info-card">
@@ -718,28 +757,34 @@
       video.addEventListener('ended', () => { videoPlaying = false; });
     }
 
-    // Render collapsible review summary as markdown
-    if (ev.review_summary && typeof marked !== 'undefined') {
-      const rawHtml = marked.parse(ev.review_summary);
-      const safeHtml = typeof DOMPurify !== 'undefined' ? DOMPurify.sanitize(rawHtml) : rawHtml;
-
-      // Excerpt: first 2-3 meaningful lines
-      const lines = ev.review_summary.split('\n').filter(l => l.trim() && !l.trim().startsWith('#'));
-      const excerpt = lines.slice(0, 3).join(' ').substring(0, 200);
-      const excerptEl = document.getElementById('summaryExcerpt');
-      const fullEl = document.getElementById('summaryFull');
-      const btnExpand = document.getElementById('btnExpandSummary');
-
-      if (excerptEl) excerptEl.textContent = excerpt + (excerpt.length >= 200 ? '...' : '');
-      if (fullEl) { fullEl.innerHTML = '<div class="markdown-content">' + safeHtml + '</div>'; }
-      if (btnExpand) {
-        btnExpand.addEventListener('click', () => {
+    // Populate AI Analysis blocks and bind expand handlers
+    const aiResult = renderAiAnalysisBlocks(ev);
+    const aiContainer = document.getElementById('aiAnalysisContainer');
+    if (aiContainer) {
+      aiContainer.innerHTML = aiResult.html;
+      aiResult.blocks.forEach((b) => {
+        const btn = document.getElementById(b.id + 'Btn');
+        const excerptEl = document.getElementById(b.id + 'Excerpt');
+        const fullEl = document.getElementById(b.id + 'Full');
+        if (!btn || !fullEl) return;
+        btn.addEventListener('click', () => {
           const isExpanded = fullEl.classList.toggle('expanded');
-          btnExpand.textContent = isExpanded ? 'Collapse Report' : 'Expand Full Report';
+          btn.textContent = isExpanded ? 'Collapse' : 'Expand';
+          if (isExpanded && fullEl.innerHTML === '') {
+            let displayContent;
+            if (b.format === 'markdown' && typeof marked !== 'undefined') {
+              displayContent = typeof DOMPurify !== 'undefined' ? DOMPurify.sanitize(marked.parse(b.content)) : marked.parse(b.content);
+              fullEl.innerHTML = '<div class="markdown-content">' + displayContent + '</div>';
+            } else if (b.format === 'html') {
+              fullEl.innerHTML = '<p class="description-text">' + b.content + '</p>';
+            } else {
+              fullEl.innerHTML = '<p class="description-text">' + escapeHtml(b.content) + '</p>';
+            }
+          }
           if (isExpanded && excerptEl) excerptEl.style.display = 'none';
           if (!isExpanded && excerptEl) excerptEl.style.display = '';
         });
-      }
+      });
     }
   }
 
