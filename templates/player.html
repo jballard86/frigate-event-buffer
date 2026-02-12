@@ -183,23 +183,38 @@
 
   .empty-state .stats-below { margin-top: 24px; }
 
-  /* Stats panel */
-  .stats-panel { margin-top: 16px; }
-  .stats-panel .info-card { margin-top: 12px; }
+  /* Stats panel - symmetrical, centered layout */
+  .stats-panel { margin-top: 16px; text-align: center; }
+  .stats-panel .info-card {
+    margin-top: 12px;
+    text-align: center;
+  }
   .stats-panel .info-card:first-of-type { margin-top: 0; }
-  .stats-panel .stats-row { display: flex; flex-wrap: wrap; gap: 16px 24px; margin: 8px 0; font-size: 0.9rem; }
-  .stats-panel .stats-item { display: flex; gap: 6px; }
+  .stats-panel .info-card h2 { text-align: center; }
+  .stats-panel .stats-row {
+    display: flex; flex-wrap: wrap; justify-content: center; align-items: center;
+    gap: 16px 24px; margin: 8px 0; font-size: 0.9rem; text-align: center;
+  }
+  .stats-panel .stats-item { display: flex; gap: 6px; justify-content: center; }
   .stats-panel .stats-item strong { color: #e94560; min-width: 4ch; }
   .stats-panel .errors-list {
     max-height: 200px; overflow-y: auto; font-size: 0.8rem; font-family: monospace;
-    background: #0f3460; border-radius: 4px; padding: 8px; margin: 8px 0;
+    background: #0f3460; border-radius: 4px; padding: 8px; margin: 8px auto;
+    text-align: left; max-width: 100%;
   }
   .stats-panel .errors-list .err-item { margin: 6px 0; padding: 4px 0; border-bottom: 1px solid #1a1a2e; word-break: break-word; }
   .stats-panel .errors-list .err-ts { color: #888; margin-right: 8px; }
-  .stats-panel .errors-footer { font-size: 0.8rem; color: #666; margin-top: 8px; }
-  .stats-panel .camera-table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
-  .stats-panel .camera-table td { padding: 4px 8px; border-bottom: 1px solid #0f3460; }
-  .stats-panel .camera-table .meta-label { padding-right: 12px; }
+  .stats-panel .errors-footer { font-size: 0.8rem; color: #666; margin-top: 8px; text-align: center; }
+  .stats-panel .camera-table {
+    margin: 0 auto; border-collapse: collapse; font-size: 0.9rem;
+  }
+  .stats-panel .camera-table td { padding: 6px 16px; border-bottom: 1px solid #0f3460; text-align: center; }
+  .stats-panel .camera-table .meta-label { padding-right: 12px; text-align: center; }
+  .stats-panel .meta-grid {
+    display: grid; grid-template-columns: auto auto;
+    justify-content: center; justify-items: start; gap: 4px 16px;
+    margin: 8px auto; text-align: left; max-width: fit-content;
+  }
 
   /* Loading */
   .loading {
@@ -328,6 +343,9 @@
   <div class="loading">Loading events...</div>
 </div>
 
+<script>
+  window.STATS_REFRESH_SECONDS = {{ stats_refresh_seconds|default(60)|int }};
+</script>
 <script>
 (function() {
   'use strict';
@@ -716,11 +734,15 @@
   // --- Auto-refresh ---
   function startAutoRefresh() {
     if (refreshTimer) clearInterval(refreshTimer);
+    const isStats = filterSelect.value === 'stats';
+    const intervalMs = isStats
+      ? (window.STATS_REFRESH_SECONDS || 60) * 1000
+      : 30000;
     refreshTimer = setInterval(() => {
       if (!videoPlaying) {
         fetchEvents({ silent: true });
       }
-    }, 30000);
+    }, intervalMs);
   }
 
   function updateHeaderForFilter() {
@@ -730,10 +752,18 @@
   }
 
   // --- Init ---
+  // Honor ?filter=all from URL (e.g. "View most recent notification" link)
+  const urlParams = new URLSearchParams(window.location.search);
+  const urlFilter = urlParams.get('filter');
+  if (urlFilter === 'all') {
+    filterSelect.value = 'all';
+  }
+
   cameraSelect.addEventListener('change', () => fetchEvents());
   filterSelect.addEventListener('change', () => {
     updateHeaderForFilter();
     fetchEvents();
+    startAutoRefresh();
   });
   btnMarkAll.addEventListener('click', markAllViewed);
   btnRefreshStats.addEventListener('click', () => fetchStats());
