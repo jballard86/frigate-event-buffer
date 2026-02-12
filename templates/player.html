@@ -532,6 +532,13 @@
       } else {
         events = newEvents;
         currentIndex = 0;
+        // Back from timeline: seek to same event
+        if (urlCamera && urlSubdir && events.length > 0) {
+          const idx = events.findIndex(e => (e.camera || '').toLowerCase() === urlCamera.toLowerCase() && (e.subdir || e.hosted_clip?.split('/').slice(-2, -1)[0]) === urlSubdir);
+          if (idx >= 0) {
+            currentIndex = idx;
+          }
+        }
       }
 
       render();
@@ -620,7 +627,7 @@
     const description = ev.description || ev.summary || 'No description available.';
     const cameraDisplay = ev.camera.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
     const labelDisplay = (ev.label || 'unknown').replace(/\b\w/g, c => c.toUpperCase());
-    const subdir = ev.hosted_clip.split('/').slice(-2, -1)[0];
+    const subdir = ev.subdir || ev.hosted_clip.split('/').slice(-2, -1)[0];
     const threatLevel = ev.threat_level || 0;
     const threatLabels = {0: 'Normal', 1: 'Suspicious', 2: 'Critical'};
     const threatBadge = threatLevel > 0
@@ -757,8 +764,13 @@
   // Honor ?filter=all from URL (e.g. "View most recent notification" link)
   const urlParams = new URLSearchParams(window.location.search);
   const urlFilter = urlParams.get('filter');
+  const urlCamera = urlParams.get('camera');
+  const urlSubdir = urlParams.get('subdir');
   if (urlFilter === 'all') {
     filterSelect.value = 'all';
+  }
+  if (urlCamera) {
+    cameraSelect.value = urlCamera;
   }
 
   cameraSelect.addEventListener('change', () => fetchEvents());
@@ -770,10 +782,13 @@
   btnMarkAll.addEventListener('click', markAllViewed);
   btnRefreshStats.addEventListener('click', () => fetchStats());
 
-  fetchCameras();
-  fetchEvents();
-  updateHeaderForFilter();
-  startAutoRefresh();
+  (async function init() {
+    await fetchCameras();
+    if (urlCamera) cameraSelect.value = urlCamera;
+    await fetchEvents();
+    updateHeaderForFilter();
+    startAutoRefresh();
+  })();
 })();
 </script>
 </body>

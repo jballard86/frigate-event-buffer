@@ -63,6 +63,13 @@ settings:
   # Hour (0-23) to run daily review fetch for previous day
   daily_review_schedule_hour: 1
 
+  # Consolidated event series
+  # Seconds of no activity before a new Frigate event starts a new consolidated event
+  event_gap_seconds: 120
+  # Export time range buffers (seconds)
+  export_buffer_before: 5
+  export_buffer_after: 30
+
 # Network configuration
 # These can be overridden by environment variables:
 #   MQTT_BROKER, MQTT_PORT, FRIGATE_URL, BUFFER_IP, FLASK_PORT, STORAGE_PATH
