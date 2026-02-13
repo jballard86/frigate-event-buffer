@@ -12,6 +12,7 @@ A state-aware orchestrator that listens to Frigate NVR events via MQTT, tracks t
 - **Review Summaries**: Fetches rich markdown security reports from Frigate's review summary API with cross-camera context, timeline, and assessments
 - **Threat Level Alerts**: Three-tier threat classification (0=Normal, 1=Suspicious, 2=Critical) — Level 2 alerts bypass phone volume/DND and keep all follow-up notifications audible
 - **Camera/Label Filtering**: Only process events from specific cameras or with specific labels
+- **Smart Zone Filtering**: Optional per-camera zones to ignore (e.g., road) and exceptions (e.g., UPS, FedEx); Late Start when events begin in ignored zones
 - **Multi-Camera Support**: Handles events from multiple cameras simultaneously without state collision
 - **Clip Export via Frigate API**: Requests clips from Frigate's Export API (POST with JSON body; polls by `export_id` when async); full event duration with configurable buffer; falls back to per-event clip via events API if export fails or times out; events older than 90 minutes no longer show "Event ongoing"
 - **Auto-Transcoding**: Transcodes clips to H.264 for broad compatibility
@@ -34,11 +35,11 @@ A state-aware orchestrator that listens to Frigate NVR events via MQTT, tracks t
 ├─────────────────────────────────────────────────────────┤
 │  MQTT Client          EventStateManager    Flask API    │
 │  ├─ frigate/events    ├─ active_events     ├─ /player   │
-│  ├─ frigate/+/        ├─ phase tracking    ├─ /events   │
-│  │   tracked_object   │   (NEW→DESCRIBED   ├─ /cameras  │
-│  └─ frigate/reviews   │    →FINALIZED      ├─ /files    │
-│                       │    →SUMMARIZED)    ├─ /stats    │
-│                       │                    ├─ /stats-   │
+│  │   (new,update,end) ├─ smart zone filter  ├─ /events   │
+│  ├─ frigate/+/        ├─ phase tracking    ├─ /cameras  │
+│  │   tracked_object   │   (NEW→DESCRIBED   ├─ /files    │
+│  └─ frigate/reviews   │    →FINALIZED      ├─ /stats    │
+│                       │    →SUMMARIZED)    ├─ /stats-   │
 │                       │                    │   page     │
 │                       │                    ├─ /daily-   │
 │                       │                    │   review   │
@@ -68,7 +69,7 @@ The application is organized as a Python package `frigate_buffer/`:
 | `static/` | Static assets (marked.min.js, purify.min.js). Located under `frigate_buffer/`. |
 | `Dockerfile` | Builds from `frigate_buffer/` and runs `python -m frigate_buffer.main`. |
 | `docker-compose.example.yaml` | Template for Docker Compose — local build or token pull from private GitHub. |
-| `config.example.yaml` | Example configuration for cameras, settings, network, optional HA integration. |
+| `config.example.yaml` | Example configuration for cameras, event_filters (Smart Zone Filtering), settings, network, optional HA integration. |
 
 ## Quick Start
 
@@ -138,11 +139,17 @@ cameras:
       - "person"
       - "package"
 
-  # Driveway - only vehicle events
+  # Driveway - only vehicle events (with Smart Zone Filtering example)
   - name: "Front_Yard"
     labels:
       - "car"
       - "truck"
+    # event_filters:     # Optional - omit for legacy behavior
+    #   zones_to_ignore:
+    #     - "road"
+    #   exceptions:
+    #     - "UPS"
+    #     - "FedEx"
 
   # Backyard - allow ALL labels (empty list)
   - name: "Carport"
@@ -239,7 +246,7 @@ At the configured hour (default 1am), the buffer fetches the previous day's revi
 
 ## Camera/Label Filtering
 
-The orchestrator filters events on a per-camera basis:
+The orchestrator filters events on a per-camera basis. Filter order: **camera/label first**, then **Smart Zone Filtering** (if `event_filters` is configured).
 
 - **Camera must be listed**: Cameras not in the config are filtered out entirely
 - **Per-camera labels**: Each camera can have its own label whitelist
@@ -264,6 +271,32 @@ cameras:
   # Backyard - allow ALL labels
   - name: "Backyard"
     labels: []
+```
+
+## Smart Zone Filtering
+
+Optional per-camera `event_filters` reduce background noise by deferring events that start only in specified zones (e.g., road traffic) until the object enters a watched zone or matches an exception.
+
+**Flow:** The buffer listens for both `type: new` and `type: update` on `frigate/events`. For each message, if the event is not yet tracked, it runs the decision tree: (1) Does the label or sub_label match an exception? → Start immediately. (2) Are `entered_zones` only in `zones_to_ignore`? → Defer. (3) Otherwise → Start. Each `update` re-evaluates until the event is created.
+
+- **zones_to_ignore**: Frigate zone names. Events that have entered *only* these zones are deferred (not created yet). A car on the road is ignored until it enters the driveway.
+- **exceptions**: Labels or sub_labels (e.g. `person`, `UPS`, `FedEx`) that always trigger an event regardless of zone. Put both in the same list; matching is case-insensitive.
+- **Late Start**: When an event is first created from an `update` message (e.g., car moves from road into driveway), the original `start_time` from the payload is used so clips and review windows cover the full event.
+
+Omit `event_filters` for legacy behavior (all events start immediately on `new`). At startup, the buffer logs `Smart Zone Filtering:` with per-camera `ignore_zones` and `exceptions` when configured.
+
+```yaml
+  - name: "Front_Yard"
+    labels:
+      - "car"
+      - "truck"
+    event_filters:
+      zones_to_ignore:
+        - "road"
+      exceptions:
+        - "person"
+        - "UPS"
+        - "FedEx"
 ```
 
 ## API Endpoints
@@ -721,7 +754,7 @@ Enable debug logging to troubleshoot issues:
 
 Debug output includes:
 - MQTT messages received (topic, payload size)
-- Filtering decisions (camera/label allow/deny)
+- Filtering decisions (camera/label allow/deny, Smart Zone Filtering ignore when event deferred)
 - Event state transitions
 - File operations (download start/end, transcode progress)
 - FFmpeg commands and timing
@@ -737,9 +770,11 @@ The orchestrator includes safeguards against hung FFmpeg processes:
 
 ## Event Lifecycle
 
+The buffer listens to **`frigate/events`** for `type: new`, `type: update`, and `type: end`. With Smart Zone Filtering enabled, event creation may be deferred: a `new` or `update` is ignored until the object enters a non-ignored zone or matches an exception. When creation is triggered by a later `update` (Late Start), the original `start_time` from the payload is used so clips cover the full event.
+
 | Time | MQTT Topic | Phase | Action |
 |------|------------|-------|--------|
-| T+0s | `frigate/events` (type=new) | NEW | Create folder, send instant notification (Frigate snapshot fallback), then fetch local snapshot after delay |
+| T+0s | `frigate/events` (type=new or update) | NEW | Create folder if not deferred by Smart Zone Filtering; send instant notification; fetch local snapshot after delay. With zones_to_ignore, may defer until object enters watched zone (Late Start). |
 | T+5s | `frigate/{camera}/tracked_object_update` (type=description) | DESCRIBED | Update with AI description |
 | T+30s | `frigate/events` (type=end) | - | Download snapshot; request clip via Frigate Export API (POST with JSON body; poll by export_id) |
 | T+35s | *(background processing)* | - | Transcode clip, write summary, send `clip_ready`; falls back to per-event clip if export fails or times out |
@@ -798,9 +833,11 @@ Check `/status` endpoint - `mqtt_connected` should be `true`. Verify:
    ```
    Filtered out event from camera 'BackYard' (not configured)
    Filtered out 'car' on 'Doorbell' (allowed: ['person', 'package'])
+   Ignoring <event_id> (smart zone filter: only in zones ['road'])
    ```
 3. Verify camera names match exactly (case-sensitive)
 4. Check that the camera is listed in the `cameras` config
+5. **Smart Zone Filtering**: If `event_filters` is configured, events may be deferred until the object enters a non-ignored zone or matches an exception. Check `zones_to_ignore` and `exceptions` in your config.
 
 ### Screenshots Not Showing in Notifications
 

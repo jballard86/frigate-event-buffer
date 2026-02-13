@@ -53,6 +53,8 @@ def load_config() -> dict:
         'ALLOWED_CAMERAS': [],
         'ALLOWED_LABELS': [],
         'CAMERA_LABEL_MAP': {},
+        # Smart Zone Filtering: per-camera event_filters (zones_to_ignore, exceptions)
+        'CAMERA_EVENT_FILTERS': {},
     }
 
     # Load from config.yaml if exists
@@ -66,13 +68,23 @@ def load_config() -> dict:
                 with open(path, 'r') as f:
                     yaml_config = yaml.safe_load(f) or {}
 
-                # Build camera-to-labels mapping from per-camera config
+                # Build camera-to-labels and event_filters mapping from per-camera config
                 if 'cameras' in yaml_config and isinstance(yaml_config['cameras'], list):
                     for cam in yaml_config['cameras']:
                         if isinstance(cam, dict) and 'name' in cam:
                             camera_name = cam['name']
                             labels = cam.get('labels', []) or []
                             config['CAMERA_LABEL_MAP'][camera_name] = labels
+
+                            # Smart Zone Filtering (optional per camera)
+                            event_filters = cam.get('event_filters')
+                            if isinstance(event_filters, dict):
+                                zones = event_filters.get('zones_to_ignore')
+                                exceptions = event_filters.get('exceptions')
+                                config['CAMERA_EVENT_FILTERS'][camera_name] = {
+                                    'zones_to_ignore': zones if isinstance(zones, list) else [],
+                                    'exceptions': [str(x).strip() for x in exceptions] if isinstance(exceptions, list) else [],
+                                }
 
                     # Derive flat lists for status/logging
                     config['ALLOWED_CAMERAS'] = list(config['CAMERA_LABEL_MAP'].keys())
