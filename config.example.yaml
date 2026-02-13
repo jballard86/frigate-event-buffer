@@ -83,3 +83,11 @@ network:
   buffer_ip: "YOUR_BUFFER_IP"
   flask_port: 5055
   storage_path: "/app/storage"
+
+# Optional: Home Assistant REST API (for stats page API Usage display)
+# Uncomment and set to show Gemini cost/token usage on the stats page
+# ha:
+#   base_url: "http://YOUR_HA_IP:8123/api"
+#   token: "YOUR_LONG_LIVED_ACCESS_TOKEN"
+#   gemini_cost_entity: "input_number.gemini_daily_cost"
+#   gemini_tokens_entity: "input_number.gemini_total_tokens"

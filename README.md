@@ -20,7 +20,7 @@ A state-aware orchestrator that listens to Frigate NVR events via MQTT, tracks t
 - **Rolling Retention**: Automatically cleans up events older than the retention period (default: 3 days)
 - **Notification Rate Limiting**: Max 2 notifications per 5 seconds with queue overflow protection
 - **Built-in Event Viewer**: Self-contained web page at `/player` with video playback, expandable AI analysis (GenAI summary, scene, cross-camera review), event navigation, reviewed/unreviewed filtering, download, and **View Timeline** (per-event data pipeline log) — embeddable as an HA iframe
-- **Stats Dashboard**: "Stats" filter option and stats panel when no events — event counts (today/week/month), storage by camera, recent errors, last cleanup, system info; configurable auto-refresh with manual Refresh button
+- **Stats Dashboard**: Stats as a header button (like Daily Review) linking to `/stats-page`; standalone stats page with event counts (today/week/month), API Usage (Month to Date API cost and token usage from HA helpers when configured), storage by camera, recent errors, last cleanup, system info; configurable auto-refresh with manual Refresh button
 - **Daily Review**: Frigate review summarize integration — scheduled fetch at 1am for previous day, 90-day retention (configurable), date selector, "Current Day Review" for midnight-to-now; markdown rendering
 - **Event Review Tracking**: Mark events as reviewed with per-event or bulk "mark all" controls; defaults to showing unreviewed events
 - **REST API**: Serves events, clips, and snapshots to your Home Assistant dashboard
@@ -38,6 +38,8 @@ A state-aware orchestrator that listens to Frigate NVR events via MQTT, tracks t
 │  │   tracked_object   │   (NEW→DESCRIBED   ├─ /cameras  │
 │  └─ frigate/reviews   │    →FINALIZED      ├─ /files    │
 │                       │    →SUMMARIZED)    ├─ /stats    │
+│                       │                    ├─ /stats-   │
+│                       │                    │   page     │
 │                       │                    ├─ /daily-   │
 │                       │                    │   review   │
 │                       │                    └─ /status   │
@@ -134,6 +136,13 @@ network:
   buffer_ip: "YOUR_BUFFER_IP"  # IP where this container is reachable
   flask_port: 5055
   storage_path: "/app/storage"
+
+# Optional: Home Assistant REST API (for stats page API Usage display)
+# ha:
+#   base_url: "http://YOUR_HA_IP:8123/api"
+#   token: "YOUR_LONG_LIVED_ACCESS_TOKEN"
+#   gemini_cost_entity: "input_number.gemini_daily_cost"
+#   gemini_tokens_entity: "input_number.gemini_total_tokens"
 ```
 
 ### Environment Variables
@@ -157,10 +166,16 @@ Environment variables override config.yaml values:
 | `EVENT_GAP_SECONDS` | `120` | Seconds without activity before new consolidated event |
 | `EXPORT_BUFFER_BEFORE` | `5` | Seconds before event start for clip export time range |
 | `EXPORT_BUFFER_AFTER` | `30` | Seconds after event end for clip export time range |
+| `HA_URL` | *(optional)* | Home Assistant API base URL, e.g. `http://YOUR_HA_IP:8123/api` (for stats page API Usage display) |
+| `HA_TOKEN` | *(optional)* | Home Assistant long-lived access token (for stats page API Usage display) |
 
 ## Daily Review
 
 The Daily Review feature integrates with [Frigate's Review Summarize API](https://docs.frigate.video/configuration/genai/genai_review) to fetch and display AI-generated security summaries. The buffer stores these reviews separately from event clips (90-day retention by default).
+
+### GET /stats-page
+
+Standalone stats dashboard. Opens from the "Stats" button in the player header. Shows: API Usage (Month to Date cost/tokens from HA helpers when configured), Event Counts, Events by Camera, Storage, Recent Activity, Errors, System. Configurable auto-refresh (`stats_refresh_seconds`), manual Refresh button. "Back to Events" links to `/player`.
 
 ### GET /daily-review
 
@@ -235,16 +250,15 @@ Features:
 - Expandable AI analysis: GenAI summary, GenAI scene, cross-camera review (each expandable)
 - Event metadata (camera, label, timestamp)
 - Camera filter dropdown
-- Reviewed/Unreviewed/All/Stats filter (defaults to unreviewed)
-- Stats dashboard when "Stats" is selected or when no events: event counts (today, week, month), reviewed/unreviewed totals, events per camera, storage by camera (clips, snapshots, descriptions), recent errors (last 10), last cleanup time, link to most recent notification, system info (uptime, MQTT, retention, etc.)
+- Reviewed/Unreviewed/All filter (defaults to unreviewed)
+- Stats button in header — links to `/stats-page` (standalone stats dashboard)
 - "View most recent notification" link loads `/player?filter=all` so the most recent event is shown first (ignores reviewed/unreviewed filter)
-- Stats layout: centered and symmetrical
 - "Mark Reviewed" per-event and "Mark All Reviewed" bulk action
 - Prev/Next event navigation
 - Download and delete buttons
 - **View Timeline** link — opens per-event page showing data from Frigate, Frigate API requests/responses, and HA notification payloads (saved as `notification_timeline.json`)
 - Auto-refresh every 30 seconds (pauses during video playback)
-- Stats view: configurable auto-refresh (default 60s via `stats_refresh_seconds`) plus manual Refresh button
+- When no events: "No Events Found" with link to Stats page
 - Dark theme optimized for HA dark mode
 
 ```
@@ -365,7 +379,7 @@ curl -X POST http://localhost:5055/viewed/all
 
 ### GET /stats
 
-Get statistics for the player dashboard (events, storage, errors, system). Used by the Stats view in the player.
+Get statistics for the stats dashboard (events, storage, errors, system). Used by the Stats page. When HA is configured via `ha.base_url` and `ha.token` in config.yaml, optionally includes `ha_helpers` with `gemini_month_cost` and `gemini_month_tokens` from HA input_number helpers.
 
 ```bash
 curl http://localhost:5055/stats
@@ -381,6 +395,10 @@ Response:
     "total_reviewed": 80,
     "total_unreviewed": 40,
     "by_camera": {"doorbell": 60, "front_yard": 60}
+  },
+  "ha_helpers": {
+    "gemini_month_cost": 0.00123,
+    "gemini_month_tokens": 1234567
   },
   "storage": {
     "total_mb": 1250,
@@ -405,7 +423,7 @@ Response:
 }
 ```
 
-Errors are limited to the last 10 (see container logs for full history). Storage is shown in MB or GB (GB when over 1 GB per camera). The `most_recent.url` links to `/player?filter=all` so the most recent event is shown first when the page loads.
+Errors are limited to the last 10 (see container logs for full history). Storage is shown in MB or GB (GB when over 1 GB per camera). The `most_recent.url` links to `/player?filter=all` so the most recent event is shown first when the page loads. The `ha_helpers` object is optional and only included when HA is configured via `ha.base_url` and `ha.token` in config.yaml (or `HA_URL` and `HA_TOKEN` env vars).
 
 ### GET /status
 
@@ -584,6 +602,20 @@ type: iframe
 url: "http://YOUR_BUFFER_IP:5055/player"
 aspect_ratio: "16:9"
 ```
+
+### Stats Page — API Usage (optional)
+
+The Stats page (`/stats-page`) can display Month to Date API cost and token usage when Home Assistant helpers and REST API are configured. Add to `config.yaml`:
+
+```yaml
+ha:
+  base_url: "http://YOUR_HA_IP:8123/api"
+  token: "YOUR_LONG_LIVED_ACCESS_TOKEN"
+  gemini_cost_entity: "input_number.gemini_daily_cost"
+  gemini_tokens_entity: "input_number.gemini_total_tokens"
+```
+
+Or set `HA_URL` and `HA_TOKEN` environment variables. The cost is formatted to 5 decimal places.
 
 ### Required Helpers
 

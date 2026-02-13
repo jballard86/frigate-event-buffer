@@ -28,7 +28,7 @@ import yaml
 import paho.mqtt.client as mqtt
 import requests
 import schedule
-from flask import Flask, Response, send_from_directory, jsonify, render_template, request
+from flask import Flask, Response, send_from_directory, jsonify, render_template, request, redirect
 
 # =============================================================================
 # CONFIGURATION
@@ -91,6 +91,12 @@ def load_config() -> dict:
         'EXPORT_BUFFER_BEFORE': 5,
         'EXPORT_BUFFER_AFTER': 30,
 
+        # Optional HA REST API (for stats page token/cost display)
+        'HA_URL': None,
+        'HA_TOKEN': None,
+        'HA_GEMINI_COST_ENTITY': 'input_number.gemini_daily_cost',
+        'HA_GEMINI_TOKENS_ENTITY': 'input_number.gemini_total_tokens',
+
         # Filtering defaults (empty = allow all)
         'ALLOWED_CAMERAS': [],
         'ALLOWED_LABELS': [],
@@ -147,6 +153,13 @@ def load_config() -> dict:
                     config['FLASK_PORT'] = network.get('flask_port', config['FLASK_PORT'])
                     config['STORAGE_PATH'] = network.get('storage_path', config['STORAGE_PATH'])
 
+                if 'ha' in yaml_config:
+                    ha_cfg = yaml_config['ha']
+                    config['HA_URL'] = ha_cfg.get('base_url') or ha_cfg.get('url') or config['HA_URL']
+                    config['HA_TOKEN'] = ha_cfg.get('token') or config['HA_TOKEN']
+                    config['HA_GEMINI_COST_ENTITY'] = ha_cfg.get('gemini_cost_entity', config['HA_GEMINI_COST_ENTITY'])
+                    config['HA_GEMINI_TOKENS_ENTITY'] = ha_cfg.get('gemini_tokens_entity', config['HA_GEMINI_TOKENS_ENTITY'])
+
                 config_loaded = True
                 break
 
@@ -172,6 +185,8 @@ def load_config() -> dict:
     config['EVENT_GAP_SECONDS'] = int(os.getenv('EVENT_GAP_SECONDS', str(config['EVENT_GAP_SECONDS'])))
     config['EXPORT_BUFFER_BEFORE'] = int(os.getenv('EXPORT_BUFFER_BEFORE', str(config['EXPORT_BUFFER_BEFORE'])))
     config['EXPORT_BUFFER_AFTER'] = int(os.getenv('EXPORT_BUFFER_AFTER', str(config['EXPORT_BUFFER_AFTER'])))
+    config['HA_URL'] = os.getenv('HA_URL') or config['HA_URL']
+    config['HA_TOKEN'] = os.getenv('HA_TOKEN') or config['HA_TOKEN']
 
     # Validate required settings
     missing = []
@@ -1671,6 +1686,20 @@ class StateAwareOrchestrator:
                 "data": data
             })
 
+    def _fetch_ha_state(self, ha_url: str, ha_token: str, entity_id: str):
+        """Fetch entity state from Home Assistant REST API. Returns state value or None on error."""
+        base = ha_url.rstrip('/')
+        path = "/states/" if base.endswith("/api") else "/api/states/"
+        url = f"{base}{path}{entity_id}"
+        try:
+            resp = requests.get(url, headers={"Authorization": f"Bearer {ha_token}"}, timeout=5)
+            if resp.ok:
+                data = resp.json()
+                return data.get("state")
+        except Exception:
+            pass
+        return None
+
     def _on_mqtt_message(self, client, userdata, msg):
         """Route incoming MQTT messages to appropriate handlers."""
         logger.debug(f"MQTT message received: {msg.topic} ({len(msg.payload)} bytes)")
@@ -2122,6 +2151,8 @@ class StateAwareOrchestrator:
         @app.route('/player')
         def player():
             """Serve the event viewer page."""
+            if request.args.get('filter') == 'stats':
+                return redirect('/stats-page')
             return render_template('player.html',
                 stats_refresh_seconds=self.config.get('STATS_REFRESH_SECONDS', 60))
 
@@ -2143,6 +2174,12 @@ class StateAwareOrchestrator:
             except requests.RequestException as e:
                 logger.debug(f"Snapshot proxy error for {event_id}: {e}")
                 return "Snapshot unavailable", 502
+
+        @app.route('/stats-page')
+        def stats_page():
+            """Serve the standalone stats dashboard page."""
+            return render_template('stats.html',
+                stats_refresh_seconds=self.config.get('STATS_REFRESH_SECONDS', 60))
 
         @app.route('/daily-review')
         def daily_review_page():
@@ -2590,7 +2627,36 @@ class StateAwareOrchestrator:
                     'deleted': self._last_cleanup_deleted
                 }
 
-            return jsonify({
+            ha_helpers = None
+            ha_url = self.config.get('HA_URL', '').rstrip('/')
+            ha_token = self.config.get('HA_TOKEN', '')
+            if ha_url and ha_token:
+                try:
+                    cost_entity = self.config.get('HA_GEMINI_COST_ENTITY', 'input_number.gemini_daily_cost')
+                    tokens_entity = self.config.get('HA_GEMINI_TOKENS_ENTITY', 'input_number.gemini_total_tokens')
+                    cost_val = self._fetch_ha_state(ha_url, ha_token, cost_entity)
+                    tokens_val = self._fetch_ha_state(ha_url, ha_token, tokens_entity)
+                    gemini_cost = None
+                    if cost_val is not None:
+                        try:
+                            gemini_cost = float(cost_val)
+                        except (TypeError, ValueError):
+                            pass
+                    gemini_tokens = None
+                    if tokens_val is not None:
+                        try:
+                            gemini_tokens = int(float(tokens_val))
+                        except (TypeError, ValueError):
+                            pass
+                    if gemini_cost is not None or gemini_tokens is not None:
+                        ha_helpers = {
+                            'gemini_month_cost': gemini_cost,
+                            'gemini_month_tokens': gemini_tokens
+                        }
+                except Exception as e:
+                    logger.debug(f"Failed to fetch HA helpers for stats: {e}")
+
+            response_data = {
                 'events': {
                     'today': events_today,
                     'this_week': events_week,
@@ -2617,7 +2683,10 @@ class StateAwareOrchestrator:
                     'storage_path': self.config['STORAGE_PATH'],
                     'stats_refresh_seconds': self.config.get('STATS_REFRESH_SECONDS', 60)
                 }
-            })
+            }
+            if ha_helpers is not None:
+                response_data['ha_helpers'] = ha_helpers
+            return jsonify(response_data)
 
         @app.route('/status')
         def status():
