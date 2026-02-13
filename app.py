@@ -1705,7 +1705,13 @@ class StateAwareOrchestrator:
         self._start_time = time.time()
 
         # Initialize components (file_manager first - needed by consolidated_manager)
-        self.state_manager = EventStateManager(        )
+        self.state_manager = EventStateManager()
+        self.file_manager = FileManager(
+            config['STORAGE_PATH'],
+            config['FRIGATE_URL'],
+            config['RETENTION_DAYS'],
+            config.get('FFMPEG_TIMEOUT', 60)
+        )
         self.consolidated_manager = ConsolidatedEventManager(
             self.file_manager,
             event_gap_seconds=config.get('EVENT_GAP_SECONDS', 120),
