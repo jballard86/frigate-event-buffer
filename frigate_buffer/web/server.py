@@ -106,6 +106,42 @@ def create_app(orchestrator):
                 parsed[key.strip()] = value.strip()
         return parsed
 
+    def _extract_genai_entries(folder_path: str) -> list:
+        """Extract GenAI metadata entries from notification_timeline.json."""
+        entries = []
+        timeline_path = os.path.join(folder_path, 'notification_timeline.json')
+        if not os.path.exists(timeline_path):
+            return entries
+        try:
+            with open(timeline_path, 'r') as f:
+                data = json.load(f)
+        except Exception:
+            return entries
+        for e in data.get('entries', []):
+            payload = (e.get('data') or {}).get('payload') or {}
+            if payload.get('type') != 'genai':
+                continue
+            after = payload.get('after') or {}
+            meta = (after.get('data') or {}).get('metadata')
+            if not meta:
+                continue
+            title = meta.get('title') or ''
+            scene = meta.get('scene') or ''
+            short_summary = meta.get('shortSummary') or meta.get('description') or ''
+            # Skip boilerplate "no concerns/activity" entries to avoid noise
+            lower = (title + ' ' + short_summary + ' ' + scene).lower()
+            if 'no concerns' in lower or 'no activity' in lower:
+                if not title and not scene and len(short_summary) < 80:
+                    continue
+            entries.append({
+                'title': title,
+                'scene': scene,
+                'shortSummary': short_summary,
+                'time': meta.get('time'),
+                'potential_threat_level': meta.get('potential_threat_level', 0),
+            })
+        return entries
+
     def _get_events_from_consolidated() -> list:
         """Get consolidated events from events/{ce_id}/{camera}/ structure."""
         events_dir = os.path.join(storage_path, "events")
@@ -141,6 +177,19 @@ def create_app(orchestrator):
                         metadata = json.load(f)
                 except Exception:
                     pass
+            # Consolidated: metadata may live in primary camera folder
+            if not metadata and cameras:
+                for cam in cameras:
+                    cam_meta = os.path.join(ce_path, cam, 'metadata.json')
+                    if os.path.exists(cam_meta):
+                        try:
+                            with open(cam_meta, 'r') as f:
+                                metadata = json.load(f)
+                            break
+                        except Exception:
+                            pass
+
+            genai_entries = _extract_genai_entries(ce_path)
 
             review_summary = None
             if os.path.exists(review_summary_path):
@@ -164,6 +213,14 @@ def create_app(orchestrator):
             has_clip = any(os.path.exists(os.path.join(ce_path, cam, 'clip.mp4')) for cam in cameras)
             has_snapshot = any(os.path.exists(os.path.join(ce_path, cam, 'snapshot.jpg')) for cam in cameras)
 
+            # Time-based "not ongoing": events older than 90 min are treated as finalized
+            try:
+                ts_float = float(ts)
+                age_seconds = time.time() - ts_float
+                ongoing = not has_clip and age_seconds < 5400  # 90 min
+            except (ValueError, TypeError):
+                ongoing = not has_clip
+
             events_list.append({
                 "event_id": ce_id,
                 "camera": "events",
@@ -184,7 +241,8 @@ def create_app(orchestrator):
                 "hosted_snapshot": primary_snapshot or (f"/files/events/{ce_id}/{cameras[0]}/snapshot.jpg" if cameras else None),
                 "cameras": cameras,
                 "consolidated": True,
-                "ongoing": not has_clip
+                "ongoing": ongoing,
+                "genai_entries": genai_entries
             })
 
         return events_list
@@ -239,6 +297,14 @@ def create_app(orchestrator):
             clip_path = os.path.join(folder_path, 'clip.mp4')
             snapshot_path = os.path.join(folder_path, 'snapshot.jpg')
             viewed_path = os.path.join(folder_path, '.viewed')
+            has_clip = os.path.exists(clip_path)
+            try:
+                ts_float = float(ts)
+                age_seconds = time.time() - ts_float
+                ongoing = not has_clip and age_seconds < 5400
+            except (ValueError, TypeError):
+                ongoing = not has_clip
+            genai_entries = _extract_genai_entries(folder_path)
 
             events.append({
                 "event_id": eid,
@@ -253,11 +319,13 @@ def create_app(orchestrator):
                 "severity": metadata.get("severity") or parsed.get("Severity"),
                 "threat_level": metadata.get("threat_level", 0),
                 "review_summary": review_summary,
-                "has_clip": os.path.exists(clip_path),
+                "has_clip": has_clip,
                 "has_snapshot": os.path.exists(snapshot_path),
                 "viewed": os.path.exists(viewed_path),
                 "hosted_clip": f"/files/{camera_name}/{subdir}/clip.mp4",
-                "hosted_snapshot": f"/files/{camera_name}/{subdir}/snapshot.jpg"
+                "hosted_snapshot": f"/files/{camera_name}/{subdir}/snapshot.jpg",
+                "ongoing": ongoing,
+                "genai_entries": genai_entries
             })
 
         return events
@@ -465,6 +533,13 @@ def create_app(orchestrator):
                 fp = os.path.join(folder_path, f)
                 if os.path.isfile(fp):
                     event_files.append(f)
+            # Include files from camera subdirs (consolidated: Carport/clip.mp4, etc.)
+            for sub in os.listdir(folder_path):
+                sub_fp = os.path.join(folder_path, sub)
+                if os.path.isdir(sub_fp) and not sub.startswith('.'):
+                    for sf in ('clip.mp4', 'snapshot.jpg', 'metadata.json', 'summary.txt', 'review_summary.md'):
+                        if os.path.isfile(os.path.join(sub_fp, sf)):
+                            event_files.append(f"{sub}/{sf}")
             event_files.sort()
         except OSError:
             pass

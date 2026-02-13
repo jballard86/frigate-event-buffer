@@ -322,6 +322,7 @@ class StateAwareOrchestrator:
         end_ts = int((ce.end_time_max or ce.last_activity_time) + export_after)
 
         first_clip_path = None
+        primary_cam = ce.primary_camera or (ce.cameras[0] if ce.cameras else None)
         for camera in ce.cameras:
             camera_folder = self.file_manager.ensure_consolidated_camera_folder(ce.folder_path, camera)
             self._timeline_log_frigate_api(
@@ -337,6 +338,13 @@ class StateAwareOrchestrator:
             self._timeline_log_frigate_api(ce.folder_path, 'in', f'Clip export response for {camera}', {'success': ok})
             if ok and first_clip_path is None:
                 first_clip_path = os.path.join(camera_folder, 'clip.mp4')
+        # Placeholder fallback: if all exports failed, try per-event clip for primary camera
+        if first_clip_path is None and primary_cam and ce.primary_event_id:
+            primary_folder = self.file_manager.ensure_consolidated_camera_folder(ce.folder_path, primary_cam)
+            ok = self.file_manager.download_and_transcode_clip(ce.primary_event_id, primary_folder)
+            if ok:
+                first_clip_path = os.path.join(primary_folder, 'clip.mp4')
+                self._timeline_log_frigate_api(ce.folder_path, 'in', 'Placeholder clip (events API fallback)', {'success': True})
 
         if first_clip_path:
             gif_path = os.path.join(ce.folder_path, 'notification.gif')
