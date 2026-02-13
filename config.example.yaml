@@ -18,13 +18,21 @@ cameras:
       - "person"
       - "package"
 
-  # Example: Driveway - only vehicle events
+  # Example: Driveway - only vehicle events, with Smart Zone Filtering
+  # Ignores cars on the road unless they enter the driveway or match an exception
   - name: "YOUR_CAMERA_2"
     labels:
       - "car"
       - "truck"
+    event_filters:              # Optional - omit for legacy behavior (all events start immediately)
+      zones_to_ignore:          # Zones where events should NOT start (e.g. ignore road traffic)
+        - "road"
+      exceptions:               # Labels or sub_labels that always trigger - put both in same list
+        - "person"              # e.g. person, UPS, FedEx - match against label and sub_label
+        - "UPS"
+        - "FedEx"
 
-  # Example: Backyard - allow ALL labels (empty list)
+  # Example: Backyard - allow ALL labels (empty list), no zone filtering
   # - name: "YOUR_CAMERA_3"
   #   labels: []
 

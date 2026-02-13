@@ -10,7 +10,7 @@ import time
 import logging
 import threading
 from datetime import date, datetime, timedelta
-from typing import Optional
+from typing import Optional, List, Any
 
 import paho.mqtt.client as mqtt
 import requests
@@ -167,6 +167,56 @@ class StateAwareOrchestrator:
             pass
         return None
 
+    def _normalize_sub_label(self, sub_label: Any) -> Optional[str]:
+        """Extract matchable string from Frigate sub_label (format varies by version).
+        Handles: None, string, [name, score], empty values, unexpected types.
+        """
+        if sub_label is None:
+            return None
+        if isinstance(sub_label, str):
+            return sub_label.strip() if sub_label.strip() else None
+        if isinstance(sub_label, (list, tuple)) and len(sub_label) > 0:
+            first = sub_label[0]
+            if isinstance(first, str):
+                return first.strip() if first.strip() else None
+            if first is not None:
+                return str(first).strip() or None
+        return None
+
+    def _should_start_event(self, camera: str, label: str, sub_label: Any,
+                            entered_zones: List[str]) -> bool:
+        """Smart Zone Filtering: decide if we should create an event.
+        Returns True to start, False to ignore (defer).
+        No event_filters for camera -> legacy behavior (always start).
+        """
+        filters = self.config.get('CAMERA_EVENT_FILTERS', {}).get(camera)
+        if not filters:
+            return True
+
+        exceptions = filters.get('exceptions') or []
+        zones_to_ignore = filters.get('zones_to_ignore') or []
+
+        # 1. Check exceptions (labels or sub_labels) - match against both
+        if exceptions:
+            exc_set = {e.strip().lower() for e in exceptions if e}
+            if label and label.strip().lower() in exc_set:
+                return True
+            norm = self._normalize_sub_label(sub_label)
+            if norm and norm.lower() in exc_set:
+                return True
+
+        # 2. Check zones - if no zones to ignore, no zone-based deferral
+        if not zones_to_ignore:
+            return True
+        entered = entered_zones or []
+        if not entered:
+            return True
+        ignore_set = {z.strip().lower() for z in zones_to_ignore if z}
+        entered_lower = [z.strip().lower() for z in entered if z]
+        if all(z in ignore_set for z in entered_lower):
+            return False
+        return True
+
     def _on_mqtt_message(self, client, userdata, msg):
         """Route incoming MQTT messages to appropriate handlers."""
         logger.debug(f"MQTT message received: {msg.topic} ({len(msg.payload)} bytes)")
@@ -188,13 +238,16 @@ class StateAwareOrchestrator:
             logger.exception(f"Error processing message from {msg.topic}: {e}")
 
     def _handle_frigate_event(self, payload: dict):
-        """Process frigate/events messages with camera/label filtering."""
+        """Process frigate/events messages with camera/label filtering and Smart Zone Filtering."""
         event_type = payload.get("type")
         after_data = payload.get("after", {})
 
         event_id = after_data.get("id")
         camera = after_data.get("camera")
         label = after_data.get("label")
+        sub_label = after_data.get("sub_label")
+        start_time = after_data.get("start_time", time.time())
+        entered_zones = after_data.get("entered_zones") or []
 
         if not event_id:
             logger.debug("Skipping event: no event_id in payload")
@@ -212,16 +265,7 @@ class StateAwareOrchestrator:
                 logger.debug(f"Filtered out '{label}' on '{camera}' (allowed: {allowed_labels_for_camera})")
                 return
 
-        if event_type == "new":
-            self._handle_event_new(
-                event_id=event_id,
-                camera=camera,
-                label=label,
-                start_time=after_data.get("start_time", time.time()),
-                mqtt_payload=payload
-            )
-
-        elif event_type == "end":
+        if event_type == "end":
             self._handle_event_end(
                 event_id=event_id,
                 end_time=after_data.get("end_time", time.time()),
@@ -229,6 +273,28 @@ class StateAwareOrchestrator:
                 has_snapshot=after_data.get("has_snapshot", False),
                 mqtt_payload=payload
             )
+            return
+
+        # type: new or update - unified Smart Zone Filtering path
+        if event_type not in ("new", "update"):
+            logger.debug(f"Skipping frigate/events type: {event_type}")
+            return
+
+        # Already tracked - no new creation (Late Start already handled if we created from prior update)
+        if self.state_manager.get_event(event_id):
+            return
+
+        if not self._should_start_event(camera, label or "", sub_label, entered_zones):
+            logger.debug(f"Ignoring {event_id} (smart zone filter: only in zones {entered_zones})")
+            return
+
+        self._handle_event_new(
+            event_id=event_id,
+            camera=camera,
+            label=label or "unknown",
+            start_time=start_time,
+            mqtt_payload=payload
+        )
 
     def _handle_event_new(self, event_id: str, camera: str, label: str,
                           start_time: float, mqtt_payload: Optional[dict] = None):
@@ -243,9 +309,10 @@ class StateAwareOrchestrator:
         event.folder_path = camera_folder
 
         if mqtt_payload:
+            mqtt_type = mqtt_payload.get("type", "new")
             self._timeline_log_mqtt(
                 ce.folder_path, "frigate/events",
-                mqtt_payload, "Event new (from Frigate)"
+                mqtt_payload, f"Event {mqtt_type} (from Frigate)"
             )
 
         if not is_new:
@@ -746,6 +813,22 @@ class StateAwareOrchestrator:
                     logger.info(f"  {camera}: ALL labels")
         else:
             logger.info("Camera/Label Filtering: DISABLED (all cameras and labels allowed)")
+
+        event_filters = self.config.get('CAMERA_EVENT_FILTERS', {})
+        if event_filters:
+            logger.info("Smart Zone Filtering:")
+            for camera, filt in event_filters.items():
+                zones = filt.get('zones_to_ignore') or []
+                exc = filt.get('exceptions') or []
+                parts = []
+                if zones:
+                    parts.append(f"ignore_zones={zones}")
+                if exc:
+                    parts.append(f"exceptions={exc}")
+                if parts:
+                    logger.info(f"  {camera}: {', '.join(parts)}")
+        else:
+            logger.info("Smart Zone Filtering: DISABLED")
 
         logger.info("=" * 60)
 
