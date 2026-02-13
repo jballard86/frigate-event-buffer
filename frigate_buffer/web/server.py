@@ -170,6 +170,9 @@ def create_app(orchestrator):
                     summary_text = f.read().strip()
                 parsed = _parse_summary(summary_text)
 
+            cameras = [d for d in os.listdir(ce_path)
+                      if os.path.isdir(os.path.join(ce_path, d)) and not d.startswith('.')]
+
             metadata = {}
             if os.path.exists(metadata_path):
                 try:
@@ -195,9 +198,6 @@ def create_app(orchestrator):
             if os.path.exists(review_summary_path):
                 with open(review_summary_path, 'r') as f:
                     review_summary = f.read().strip()
-
-            cameras = [d for d in os.listdir(ce_path)
-                      if os.path.isdir(os.path.join(ce_path, d)) and not d.startswith('.')]
             primary_clip = primary_snapshot = None
             for cam in cameras:
                 cam_path = os.path.join(ce_path, cam)
