@@ -13,13 +13,13 @@ A state-aware orchestrator that listens to Frigate NVR events via MQTT, tracks t
 - **Threat Level Alerts**: Three-tier threat classification (0=Normal, 1=Suspicious, 2=Critical) — Level 2 alerts bypass phone volume/DND and keep all follow-up notifications audible
 - **Camera/Label Filtering**: Only process events from specific cameras or with specific labels
 - **Multi-Camera Support**: Handles events from multiple cameras simultaneously without state collision
-- **Clip Export via Frigate API**: Requests clips from Frigate's Export API for the full event duration (with configurable buffer before/after); this is the final video update sent in notifications; falls back to events API if export fails
+- **Clip Export via Frigate API**: Requests clips from Frigate's Export API (POST with JSON body; polls by `export_id` when async); full event duration with configurable buffer; falls back to per-event clip via events API if export fails or times out; events older than 90 minutes no longer show "Event ongoing"
 - **Auto-Transcoding**: Transcodes clips to H.264 for broad compatibility
 - **Clip Download Retry**: Retries clip downloads up to 3 times on HTTP 400 (Frigate not ready), with 5-second delays when using events API fallback
 - **FFmpeg Safety**: 60-second timeout with graceful termination prevents zombie processes
 - **Rolling Retention**: Automatically cleans up events older than the retention period (default: 3 days)
 - **Notification Rate Limiting**: Max 2 notifications per 5 seconds with queue overflow protection
-- **Built-in Event Viewer**: Self-contained web page at `/player` with video playback, expandable AI analysis (GenAI summary, scene, cross-camera review), event navigation, reviewed/unreviewed filtering, download, and **View Timeline** (per-event data pipeline log) — embeddable as an HA iframe
+- **Built-in Event Viewer**: Self-contained web page at `/player` with video playback, expandable AI analysis (each GenAI event from timeline with its own expand/collapse; cross-camera review; single-camera shows "Review Summary"), "Event ongoing" badge clears after 90 min or when clip available, event navigation, reviewed/unreviewed filtering, download, and **View Timeline** (per-event data pipeline log with all files including clips/snapshots from camera subdirs) — embeddable as an HA iframe
 - **Stats Dashboard**: Stats as a header button (like Daily Review) linking to `/stats-page`; standalone stats page with event counts (today/week/month), API Usage (Month to Date API cost and token usage from HA helpers when configured), storage by camera, recent errors, last cleanup, system info; configurable auto-refresh with manual Refresh button
 - **Daily Review**: Frigate review summarize integration — scheduled fetch at 1am for previous day, 90-day retention (configurable), date selector, "Current Day Review" for midnight-to-now; markdown rendering
 - **Event Review Tracking**: Mark events as reviewed with per-event or bulk "mark all" controls; defaults to showing unreviewed events
@@ -58,7 +58,7 @@ The application is organized as a Python package `frigate_buffer/`:
 | `models.py` | Data models: `EventPhase`, `EventState`, `ConsolidatedEvent`, plus helpers for consolidated IDs and "no concerns" detection. |
 | `orchestrator.py` | `StateAwareOrchestrator` — MQTT subscription, event phase tracking, notification publishing, and coordination of managers. |
 | `managers/` | Business logic modules: |
-| `managers/file.py` | `FileManager` — clip/snapshot download, FFmpeg transcode, storage paths, cleanup. |
+| `managers/file.py` | `FileManager` — clip/snapshot download, FFmpeg transcode, storage paths, cleanup. Export API uses JSON body, polls by export_id, 90s poll timeout, 180s download timeout. |
 | `managers/state.py` | `EventStateManager` — per-event state (phase, metadata) and active event tracking. |
 | `managers/consolidation.py` | `ConsolidatedEventManager` — groups related Frigate events into consolidated events. |
 | `managers/reviews.py` | `DailyReviewManager` — fetches and caches Frigate daily review summaries. |
@@ -274,7 +274,7 @@ Per-event notification timeline page. Shows data received from Frigate (MQTT), c
 
 - **Back to Player** — links to `/player?camera=X&subdir=Y` so the player opens on the same event
 - **Download Timeline** — downloads `notification_timeline.json`
-- **Event Files** — download links for each file in the event folder (clip.mp4, snapshot, summary, metadata, etc.); clip is the export video (full duration + buffer)
+- **Event Files** — download links for all files: root-level (notification_timeline.json, review_summary.md, summary.txt, metadata.json); and per-camera subdirs (clip.mp4, snapshot.jpg, metadata.json, etc.) for consolidated events
 
 ### GET /player
 
@@ -283,7 +283,7 @@ Built-in event viewer web page. Open in a browser or embed as an HA iframe card.
 Features:
 - Single-column responsive layout (scales to any device)
 - HTML5 video player with snapshot poster
-- Expandable AI analysis: GenAI summary, GenAI scene, cross-camera review (each expandable)
+- Expandable AI analysis: each GenAI event from the timeline with its own expand/collapse; cross-camera review (or "Review Summary" when single camera); "No activity" boilerplate hidden when GenAI data is present
 - Event metadata (camera, label, timestamp)
 - Camera filter dropdown
 - Reviewed/Unreviewed/All filter (defaults to unreviewed)
@@ -352,8 +352,10 @@ Response:
       "has_clip": true,
       "has_snapshot": true,
       "viewed": false,
+      "ongoing": false,
       "hosted_clip": "/files/doorbell/1234567890_eventid/clip.mp4",
-      "hosted_snapshot": "/files/doorbell/1234567890_eventid/snapshot.jpg"
+      "hosted_snapshot": "/files/doorbell/1234567890_eventid/snapshot.jpg",
+      "genai_entries": [{"title": "Person at door", "shortSummary": "...", "scene": "...", "time": "Friday, 2:30 PM"}]
     }
   ]
 }
@@ -739,8 +741,8 @@ The orchestrator includes safeguards against hung FFmpeg processes:
 |------|------------|-------|--------|
 | T+0s | `frigate/events` (type=new) | NEW | Create folder, send instant notification (Frigate snapshot fallback), then fetch local snapshot after delay |
 | T+5s | `frigate/{camera}/tracked_object_update` (type=description) | DESCRIBED | Update with AI description |
-| T+30s | `frigate/events` (type=end) | - | Download snapshot; request clip via Frigate Export API (full event duration + buffer) |
-| T+35s | *(background processing)* | - | Transcode clip, write summary, send `clip_ready` (final video update); falls back to events API if export fails |
+| T+30s | `frigate/events` (type=end) | - | Download snapshot; request clip via Frigate Export API (POST with JSON body; poll by export_id) |
+| T+35s | *(background processing)* | - | Transcode clip, write summary, send `clip_ready`; falls back to per-event clip if export fails or times out |
 | T+45s | `frigate/reviews` (type=genai) | FINALIZED | Update with GenAI metadata (title, description, threat_level) from `data.metadata` |
 | T+55s | Frigate Review Summary API | SUMMARIZED | Fetch cross-camera review summary with configurable time padding, write `review_summary.md` |
 
@@ -810,11 +812,13 @@ Notification images use buffer URLs (local file or `/api/events/{event_id}/snaps
 
 ### Clips Not Downloading
 
-The app uses Frigate's Export API first (`POST /api/export/<camera>/start/<start>/end/<end>`); if that fails, it falls back to the events API. If clips still fail:
+The app uses Frigate's Export API first (`POST /api/export/<camera>/start/<start>/end/<end>` with `Content-Type: application/json` and body `{}`); it polls `/api/exports` by `export_id` for up to 90 seconds. If export fails or times out, it falls back to the per-event events API (placeholder clip for consolidated events). If clips still fail:
 - Check logs for `Export API failed` or `Clip not ready for ... (HTTP 400), retrying`
 - Verify `FRIGATE_URL` is correct and accessible
 - Verify Frigate API is responding: `curl http://your-frigate-ip:5000/api/events`
-- The timeline page shows "Clip export request" and "Clip export response" entries for debugging
+- Camera names must match Frigate config exactly (case-sensitive, e.g. `Doorbell` not `doorbell`)
+- Under high server load, exports can timeout; the placeholder fallback provides a clip from the primary event
+- The timeline page shows "Clip export request", "Clip export response", and "Placeholder clip (events API fallback)" entries for debugging
 
 ### FFmpeg Timeouts
 

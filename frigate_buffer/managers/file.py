@@ -160,50 +160,69 @@ class FileManager:
         process = None
 
         try:
-            # 1. Trigger export via POST
+            # 1. Trigger export via POST (Frigate/FastAPI requires JSON body)
             logger.info(f"Requesting clip export: {export_url}")
-            resp = requests.post(export_url, timeout=30)
+            resp = requests.post(
+                export_url,
+                json={},
+                headers={"Content-Type": "application/json"},
+                timeout=60
+            )
             resp.raise_for_status()
 
-            # 2. Get export filename: try response body first, else poll /api/exports
+            # 2. Get export filename or export_id from response
             export_filename = None
+            export_id = None
             if resp.headers.get("content-type", "").startswith("application/json"):
                 try:
                     data = resp.json()
                     export_filename = data.get("export") or data.get("filename") or data.get("name")
+                    export_id = data.get("export_id")
                 except Exception:
                     pass
 
-            if not export_filename:
-                # Poll exports list until our export appears (newest matching time range)
-                for _ in range(24):  # 24 * 2.5s = 60s max
-                    time.sleep(2.5)
-                    try:
-                        list_resp = requests.get(exports_list_url, timeout=10)
-                        list_resp.raise_for_status()
-                        exports = list_resp.json() if list_resp.content else []
-                        if isinstance(exports, list) and exports:
-                            # Use newest export (likely ours)
+            # 3. Poll exports list until our export appears (match by export_id or use newest)
+            poll_count = 0
+            poll_max = 36  # 36 * 2.5s = 90s max
+            while not export_filename and poll_count < poll_max:
+                time.sleep(2.5)
+                poll_count += 1
+                try:
+                    list_resp = requests.get(exports_list_url, timeout=15)
+                    list_resp.raise_for_status()
+                    exports = list_resp.json() if list_resp.content else []
+                    if isinstance(exports, list) and exports:
+                        # Prefer match by export_id if we have it
+                        if export_id:
+                            for e in exports:
+                                if e.get("export_id") == export_id or e.get("id") == export_id:
+                                    export_filename = e.get("export") or e.get("filename") or e.get("name") or e.get("path")
+                                    if export_filename:
+                                        break
+                        if not export_filename:
+                            # Fallback: use newest export (likely ours)
                             newest = max(
                                 exports,
-                                key=lambda e: e.get("created", 0) or e.get("start_time", 0)
+                                key=lambda e: e.get("created", 0) or e.get("start_time", 0) or e.get("modified", 0)
                             )
-                            export_filename = newest.get("export") or newest.get("filename") or newest.get("name")
-                        elif isinstance(exports, dict):
-                            export_filename = exports.get("export") or exports.get("filename")
-                        if export_filename:
-                            break
-                    except Exception as e:
-                        logger.debug(f"Exports poll: {e}")
+                            export_filename = newest.get("export") or newest.get("filename") or newest.get("name") or newest.get("path")
+                    elif isinstance(exports, dict):
+                        export_filename = exports.get("export") or exports.get("filename") or exports.get("name")
+                    if export_filename:
+                        break
+                except Exception as e:
+                    logger.debug(f"Exports poll: {e}")
 
             if not export_filename:
                 logger.warning("Could not determine export filename, falling back to events API")
                 return self.download_and_transcode_clip(event_id, folder_path)
 
-            # 3. Download from Frigate exports (web server path, not /api/)
-            download_url = f"{self.frigate_url}/exports/{export_filename}"
+            # 4. Download from Frigate exports (web server path, not /api/)
+            # Handle path that may include camera prefix (e.g. "Doorbell/xxx.mp4" or "Doorbell_xxx.mp4")
+            download_path = export_filename.lstrip("/").split("/")[-1] if "/" in export_filename else export_filename
+            download_url = f"{self.frigate_url.rstrip('/')}/exports/{download_path}"
             logger.info(f"Downloading export clip from {download_url}")
-            dl_resp = requests.get(download_url, timeout=120, stream=True)
+            dl_resp = requests.get(download_url, timeout=180, stream=True)
             dl_resp.raise_for_status()
 
             bytes_downloaded = 0

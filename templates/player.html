@@ -460,40 +460,61 @@
     }
   }
 
-  // Renders all GenAI response blocks (summary, scene, review) as separate expandable sections.
+  // Renders GenAI blocks: each genai_entries item gets expand/collapse; fallback to single summary/scene/review.
   // Returns { html, blocks } so render() can bind expand handlers with full content.
   function renderAiAnalysisBlocks(ev) {
     const parts = [];
     const blockData = [];
     let blockIdx = 0;
+    const genaiEntries = ev.genai_entries || [];
 
-    // Block 1: GenAI Summary (title + shortSummary/description)
-    const summaryContent = (ev.title || ev.description)
-      ? (ev.title ? escapeHtml(ev.title) : '') + (ev.description ? (ev.title ? ' — ' : '') + escapeHtml(ev.description) : '')
-      : null;
-    if (summaryContent) {
-      const excerpt = summaryContent.length > 200 ? summaryContent.substring(0, 200) + '...' : summaryContent;
-      const idBase = 'aiBlock' + blockIdx++;
-      parts.push(`<div class="ai-block"><div class="ai-block-label">GenAI Summary</div><div class="summary-excerpt" id="${idBase}Excerpt">${excerpt}</div><button class="btn-expand" id="${idBase}Btn" type="button">Expand</button><div class="summary-full" id="${idBase}Full"></div></div>`);
-      blockData.push({ id: idBase, content: summaryContent, format: 'html' });
+    if (genaiEntries.length > 0) {
+      // Render each GenAI event from timeline with its own expand/collapse
+      genaiEntries.forEach((entry, i) => {
+        const title = entry.title || `GenAI Analysis ${i + 1}`;
+        const summary = entry.shortSummary || '';
+        const scene = entry.scene || '';
+        const timeStr = entry.time ? ` (${entry.time})` : '';
+        const content = [summary, scene].filter(Boolean).join('\n\n');
+        if (!content) return;
+        const excerpt = content.length > 200 ? escapeHtml(content.substring(0, 200) + '...') : escapeHtml(content);
+        const idBase = 'aiBlock' + blockIdx++;
+        parts.push(`<div class="ai-block"><div class="ai-block-label">${escapeHtml(title)}${escapeHtml(timeStr)}</div><div class="summary-excerpt" id="${idBase}Excerpt">${excerpt}</div><button class="btn-expand" id="${idBase}Btn" type="button">Expand</button><div class="summary-full" id="${idBase}Full"></div></div>`);
+        blockData.push({ id: idBase, content: content, format: 'text' });
+      });
     }
 
-    // Block 2: GenAI Scene (longer narrative)
-    if (ev.scene) {
-      const excerpt = ev.scene.length > 200 ? escapeHtml(ev.scene.substring(0, 200) + '...') : escapeHtml(ev.scene);
-      const idBase = 'aiBlock' + blockIdx++;
-      parts.push(`<div class="ai-block"><div class="ai-block-label">GenAI Scene</div><div class="summary-excerpt" id="${idBase}Excerpt">${excerpt}</div><button class="btn-expand" id="${idBase}Btn" type="button">Expand</button><div class="summary-full" id="${idBase}Full"></div></div>`);
-      blockData.push({ id: idBase, content: ev.scene, format: 'text' });
+    // Fallback: single GenAI Summary (title + description) when no genai_entries
+    if (genaiEntries.length === 0) {
+      const summaryContent = (ev.title || ev.description)
+        ? (ev.title ? escapeHtml(ev.title) : '') + (ev.description ? (ev.title ? ' — ' : '') + escapeHtml(ev.description) : '')
+        : null;
+      if (summaryContent) {
+        const excerpt = summaryContent.length > 200 ? summaryContent.substring(0, 200) + '...' : summaryContent;
+        const idBase = 'aiBlock' + blockIdx++;
+        parts.push(`<div class="ai-block"><div class="ai-block-label">GenAI Summary</div><div class="summary-excerpt" id="${idBase}Excerpt">${excerpt}</div><button class="btn-expand" id="${idBase}Btn" type="button">Expand</button><div class="summary-full" id="${idBase}Full"></div></div>`);
+        blockData.push({ id: idBase, content: summaryContent, format: 'html' });
+      }
+      if (ev.scene) {
+        const excerpt = ev.scene.length > 200 ? escapeHtml(ev.scene.substring(0, 200) + '...') : escapeHtml(ev.scene);
+        const idBase = 'aiBlock' + blockIdx++;
+        parts.push(`<div class="ai-block"><div class="ai-block-label">GenAI Scene</div><div class="summary-excerpt" id="${idBase}Excerpt">${excerpt}</div><button class="btn-expand" id="${idBase}Btn" type="button">Expand</button><div class="summary-full" id="${idBase}Full"></div></div>`);
+        blockData.push({ id: idBase, content: ev.scene, format: 'text' });
+      }
     }
 
-    // Block 3: Cross-Camera Review Summary (markdown)
-    if (ev.review_summary) {
-      const lines = ev.review_summary.split('\n').filter(l => l.trim() && !l.trim().startsWith('#'));
+    // Cross-Camera Review (or "Review Summary" when single camera)
+    const reviewSummary = ev.review_summary || '';
+    const isNoActivity = /no activity was found|no concerns/i.test(reviewSummary);
+    const isSingleCamera = (ev.cameras && ev.cameras.length === 1) || !ev.cameras;
+    const reviewLabel = (isSingleCamera && isNoActivity) ? 'Review Summary' : 'Cross-Camera Review';
+    if (reviewSummary && !(isNoActivity && genaiEntries.length > 0)) {
+      const lines = reviewSummary.split('\n').filter(l => l.trim() && !l.trim().startsWith('#'));
       const rawExcerpt = lines.slice(0, 3).join(' ').substring(0, 200);
       const excerpt = escapeHtml(rawExcerpt + (rawExcerpt.length >= 200 ? '...' : ''));
       const idBase = 'aiBlock' + blockIdx++;
-      parts.push(`<div class="ai-block"><div class="ai-block-label">Cross-Camera Review</div><div class="summary-excerpt" id="${idBase}Excerpt">${excerpt}</div><button class="btn-expand" id="${idBase}Btn" type="button">Expand</button><div class="summary-full" id="${idBase}Full"></div></div>`);
-      blockData.push({ id: idBase, content: ev.review_summary, format: 'markdown' });
+      parts.push(`<div class="ai-block"><div class="ai-block-label">${reviewLabel}</div><div class="summary-excerpt" id="${idBase}Excerpt">${excerpt}</div><button class="btn-expand" id="${idBase}Btn" type="button">Expand</button><div class="summary-full" id="${idBase}Full"></div></div>`);
+      blockData.push({ id: idBase, content: reviewSummary, format: 'markdown' });
     }
 
     if (parts.length === 0) return { html: '<p class="description-text">No AI analysis available.</p>', blocks: [] };
