@@ -128,6 +128,8 @@
   .btn-mark-all { background: #4a3a1a; border-color: #7a6a2d; }
   .btn-mark-all:hover:not(:disabled) { background: #7a6a2d; }
 
+  .ongoing-badge { margin-left: 8px; padding: 2px 8px; background: #3a4a2a; color: #9fdf9f; border-radius: 4px; font-size: 0.75rem; }
+
   /* Info cards */
   .info-card {
     background: #16213e;
@@ -361,9 +363,11 @@
   }
 
   async function fetchEvents(opts) {
-    const camera = cameraSelect.value;
     const filter = filterSelect.value;
     const silent = opts && opts.silent;
+    // Back from timeline: fetch all events (don't restrict to camera) so count matches
+    const forceAll = !!(opts && opts.forceAll);
+    const camera = forceAll ? '' : cameraSelect.value;
 
     try {
       const base = camera ? `/events/${encodeURIComponent(camera)}` : '/events';
@@ -387,9 +391,9 @@
       } else {
         events = newEvents;
         currentIndex = 0;
-        // Back from timeline: seek to same event
+        // Back from timeline: seek to same event (do NOT change camera dropdown - keeps full count)
         if (urlCamera && urlSubdir && events.length > 0) {
-          const idx = events.findIndex(e => (e.camera || '').toLowerCase() === urlCamera.toLowerCase() && (e.subdir || e.hosted_clip?.split('/').slice(-2, -1)[0]) === urlSubdir);
+          const idx = events.findIndex(e => (e.camera || '').toLowerCase() === urlCamera.toLowerCase() && (e.subdir || (e.hosted_clip && e.hosted_clip.split('/').slice(-2, -1)[0])) === urlSubdir);
           if (idx >= 0) {
             currentIndex = idx;
           }
@@ -517,7 +521,7 @@
     const scene = ev.scene || '';
     const cameraDisplay = ev.camera.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
     const labelDisplay = (ev.label || 'unknown').replace(/\b\w/g, c => c.toUpperCase());
-    const subdir = ev.subdir || ev.hosted_clip.split('/').slice(-2, -1)[0];
+    const subdir = ev.subdir || (ev.hosted_clip && ev.hosted_clip.split('/').slice(-2, -1)[0]);
     const threatLevel = ev.threat_level || 0;
     const threatLabels = {0: 'Normal', 1: 'Suspicious', 2: 'Critical'};
     const threatBadge = threatLevel > 0
@@ -543,7 +547,7 @@
           <button id="btnNewer" ${currentIndex <= 0 ? 'disabled' : ''}>&#9664; Newer</button>
           <button id="btnOlder" ${currentIndex >= events.length - 1 ? 'disabled' : ''}>Older &#9654;</button>
         </div>
-        <span class="event-counter">${currentIndex + 1} / ${events.length}${ev.viewed ? '<span class="viewed-badge">Reviewed</span>' : ''}</span>
+        <span class="event-counter">${currentIndex + 1} / ${events.length}${ev.viewed ? '<span class="viewed-badge">Reviewed</span>' : ''}${ev.ongoing ? '<span class="ongoing-badge">Event ongoing</span>' : ''}</span>
         <div class="nav-buttons">
           ${!ev.viewed ? `<button class="btn-success" id="btnMarkReviewed">Reviewed</button>` : ''}
           ${ev.has_clip ? `<a href="${ev.hosted_clip}" download style="text-decoration:none;"><button class="btn-download">Download</button></a>` : ''}
@@ -649,7 +653,8 @@
   if (urlFilter === 'all') {
     filterSelect.value = 'all';
   }
-  if (urlCamera) {
+  // Only set camera from URL when NOT coming back from timeline (no subdir) - preserves event count
+  if (urlCamera && !urlSubdir) {
     cameraSelect.value = urlCamera;
   }
 
@@ -662,8 +667,8 @@
 
   (async function init() {
     await fetchCameras();
-    if (urlCamera) cameraSelect.value = urlCamera;
-    await fetchEvents();
+    if (urlCamera && !urlSubdir) cameraSelect.value = urlCamera;
+    await fetchEvents({ forceAll: !!urlSubdir });
     startAutoRefresh();
   })();
 })();
