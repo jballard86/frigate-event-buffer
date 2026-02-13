@@ -36,10 +36,8 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy application, templates, static assets, and example config
-COPY app.py .
-COPY templates/ ./templates/
-COPY static/ ./static/
+# Copy application package and example config
+COPY frigate_buffer/ ./frigate_buffer/
 COPY config.example.yaml .
 
 # Create storage directory
@@ -52,4 +50,4 @@ EXPOSE 5055
 HEALTHCHECK --interval=60s --timeout=10s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:5055/status || exit 1
 
-CMD ["python", "app.py"]
+CMD ["python", "-m", "frigate_buffer.main"]

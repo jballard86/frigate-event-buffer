@@ -46,9 +46,35 @@ A state-aware orchestrator that listens to Frigate NVR events via MQTT, tracks t
 └─────────────────────────────────────────────────────────┘
 ```
 
+## Project Structure
+
+The application is organized as a Python package `frigate_buffer/`:
+
+| File / Directory | Description |
+|------------------|-------------|
+| `main.py` | Entry point. Loads config, sets up logging and signal handlers, starts the orchestrator. Run with `python -m frigate_buffer.main`. |
+| `config.py` | Configuration loading. Merges YAML, env vars, and defaults. Searches config paths in order. |
+| `logging_utils.py` | Error buffer and logging. `ErrorBuffer` stores recent errors for the stats dashboard; `setup_logging()` configures log level and handlers. |
+| `models.py` | Data models: `EventPhase`, `EventState`, `ConsolidatedEvent`, plus helpers for consolidated IDs and "no concerns" detection. |
+| `orchestrator.py` | `StateAwareOrchestrator` — MQTT subscription, event phase tracking, notification publishing, and coordination of managers. |
+| `managers/` | Business logic modules: |
+| `managers/file.py` | `FileManager` — clip/snapshot download, FFmpeg transcode, storage paths, cleanup. |
+| `managers/state.py` | `EventStateManager` — per-event state (phase, metadata) and active event tracking. |
+| `managers/consolidation.py` | `ConsolidatedEventManager` — groups related Frigate events into consolidated events. |
+| `managers/reviews.py` | `DailyReviewManager` — fetches and caches Frigate daily review summaries. |
+| `services/notifier.py` | `NotificationPublisher` — publishes MQTT notifications to Home Assistant. |
+| `web/server.py` | Flask app factory `create_app(orchestrator)`. Routes for player, events, files, stats, daily review, API. |
+| `templates/` | Jinja2 templates (player, stats, daily review, timeline). Located under `frigate_buffer/`. |
+| `static/` | Static assets (marked.min.js, purify.min.js). Located under `frigate_buffer/`. |
+| `Dockerfile` | Builds from `frigate_buffer/` and runs `python -m frigate_buffer.main`. |
+| `docker-compose.example.yaml` | Template for Docker Compose — local build or token pull from private GitHub. |
+| `config.example.yaml` | Example configuration for cameras, settings, network, optional HA integration. |
+
 ## Quick Start
 
 ### 1. Build the Docker Image
+
+From the project root (cloned repo):
 
 ```bash
 docker build -t frigate-buffer .
@@ -70,6 +96,16 @@ docker run -d \
 curl http://localhost:5055/status
 ```
 
+### Running without Docker
+
+From the project root with dependencies installed:
+
+```bash
+python -m frigate_buffer.main
+```
+
+The app searches for `config.yaml` in order at: `/app/config.yaml`, `/app/storage/config.yaml`, `./config.yaml`, and `config.yaml`. No separate path configuration is needed.
+
 ## Configuration
 
 Configuration is loaded from three sources (in order of priority):
@@ -78,7 +114,7 @@ Configuration is loaded from three sources (in order of priority):
 2. **config.yaml** file (searched at `/app/config.yaml`, `/app/storage/config.yaml`, `./config.yaml`, and `config.yaml` in the current working directory)
 3. **Default values** (lowest priority)
 
-Place your `config.yaml` in the storage volume directory — it will be found automatically at `/app/storage/config.yaml` without needing a separate file bind mount. You can optionally bind-mount a config file to `/app/config.yaml` instead.
+Place your `config.yaml` inside the storage volume (e.g. `/mnt/user/appdata/frigate_buffer/config.yaml`); the app finds it at `/app/storage/config.yaml` automatically. No separate bind mount is required. You can optionally bind-mount a config file to `/app/config.yaml` instead.
 
 ### config.yaml
 
@@ -647,30 +683,24 @@ sensor:
 
 ## Docker Compose
 
-```yaml
-services:
-  frigate-buffer:
-    build: .
-    container_name: frigate-buffer
-    restart: unless-stopped
-    ports:
-      - "5055:5055"
-    volumes:
-      - /mnt/user/appdata/frigate_buffer:/app/storage
-      - /etc/localtime:/etc/localtime:ro
-    environment:
-      - MQTT_BROKER=YOUR_MQTT_BROKER_IP
-      - FRIGATE_URL=http://YOUR_FRIGATE_IP:5000
-      - BUFFER_IP=YOUR_BUFFER_IP
-      - LOG_LEVEL=DEBUG  # Optional: override config.yaml
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:5055/status"]
-      interval: 60s
-      timeout: 10s
-      retries: 3
+**Option 1: Build from local clone** — Copy and customize the example:
+
+```bash
+cp docker-compose.example.yaml docker-compose.yaml
+# Edit docker-compose.yaml: update paths, BUFFER_IP, FRIGATE_URL, MQTT_BROKER
+docker compose up -d
 ```
 
-Optional env vars (e.g. `RETENTION_DAYS`, `MQTT_PORT`) can be set as in `docker-compose.example.yaml`. Place your `config.yaml` inside the storage volume (e.g., `/mnt/user/appdata/frigate_buffer/config.yaml`) — the app will find it automatically. No separate file bind mount needed. You can optionally bind-mount a config file to `/app/config.yaml` instead.
+**Option 2: Build from private GitHub (token pull)** — For Dockge, Portainer, or headless servers. Copy `docker-compose.example.yaml` to `docker-compose.yaml`, comment out `build: .`, and uncomment the `build.context` block with your GitHub username and PAT (repo scope):
+
+```yaml
+build:
+  context: https://YOUR_GITHUB_USERNAME:YOUR_GITHUB_PAT@github.com/jballard86/frigate-event-buffer.git#main
+```
+
+See `docker-compose.example.yaml` for the full template with all env vars and optional config bind mount.
+
+Place `config.yaml` in the storage volume — it is found at `/app/storage/config.yaml` automatically. Optional: bind-mount a config file to `/app/config.yaml`.
 
 ## Debug Logging
 
