@@ -7,11 +7,9 @@ services:
     # This is used when you have cloned the repository to your machine.
     build: .
 
-    # Option 2: Build directly from a private GitHub repository.
-    # This is useful for server environments like Dockge or Portainer.
-    # To use, comment out "build: ." above, uncomment the block below,
-    # and replace the placeholders with your GitHub username and a
-    # Personal Access Token (PAT) that has 'repo' scope.
+    # Option 2: Build from private GitHub using token pull (Dockge/Portainer).
+    # Comment out "build: ." above, uncomment the block below, and replace
+    # placeholders with your GitHub username and PAT (repo scope).
     # build:
     #   context: https://YOUR_GITHUB_USERNAME:YOUR_GITHUB_PAT@github.com/jballard86/frigate-event-buffer.git#main
 
