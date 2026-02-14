@@ -277,14 +277,15 @@ class NotificationPublisher:
 
     def _build_message(self, event: EventState, status: str) -> str:
         """Build notification message combining status context with best available description."""
-        # Best available description at this moment
-        best_desc = event.genai_description or event.ai_description
+        # Best available description at this moment (use getattr for NotifyTarget etc.)
+        best_desc = getattr(event, 'genai_description', None) or getattr(event, 'ai_description', None)
         camera_display = event.camera.replace('_', ' ').title()
         label_display = event.label.title()
         fallback = f"{label_display} detected at {camera_display}"
 
-        if status == "summarized" and event.review_summary:
-            lines = [l.strip() for l in event.review_summary.split('\n')
+        if status == "summarized" and getattr(event, 'review_summary', None):
+            review_summary = getattr(event, 'review_summary', None) or ""
+            lines = [l.strip() for l in review_summary.split('\n')
                      if l.strip() and not l.strip().startswith('#')]
             excerpt = lines[0] if lines else "Review summary available"
             return excerpt[:200] + ("..." if len(excerpt) > 200 else "")
@@ -300,7 +301,7 @@ class NotificationPublisher:
             return best_desc or f"Event complete: {fallback}"
 
         if status == "described":
-            return event.ai_description or f"{fallback} (details updating)"
+            return getattr(event, 'ai_description', None) or f"{fallback} (details updating)"
 
         # new, snapshot_ready, or any other status
         return best_desc or fallback
