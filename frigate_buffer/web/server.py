@@ -142,6 +142,56 @@ def create_app(orchestrator):
             })
         return entries
 
+    def _event_ended_in_timeline(folder_path: str) -> bool:
+        """Check if event has ended based on timeline (Event end from Frigate, or end_time set)."""
+        timeline_path = os.path.join(folder_path, 'notification_timeline.json')
+        if not os.path.exists(timeline_path):
+            return False
+        try:
+            with open(timeline_path, 'r') as f:
+                data = json.load(f)
+        except Exception:
+            return False
+        for e in data.get('entries', []):
+            label = (e.get('label') or '').lower()
+            if 'event end' in label:
+                return True
+            payload = (e.get('data') or {}).get('payload') or {}
+            if payload.get('type') == 'end':
+                return True
+            after = payload.get('after') or {}
+            if after.get('end_time') is not None:
+                return True
+        return False
+
+    def _extract_cameras_zones_from_timeline(folder_path: str) -> list:
+        """Extract cameras and zones from frigate_mqtt entries in notification_timeline.json."""
+        timeline_path = os.path.join(folder_path, 'notification_timeline.json')
+        if not os.path.exists(timeline_path):
+            return []
+        try:
+            with open(timeline_path, 'r') as f:
+                data = json.load(f)
+        except Exception:
+            return []
+        camera_zones = {}
+        for e in data.get('entries', []):
+            if e.get('source') != 'frigate_mqtt':
+                continue
+            payload = (e.get('data') or {}).get('payload') or {}
+            after = payload.get('after') or payload.get('before') or {}
+            camera = after.get('camera')
+            if not camera:
+                continue
+            zones = camera_zones.setdefault(camera, set())
+            for z in (after.get('entered_zones') or []):
+                if z:
+                    zones.add(z)
+            for z in (after.get('current_zones') or []):
+                if z:
+                    zones.add(z)
+        return [{"camera": cam, "zones": sorted(zones)} for cam, zones in sorted(camera_zones.items())]
+
     def _get_events_from_consolidated() -> list:
         """Get consolidated events from events/{ce_id}/{camera}/ structure."""
         events_dir = os.path.join(storage_path, "events")
@@ -213,13 +263,18 @@ def create_app(orchestrator):
             has_clip = any(os.path.exists(os.path.join(ce_path, cam, 'clip.mp4')) for cam in cameras)
             has_snapshot = any(os.path.exists(os.path.join(ce_path, cam, 'snapshot.jpg')) for cam in cameras)
 
-            # Time-based "not ongoing": events older than 90 min are treated as finalized
+            # "Not ongoing": event ended in timeline, or has clip, or older than 90 min
+            event_ended = _event_ended_in_timeline(ce_path)
             try:
                 ts_float = float(ts)
                 age_seconds = time.time() - ts_float
-                ongoing = not has_clip and age_seconds < 5400  # 90 min
+                ongoing = not has_clip and age_seconds < 5400 and not event_ended  # 90 min
             except (ValueError, TypeError):
-                ongoing = not has_clip
+                ongoing = not has_clip and not event_ended
+
+            cameras_with_zones = _extract_cameras_zones_from_timeline(ce_path)
+            if not cameras_with_zones and cameras:
+                cameras_with_zones = [{"camera": c, "zones": []} for c in cameras]
 
             events_list.append({
                 "event_id": ce_id,
@@ -240,6 +295,7 @@ def create_app(orchestrator):
                 "hosted_clip": primary_clip or (f"/files/events/{ce_id}/{cameras[0]}/clip.mp4" if cameras else None),
                 "hosted_snapshot": primary_snapshot or (f"/files/events/{ce_id}/{cameras[0]}/snapshot.jpg" if cameras else None),
                 "cameras": cameras,
+                "cameras_with_zones": cameras_with_zones,
                 "consolidated": True,
                 "ongoing": ongoing,
                 "genai_entries": genai_entries
@@ -298,13 +354,18 @@ def create_app(orchestrator):
             snapshot_path = os.path.join(folder_path, 'snapshot.jpg')
             viewed_path = os.path.join(folder_path, '.viewed')
             has_clip = os.path.exists(clip_path)
+            event_ended = _event_ended_in_timeline(folder_path)
             try:
                 ts_float = float(ts)
                 age_seconds = time.time() - ts_float
-                ongoing = not has_clip and age_seconds < 5400
+                ongoing = not has_clip and age_seconds < 5400 and not event_ended
             except (ValueError, TypeError):
-                ongoing = not has_clip
+                ongoing = not has_clip and not event_ended
             genai_entries = _extract_genai_entries(folder_path)
+
+            cameras_with_zones = _extract_cameras_zones_from_timeline(folder_path)
+            if not cameras_with_zones:
+                cameras_with_zones = [{"camera": camera_name, "zones": []}]
 
             events.append({
                 "event_id": eid,
@@ -324,6 +385,7 @@ def create_app(orchestrator):
                 "viewed": os.path.exists(viewed_path),
                 "hosted_clip": f"/files/{camera_name}/{subdir}/clip.mp4",
                 "hosted_snapshot": f"/files/{camera_name}/{subdir}/snapshot.jpg",
+                "cameras_with_zones": cameras_with_zones,
                 "ongoing": ongoing,
                 "genai_entries": genai_entries
             })
