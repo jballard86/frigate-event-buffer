@@ -585,8 +585,14 @@
       <div class="info-card">
         <h2>Event Details</h2>
         <div class="meta-grid">
-          <span class="meta-label">Camera</span>
-          <span class="meta-value">${escapeHtml(cameraDisplay)}</span>
+          <span class="meta-label">Cameras & Zones</span>
+          <span class="meta-value cameras-zones">${((ev.cameras_with_zones && ev.cameras_with_zones.length) ? ev.cameras_with_zones : [{camera: ev.camera, zones: []}])
+            .map(c => {
+              const cam = escapeHtml((c.camera || '').replace(/_/g, ' ').replace(/\\b\\w/g, ch => ch.toUpperCase()));
+              const zones = (c.zones && c.zones.length) ? c.zones.join(', ') : 'No Zones Indicated';
+              return cam + ': ' + escapeHtml(zones);
+            })
+            .join('<br>')}</span>
           <span class="meta-label">Label</span>
           <span class="meta-value">${escapeHtml(labelDisplay)}</span>
           <span class="meta-label">Time</span>
