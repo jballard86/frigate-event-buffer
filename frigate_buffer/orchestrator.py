@@ -402,12 +402,16 @@ class StateAwareOrchestrator:
                 f'Clip export for {camera} (CE close)',
                 {'url': f"{self.config.get('FRIGATE_URL', '')}/api/export/{camera}/start/{start_ts}/end/{end_ts}"}
             )
-            ok = self.file_manager.export_and_transcode_clip(
+            result = self.file_manager.export_and_transcode_clip(
                 ce.consolidated_id, camera_folder, camera,
                 ce.start_time, ce.end_time_max or ce.last_activity_time,
                 export_before, export_after
             )
-            self._timeline_log_frigate_api(ce.folder_path, 'in', f'Clip export response for {camera}', {'success': ok})
+            ok = result.get("success", False)
+            timeline_data = {"success": ok, "frigate_response": result.get("frigate_response")}
+            if "fallback" in result:
+                timeline_data["fallback"] = result["fallback"]
+            self._timeline_log_frigate_api(ce.folder_path, 'in', f'Clip export response for {camera}', timeline_data)
             if ok and first_clip_path is None:
                 first_clip_path = os.path.join(camera_folder, 'clip.mp4')
         # Placeholder fallback: if all exports failed, try per-event clip for primary camera
@@ -511,7 +515,7 @@ class StateAwareOrchestrator:
                     },
                 )
 
-                event.clip_downloaded = self.file_manager.export_and_transcode_clip(
+                result = self.file_manager.export_and_transcode_clip(
                     event.event_id,
                     event.folder_path,
                     camera=event.camera,
@@ -520,11 +524,15 @@ class StateAwareOrchestrator:
                     export_buffer_before=export_before,
                     export_buffer_after=export_after,
                 )
+                event.clip_downloaded = result.get("success", False)
 
+                timeline_data = {"success": event.clip_downloaded, "frigate_response": result.get("frigate_response")}
+                if "fallback" in result:
+                    timeline_data["fallback"] = result["fallback"]
                 self._timeline_log_frigate_api(
                     self._timeline_folder(event), 'in',
                     'Clip export response (from Frigate API)',
-                    {'success': event.clip_downloaded},
+                    timeline_data,
                 )
 
             self.file_manager.write_summary(event.folder_path, event)

@@ -139,13 +139,15 @@ class FileManager:
         end_time: float,
         export_buffer_before: int,
         export_buffer_after: int,
-    ) -> bool:
+    ) -> dict:
         """
         Request clip export from Frigate's Export API for the full event duration
         (with buffer), then download and transcode to H.264.
 
         Uses buffer-assigned event time range: start_ts = start_time - buffer_before,
         end_ts = end_time + buffer_after. Falls back to events API if export fails.
+
+        Returns dict with keys: success (bool), frigate_response (dict), optionally fallback (str).
         """
         # Compute export time range (Unix epoch seconds)
         start_ts = int(start_time - export_buffer_before)
@@ -158,28 +160,38 @@ class FileManager:
         temp_path = os.path.join(folder_path, "clip_original.mp4")
         final_path = os.path.join(folder_path, "clip.mp4")
         process = None
+        frigate_response: Optional[dict] = None
 
         try:
-            # 1. Trigger export via POST (Frigate/FastAPI requires JSON body)
+            # 1. Trigger export via POST (Frigate/FastAPI requires JSON body with playback, name)
+            payload = {
+                "playback": "realtime",
+                "name": f"export_{event_id}"[:256],
+            }
             logger.info(f"Requesting clip export: {export_url}")
             resp = requests.post(
                 export_url,
-                json={},
+                json=payload,
                 headers={"Content-Type": "application/json"},
                 timeout=60
             )
+            # Capture response for timeline debugging before raise_for_status
+            if resp.headers.get("content-type", "").startswith("application/json"):
+                try:
+                    frigate_response = resp.json()
+                except Exception:
+                    frigate_response = {"status_code": resp.status_code, "raw": resp.text[:500] if resp.text else ""}
+            elif resp.text:
+                frigate_response = {"status_code": resp.status_code, "raw": resp.text[:500]}
+
             resp.raise_for_status()
 
             # 2. Get export filename or export_id from response
             export_filename = None
             export_id = None
-            if resp.headers.get("content-type", "").startswith("application/json"):
-                try:
-                    data = resp.json()
-                    export_filename = data.get("export") or data.get("filename") or data.get("name")
-                    export_id = data.get("export_id")
-                except Exception:
-                    pass
+            if frigate_response:
+                export_filename = frigate_response.get("export") or frigate_response.get("filename") or frigate_response.get("name")
+                export_id = frigate_response.get("export_id")
 
             # 3. Poll exports list until our export appears (match by export_id or use newest)
             poll_count = 0
@@ -215,7 +227,12 @@ class FileManager:
 
             if not export_filename:
                 logger.warning("Could not determine export filename, falling back to events API")
-                return self.download_and_transcode_clip(event_id, folder_path)
+                fallback_ok = self.download_and_transcode_clip(event_id, folder_path)
+                return {
+                    "success": fallback_ok,
+                    "frigate_response": frigate_response,
+                    "fallback": "events_api",
+                }
 
             # 4. Download from Frigate exports (web server path, not /api/)
             # Handle path that may include camera prefix (e.g. "Doorbell/xxx.mp4" or "Doorbell_xxx.mp4")
@@ -234,11 +251,17 @@ class FileManager:
             logger.info(f"Downloaded export clip for {event_id} ({bytes_downloaded} bytes), transcoding...")
 
             # 4. Transcode (same logic as download_and_transcode_clip)
-            return self._transcode_clip_to_h264(event_id, temp_path, final_path)
+            transcode_ok = self._transcode_clip_to_h264(event_id, temp_path, final_path)
+            return {"success": transcode_ok, "frigate_response": frigate_response}
 
         except requests.exceptions.RequestException as e:
             logger.warning(f"Export API failed for {event_id}: {e}, falling back to events API")
-            return self.download_and_transcode_clip(event_id, folder_path)
+            fallback_ok = self.download_and_transcode_clip(event_id, folder_path)
+            return {
+                "success": fallback_ok,
+                "frigate_response": frigate_response or {"error": str(e)},
+                "fallback": "events_api",
+            }
         except Exception as e:
             logger.exception(f"Export clip failed for {event_id}: {e}")
             if os.path.exists(temp_path):
@@ -246,7 +269,7 @@ class FileManager:
                     os.remove(temp_path)
                 except OSError:
                     pass
-            return False
+            return {"success": False, "frigate_response": frigate_response or {"error": str(e)}}
 
     def _transcode_clip_to_h264(self, event_id: str, temp_path: str, final_path: str) -> bool:
         """Transcode clip_original.mp4 to H.264 clip.mp4. Removes temp on success."""
