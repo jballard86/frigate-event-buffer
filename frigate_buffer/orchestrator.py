@@ -280,8 +280,13 @@ class StateAwareOrchestrator:
             logger.debug(f"Skipping frigate/events type: {event_type}")
             return
 
-        # Already tracked - no new creation (Late Start already handled if we created from prior update)
-        if self.state_manager.get_event(event_id):
+        # Already tracked - log MQTT to timeline, then return (no new creation)
+        event = self.state_manager.get_event(event_id)
+        if event:
+            folder = self._timeline_folder(event)
+            if folder:
+                mqtt_type = payload.get("type", "update")
+                self._timeline_log_mqtt(folder, "frigate/events", payload, f"Event {mqtt_type} (from Frigate)")
             return
 
         if not self._should_start_event(camera, label or "", sub_label, entered_zones):
