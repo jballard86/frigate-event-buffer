@@ -49,6 +49,8 @@ class ConsolidatedEventManager:
                     ce.last_activity_time = now
                     if camera not in ce.cameras:
                         ce.cameras.append(camera)
+                    if label and label not in ce.labels:
+                        ce.labels.append(label)
                     self._frigate_to_ce[event_id] = ce.consolidated_id
                     # Ensure camera subdir exists
                     camera_folder = self._file_manager.ensure_consolidated_camera_folder(
@@ -68,6 +70,7 @@ class ConsolidatedEventManager:
                 last_activity_time=now,
                 cameras=[camera],
                 frigate_event_ids=[event_id],
+                labels=[label] if label else [],
                 primary_event_id=event_id,
                 primary_camera=camera,
             )

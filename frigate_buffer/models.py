@@ -84,6 +84,7 @@ class ConsolidatedEvent:
     end_time_max: float = 0  # Max end_time across sub-events (updated as events end)
     cameras: List[str] = field(default_factory=list)
     frigate_event_ids: List[str] = field(default_factory=list)
+    labels: List[str] = field(default_factory=list)
 
     # Best-so-far (never regress)
     best_title: Optional[str] = None
@@ -114,7 +115,11 @@ class ConsolidatedEvent:
 
     @property
     def label(self) -> str:
-        return "person"  # Aggregated; use best_description for display
+        """Return comma-separated list of unique labels."""
+        if not self.labels:
+            return "person"  # Fallback
+        unique = sorted(list(set(self.labels)))
+        return ", ".join(unique)
 
     @property
     def created_at(self) -> float:
