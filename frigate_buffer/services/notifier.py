@@ -271,23 +271,32 @@ class NotificationPublisher:
             logger.error(f"Error publishing notification: {e}")
             return False
 
+    def _get_camera_display_name(self, event: NotificationEvent) -> str:
+        """Get formatted camera name for display."""
+        return event.camera.replace('_', ' ').title()
+
+    def _get_label_display_name(self, event: NotificationEvent) -> str:
+        """Get formatted label name for display."""
+        return event.label.title()
+
+    def _get_default_title(self, event: NotificationEvent) -> str:
+        """Get standard formatted detection title."""
+        camera_display = self._get_camera_display_name(event)
+        label_display = self._get_label_display_name(event)
+        return f"{label_display} detected at {camera_display}"
+
     def _build_title(self, event: NotificationEvent) -> str:
         """Build notification title based on event state."""
         if event.genai_title:
             return event.genai_title
 
-        camera_display = event.camera.replace('_', ' ').title()
-        label_display = event.label.title()
-
-        return f"{label_display} detected at {camera_display}"
+        return self._get_default_title(event)
 
     def _build_message(self, event: NotificationEvent, status: str) -> str:
         """Build notification message combining status context with best available description."""
         # Best available description at this moment
         best_desc = event.genai_description or event.ai_description
-        camera_display = event.camera.replace('_', ' ').title()
-        label_display = event.label.title()
-        fallback = f"{label_display} detected at {camera_display}"
+        fallback = self._get_default_title(event)
 
         if status == "summarized" and event.review_summary:
             review_summary = event.review_summary or ""
