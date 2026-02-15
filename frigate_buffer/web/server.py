@@ -5,6 +5,7 @@ import json
 import time
 import shutil
 import logging
+import threading
 from datetime import date, datetime, timedelta
 
 import requests
@@ -468,6 +469,33 @@ def create_app(orchestrator):
         uptime_seconds = time.time() - orchestrator._start_time
         uptime_str = str(timedelta(seconds=int(uptime_seconds)))
 
+        # Gather active consolidated events
+        active_ce = []
+        try:
+            for ce in orchestrator.consolidated_manager.get_all():
+                state = "active"
+                if ce.closing:
+                    state = "closing"
+                if ce.closed:
+                    state = "closed"
+
+                active_ce.append({
+                    "id": ce.consolidated_id,
+                    "state": state,
+                    "cameras": ce.cameras,
+                    "start_time": ce.start_time
+                })
+        except Exception as e:
+            logger.error(f"Error gathering consolidated events for status: {e}")
+
+        # Gather metrics
+        metrics = {
+            "notification_queue_size": getattr(orchestrator.notifier, 'queue_size', 0),
+            "active_threads": threading.active_count(),
+            "active_consolidated_events": active_ce,
+            "recent_errors": error_buffer.get_all()[:5]
+        }
+
         return jsonify({
             "online": True,
             "mqtt_connected": orchestrator.mqtt_wrapper.mqtt_connected,
@@ -475,6 +503,7 @@ def create_app(orchestrator):
             "uptime": uptime_str,
             "started_at": time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(orchestrator._start_time)),
             "active_events": state_manager.get_stats(),
+            "metrics": metrics,
             "config": {
                 "retention_days": orchestrator.config['RETENTION_DAYS'],
                 "log_level": orchestrator.config.get('LOG_LEVEL', 'INFO'),
