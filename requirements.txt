@@ -1,5 +1,5 @@
 flask
-paho-mqtt
+paho-mqtt>=2.0.0
 requests
 schedule
 pyyaml

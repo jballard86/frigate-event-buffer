@@ -79,8 +79,8 @@ def test_on_consolidated_event_close():
         'MQTT_PORT': 1883,
     }
 
-    # Patch orchestrator to prevent side effects in init
-    with patch('frigate_buffer.orchestrator.mqtt.Client'), \
+    # Patch orchestrator to prevent side effects in init (MQTT client lives in mqtt_client now)
+    with patch('frigate_buffer.services.mqtt_client.mqtt.Client'), \
          patch('frigate_buffer.orchestrator.NotificationPublisher'), \
          patch('frigate_buffer.orchestrator.DailyReviewManager'), \
          patch('frigate_buffer.orchestrator.FileManager'), \

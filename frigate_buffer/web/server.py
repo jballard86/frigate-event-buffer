@@ -775,7 +775,7 @@ def create_app(orchestrator):
             'most_recent': most_recent_out,
             'system': {
                 'uptime_seconds': int(time.time() - orchestrator._start_time),
-                'mqtt_connected': orchestrator.mqtt_connected,
+                'mqtt_connected': orchestrator.mqtt_wrapper.mqtt_connected,
                 'active_events': len(orchestrator.state_manager.get_active_event_ids()),
                 'retention_days': orchestrator.config['RETENTION_DAYS'],
                 'cleanup_interval_hours': orchestrator.config.get('CLEANUP_INTERVAL_HOURS', 1),
@@ -795,7 +795,7 @@ def create_app(orchestrator):
 
         return jsonify({
             "online": True,
-            "mqtt_connected": orchestrator.mqtt_connected,
+            "mqtt_connected": orchestrator.mqtt_wrapper.mqtt_connected,
             "uptime_seconds": uptime_seconds,
             "uptime": uptime_str,
             "started_at": time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(orchestrator._start_time)),
