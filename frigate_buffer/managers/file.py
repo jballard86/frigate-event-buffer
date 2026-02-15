@@ -241,50 +241,56 @@ class FileManager:
         try:
             # Download original clip (retry on HTTP 400 — Frigate may not have clip ready yet)
             url = f"{self.frigate_url}/api/events/{event_id}/clip.mp4"
-            response = None
 
+            download_success = False
             for attempt in range(1, 4):
                 logger.debug(f"Downloading clip from {url} (attempt {attempt}/3)")
                 try:
-                    response = requests.get(url, timeout=120, stream=True)
-                    response.raise_for_status()
-                    break
-                except requests.exceptions.HTTPError:
-                    if response is not None:
-                        if response.status_code == 404:
+                    with requests.get(url, timeout=120, stream=True) as response:
+                        response.raise_for_status()
+
+                        bytes_downloaded = 0
+                        with open(temp_path, 'wb') as f:
+                            for chunk in response.iter_content(chunk_size=8192):
+                                f.write(chunk)
+                                bytes_downloaded += len(chunk)
+
+                        logger.debug(f"Downloaded clip for {event_id} ({bytes_downloaded} bytes), starting transcode...")
+                        download_success = True
+                        break
+
+                except requests.exceptions.HTTPError as e:
+                    if e.response is not None:
+                        if e.response.status_code == 404:
                             logger.warning(f"No recording available for event {event_id}")
                             return False
 
-                        if response.status_code == 400 and attempt < 3:
+                        if e.response.status_code == 400 and attempt < 3:
                             logger.warning(f"Clip not ready for {event_id} (HTTP 400), retrying in 5s ({attempt}/3)")
                             time.sleep(5)
                             continue
                     raise
 
-            bytes_downloaded = 0
-            with open(temp_path, 'wb') as f:
-                for chunk in response.iter_content(chunk_size=8192):
-                    f.write(chunk)
-                    bytes_downloaded += len(chunk)
+            if not download_success:
+                return False
 
-            logger.debug(f"Downloaded clip for {event_id} ({bytes_downloaded} bytes), starting transcode...")
             return self.video_service.transcode_clip_to_h264(event_id, temp_path, final_path)
 
         except requests.exceptions.Timeout:
             logger.error(f"Timeout downloading clip for {event_id}")
-            if os.path.exists(temp_path):
-                os.remove(temp_path)
             return False
         except requests.exceptions.HTTPError as e:
             logger.error(f"HTTP error downloading clip for {event_id}: {e}")
-            if os.path.exists(temp_path):
-                os.remove(temp_path)
             return False
         except Exception as e:
             logger.exception(f"Failed to download/transcode clip for {event_id}: {e}")
-            if os.path.exists(temp_path):
-                os.remove(temp_path)
             return False
+        finally:
+            if os.path.exists(temp_path):
+                try:
+                    os.remove(temp_path)
+                except OSError:
+                    pass
 
     def write_summary(self, folder_path: str, event: EventState) -> bool:
         """Write summary.txt with event metadata."""
