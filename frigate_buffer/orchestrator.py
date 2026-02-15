@@ -64,6 +64,8 @@ class StateAwareOrchestrator:
         self.mqtt_wrapper = MqttClientWrapper(
             broker=config['MQTT_BROKER'],
             port=config['MQTT_PORT'],
+            username=config.get('MQTT_USER'),
+            password=config.get('MQTT_PASSWORD'),
             on_message_callback=self._on_mqtt_message,
         )
 

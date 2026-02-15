@@ -23,6 +23,8 @@ CONFIG_SCHEMA = Schema({
     Optional('network'): {
         Optional('mqtt_broker'): str,
         Optional('mqtt_port'): int,
+        Optional('mqtt_user'): str,
+        Optional('mqtt_password'): str,
         Optional('frigate_url'): str,
         Optional('buffer_ip'): str,
         Optional('flask_port'): int,
@@ -69,6 +71,8 @@ def load_config() -> dict:
         # Network settings - NO DEFAULTS (required from config)
         'MQTT_BROKER': None,
         'MQTT_PORT': 1883,
+        'MQTT_USER': None,
+        'MQTT_PASSWORD': None,
         'FRIGATE_URL': None,
         'BUFFER_IP': None,
         'FLASK_PORT': 5055,
@@ -163,6 +167,8 @@ def load_config() -> dict:
                     network = yaml_config['network']
                     config['MQTT_BROKER'] = network.get('mqtt_broker', config['MQTT_BROKER'])
                     config['MQTT_PORT'] = network.get('mqtt_port', config['MQTT_PORT'])
+                    config['MQTT_USER'] = network.get('mqtt_user', config['MQTT_USER'])
+                    config['MQTT_PASSWORD'] = network.get('mqtt_password', config['MQTT_PASSWORD'])
                     config['FRIGATE_URL'] = network.get('frigate_url', config['FRIGATE_URL'])
                     config['BUFFER_IP'] = network.get('buffer_ip') or network.get('ha_ip') or config['BUFFER_IP']
                     config['FLASK_PORT'] = network.get('flask_port', config['FLASK_PORT'])
@@ -187,6 +193,8 @@ def load_config() -> dict:
     # Environment variables override everything (for secrets/deployment)
     config['MQTT_BROKER'] = os.getenv('MQTT_BROKER') or config['MQTT_BROKER']
     config['MQTT_PORT'] = int(os.getenv('MQTT_PORT', str(config['MQTT_PORT'])))
+    config['MQTT_USER'] = os.getenv('MQTT_USER') or config['MQTT_USER']
+    config['MQTT_PASSWORD'] = os.getenv('MQTT_PASSWORD') or config['MQTT_PASSWORD']
     frigate_url = os.getenv('FRIGATE_URL') or config['FRIGATE_URL']
     config['FRIGATE_URL'] = frigate_url.rstrip('/') if frigate_url else None
     config['BUFFER_IP'] = os.getenv('BUFFER_IP') or os.getenv('HA_IP') or config['BUFFER_IP']
