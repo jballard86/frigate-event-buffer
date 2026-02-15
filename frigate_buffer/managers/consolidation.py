@@ -109,7 +109,7 @@ class ConsolidatedEventManager:
             if ce_id not in self._events:
                 return
             ce = self._events[ce_id]
-            if ce.closed:
+            if ce.closed or ce.closing:
                 return
             # Cancel existing timer
             if ce_id in self._close_timers:
