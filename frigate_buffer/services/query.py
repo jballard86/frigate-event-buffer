@@ -13,8 +13,23 @@ logger = logging.getLogger('frigate-buffer')
 class EventQueryService:
     """Service for querying events from the filesystem."""
 
-    def __init__(self, storage_path: str):
+    def __init__(self, storage_path: str, cache_ttl: int = 5):
         self.storage_path = storage_path
+        self._cache = {}
+        self._cache_ttl = cache_ttl
+
+    def _get_cached(self, key: str) -> Optional[Any]:
+        if key in self._cache:
+            entry = self._cache[key]
+            if time.monotonic() - entry['timestamp'] < self._cache_ttl:
+                return entry['data']
+        return None
+
+    def _set_cache(self, key: str, data: Any):
+        self._cache[key] = {
+            'timestamp': time.monotonic(),
+            'data': data
+        }
 
     def _parse_summary(self, summary_text: str) -> Dict[str, str]:
         """Parse key-value pairs from summary.txt format."""
@@ -318,12 +333,26 @@ class EventQueryService:
 
     def get_events(self, camera_name: str) -> List[Dict[str, Any]]:
         """Get events for a specific camera or 'events' for consolidated events."""
+        cache_key = f"events_{camera_name}"
+        cached = self._get_cached(cache_key)
+        if cached is not None:
+            return cached
+
         if camera_name == "events":
-            return self._get_consolidated_events()
-        return self._get_camera_events(camera_name)
+            events = self._get_consolidated_events()
+        else:
+            events = self._get_camera_events(camera_name)
+
+        self._set_cache(cache_key, events)
+        return events
 
     def get_all_events(self) -> Tuple[List[Dict[str, Any]], List[str]]:
         """Get all events across all cameras (global view)."""
+        cache_key = "all_events"
+        cached = self._get_cached(cache_key)
+        if cached is not None:
+            return cached
+
         all_events = []
         cameras_found = []
 
@@ -345,10 +374,17 @@ class EventQueryService:
             logger.error(f"Error listing events: {e}")
             raise
 
-        return all_events, sorted(cameras_found)
+        result = (all_events, sorted(cameras_found))
+        self._set_cache(cache_key, result)
+        return result
 
     def get_cameras(self) -> List[str]:
         """List available cameras from storage."""
+        cache_key = "cameras"
+        cached = self._get_cached(cache_key)
+        if cached is not None:
+            return cached
+
         active_cameras = []
         try:
             for item in os.listdir(self.storage_path):
@@ -362,4 +398,6 @@ class EventQueryService:
         if os.path.isdir(os.path.join(self.storage_path, "events")) and "events" not in active_cameras:
             active_cameras.append("events")
 
-        return sorted(active_cameras)
+        result = sorted(active_cameras)
+        self._set_cache(cache_key, result)
+        return result
