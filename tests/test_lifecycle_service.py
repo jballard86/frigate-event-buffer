@@ -104,11 +104,14 @@ class TestEventLifecycleService(unittest.TestCase):
         self.file_manager.cleanup_old_events.assert_called()
         self.assertIsNotNone(self.service.last_cleanup_time)
 
-    def test_on_consolidated_event_close(self):
+    def test_finalize_consolidated_event(self):
         # Setup
         ce_id = "ce1"
         ce = ConsolidatedEvent(ce_id, "folder", "path", 100.0, 110.0)
-        ce.closed = True
+
+        # Ensure mark_closing returns True to proceed
+        self.consolidated_manager.mark_closing.return_value = True
+
         ce.frigate_event_ids = ["evt1"]
         ce.cameras = ["cam1"]
         ce.primary_camera = "cam1"
@@ -124,9 +127,10 @@ class TestEventLifecycleService(unittest.TestCase):
         self.file_manager.export_and_transcode_clip.return_value = {"success": True}
 
         # Act
-        self.service.on_consolidated_event_close(ce_id)
+        self.service.finalize_consolidated_event(ce_id)
 
         # Assert
+        self.consolidated_manager.mark_closing.assert_called_with(ce_id)
         self.file_manager.export_and_transcode_clip.assert_called()
         self.consolidated_manager.remove.assert_called_with(ce_id)
 
