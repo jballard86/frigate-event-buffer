@@ -2,10 +2,56 @@
 
 import os
 import logging
+import sys
 
 import yaml
+from voluptuous import Schema, Required, Optional, Any, ALLOW_EXTRA, Invalid
 
 logger = logging.getLogger('frigate-buffer')
+
+
+# Configuration Schema
+CONFIG_SCHEMA = Schema({
+    Required('cameras'): [{
+        Required('name'): str,
+        Optional('labels'): [str],
+        Optional('event_filters'): {
+            Optional('tracked_zones'): [str],
+            Optional('exceptions'): [str],
+        }
+    }],
+    Optional('network'): {
+        Optional('mqtt_broker'): str,
+        Optional('mqtt_port'): int,
+        Optional('frigate_url'): str,
+        Optional('buffer_ip'): str,
+        Optional('flask_port'): int,
+        Optional('storage_path'): str,
+        Optional('ha_ip'): str,  # Legacy fallback
+    },
+    Optional('settings'): {
+        Optional('retention_days'): int,
+        Optional('cleanup_interval_hours'): int,
+        Optional('ffmpeg_timeout_seconds'): int,
+        Optional('notification_delay_seconds'): int,
+        Optional('log_level'): Any('DEBUG', 'INFO', 'WARNING', 'ERROR'),
+        Optional('summary_padding_before'): int,
+        Optional('summary_padding_after'): int,
+        Optional('stats_refresh_seconds'): int,
+        Optional('daily_review_retention_days'): int,
+        Optional('daily_review_schedule_hour'): int,
+        Optional('event_gap_seconds'): int,
+        Optional('export_buffer_before'): int,
+        Optional('export_buffer_after'): int,
+    },
+    Optional('ha'): {
+        Optional('base_url'): str,
+        Optional('url'): str,
+        Optional('token'): str,
+        Optional('gemini_cost_entity'): str,
+        Optional('gemini_tokens_entity'): str,
+    }
+}, extra=ALLOW_EXTRA)
 
 
 def load_config() -> dict:
@@ -68,29 +114,34 @@ def load_config() -> dict:
                 with open(path, 'r') as f:
                     yaml_config = yaml.safe_load(f) or {}
 
+                # Validate schema
+                try:
+                    yaml_config = CONFIG_SCHEMA(yaml_config)
+                except Invalid as e:
+                    logger.error(f"Invalid configuration in {path}: {e}")
+                    sys.exit(1)
+
                 # Build camera-to-labels and event_filters mapping from per-camera config
-                if 'cameras' in yaml_config and isinstance(yaml_config['cameras'], list):
-                    for cam in yaml_config['cameras']:
-                        if isinstance(cam, dict) and 'name' in cam:
-                            camera_name = cam['name']
-                            labels = cam.get('labels', []) or []
-                            config['CAMERA_LABEL_MAP'][camera_name] = labels
+                for cam in yaml_config['cameras']:
+                    camera_name = cam['name']
+                    labels = cam.get('labels', []) or []
+                    config['CAMERA_LABEL_MAP'][camera_name] = labels
 
-                            # Smart Zone Filtering (optional per camera)
-                            event_filters = cam.get('event_filters')
-                            if isinstance(event_filters, dict):
-                                zones = event_filters.get('tracked_zones')
-                                exceptions = event_filters.get('exceptions')
-                                config['CAMERA_EVENT_FILTERS'][camera_name] = {
-                                    'tracked_zones': zones if isinstance(zones, list) else [],
-                                    'exceptions': [str(x).strip() for x in exceptions] if isinstance(exceptions, list) else [],
-                                }
+                    # Smart Zone Filtering (optional per camera)
+                    event_filters = cam.get('event_filters')
+                    if event_filters:
+                        zones = event_filters.get('tracked_zones')
+                        exceptions = event_filters.get('exceptions')
+                        config['CAMERA_EVENT_FILTERS'][camera_name] = {
+                            'tracked_zones': zones if zones else [],
+                            'exceptions': [str(x).strip() for x in exceptions] if exceptions else [],
+                        }
 
-                    # Derive flat lists for status/logging
-                    config['ALLOWED_CAMERAS'] = list(config['CAMERA_LABEL_MAP'].keys())
-                    config['ALLOWED_LABELS'] = list(set(
-                        label for labels in config['CAMERA_LABEL_MAP'].values() for label in labels if labels
-                    ))
+                # Derive flat lists for status/logging
+                config['ALLOWED_CAMERAS'] = list(config['CAMERA_LABEL_MAP'].keys())
+                config['ALLOWED_LABELS'] = list(set(
+                    label for labels in config['CAMERA_LABEL_MAP'].values() for label in labels if labels
+                ))
 
                 if 'settings' in yaml_config:
                     settings = yaml_config['settings']

@@ -4,7 +4,7 @@ import time
 import uuid
 from enum import Enum, auto
 from dataclasses import dataclass, field
-from typing import Optional, List
+from typing import Optional, List, Protocol, runtime_checkable
 
 # Patterns that indicate "no concerns" from GenAI review summary (skip summarized notification)
 NO_CONCERNS_PATTERNS = (
@@ -26,6 +26,27 @@ class EventPhase(Enum):
     DESCRIBED = auto()  # Phase 2: AI description received from tracked_object_update
     FINALIZED = auto()  # Phase 3: GenAI metadata received from frigate/reviews
     SUMMARIZED = auto() # Phase 4: Review summary received from Frigate API
+
+
+@runtime_checkable
+class NotificationEvent(Protocol):
+    """Protocol for event notification data."""
+    event_id: str
+    camera: str
+    label: str
+    phase: EventPhase
+    created_at: float
+    threat_level: int
+    clip_downloaded: bool
+    snapshot_downloaded: bool
+
+    # Optional fields
+    ai_description: Optional[str]
+    genai_title: Optional[str]
+    genai_description: Optional[str]
+    review_summary: Optional[str]
+    folder_path: Optional[str]
+    image_url_override: Optional[str]
 
 
 @dataclass
@@ -61,6 +82,9 @@ class EventState:
     end_time: Optional[float] = None
     has_clip: bool = False
     has_snapshot: bool = False
+
+    # Notification override
+    image_url_override: Optional[str] = None
 
 
 def _generate_consolidated_id(start_ts: float) -> tuple:
@@ -102,6 +126,7 @@ class ConsolidatedEvent:
     finalized_sent: bool = False
 
     # CE close: when True, no more sub-events will be added
+    closing: bool = False
     closed: bool = False
 
     # Legacy-compat: expose as EventState-like for notifier
@@ -160,3 +185,11 @@ class ConsolidatedEvent:
     @property
     def has_snapshot(self) -> bool:
         return self.snapshot_downloaded
+
+    @property
+    def image_url_override(self) -> Optional[str]:
+        return None
+
+    @property
+    def ai_description(self) -> Optional[str]:
+        return None

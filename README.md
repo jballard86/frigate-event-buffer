@@ -38,6 +38,16 @@ The **StateAwareOrchestrator** is the central coordinator. It owns event-handlin
 - **NotificationPublisher** — Publishes to `frigate/custom/notifications`; timeline callback is `TimelineLogger.log_ha`.
 - **Flask** — Web API (player, events, files, stats, daily review, status).
 
+### Refactor Additions (This Fork)
+
+- **VideoService** (`services/video.py`) — FFmpeg transcoding and GIF generation; used by FileManager so clip handling is isolated and process/timeout logic is in one place.
+- **EventLifecycleService** (`services/lifecycle.py`) — Handles event creation, event end (clip export, cleanup), and consolidated-event finalization (export, review summary, notifications); orchestrator delegates to it instead of inlining logic.
+- **EventQueryService** (`services/query.py`) — Reads and parses event data from the filesystem with TTL and per-folder caching; used by the Flask server for event lists and stats so path and parsing logic are centralized.
+- **NotificationEvent protocol** (`models.py`) — Shared interface for EventState and ConsolidatedEvent so the notifier accepts a single contract.
+- **ConsolidatedEventManager “closing” state** — A CE can be `closing` before removal; `mark_closing(ce_id)` prevents new sub-events and timer rescheduling; avoids races during finalization.
+- **FileManager path validation** — Camera names and folder paths are checked with `os.path.realpath` and `commonpath` so paths cannot escape the storage root; invalid inputs raise `ValueError`.
+- **Config schema validation** — When a config file is present, it is validated with a **voluptuous** schema before use; invalid config exits at startup with a clear error (see [Configuration validation](#configuration-validation)).
+
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
 │                    StateAwareOrchestrator (coordinator)                   │
@@ -65,18 +75,21 @@ The application is organized as a Python package `frigate_buffer/`:
 | File / Directory | Description |
 |------------------|-------------|
 | `main.py` | Entry point. Loads config, sets up logging and signal handlers, starts the orchestrator. Run with `python -m frigate_buffer.main`. |
-| `config.py` | Configuration loading. Merges YAML, env vars, and defaults. Searches config paths in order. |
+| `config.py` | Configuration loading and validation. When a config file exists, validates with a voluptuous schema (required `cameras`, optional `network`/`settings`/`ha`; invalid config exits with code 1). Merges YAML, env vars, and defaults. Searches config paths in order. |
 | `logging_utils.py` | Error buffer and logging. `ErrorBuffer` stores recent errors for the stats dashboard; `setup_logging()` configures log level and handlers. |
 | `models.py` | Data models: `EventPhase`, `EventState`, `ConsolidatedEvent`, plus helpers for consolidated IDs and "no concerns" detection. |
 | `orchestrator.py` | `StateAwareOrchestrator` — Central coordinator: MQTT message routing (`_on_mqtt_message`), event handlers (frigate/events, tracked_object_update, reviews), CE close and event-end processing. Delegates to MqttClientWrapper, SmartZoneFilter, TimelineLogger, and managers. |
 | `managers/` | Business logic modules: |
-| `managers/file.py` | `FileManager` — clip/snapshot download, FFmpeg transcode, storage paths, cleanup. Export API uses JSON body (`playback`, `name`), polls by export_id, 90s poll timeout, 180s download timeout; returns rich result with Frigate response for timeline debugging. Export failures and `success: false` responses are logged at WARNING with full raw response. HTTP 404 on clip download is treated as "no recording available" and returns False without retries; retries remain for HTTP 400 (Not Ready) and other transient errors. |
+| `managers/file.py` | `FileManager` — clip/snapshot download, storage paths, cleanup; transcoding delegated to `VideoService`. Path validation via `realpath`/`commonpath` prevents traversal outside storage. Export API uses JSON body (`playback`, `name`), polls by export_id, 90s poll timeout, 180s download timeout; returns rich result with Frigate response for timeline debugging. Export failures and `success: false` responses are logged at WARNING with full raw response. HTTP 404 on clip download is treated as "no recording available" and returns False without retries; retries remain for HTTP 400 (Not Ready) and other transient errors. |
 | `managers/state.py` | `EventStateManager` — per-event state (phase, metadata) and active event tracking. |
-| `managers/consolidation.py` | `ConsolidatedEventManager` — groups related Frigate events into consolidated events. |
+| `managers/consolidation.py` | `ConsolidatedEventManager` — groups related Frigate events; supports `closing` state and `mark_closing()` to avoid races during finalization. |
 | `managers/reviews.py` | `DailyReviewManager` — fetches and caches Frigate daily review summaries. |
 | `managers/zone_filter.py` | `SmartZoneFilter` — per-camera `CAMERA_EVENT_FILTERS` (tracked_zones, exceptions); `should_start_event` and `normalize_sub_label`. |
 | `services/` | External integrations and utilities: |
-| `services/notifier.py` | `NotificationPublisher` — publishes MQTT notifications to Home Assistant; optional `timeline_callback` (e.g. `TimelineLogger.log_ha`). |
+| `services/video.py` | `VideoService` — FFmpeg transcoding (`transcode_clip_to_h264`) and GIF generation; used by FileManager. |
+| `services/lifecycle.py` | `EventLifecycleService` — event creation, event end processing, and consolidated-event finalization; orchestrator delegates to it. |
+| `services/query.py` | `EventQueryService` — reads event data from filesystem with TTL and per-folder caching; used by Flask for event lists and stats. |
+| `services/notifier.py` | `NotificationPublisher` — publishes MQTT notifications to Home Assistant; accepts `NotificationEvent` protocol; optional `timeline_callback` (e.g. `TimelineLogger.log_ha`). |
 | `services/timeline.py` | `TimelineLogger` — resolves event/CE folder and appends HA, MQTT, and Frigate API entries to `notification_timeline.json` via `FileManager`. |
 | `services/mqtt_client.py` | `MqttClientWrapper` — Paho MQTT client lifecycle (connect, subscribe, loop), connect/disconnect logging; exposes `client` and `mqtt_connected`; message handling delegated to orchestrator callback. Requires `paho-mqtt>=2.0.0` (CallbackAPIVersion.VERSION2). |
 | `web/server.py` | Flask app factory `create_app(orchestrator)`. Routes for player, events, files, stats, daily review, API. |
@@ -85,6 +98,7 @@ The application is organized as a Python package `frigate_buffer/`:
 | `Dockerfile` | Builds from `frigate_buffer/` and runs `python -m frigate_buffer.main`. |
 | `docker-compose.example.yaml` | Template for Docker Compose — local build or token pull from private GitHub. |
 | `config.example.yaml` | Example configuration for cameras, event_filters (Smart Zone Filtering), settings, network, optional HA integration. |
+| `tests/` | Unit tests (`test_*.py`). Run with `python -m unittest discover -s tests -p "test_*.py" -v`. See [Tests](#tests). |
 
 ## Quick Start
 
@@ -203,6 +217,17 @@ network:
 #   gemini_cost_entity: "input_number.gemini_daily_cost"
 #   gemini_tokens_entity: "input_number.gemini_total_tokens"
 ```
+
+### Configuration validation
+
+When a **config file is found** (at any of the searched paths), the buffer validates it with a **voluptuous** schema before merging with defaults and environment variables. This catches typos, wrong types, and missing required keys at startup.
+
+- **When validation runs**: Only when `config.yaml` (or equivalent) exists and is loaded. If no config file is found, the app uses defaults and environment variables only and does not run schema validation.
+- **Required**: The root key `cameras` is **required** and must be a list. Each camera entry must have at least `name` (string). This ensures every config file declares which cameras to process.
+- **Optional sections**: `network`, `settings`, and `ha` are optional. Within them, fields have enforced types (e.g. `mqtt_port` must be an int, `log_level` must be one of `DEBUG`, `INFO`, `WARNING`, `ERROR`).
+- **Schema rules**: `cameras[].event_filters` may contain `tracked_zones` (list of strings) and `exceptions` (list of strings). Extra keys at the root are allowed (`ALLOW_EXTRA`), so you can add custom keys without validation errors.
+- **On failure**: If validation fails, the app logs the error (e.g. `Invalid configuration in /app/config.yaml: required key not provided @ data['cameras']`) and exits with code 1. Fix the config file and restart.
+- **Dependency**: Validation requires the `voluptuous` package (listed in `requirements.txt`).
 
 ### Environment Variables
 
@@ -780,12 +805,12 @@ Debug output includes:
 
 ## FFmpeg Process Safety
 
-The application includes safeguards against hung FFmpeg processes (in `FileManager`):
+The application includes safeguards against hung FFmpeg processes in **VideoService** (`services/video.py`), used by FileManager for transcoding and GIF generation:
 
-- **60-second timeout**: Configurable via `ffmpeg_timeout_seconds`
-- **Graceful termination**: SIGTERM first, wait 5s, then SIGKILL
+- **60-second timeout**: Configurable via `ffmpeg_timeout_seconds` in config
+- **Graceful termination**: SIGTERM first, wait 5s, then SIGKILL via `_terminate_process_gracefully`
 - **Zombie reaping**: Ensures child processes are properly cleaned up
-- **Fallback**: If transcoding fails/times out, original clip is used
+- **Fallback**: If transcoding fails/times out, original clip is renamed to final path and used
 
 ## Event Lifecycle
 
@@ -889,6 +914,27 @@ If transcoding is timing out:
 docker logs frigate-buffer
 docker logs -f frigate-buffer  # Follow logs
 ```
+
+## Tests
+
+Run all tests from the project root (requires `pip install -r requirements.txt`):
+
+```bash
+python -m unittest discover -s tests -p "test_*.py" -v
+```
+
+| Test module | What it tests |
+|-------------|----------------|
+| `test_config_schema.py` | Config validation: valid config loads; missing `cameras` or wrong types (e.g. cameras not a list, mqtt_port not int) cause `SystemExit(1)`; extra root keys are allowed. |
+| `test_consolidation.py` | ConsolidatedEventManager closing state: `mark_closing` returns True once then False; unknown CE returns False; `schedule_close_timer` does nothing when CE is closing or closed; `get_or_create` does not add events to a closing or closed CE (creates new CE instead). |
+| `test_file_manager_enhancement.py` | FileManager download/export: HTTP 400 retries (up to 3), HTTP 404 no retry, export `success: false` logs warning. |
+| `test_file_manager_path_validation.py` | FileManager path safety: `sanitize_camera_name` valid names and stripping of path characters; `create_event_folder` and `create_consolidated_event_folder` raise `ValueError` on path-traversal inputs; valid folder creation succeeds under storage root. |
+| `test_lifecycle_service.py` | EventLifecycleService: `handle_event_new` (new event and grouped event paths, threads); `process_event_end` (standalone and CE paths); `finalize_consolidated_event` (mark_closing, export, notify, remove). |
+| `test_notification_models.py` | NotificationEvent protocol: `EventState` and `ConsolidatedEvent` both satisfy the protocol (attributes required by notifier). |
+| `test_query_caching.py` | EventQueryService caching: TTL and cache key behavior. |
+| `test_query_service.py` | EventQueryService: `get_cameras`, `get_events` (camera and consolidated), `get_all_events`, `get_consolidated_events` with mocked filesystem. |
+| `test_url_masking.py` | URL credential masking for logs: URLs with user/password are redacted; no user, no port, and no-password cases. |
+| `test_video_service.py` | VideoService: `transcode_clip_to_h264` success and failure (mock Popen); `generate_gif_from_clip` success and failure. |
 
 ## License
 

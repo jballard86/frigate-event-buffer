@@ -9,7 +9,7 @@ from typing import List, Optional
 
 import paho.mqtt.client as mqtt
 
-from frigate_buffer.models import EventState
+from frigate_buffer.models import EventState, NotificationEvent
 
 logger = logging.getLogger('frigate-buffer')
 
@@ -131,7 +131,13 @@ class NotificationPublisher:
         """Stop the background queue processor."""
         self._queue_processor_running = False
 
-    def publish_notification(self, event: EventState, status: str,
+    @property
+    def queue_size(self) -> int:
+        """Return current size of the notification queue."""
+        with self._lock:
+            return len(self._pending_queue)
+
+    def publish_notification(self, event: NotificationEvent, status: str,
                             message: Optional[str] = None,
                             tag_override: Optional[str] = None) -> bool:
         """Publish event notification with rate limiting and queue management.
@@ -158,7 +164,7 @@ class NotificationPublisher:
         # Send outside the lock
         return self._send_notification_internal(event, status, message, tag_override)
 
-    def _send_notification_internal(self, event: EventState, status: str,
+    def _send_notification_internal(self, event: NotificationEvent, status: str,
                                     message: Optional[str] = None,
                                     tag_override: Optional[str] = None) -> bool:
         """Internal method to actually send the notification to MQTT."""
@@ -183,7 +189,7 @@ class NotificationPublisher:
                 folder_name = os.path.basename(event.folder_path)
                 camera_dir = os.path.basename(os.path.dirname(event.folder_path))
                 base_url = f"{buffer_base}/files/{camera_dir}/{folder_name}"
-            if getattr(event, 'image_url_override', None):
+            if event.image_url_override:
                 image_url = event.image_url_override
             elif event.snapshot_downloaded:
                 image_url = f"{base_url}/snapshot.jpg"
@@ -265,7 +271,7 @@ class NotificationPublisher:
             logger.error(f"Error publishing notification: {e}")
             return False
 
-    def _build_title(self, event: EventState) -> str:
+    def _build_title(self, event: NotificationEvent) -> str:
         """Build notification title based on event state."""
         if event.genai_title:
             return event.genai_title
@@ -275,16 +281,16 @@ class NotificationPublisher:
 
         return f"{label_display} detected at {camera_display}"
 
-    def _build_message(self, event: EventState, status: str) -> str:
+    def _build_message(self, event: NotificationEvent, status: str) -> str:
         """Build notification message combining status context with best available description."""
-        # Best available description at this moment (use getattr for NotifyTarget etc.)
-        best_desc = getattr(event, 'genai_description', None) or getattr(event, 'ai_description', None)
+        # Best available description at this moment
+        best_desc = event.genai_description or event.ai_description
         camera_display = event.camera.replace('_', ' ').title()
         label_display = event.label.title()
         fallback = f"{label_display} detected at {camera_display}"
 
-        if status == "summarized" and getattr(event, 'review_summary', None):
-            review_summary = getattr(event, 'review_summary', None) or ""
+        if status == "summarized" and event.review_summary:
+            review_summary = event.review_summary or ""
             lines = [l.strip() for l in review_summary.split('\n')
                      if l.strip() and not l.strip().startswith('#')]
             excerpt = lines[0] if lines else "Review summary available"
@@ -301,7 +307,7 @@ class NotificationPublisher:
             return best_desc or f"Event complete: {fallback}"
 
         if status == "described":
-            return getattr(event, 'ai_description', None) or f"{fallback} (details updating)"
+            return event.ai_description or f"{fallback} (details updating)"
 
         # new, snapshot_ready, or any other status
         return best_desc or fallback
