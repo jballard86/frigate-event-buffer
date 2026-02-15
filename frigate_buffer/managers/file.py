@@ -6,13 +6,13 @@ import json
 import time
 import shutil
 import logging
-import subprocess
 from datetime import datetime
 from typing import List, Optional
 
 import requests
 
 from frigate_buffer.models import EventState
+from frigate_buffer.services.video import VideoService
 
 logger = logging.getLogger('frigate-buffer')
 
@@ -21,16 +21,16 @@ class FileManager:
     """Handles file operations: folder creation, downloads, transcoding, cleanup."""
 
     def __init__(self, storage_path: str, frigate_url: str, retention_days: int,
-                 ffmpeg_timeout: int = 60):
+                 video_service: VideoService):
         self.storage_path = storage_path
         self.frigate_url = frigate_url
         self.retention_days = retention_days
-        self.ffmpeg_timeout = ffmpeg_timeout
+        self.video_service = video_service
 
         # Ensure storage directory exists
         os.makedirs(storage_path, exist_ok=True)
         logger.info(f"FileManager initialized: {storage_path}")
-        logger.debug(f"FFmpeg timeout: {ffmpeg_timeout}s, Retention: {retention_days} days")
+        logger.debug(f"Retention: {retention_days} days")
 
     def sanitize_camera_name(self, camera: str) -> str:
         """Sanitize camera name for filesystem use."""
@@ -64,25 +64,6 @@ class FileManager:
         os.makedirs(camera_path, exist_ok=True)
         return camera_path
 
-    def generate_gif_from_clip(self, clip_path: str, output_path: str,
-                               fps: int = 5, duration_sec: float = 5.0) -> bool:
-        """Generate animated GIF from video clip using FFmpeg. Returns True on success."""
-        try:
-            scale = "320:-1"
-            cmd = [
-                "ffmpeg", "-y", "-i", clip_path,
-                "-vf", f"fps={fps},scale={scale}",
-                "-t", str(duration_sec),
-                output_path
-            ]
-            proc = subprocess.run(cmd, capture_output=True, timeout=self.ffmpeg_timeout)
-            if proc.returncode == 0 and os.path.exists(output_path):
-                logger.info(f"Generated GIF from {clip_path}")
-                return True
-        except Exception as e:
-            logger.warning(f"GIF generation failed: {e}")
-        return False
-
     def download_snapshot(self, event_id: str, folder_path: str) -> bool:
         """Download snapshot from Frigate API."""
         url = f"{self.frigate_url}/api/events/{event_id}/snapshot.jpg"
@@ -107,28 +88,6 @@ class FileManager:
         except Exception as e:
             logger.exception(f"Failed to download snapshot for {event_id}: {e}")
             return False
-
-    def _terminate_process_gracefully(self, process, event_id: str, timeout: float = 5.0):
-        """Gracefully terminate a process: SIGTERM first, then SIGKILL if needed."""
-        if process is None or process.poll() is not None:
-            return  # Already dead
-
-        logger.debug(f"Sending SIGTERM to FFmpeg for {event_id}")
-        try:
-            process.terminate()  # SIGTERM - allows graceful shutdown
-        except OSError:
-            return  # Process already gone
-
-        try:
-            process.wait(timeout=timeout)  # Wait for graceful exit
-            logger.debug(f"FFmpeg for {event_id} terminated gracefully")
-        except subprocess.TimeoutExpired:
-            logger.warning(f"FFmpeg for {event_id} didn't respond to SIGTERM, sending SIGKILL")
-            try:
-                process.kill()  # SIGKILL - force kill
-                process.wait()  # Reap zombie
-            except OSError:
-                pass  # Process already gone
 
     def export_and_transcode_clip(
         self,
@@ -159,7 +118,6 @@ class FileManager:
 
         temp_path = os.path.join(folder_path, "clip_original.mp4")
         final_path = os.path.join(folder_path, "clip.mp4")
-        process = None
         frigate_response: Optional[dict] = None
 
         try:
@@ -254,8 +212,8 @@ class FileManager:
 
             logger.info(f"Downloaded export clip for {event_id} ({bytes_downloaded} bytes), transcoding...")
 
-            # 4. Transcode (same logic as download_and_transcode_clip)
-            transcode_ok = self._transcode_clip_to_h264(event_id, temp_path, final_path)
+            # 4. Transcode
+            transcode_ok = self.video_service.transcode_clip_to_h264(event_id, temp_path, final_path)
             return {"success": transcode_ok, "frigate_response": frigate_response}
 
         except requests.exceptions.RequestException as e:
@@ -274,42 +232,6 @@ class FileManager:
                 except OSError:
                     pass
             return {"success": False, "frigate_response": frigate_response or {"error": str(e)}}
-
-    def _transcode_clip_to_h264(self, event_id: str, temp_path: str, final_path: str) -> bool:
-        """Transcode clip_original.mp4 to H.264 clip.mp4. Removes temp on success."""
-        process = None
-        try:
-            command = [
-                "ffmpeg", "-y",
-                "-i", temp_path,
-                "-c:v", "libx264",
-                "-preset", "fast",
-                "-crf", "23",
-                "-c:a", "aac",
-                "-movflags", "+faststart",
-                final_path,
-            ]
-            process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            stdout, stderr = process.communicate(timeout=self.ffmpeg_timeout)
-            if process.returncode == 0:
-                os.remove(temp_path)
-                logger.info(f"Transcoded clip for {event_id}")
-                return True
-            logger.error(f"FFmpeg error for {event_id}: {stderr.decode()[:500]}")
-            if os.path.exists(temp_path):
-                os.rename(temp_path, final_path)
-            return True
-        except subprocess.TimeoutExpired:
-            self._terminate_process_gracefully(process, event_id)
-            if os.path.exists(temp_path):
-                os.rename(temp_path, final_path)
-            return True
-        except Exception as e:
-            logger.exception(f"Transcode failed for {event_id}: {e}")
-            self._terminate_process_gracefully(process, event_id)
-            if os.path.exists(temp_path):
-                os.rename(temp_path, final_path)
-            return True
 
     def download_and_transcode_clip(self, event_id: str, folder_path: str) -> bool:
         """Download clip from Frigate events API and transcode to H.264 (fallback when Export API fails)."""
@@ -346,7 +268,7 @@ class FileManager:
                     bytes_downloaded += len(chunk)
 
             logger.debug(f"Downloaded clip for {event_id} ({bytes_downloaded} bytes), starting transcode...")
-            return self._transcode_clip_to_h264(event_id, temp_path, final_path)
+            return self.video_service.transcode_clip_to_h264(event_id, temp_path, final_path)
 
         except requests.exceptions.Timeout:
             logger.error(f"Timeout downloading clip for {event_id}")

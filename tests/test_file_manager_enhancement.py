@@ -15,7 +15,8 @@ class TestFileManagerEnhancement(unittest.TestCase):
     def setUp(self):
         self.storage_path = "/tmp/test_storage"
         self.frigate_url = "http://mock-frigate:5000"
-        self.file_manager = FileManager(self.storage_path, self.frigate_url, 7)
+        self.mock_video_service = MagicMock()
+        self.file_manager = FileManager(self.storage_path, self.frigate_url, 7, self.mock_video_service)
 
         # Configure logging to capture output
         self.logger = logging.getLogger('frigate-buffer')
