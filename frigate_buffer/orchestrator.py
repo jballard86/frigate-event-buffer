@@ -388,21 +388,53 @@ class StateAwareOrchestrator:
         export_after = self.config.get('EXPORT_BUFFER_AFTER', 30)
         padding_before = self.config.get('SUMMARY_PADDING_BEFORE', 15)
         padding_after = self.config.get('SUMMARY_PADDING_AFTER', 15)
-        start_ts = int(ce.start_time - export_before)
-        end_ts = int((ce.end_time_max or ce.last_activity_time) + export_after)
+        camera_events = {}
+        for fid in ce.frigate_event_ids:
+            event = self.state_manager.get_event(fid)
+            if event:
+                if event.camera not in camera_events:
+                    camera_events[event.camera] = []
+                camera_events[event.camera].append(event)
+            else:
+                logger.warning(f"Event {fid} in consolidated event {ce_id} not found in state manager")
 
         first_clip_path = None
         primary_cam = ce.primary_camera or (ce.cameras[0] if ce.cameras else None)
-        for camera in ce.cameras:
+
+        for camera, events in camera_events.items():
             camera_folder = self.file_manager.ensure_consolidated_camera_folder(ce.folder_path, camera)
+
+            start_times = [e.created_at for e in events]
+            min_start = min(start_times) if start_times else ce.start_time
+
+            end_times = []
+            for e in events:
+                if e.end_time:
+                    end_times.append(e.end_time)
+                else:
+                    end_times.append(e.created_at + export_after)
+            max_end = max(end_times) if end_times else (ce.end_time_max or ce.last_activity_time)
+
+            def get_duration(e):
+                end = e.end_time if e.end_time else (e.created_at + export_after)
+                return end - e.created_at
+
+            representative_event = max(events, key=get_duration)
+            rep_id = representative_event.event_id
+
+            # For timeline logging
+            start_ts = int(min_start - export_before)
+            end_ts = int(max_end + export_after)
+
             self._timeline_log_frigate_api(
                 ce.folder_path, 'out',
                 f'Clip export for {camera} (CE close)',
-                {'url': f"{self.config.get('FRIGATE_URL', '')}/api/export/{camera}/start/{start_ts}/end/{end_ts}"}
+                {'url': f"{self.config.get('FRIGATE_URL', '')}/api/export/{camera}/start/{start_ts}/end/{end_ts}",
+                 'representative_id': rep_id}
             )
             result = self.file_manager.export_and_transcode_clip(
-                ce.consolidated_id, camera_folder, camera,
-                ce.start_time, ce.end_time_max or ce.last_activity_time,
+                rep_id, camera_folder, camera,
+                min_start, max_end,
                 export_before, export_after
             )
             ok = result.get("success", False)
