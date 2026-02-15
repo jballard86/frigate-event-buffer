@@ -128,7 +128,7 @@ class FileManager:
             return True
 
         except Exception as e:
-            logger.error(f"Failed to write summary: {e}")
+            logger.exception(f"Failed to write summary: {e}")
             return False
 
     def write_review_summary(self, folder_path: str, summary_markdown: str) -> bool:

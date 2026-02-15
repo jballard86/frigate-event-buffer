@@ -107,7 +107,7 @@ class EventQueryService:
                             try:
                                 with open(sub_meta, 'r') as f:
                                     sub_data['metadata'] = json.load(f)
-                            except Exception:
+                            except (FileNotFoundError, IOError, json.JSONDecodeError):
                                 pass
 
                         subdirs_map[entry.name] = sub_data
