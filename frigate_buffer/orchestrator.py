@@ -12,7 +12,6 @@ import threading
 from datetime import date, datetime, timedelta
 from typing import Optional, List, Any
 
-import paho.mqtt.client as mqtt
 import requests
 import schedule
 
@@ -21,19 +20,16 @@ from frigate_buffer.managers.file import FileManager
 from frigate_buffer.managers.state import EventStateManager
 from frigate_buffer.managers.consolidation import ConsolidatedEventManager
 from frigate_buffer.managers.reviews import DailyReviewManager
+from frigate_buffer.managers.zone_filter import SmartZoneFilter
 from frigate_buffer.services.notifier import NotificationPublisher
+from frigate_buffer.services.timeline import TimelineLogger
+from frigate_buffer.services.mqtt_client import MqttClientWrapper
 
 logger = logging.getLogger('frigate-buffer')
 
 
 class StateAwareOrchestrator:
     """Main orchestrator coordinating all components."""
-
-    MQTT_TOPICS = [
-        ("frigate/events", 0),
-        ("frigate/+/tracked_object_update", 0),
-        ("frigate/reviews", 0)
-    ]
 
     def __init__(self, config: dict):
         self.config = config
@@ -54,23 +50,28 @@ class StateAwareOrchestrator:
             on_close_callback=self._on_consolidated_event_close
         )
 
-        # Setup MQTT client
-        self.mqtt_client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id="frigate-event-buffer")
-        self.mqtt_client.on_connect = self._on_mqtt_connect
-        self.mqtt_client.on_disconnect = self._on_mqtt_disconnect
-        self.mqtt_client.on_message = self._on_mqtt_message
-        self.mqtt_client.reconnect_delay_set(min_delay=1, max_delay=120)
-        self.mqtt_connected = False
+        # Timeline logger (uses file_manager and consolidated_manager)
+        self.timeline_logger = TimelineLogger(self.file_manager, self.consolidated_manager)
 
-        # Notification publisher (initialized after MQTT setup)
+        # Smart zone filter (uses config CAMERA_EVENT_FILTERS)
+        self.zone_filter = SmartZoneFilter(config)
+
+        # MQTT client wrapper (message routing stays in orchestrator via callback)
+        self.mqtt_wrapper = MqttClientWrapper(
+            broker=config['MQTT_BROKER'],
+            port=config['MQTT_PORT'],
+            on_message_callback=self._on_mqtt_message,
+        )
+
+        # Notification publisher (uses underlying MQTT client)
         self.notifier = NotificationPublisher(
-            self.mqtt_client,
+            self.mqtt_wrapper.client,
             config['BUFFER_IP'],
             config['FLASK_PORT'],
             config.get('FRIGATE_URL', ''),
             storage_path=config['STORAGE_PATH']
         )
-        self.notifier.timeline_callback = self._timeline_log_ha
+        self.notifier.timeline_callback = self.timeline_logger.log_ha
 
         # Daily review manager (Frigate review summarize API)
         self.daily_review_manager = DailyReviewManager(
@@ -94,65 +95,6 @@ class StateAwareOrchestrator:
         self._last_cleanup_time: Optional[float] = None
         self._last_cleanup_deleted: int = 0
 
-    def _on_mqtt_connect(self, client, userdata, flags, reason_code, properties):
-        """Handle MQTT connection."""
-        if reason_code == 0:
-            self.mqtt_connected = True
-            logger.info(f"Connected to MQTT broker {self.config['MQTT_BROKER']}")
-
-            for topic, qos in self.MQTT_TOPICS:
-                client.subscribe(topic, qos)
-                logger.info(f"Subscribed to: {topic}")
-        else:
-            logger.error(f"MQTT connection failed with code: {reason_code}")
-
-    def _on_mqtt_disconnect(self, client, userdata, flags, reason_code, properties):
-        """Handle MQTT disconnection."""
-        self.mqtt_connected = False
-        if reason_code != 0:
-            logger.warning(f"Unexpected MQTT disconnect (rc={reason_code}), reconnecting...")
-        else:
-            logger.info("MQTT disconnected")
-
-    def _timeline_folder(self, event) -> Optional[str]:
-        """Folder for timeline (CE root if consolidated, else event folder)."""
-        if not event:
-            return None
-        ce = self.consolidated_manager.get_by_frigate_event(event.event_id)
-        return ce.folder_path if ce else event.folder_path
-
-    def _timeline_log_ha(self, event, status: str, payload: dict) -> None:
-        """Log HA notification payload to event timeline."""
-        folder = self._timeline_folder(event)
-        if folder:
-            self.file_manager.append_timeline_entry(folder, {
-                "source": "ha_notification",
-                "direction": "out",
-                "label": f"Sent to Home Assistant: {status}",
-                "data": payload
-            })
-
-    def _timeline_log_mqtt(self, folder_path: str, topic: str, payload: dict, label: str) -> None:
-        """Log MQTT payload from Frigate to event timeline."""
-        if folder_path:
-            self.file_manager.append_timeline_entry(folder_path, {
-                "source": "frigate_mqtt",
-                "direction": "in",
-                "label": label,
-                "data": {"topic": topic, "payload": payload}
-            })
-
-    def _timeline_log_frigate_api(self, folder_path: str, direction: str,
-                                   label: str, data: dict) -> None:
-        """Log Frigate API request/response to event timeline. direction: 'in' or 'out'."""
-        if folder_path:
-            self.file_manager.append_timeline_entry(folder_path, {
-                "source": "frigate_api",
-                "direction": direction,
-                "label": label,
-                "data": data
-            })
-
     def _fetch_ha_state(self, ha_url: str, ha_token: str, entity_id: str):
         """Fetch entity state from Home Assistant REST API. Returns state value or None on error."""
         base = ha_url.rstrip('/')
@@ -166,54 +108,6 @@ class StateAwareOrchestrator:
         except Exception:
             pass
         return None
-
-    def _normalize_sub_label(self, sub_label: Any) -> Optional[str]:
-        """Extract matchable string from Frigate sub_label (format varies by version).
-        Handles: None, string, [name, score], empty values, unexpected types.
-        """
-        if sub_label is None:
-            return None
-        if isinstance(sub_label, str):
-            return sub_label.strip() if sub_label.strip() else None
-        if isinstance(sub_label, (list, tuple)) and len(sub_label) > 0:
-            first = sub_label[0]
-            if isinstance(first, str):
-                return first.strip() if first.strip() else None
-            if first is not None:
-                return str(first).strip() or None
-        return None
-
-    def _should_start_event(self, camera: str, label: str, sub_label: Any,
-                            entered_zones: List[str]) -> bool:
-        """Smart Zone Filtering: decide if we should create an event.
-        Returns True to start, False to ignore (defer).
-        No event_filters for camera -> legacy behavior (always start).
-        """
-        filters = self.config.get('CAMERA_EVENT_FILTERS', {}).get(camera)
-        if not filters:
-            return True
-
-        exceptions = filters.get('exceptions') or []
-        tracked_zones = filters.get('tracked_zones') or []
-
-        # 1. Exceptions: create event regardless of zone
-        if exceptions:
-            exc_set = {e.strip().lower() for e in exceptions if e}
-            if label and label.strip().lower() in exc_set:
-                return True
-            norm = self._normalize_sub_label(sub_label)
-            if norm and norm.lower() in exc_set:
-                return True
-
-        # 2. Tracked zones: create ONLY when object enters a tracked zone
-        if not tracked_zones:
-            return True
-        entered = entered_zones or []
-        if not entered:
-            return False
-        tracked_set = {z.strip().lower() for z in tracked_zones if z}
-        entered_lower = [z.strip().lower() for z in entered if z]
-        return any(z in tracked_set for z in entered_lower)
 
     def _on_mqtt_message(self, client, userdata, msg):
         """Route incoming MQTT messages to appropriate handlers."""
@@ -281,13 +175,13 @@ class StateAwareOrchestrator:
         # Already tracked - log MQTT to timeline, then return (no new creation)
         event = self.state_manager.get_event(event_id)
         if event:
-            folder = self._timeline_folder(event)
+            folder = self.timeline_logger.folder_for_event(event)
             if folder:
                 mqtt_type = payload.get("type", "update")
-                self._timeline_log_mqtt(folder, "frigate/events", payload, f"Event {mqtt_type} (from Frigate)")
+                self.timeline_logger.log_mqtt(folder, "frigate/events", payload, f"Event {mqtt_type} (from Frigate)")
             return
 
-        if not self._should_start_event(camera, label or "", sub_label, entered_zones):
+        if not self.zone_filter.should_start_event(camera, label or "", sub_label, entered_zones):
             logger.debug(f"Ignoring {event_id} (smart zone filter: not in tracked zones, entered={entered_zones})")
             return
 
@@ -313,7 +207,7 @@ class StateAwareOrchestrator:
 
         if mqtt_payload:
             mqtt_type = mqtt_payload.get("type", "new")
-            self._timeline_log_mqtt(
+            self.timeline_logger.log_mqtt(
                 ce.folder_path, "frigate/events",
                 mqtt_payload, f"Event {mqtt_type} (from Frigate)"
             )
@@ -361,9 +255,9 @@ class StateAwareOrchestrator:
             event_id, end_time, has_clip, has_snapshot
         )
 
-        if event and self._timeline_folder(event) and mqtt_payload:
-            self._timeline_log_mqtt(
-                self._timeline_folder(event), "frigate/events",
+        if event and self.timeline_logger.folder_for_event(event) and mqtt_payload:
+            self.timeline_logger.log_mqtt(
+                self.timeline_logger.folder_for_event(event), "frigate/events",
                 mqtt_payload, "Event end (from Frigate)"
             )
 
@@ -426,7 +320,7 @@ class StateAwareOrchestrator:
             start_ts = int(min_start - export_before)
             end_ts = int(max_end + export_after)
 
-            self._timeline_log_frigate_api(
+            self.timeline_logger.log_frigate_api(
                 ce.folder_path, 'out',
                 f'Clip export for {camera} (CE close)',
                 {'url': f"{self.config.get('FRIGATE_URL', '')}/api/export/{camera}/start/{start_ts}/end/{end_ts}",
@@ -441,7 +335,7 @@ class StateAwareOrchestrator:
             timeline_data = {"success": ok, "frigate_response": result.get("frigate_response")}
             if "fallback" in result:
                 timeline_data["fallback"] = result["fallback"]
-            self._timeline_log_frigate_api(ce.folder_path, 'in', f'Clip export response for {camera}', timeline_data)
+            self.timeline_logger.log_frigate_api(ce.folder_path, 'in', f'Clip export response for {camera}', timeline_data)
             if ok and first_clip_path is None:
                 first_clip_path = os.path.join(camera_folder, 'clip.mp4')
         # Placeholder fallback: if all exports failed, try per-event clip for primary camera
@@ -450,7 +344,7 @@ class StateAwareOrchestrator:
             ok = self.file_manager.download_and_transcode_clip(ce.primary_event_id, primary_folder)
             if ok:
                 first_clip_path = os.path.join(primary_folder, 'clip.mp4')
-                self._timeline_log_frigate_api(ce.folder_path, 'in', 'Placeholder clip (events API fallback)', {'success': True})
+                self.timeline_logger.log_frigate_api(ce.folder_path, 'in', 'Placeholder clip (events API fallback)', {'success': True})
 
         if first_clip_path:
             gif_path = os.path.join(ce.folder_path, 'notification.gif')
@@ -460,7 +354,7 @@ class StateAwareOrchestrator:
 
         padded_start = int(ce.start_time - padding_before)
         padded_end = int((ce.end_time_max or ce.last_activity_time) + padding_after)
-        self._timeline_log_frigate_api(
+        self.timeline_logger.log_frigate_api(
             ce.folder_path, 'out',
             'Review summarize (CE close)',
             {'url': f"{self.config.get('FRIGATE_URL', '')}/api/review/summarize/start/{padded_start}/end/{padded_end}"}
@@ -469,7 +363,7 @@ class StateAwareOrchestrator:
             ce.start_time, ce.end_time_max or ce.last_activity_time,
             padding_before, padding_after
         )
-        self._timeline_log_frigate_api(
+        self.timeline_logger.log_frigate_api(
             ce.folder_path, 'in',
             'Review summarize response',
             {'response': summary or '(empty or error)'}
@@ -523,7 +417,7 @@ class StateAwareOrchestrator:
                     end_time=event.end_time or event.created_at
                 )
                 self.consolidated_manager.schedule_close_timer(ce.consolidated_id)
-                self.file_manager.write_summary(self._timeline_folder(event) or event.folder_path, event)
+                self.file_manager.write_summary(self.timeline_logger.folder_for_event(event) or event.folder_path, event)
                 active_ids = self.state_manager.get_active_event_ids()
                 active_ce_folders = [c.folder_name for c in self.consolidated_manager.get_all()]
                 deleted = self.file_manager.cleanup_old_events(active_ids, active_ce_folders)
@@ -537,8 +431,8 @@ class StateAwareOrchestrator:
                 start_ts = int(event.created_at - export_before)
                 end_ts = int((event.end_time or event.created_at) + export_after)
 
-                self._timeline_log_frigate_api(
-                    self._timeline_folder(event), 'out',
+                self.timeline_logger.log_frigate_api(
+                    self.timeline_logger.folder_for_event(event), 'out',
                     'Clip export request (to Frigate API)',
                     {
                         'url': f"{self.config.get('FRIGATE_URL', '')}/api/export/{event.camera}/start/{start_ts}/end/{end_ts}",
@@ -560,8 +454,8 @@ class StateAwareOrchestrator:
                 timeline_data = {"success": event.clip_downloaded, "frigate_response": result.get("frigate_response")}
                 if "fallback" in result:
                     timeline_data["fallback"] = result["fallback"]
-                self._timeline_log_frigate_api(
-                    self._timeline_folder(event), 'in',
+                self.timeline_logger.log_frigate_api(
+                    self.timeline_logger.folder_for_event(event), 'in',
                     'Clip export response (from Frigate API)',
                     timeline_data,
                 )
@@ -610,9 +504,9 @@ class StateAwareOrchestrator:
             return
 
         event = self.state_manager.get_event(event_id)
-        if event and self._timeline_folder(event):
-            self._timeline_log_mqtt(
-                self._timeline_folder(event), topic,
+        if event and self.timeline_logger.folder_for_event(event):
+            self.timeline_logger.log_mqtt(
+                self.timeline_logger.folder_for_event(event), topic,
                 payload, "Tracked object update (AI description)"
             )
 
@@ -643,9 +537,9 @@ class StateAwareOrchestrator:
 
         for event_id in detections:
             event = self.state_manager.get_event(event_id)
-            if event and self._timeline_folder(event):
-                self._timeline_log_mqtt(
-                    self._timeline_folder(event), "frigate/reviews",
+            if event and self.timeline_logger.folder_for_event(event):
+                self.timeline_logger.log_mqtt(
+                    self.timeline_logger.folder_for_event(event), "frigate/reviews",
                     payload, f"Review update (type={event_type})"
                 )
             title = genai.get("title")
@@ -745,9 +639,9 @@ class StateAwareOrchestrator:
                 "padding_after": padding_after
             }
 
-            if self._timeline_folder(event):
-                self._timeline_log_frigate_api(
-                    self._timeline_folder(event), "out",
+            if self.timeline_logger.folder_for_event(event):
+                self.timeline_logger.log_frigate_api(
+                    self.timeline_logger.folder_for_event(event), "out",
                     "Review summarize request (to Frigate API)",
                     {"url": url, "params": params}
                 )
@@ -757,9 +651,9 @@ class StateAwareOrchestrator:
                 padding_before, padding_after
             )
 
-            if self._timeline_folder(event):
-                self._timeline_log_frigate_api(
-                    self._timeline_folder(event), "in",
+            if self.timeline_logger.folder_for_event(event):
+                self.timeline_logger.log_frigate_api(
+                    self.timeline_logger.folder_for_event(event), "in",
                     "Review summarize response (from Frigate API)",
                     {"url": url, "params": params, "response": summary or "(empty or error)"}
                 )
@@ -767,7 +661,7 @@ class StateAwareOrchestrator:
             if summary:
                 self.state_manager.set_review_summary(event.event_id, summary)
 
-                write_folder = self._timeline_folder(event) or event.folder_path
+                write_folder = self.timeline_logger.folder_for_event(event) or event.folder_path
                 if write_folder:
                     event.review_summary_written = self.file_manager.write_review_summary(
                         write_folder, summary
@@ -811,7 +705,7 @@ class StateAwareOrchestrator:
             count = self._request_count
             self._request_count = 0
         active = len(self.state_manager._events)
-        logger.info(f"API stats (5m): {count} requests, {active} active events, MQTT {'connected' if self.mqtt_connected else 'disconnected'}")
+        logger.info(f"API stats (5m): {count} requests, {active} active events, MQTT {'connected' if self.mqtt_wrapper.mqtt_connected else 'disconnected'}")
 
     def _daily_review_job(self):
         """Fetch yesterday's review from Frigate and save. Runs at configured hour (default 1am)."""
@@ -877,15 +771,7 @@ class StateAwareOrchestrator:
 
         logger.info("=" * 60)
 
-        try:
-            self.mqtt_client.connect_async(
-                self.config['MQTT_BROKER'],
-                self.config['MQTT_PORT'],
-                keepalive=60
-            )
-            self.mqtt_client.loop_start()
-        except Exception as e:
-            logger.error(f"Failed to start MQTT client: {e}")
+        self.mqtt_wrapper.start()
 
         self.notifier.start_queue_processor()
 
@@ -907,5 +793,4 @@ class StateAwareOrchestrator:
         logger.info("Shutting down orchestrator...")
         self._shutdown = True
         self.notifier.stop_queue_processor()
-        self.mqtt_client.loop_stop()
-        self.mqtt_client.disconnect()
+        self.mqtt_wrapper.stop()
