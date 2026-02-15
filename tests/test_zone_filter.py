@@ -13,6 +13,24 @@ from frigate_buffer.managers.zone_filter import SmartZoneFilter
 
 class TestSmartZoneFilter(unittest.TestCase):
 
+    def setUp(self):
+        self.config = {
+            'CAMERA_EVENT_FILTERS': {
+                'cam1': {
+                    'exceptions': ['exception_label', 'exception_sub_label'],
+                    'tracked_zones': ['zone1', 'zone2']
+                },
+                'cam2': {
+                    'tracked_zones': ['zone1']
+                },
+                'cam3': {
+                    'exceptions': ['exception_label']
+                },
+                'cam4': {}
+            }
+        }
+        self.filter = SmartZoneFilter(self.config)
+
     def test_normalize_sub_label(self):
         """Test normalize_sub_label handles various input formats."""
 
@@ -43,6 +61,90 @@ class TestSmartZoneFilter(unittest.TestCase):
         self.assertIsNone(SmartZoneFilter.normalize_sub_label(123))
         self.assertIsNone(SmartZoneFilter.normalize_sub_label({}))
         self.assertIsNone(SmartZoneFilter.normalize_sub_label(object()))
+
+    def test_should_start_event_no_config(self):
+        """Test default behavior when no filters are defined."""
+        # Camera not in config
+        self.assertTrue(self.filter.should_start_event('cam5', 'label', 'sub', ['zone1']))
+        # Camera in config but empty filters
+        self.assertTrue(self.filter.should_start_event('cam4', 'label', 'sub', ['zone1']))
+
+    def test_should_start_event_exceptions(self):
+        """Test exception logic (label and sub_label matching, case insensitivity)."""
+        # Label match
+        self.assertTrue(self.filter.should_start_event('cam1', 'exception_label', 'sub', []))
+        self.assertTrue(self.filter.should_start_event('cam1', 'EXCEPTION_LABEL', 'sub', []))
+
+        # Sub label match
+        self.assertTrue(self.filter.should_start_event('cam1', 'label', 'exception_sub_label', []))
+        self.assertTrue(self.filter.should_start_event('cam1', 'label', ['exception_sub_label', 0.9], []))
+        self.assertTrue(self.filter.should_start_event('cam1', 'label', 'EXCEPTION_SUB_LABEL', []))
+
+        # No match
+        self.assertFalse(self.filter.should_start_event('cam1', 'label', 'sub', []))
+
+    def test_should_start_event_tracked_zones(self):
+        """Test zone logic (matching, non-matching, empty entered zones)."""
+        # Match zone
+        self.assertTrue(self.filter.should_start_event('cam1', 'label', 'sub', ['zone1']))
+        self.assertTrue(self.filter.should_start_event('cam1', 'label', 'sub', ['ZONE1']))
+        self.assertTrue(self.filter.should_start_event('cam1', 'label', 'sub', ['zone2']))
+        self.assertTrue(self.filter.should_start_event('cam1', 'label', 'sub', ['other', 'zone1']))
+
+        # No match zone
+        self.assertFalse(self.filter.should_start_event('cam1', 'label', 'sub', ['other_zone']))
+        self.assertFalse(self.filter.should_start_event('cam1', 'label', 'sub', []))
+        self.assertFalse(self.filter.should_start_event('cam1', 'label', 'sub', None))
+
+        # Only tracked zones defined
+        self.assertTrue(self.filter.should_start_event('cam2', 'label', 'sub', ['zone1']))
+        self.assertFalse(self.filter.should_start_event('cam2', 'label', 'sub', ['other']))
+
+    def test_should_start_event_interaction(self):
+        """Test interaction between exceptions and tracked zones."""
+        # Exception matched, zone not matched -> True
+        self.assertTrue(self.filter.should_start_event('cam1', 'exception_label', 'sub', ['other_zone']))
+        # Exception matched, no zones -> True
+        self.assertTrue(self.filter.should_start_event('cam1', 'exception_label', 'sub', []))
+
+        # Exception not matched, zone matched -> True
+        self.assertTrue(self.filter.should_start_event('cam1', 'label', 'sub', ['zone1']))
+
+        # Neither matched -> False
+        self.assertFalse(self.filter.should_start_event('cam1', 'label', 'sub', ['other_zone']))
+
+    def test_should_start_event_edge_cases(self):
+        """Test edge cases."""
+        # None label/sub_label
+        self.assertFalse(self.filter.should_start_event('cam1', None, None, ['other']))
+        self.assertTrue(self.filter.should_start_event('cam1', None, None, ['zone1']))
+
+        # Empty/whitespace values in config
+        config = {
+            'CAMERA_EVENT_FILTERS': {
+                'cam_bad': {
+                    'exceptions': [None, '', ' '],
+                    'tracked_zones': [None, '', ' ']
+                }
+            }
+        }
+        f = SmartZoneFilter(config)
+
+        # If tracked_zones list is not empty but contains only invalid values,
+        # it effectively tracks nothing, so should return False.
+        self.assertFalse(f.should_start_event('cam_bad', 'label', 'sub', ['zone1']))
+
+        # Test with empty tracked_zones list explicitly
+        config_empty = {
+            'CAMERA_EVENT_FILTERS': {
+                'cam_empty': {
+                    'tracked_zones': []
+                }
+            }
+        }
+        f_empty = SmartZoneFilter(config_empty)
+        # Empty tracked_zones means track everything (default behavior)
+        self.assertTrue(f_empty.should_start_event('cam_empty', 'label', 'sub', ['any']))
 
 if __name__ == '__main__':
     unittest.main()
