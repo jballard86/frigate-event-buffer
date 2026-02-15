@@ -64,6 +64,10 @@ class VideoService:
             if proc.returncode == 0 and os.path.exists(output_path):
                 logger.info(f"Generated GIF from {clip_path}")
                 return True
+        except FileNotFoundError:
+            logger.warning("GIF generation failed: 'ffmpeg' executable not found")
+        except subprocess.CalledProcessError as e:
+            logger.warning(f"GIF generation failed (subprocess error): {e}")
         except Exception as e:
             logger.warning(f"GIF generation failed: {e}")
         return False
