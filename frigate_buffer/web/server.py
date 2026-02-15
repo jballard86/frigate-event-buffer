@@ -232,17 +232,21 @@ def create_app(orchestrator):
         """Mark ALL events across all cameras as viewed."""
         count = 0
         try:
-            for camera_dir in os.listdir(storage_path):
-                camera_path = os.path.join(storage_path, camera_dir)
-                if not os.path.isdir(camera_path) or camera_dir.split('_')[0].isdigit():
-                    continue
-                for subdir in os.listdir(camera_path):
-                    folder_path = os.path.join(camera_path, subdir)
-                    if os.path.isdir(folder_path):
-                        viewed_path = os.path.join(folder_path, '.viewed')
-                        if not os.path.exists(viewed_path):
-                            open(viewed_path, 'a').close()
-                            count += 1
+            with os.scandir(storage_path) as it:
+                for camera_entry in it:
+                    if not camera_entry.is_dir():
+                        continue
+                    camera_dir = camera_entry.name
+                    if camera_dir.split('_')[0].isdigit():
+                        continue
+
+                    with os.scandir(camera_entry.path) as it_events:
+                        for event_entry in it_events:
+                            if event_entry.is_dir():
+                                viewed_path = os.path.join(event_entry.path, '.viewed')
+                                if not os.path.exists(viewed_path):
+                                    open(viewed_path, 'a').close()
+                                    count += 1
         except Exception as e:
             logger.error(f"Error marking all viewed: {e}")
             return jsonify({"status": "error", "message": str(e)}), 500
@@ -324,45 +328,50 @@ def create_app(orchestrator):
         most_recent = None
 
         try:
-            for camera_dir in os.listdir(storage_path):
-                camera_path = os.path.join(storage_path, camera_dir)
-                if not os.path.isdir(camera_path) or camera_dir.split('_')[0].isdigit():
-                    continue
-
-                count = 0
-                for event_dir in os.listdir(camera_path):
-                    event_path = os.path.join(camera_path, event_dir)
-                    if not os.path.isdir(event_path):
+            with os.scandir(storage_path) as it:
+                for camera_entry in it:
+                    if not camera_entry.is_dir():
                         continue
-                    try:
-                        parts = event_dir.split('_', 1)
-                        ts = float(parts[0])
-                    except (ValueError, IndexError):
+                    camera_dir = camera_entry.name
+                    if camera_dir.split('_')[0].isdigit():
                         continue
 
-                    viewed = os.path.exists(os.path.join(event_path, '.viewed'))
-                    if viewed:
-                        total_reviewed += 1
-                    else:
-                        total_unreviewed += 1
+                    count = 0
+                    with os.scandir(camera_entry.path) as it_events:
+                        for event_entry in it_events:
+                            if not event_entry.is_dir():
+                                continue
 
-                    count += 1
-                    if ts >= day_start:
-                        events_today += 1
-                    if ts >= week_start:
-                        events_week += 1
-                    if ts >= month_start:
-                        events_month += 1
+                            event_dir = event_entry.name
+                            try:
+                                parts = event_dir.split('_', 1)
+                                ts = float(parts[0])
+                            except (ValueError, IndexError):
+                                continue
 
-                    if most_recent is None or ts > most_recent['timestamp']:
-                        most_recent = {
-                            'event_id': parts[1] if len(parts) > 1 else event_dir,
-                            'camera': camera_dir,
-                            'subdir': event_dir,
-                            'timestamp': ts
-                        }
+                            viewed = os.path.exists(os.path.join(event_entry.path, '.viewed'))
+                            if viewed:
+                                total_reviewed += 1
+                            else:
+                                total_unreviewed += 1
 
-                by_camera[camera_dir] = count
+                            count += 1
+                            if ts >= day_start:
+                                events_today += 1
+                            if ts >= week_start:
+                                events_week += 1
+                            if ts >= month_start:
+                                events_month += 1
+
+                            if most_recent is None or ts > most_recent['timestamp']:
+                                most_recent = {
+                                    'event_id': parts[1] if len(parts) > 1 else event_dir,
+                                    'camera': camera_dir,
+                                    'subdir': event_dir,
+                                    'timestamp': ts
+                                }
+
+                    by_camera[camera_dir] = count
         except Exception as e:
             logger.error(f"Error scanning events for stats: {e}")
 
