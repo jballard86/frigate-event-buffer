@@ -366,7 +366,7 @@ def create_app(orchestrator):
         except Exception as e:
             logger.error(f"Error scanning events for stats: {e}")
 
-        storage_raw = file_manager.compute_storage_stats()
+        storage_raw = orchestrator._cached_storage_stats
         mb = 1024 * 1024
 
         def fmt_size(b):

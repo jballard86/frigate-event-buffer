@@ -537,7 +537,13 @@ class FileManager:
         by_camera = {}
 
         try:
-            for camera_dir in os.listdir(self.storage_path):
+            # Get list of cameras safely
+            try:
+                camera_dirs = os.listdir(self.storage_path)
+            except OSError:
+                camera_dirs = []
+
+            for camera_dir in camera_dirs:
                 camera_path = os.path.join(self.storage_path, camera_dir)
 
                 if not os.path.isdir(camera_path):
@@ -547,21 +553,39 @@ class FileManager:
 
                 cam_clips = cam_snapshots = cam_descriptions = 0
 
-                for event_dir in os.listdir(camera_path):
+                # Get list of events safely
+                try:
+                    event_dirs = os.listdir(camera_path)
+                except OSError:
+                    continue
+
+                for event_dir in event_dirs:
                     event_path = os.path.join(camera_path, event_dir)
                     if not os.path.isdir(event_path):
                         continue
 
                     clip_path = os.path.join(event_path, 'clip.mp4')
                     snapshot_path = os.path.join(event_path, 'snapshot.jpg')
+
                     for f in ('summary.txt', 'review_summary.md', 'metadata.json'):
                         p = os.path.join(event_path, f)
-                        if os.path.exists(p):
-                            cam_descriptions += os.path.getsize(p)
-                    if os.path.exists(clip_path):
-                        cam_clips += os.path.getsize(clip_path)
-                    if os.path.exists(snapshot_path):
-                        cam_snapshots += os.path.getsize(snapshot_path)
+                        try:
+                            if os.path.exists(p):
+                                cam_descriptions += os.path.getsize(p)
+                        except OSError:
+                            pass
+
+                    try:
+                        if os.path.exists(clip_path):
+                            cam_clips += os.path.getsize(clip_path)
+                    except OSError:
+                        pass
+
+                    try:
+                        if os.path.exists(snapshot_path):
+                            cam_snapshots += os.path.getsize(snapshot_path)
+                    except OSError:
+                        pass
 
                 cam_total = cam_clips + cam_snapshots + cam_descriptions
                 if cam_total > 0:
