@@ -12,15 +12,15 @@ A state-aware orchestrator that listens to Frigate NVR events via MQTT, tracks t
 - **Review Summaries**: Fetches rich markdown security reports from Frigate's review summary API with cross-camera context, timeline, and assessments
 - **Threat Level Alerts**: Three-tier threat classification (0=Normal, 1=Suspicious, 2=Critical) — Level 2 alerts bypass phone volume/DND and keep all follow-up notifications audible
 - **Camera/Label Filtering**: Only process events from specific cameras or with specific labels
-- **Smart Zone Filtering**: Optional per-camera zones to ignore (e.g., road) and exceptions (e.g., UPS, FedEx); Late Start when events begin in ignored zones
+- **Smart Zone Filtering**: Optional per-camera tracked zones (create event only when object enters); exceptions (e.g., UPS, FedEx) trigger regardless of zone; Late Start when creation is triggered by a later update
 - **Multi-Camera Support**: Handles events from multiple cameras simultaneously without state collision
-- **Clip Export via Frigate API**: Requests clips from Frigate's Export API (POST with JSON body `playback`/`name` per Frigate schema; polls by `export_id` when async); full event duration with configurable buffer; falls back to per-event clip via events API if export fails or times out; timeline includes full Frigate response for debugging failures; events older than 90 minutes no longer show "Event ongoing"
+- **Clip Export via Frigate API**: Requests clips from Frigate's Export API (POST with JSON body `playback`/`name` per Frigate schema; polls by `export_id` when async); full event duration with configurable buffer; falls back to per-event clip via events API if export fails or times out; timeline includes full Frigate response for debugging failures; "Event ongoing" badge clears when clip is available, when Frigate signals event end (from timeline), or after 90 minutes
 - **Auto-Transcoding**: Transcodes clips to H.264 for broad compatibility
 - **Clip Download Retry**: Retries clip downloads up to 3 times on HTTP 400 (Frigate not ready), with 5-second delays when using events API fallback
 - **FFmpeg Safety**: 60-second timeout with graceful termination prevents zombie processes
 - **Rolling Retention**: Automatically cleans up events older than the retention period (default: 3 days)
 - **Notification Rate Limiting**: Max 2 notifications per 5 seconds with queue overflow protection
-- **Built-in Event Viewer**: Self-contained web page at `/player` with video playback, expandable AI analysis (each GenAI event from timeline with its own expand/collapse; cross-camera review; single-camera shows "Review Summary"), "Event ongoing" badge clears after 90 min or when clip available, event navigation, reviewed/unreviewed filtering, download, and **View Timeline** (per-event data pipeline log with all files including clips/snapshots from camera subdirs) — embeddable as an HA iframe
+- **Built-in Event Viewer**: Self-contained web page at `/player` with video playback, expandable AI analysis (each GenAI event from timeline with its own expand/collapse; cross-camera review; single-camera shows "Review Summary"), "Event ongoing" badge clears when clip available, when Frigate signals event end (timeline), or after 90 min, event navigation, reviewed/unreviewed filtering, download, and **View Timeline** (per-event data pipeline log with all files including clips/snapshots from camera subdirs) — embeddable as an HA iframe
 - **Stats Dashboard**: Stats as a header button (like Daily Review) linking to `/stats-page`; standalone stats page with event counts (today/week/month), API Usage (Month to Date API cost and token usage from HA helpers when configured), storage by camera, recent errors, last cleanup, system info; configurable auto-refresh with manual Refresh button
 - **Daily Review**: Frigate review summarize integration — scheduled fetch at 1am for previous day, 90-day retention (configurable), date selector, "Current Day Review" for midnight-to-now; markdown rendering
 - **Event Review Tracking**: Mark events as reviewed with per-event or bulk "mark all" controls; defaults to showing unreviewed events
@@ -65,7 +65,7 @@ The application is organized as a Python package `frigate_buffer/`:
 | `managers/reviews.py` | `DailyReviewManager` — fetches and caches Frigate daily review summaries. |
 | `services/notifier.py` | `NotificationPublisher` — publishes MQTT notifications to Home Assistant. |
 | `web/server.py` | Flask app factory `create_app(orchestrator)`. Routes for player, events, files, stats, daily review, API. |
-| `templates/` | Jinja2 templates (player, stats, daily review, timeline). Located under `frigate_buffer/`. |
+| `templates/` | Jinja2 templates (player, stats, daily review, timeline). Single location under `frigate_buffer/`; used by Flask at runtime. |
 | `static/` | Static assets (marked.min.js, purify.min.js). Located under `frigate_buffer/`. |
 | `Dockerfile` | Builds from `frigate_buffer/` and runs `python -m frigate_buffer.main`. |
 | `docker-compose.example.yaml` | Template for Docker Compose — local build or token pull from private GitHub. |
@@ -145,9 +145,9 @@ cameras:
       - "car"
       - "truck"
     # event_filters:     # Optional - omit for legacy behavior
-    #   zones_to_ignore:
-    #     - "road"
-    #   exceptions:
+    #   tracked_zones:   # Only create when object enters these zones
+    #     - driveway
+    #   exceptions:      # Create regardless of zone
     #     - "UPS"
     #     - "FedEx"
 
@@ -275,15 +275,15 @@ cameras:
 
 ## Smart Zone Filtering
 
-Optional per-camera `event_filters` reduce background noise by deferring events that start only in specified zones (e.g., road traffic) until the object enters a watched zone or matches an exception.
+Optional per-camera `event_filters` reduce background noise by creating events **only** when an object enters a tracked zone (e.g., driveway). Exceptions create events regardless of zone.
 
-**Flow:** The buffer listens for both `type: new` and `type: update` on `frigate/events`. For each message, if the event is not yet tracked, it runs the decision tree: (1) Does the label or sub_label match an exception? → Start immediately. (2) Are `entered_zones` only in `zones_to_ignore`? → Defer. (3) Otherwise → Start. Each `update` re-evaluates until the event is created.
+**Flow:** The buffer listens for both `type: new` and `type: update` on `frigate/events`. For each message, if the event is not yet tracked, it runs the decision tree: (1) Does the label or sub_label match an exception? → Start immediately. (2) Has the object entered any zone in `tracked_zones`? → Start. (3) Otherwise → Defer. Each `update` re-evaluates until the event is created.
 
-- **zones_to_ignore**: Frigate zone names. Events that have entered *only* these zones are deferred (not created yet). A car on the road is ignored until it enters the driveway.
-- **exceptions**: Labels or sub_labels (e.g. `person`, `UPS`, `FedEx`) that always trigger an event regardless of zone. Put both in the same list; matching is case-insensitive.
-- **Late Start**: When an event is first created from an `update` message (e.g., car moves from road into driveway), the original `start_time` from the payload is used so clips and review windows cover the full event.
+- **tracked_zones**: Frigate zone names. Create an event **only** when the object enters one of these zones. A car on the road is deferred until it enters the driveway.
+- **exceptions**: Labels or sub_labels (e.g. `person`, `UPS`, `FedEx`) that create an event regardless of zone. Put both in the same list; matching is case-insensitive.
+- **Late Start**: When an event is first created from an `update` message (e.g., car enters driveway), the original `start_time` from the payload is used so clips and review windows cover the full event.
 
-Omit `event_filters` for legacy behavior (all events start immediately on `new`). At startup, the buffer logs `Smart Zone Filtering:` with per-camera `ignore_zones` and `exceptions` when configured.
+Omit `event_filters` for legacy behavior (all events start immediately on `new`). At startup, the buffer logs `Smart Zone Filtering:` with per-camera `tracked_zones` and `exceptions` when configured.
 
 ```yaml
   - name: "Front_Yard"
@@ -291,8 +291,8 @@ Omit `event_filters` for legacy behavior (all events start immediately on `new`)
       - "car"
       - "truck"
     event_filters:
-      zones_to_ignore:
-        - "road"
+      tracked_zones:
+        - driveway
       exceptions:
         - "person"
         - "UPS"
@@ -316,8 +316,8 @@ Built-in event viewer web page. Open in a browser or embed as an HA iframe card.
 Features:
 - Single-column responsive layout (scales to any device)
 - HTML5 video player with snapshot poster
-- Expandable AI analysis: each GenAI event from the timeline with its own expand/collapse; cross-camera review (or "Review Summary" when single camera); "No activity" boilerplate hidden when GenAI data is present
-- Event metadata (camera, label, timestamp)
+- Expandable AI analysis: each GenAI event from the timeline with its own expand/collapse (Expand button only shown when content is truncated); identical descriptions are deduplicated so each unique analysis is shown once (raw timeline keeps all entries for debugging); cross-camera review (or "Review Summary" when single camera); "No activity" boilerplate hidden when GenAI data is present
+- Event Details (Cameras & Zones, label, timestamp): shows all cameras with affected zones from timeline (e.g., `Doorbell: Front_Porch, Front Yard` / `Carport: No Zones Indicated`)
 - Camera filter dropdown
 - Reviewed/Unreviewed/All filter (defaults to unreviewed)
 - Stats button in header — links to `/stats-page` (standalone stats dashboard)
@@ -388,11 +388,14 @@ Response:
       "ongoing": false,
       "hosted_clip": "/files/doorbell/1234567890_eventid/clip.mp4",
       "hosted_snapshot": "/files/doorbell/1234567890_eventid/snapshot.jpg",
+      "cameras_with_zones": [{"camera": "doorbell", "zones": ["Front_Porch", "Front Yard"]}],
       "genai_entries": [{"title": "Person at door", "shortSummary": "...", "scene": "...", "time": "Friday, 2:30 PM"}]
     }
   ]
 }
 ```
+
+`genai_entries` are deduplicated by title, shortSummary, and scene so each unique analysis appears once; the raw `notification_timeline.json` still contains all timeline entries for debugging.
 
 ### GET /events/{camera}
 
@@ -770,11 +773,11 @@ The orchestrator includes safeguards against hung FFmpeg processes:
 
 ## Event Lifecycle
 
-The buffer listens to **`frigate/events`** for `type: new`, `type: update`, and `type: end`. With Smart Zone Filtering enabled, event creation may be deferred: a `new` or `update` is ignored until the object enters a non-ignored zone or matches an exception. When creation is triggered by a later `update` (Late Start), the original `start_time` from the payload is used so clips cover the full event.
+The buffer listens to **`frigate/events`** for `type: new`, `type: update`, and `type: end`. With Smart Zone Filtering enabled, event creation may be deferred: a `new` or `update` is ignored until the object enters a tracked zone or matches an exception. When creation is triggered by a later `update` (Late Start), the original `start_time` from the payload is used so clips cover the full event.
 
 | Time | MQTT Topic | Phase | Action |
 |------|------------|-------|--------|
-| T+0s | `frigate/events` (type=new or update) | NEW | Create folder if not deferred by Smart Zone Filtering; send instant notification; fetch local snapshot after delay. With zones_to_ignore, may defer until object enters watched zone (Late Start). |
+| T+0s | `frigate/events` (type=new or update) | NEW | Create folder if not deferred by Smart Zone Filtering; send instant notification; fetch local snapshot after delay. With tracked_zones, may defer until object enters tracked zone (Late Start). |
 | T+5s | `frigate/{camera}/tracked_object_update` (type=description) | DESCRIBED | Update with AI description |
 | T+30s | `frigate/events` (type=end) | - | Download snapshot; request clip via Frigate Export API (POST with `playback`/`name` JSON body; poll by export_id) |
 | T+35s | *(background processing)* | - | Transcode clip, write summary, send `clip_ready`; falls back to per-event clip if export fails or times out |
@@ -833,11 +836,11 @@ Check `/status` endpoint - `mqtt_connected` should be `true`. Verify:
    ```
    Filtered out event from camera 'BackYard' (not configured)
    Filtered out 'car' on 'Doorbell' (allowed: ['person', 'package'])
-   Ignoring <event_id> (smart zone filter: only in zones ['road'])
+   Ignoring <event_id> (smart zone filter: not in tracked zones, entered=['road'])
    ```
 3. Verify camera names match exactly (case-sensitive)
 4. Check that the camera is listed in the `cameras` config
-5. **Smart Zone Filtering**: If `event_filters` is configured, events may be deferred until the object enters a non-ignored zone or matches an exception. Check `zones_to_ignore` and `exceptions` in your config.
+5. **Smart Zone Filtering**: If `event_filters` is configured, events may be deferred until the object enters a tracked zone or matches an exception. Check `tracked_zones` and `exceptions` in your config.
 
 ### Screenshots Not Showing in Notifications
 

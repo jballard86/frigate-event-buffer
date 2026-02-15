@@ -194,9 +194,9 @@ class StateAwareOrchestrator:
             return True
 
         exceptions = filters.get('exceptions') or []
-        zones_to_ignore = filters.get('zones_to_ignore') or []
+        tracked_zones = filters.get('tracked_zones') or []
 
-        # 1. Check exceptions (labels or sub_labels) - match against both
+        # 1. Exceptions: create event regardless of zone
         if exceptions:
             exc_set = {e.strip().lower() for e in exceptions if e}
             if label and label.strip().lower() in exc_set:
@@ -205,17 +205,15 @@ class StateAwareOrchestrator:
             if norm and norm.lower() in exc_set:
                 return True
 
-        # 2. Check zones - if no zones to ignore, no zone-based deferral
-        if not zones_to_ignore:
+        # 2. Tracked zones: create ONLY when object enters a tracked zone
+        if not tracked_zones:
             return True
         entered = entered_zones or []
         if not entered:
-            return True
-        ignore_set = {z.strip().lower() for z in zones_to_ignore if z}
-        entered_lower = [z.strip().lower() for z in entered if z]
-        if all(z in ignore_set for z in entered_lower):
             return False
-        return True
+        tracked_set = {z.strip().lower() for z in tracked_zones if z}
+        entered_lower = [z.strip().lower() for z in entered if z]
+        return any(z in tracked_set for z in entered_lower)
 
     def _on_mqtt_message(self, client, userdata, msg):
         """Route incoming MQTT messages to appropriate handlers."""
@@ -290,7 +288,7 @@ class StateAwareOrchestrator:
             return
 
         if not self._should_start_event(camera, label or "", sub_label, entered_zones):
-            logger.debug(f"Ignoring {event_id} (smart zone filter: only in zones {entered_zones})")
+            logger.debug(f"Ignoring {event_id} (smart zone filter: not in tracked zones, entered={entered_zones})")
             return
 
         self._handle_event_new(
@@ -833,11 +831,11 @@ class StateAwareOrchestrator:
         if event_filters:
             logger.info("Smart Zone Filtering:")
             for camera, filt in event_filters.items():
-                zones = filt.get('zones_to_ignore') or []
+                zones = filt.get('tracked_zones') or []
                 exc = filt.get('exceptions') or []
                 parts = []
                 if zones:
-                    parts.append(f"ignore_zones={zones}")
+                    parts.append(f"tracked_zones={zones}")
                 if exc:
                     parts.append(f"exceptions={exc}")
                 if parts:

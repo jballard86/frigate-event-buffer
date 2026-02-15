@@ -468,6 +468,20 @@
     let blockIdx = 0;
     const genaiEntries = ev.genai_entries || [];
 
+    function addAiBlock(label, excerptHtml, content, format, expandable) {
+      const idBase = 'aiBlock' + blockIdx++;
+      const expandBtnHtml = expandable
+        ? `<button class="btn-expand" id="${idBase}Btn" type="button">Expand</button>`
+        : '';
+      const fullHtml = expandable
+        ? `<div class="summary-full" id="${idBase}Full"></div>`
+        : '';
+      parts.push(`<div class="ai-block"><div class="ai-block-label">${label}</div><div class="summary-excerpt" id="${idBase}Excerpt">${excerptHtml}</div>${expandBtnHtml}${fullHtml}</div>`);
+      if (expandable) {
+        blockData.push({ id: idBase, content: content, format: format });
+      }
+    }
+
     if (genaiEntries.length > 0) {
       // Render each GenAI event from timeline with its own expand/collapse
       genaiEntries.forEach((entry, i) => {
@@ -477,10 +491,15 @@
         const timeStr = entry.time ? ` (${entry.time})` : '';
         const content = [summary, scene].filter(Boolean).join('\n\n');
         if (!content) return;
-        const excerpt = content.length > 200 ? escapeHtml(content.substring(0, 200) + '...') : escapeHtml(content);
-        const idBase = 'aiBlock' + blockIdx++;
-        parts.push(`<div class="ai-block"><div class="ai-block-label">${escapeHtml(title)}${escapeHtml(timeStr)}</div><div class="summary-excerpt" id="${idBase}Excerpt">${excerpt}</div><button class="btn-expand" id="${idBase}Btn" type="button">Expand</button><div class="summary-full" id="${idBase}Full"></div></div>`);
-        blockData.push({ id: idBase, content: content, format: 'text' });
+        const isTruncated = content.length > 200;
+        const excerpt = isTruncated ? escapeHtml(content.substring(0, 200) + '...') : escapeHtml(content);
+        addAiBlock(
+          `${escapeHtml(title)}${escapeHtml(timeStr)}`,
+          excerpt,
+          content,
+          'text',
+          isTruncated
+        );
       });
     }
 
@@ -490,16 +509,14 @@
         ? (ev.title ? escapeHtml(ev.title) : '') + (ev.description ? (ev.title ? ' — ' : '') + escapeHtml(ev.description) : '')
         : null;
       if (summaryContent) {
-        const excerpt = summaryContent.length > 200 ? summaryContent.substring(0, 200) + '...' : summaryContent;
-        const idBase = 'aiBlock' + blockIdx++;
-        parts.push(`<div class="ai-block"><div class="ai-block-label">GenAI Summary</div><div class="summary-excerpt" id="${idBase}Excerpt">${excerpt}</div><button class="btn-expand" id="${idBase}Btn" type="button">Expand</button><div class="summary-full" id="${idBase}Full"></div></div>`);
-        blockData.push({ id: idBase, content: summaryContent, format: 'html' });
+        const isTruncated = summaryContent.length > 200;
+        const excerpt = isTruncated ? summaryContent.substring(0, 200) + '...' : summaryContent;
+        addAiBlock('GenAI Summary', excerpt, summaryContent, 'html', isTruncated);
       }
       if (ev.scene) {
-        const excerpt = ev.scene.length > 200 ? escapeHtml(ev.scene.substring(0, 200) + '...') : escapeHtml(ev.scene);
-        const idBase = 'aiBlock' + blockIdx++;
-        parts.push(`<div class="ai-block"><div class="ai-block-label">GenAI Scene</div><div class="summary-excerpt" id="${idBase}Excerpt">${excerpt}</div><button class="btn-expand" id="${idBase}Btn" type="button">Expand</button><div class="summary-full" id="${idBase}Full"></div></div>`);
-        blockData.push({ id: idBase, content: ev.scene, format: 'text' });
+        const isTruncated = ev.scene.length > 200;
+        const excerpt = isTruncated ? escapeHtml(ev.scene.substring(0, 200) + '...') : escapeHtml(ev.scene);
+        addAiBlock('GenAI Scene', excerpt, ev.scene, 'text', isTruncated);
       }
     }
 
@@ -510,11 +527,11 @@
     const reviewLabel = (isSingleCamera && isNoActivity) ? 'Review Summary' : 'Cross-Camera Review';
     if (reviewSummary && !(isNoActivity && genaiEntries.length > 0)) {
       const lines = reviewSummary.split('\n').filter(l => l.trim() && !l.trim().startsWith('#'));
-      const rawExcerpt = lines.slice(0, 3).join(' ').substring(0, 200);
-      const excerpt = escapeHtml(rawExcerpt + (rawExcerpt.length >= 200 ? '...' : ''));
-      const idBase = 'aiBlock' + blockIdx++;
-      parts.push(`<div class="ai-block"><div class="ai-block-label">${reviewLabel}</div><div class="summary-excerpt" id="${idBase}Excerpt">${excerpt}</div><button class="btn-expand" id="${idBase}Btn" type="button">Expand</button><div class="summary-full" id="${idBase}Full"></div></div>`);
-      blockData.push({ id: idBase, content: reviewSummary, format: 'markdown' });
+      const previewText = lines.slice(0, 3).join(' ');
+      const isTruncated = previewText.length > 200 || lines.length > 3;
+      const rawExcerpt = previewText.substring(0, 200);
+      const excerpt = escapeHtml(rawExcerpt + (isTruncated ? '...' : ''));
+      addAiBlock(escapeHtml(reviewLabel), excerpt, reviewSummary, 'markdown', isTruncated);
     }
 
     if (parts.length === 0) return { html: '<p class="description-text">No AI analysis available.</p>', blocks: [] };

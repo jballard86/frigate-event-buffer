@@ -107,8 +107,12 @@ def create_app(orchestrator):
         return parsed
 
     def _extract_genai_entries(folder_path: str) -> list:
-        """Extract GenAI metadata entries from notification_timeline.json."""
+        """Extract GenAI metadata entries from notification_timeline.json.
+        Identical descriptions (same title, shortSummary, scene) are deduplicated
+        so the AI Analysis section shows each unique analysis once; the raw timeline
+        file is unchanged for debugging."""
         entries = []
+        seen = set()
         timeline_path = os.path.join(folder_path, 'notification_timeline.json')
         if not os.path.exists(timeline_path):
             return entries
@@ -133,6 +137,10 @@ def create_app(orchestrator):
             if 'no concerns' in lower or 'no activity' in lower:
                 if not title and not scene and len(short_summary) < 80:
                     continue
+            content_key = (title.strip(), short_summary.strip(), scene.strip())
+            if content_key in seen:
+                continue
+            seen.add(content_key)
             entries.append({
                 'title': title,
                 'scene': scene,

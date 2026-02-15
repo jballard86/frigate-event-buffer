@@ -79,10 +79,10 @@ def load_config() -> dict:
                             # Smart Zone Filtering (optional per camera)
                             event_filters = cam.get('event_filters')
                             if isinstance(event_filters, dict):
-                                zones = event_filters.get('zones_to_ignore')
+                                zones = event_filters.get('tracked_zones')
                                 exceptions = event_filters.get('exceptions')
                                 config['CAMERA_EVENT_FILTERS'][camera_name] = {
-                                    'zones_to_ignore': zones if isinstance(zones, list) else [],
+                                    'tracked_zones': zones if isinstance(zones, list) else [],
                                     'exceptions': [str(x).strip() for x in exceptions] if isinstance(exceptions, list) else [],
                                 }
 
