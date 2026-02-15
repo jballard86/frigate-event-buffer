@@ -157,11 +157,16 @@ class EventLifecycleService:
         except Exception as e:
             logger.exception(f"Error processing event end: {e}")
 
-    def on_consolidated_event_close(self, ce_id: str):
-        """Called when CE close timer fires. Export clips, fetch summary, send notifications."""
+    def finalize_consolidated_event(self, ce_id: str):
+        """Called to close CE. Export clips, fetch summary, send notifications."""
+        # Attempt to mark as closing to prevent new additions
+        if not self.consolidated_manager.mark_closing(ce_id):
+            return
+
         with self.consolidated_manager._lock:
             ce = self.consolidated_manager._events.get(ce_id)
-        if not ce or not ce.closed:
+
+        if not ce:
             return
 
         export_before = self.config.get('EXPORT_BUFFER_BEFORE', 5)

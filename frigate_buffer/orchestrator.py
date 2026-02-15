@@ -85,7 +85,7 @@ class StateAwareOrchestrator:
         )
 
         # Update callback after lifecycle service creation
-        self.consolidated_manager.on_close_callback = self.lifecycle_service.on_consolidated_event_close
+        self.consolidated_manager.on_close_callback = self.lifecycle_service.finalize_consolidated_event
 
         # Daily review manager (Frigate review summarize API)
         self.daily_review_manager = DailyReviewManager(
