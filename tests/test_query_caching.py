@@ -36,6 +36,11 @@ class TestQueryCaching(unittest.TestCase):
         with open(self.summary_path, "w") as f:
             f.write("Title: Modified Title")
 
+        # Simulate directory modification (required for mtime-based caching)
+        # Ensure mtime actually changes by forcing it forward
+        st = os.stat(self.event_dir)
+        os.utime(self.event_dir, (st.st_atime, st.st_mtime + 1.0))
+
         # 3. Fetch immediately - should be cached (stale)
         events_cached = self.service.get_events(self.cam)
         self.assertEqual(events_cached[0]['title'], "Initial Title", "Should return cached data immediately")
