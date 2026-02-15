@@ -131,6 +131,12 @@ class NotificationPublisher:
         """Stop the background queue processor."""
         self._queue_processor_running = False
 
+    @property
+    def queue_size(self) -> int:
+        """Return current size of the notification queue."""
+        with self._lock:
+            return len(self._pending_queue)
+
     def publish_notification(self, event: NotificationEvent, status: str,
                             message: Optional[str] = None,
                             tag_override: Optional[str] = None) -> bool:
