@@ -27,6 +27,14 @@ class ConsolidatedEventManager:
         self.event_gap_seconds = event_gap_seconds
         self._on_close_callback = on_close_callback  # (ce_id: str) -> None
 
+    @property
+    def on_close_callback(self):
+        return self._on_close_callback
+
+    @on_close_callback.setter
+    def on_close_callback(self, callback):
+        self._on_close_callback = callback
+
     def get_or_create(
         self,
         event_id: str,
@@ -44,7 +52,8 @@ class ConsolidatedEventManager:
             if self._active_ce_id:
                 ce = self._events.get(self._active_ce_id)
                 # Add to existing CE if within time gap (cross-camera grouping)
-                if (ce and (now - ce.last_activity_time) < self.event_gap_seconds):
+                if (ce and not ce.closing and not ce.closed and
+                        (now - ce.last_activity_time) < self.event_gap_seconds):
                     ce.frigate_event_ids.append(event_id)
                     ce.last_activity_time = now
                     if camera not in ce.cameras:
@@ -115,18 +124,27 @@ class ConsolidatedEventManager:
             t.start()
             logger.debug(f"Scheduled CE close timer for {ce_id} in {self.event_gap_seconds}s")
 
-    def _on_close_timer(self, ce_id: str) -> None:
-        """Called when close timer fires. Mark CE closed and invoke callback."""
+    def mark_closing(self, ce_id: str) -> bool:
+        """
+        Mark event as closing to prevent new additions.
+        Returns True if successful (state changed), False if already closing/closed.
+        """
         with self._lock:
-            if ce_id not in self._events:
-                return
-            ce = self._events[ce_id]
-            if ce.closed:
-                return
-            ce.closed = True
-            self._active_ce_id = None if self._active_ce_id == ce_id else self._active_ce_id
+            ce = self._events.get(ce_id)
+            if not ce or ce.closing or ce.closed:
+                return False
+            ce.closing = True
+            if self._active_ce_id == ce_id:
+                self._active_ce_id = None
             if ce_id in self._close_timers:
+                self._close_timers[ce_id].cancel()
                 del self._close_timers[ce_id]
+            return True
+
+    def _on_close_timer(self, ce_id: str) -> None:
+        """Called when close timer fires. Invoke callback to finalize."""
+        # Note: We do NOT mark closed here anymore to avoid race conditions.
+        # The callback (finalize_consolidated_event) must acquire the closing lock.
         if self._on_close_callback:
             try:
                 self._on_close_callback(ce_id)

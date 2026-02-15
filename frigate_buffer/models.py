@@ -126,6 +126,7 @@ class ConsolidatedEvent:
     finalized_sent: bool = False
 
     # CE close: when True, no more sub-events will be added
+    closing: bool = False
     closed: bool = False
 
     # Legacy-compat: expose as EventState-like for notifier
