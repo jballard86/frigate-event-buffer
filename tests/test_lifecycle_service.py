@@ -23,6 +23,7 @@ class TestEventLifecycleService(unittest.TestCase):
         self.consolidated_manager._lock.__enter__ = MagicMock()
         self.consolidated_manager._lock.__exit__ = MagicMock()
         self.video_service = MagicMock()
+        self.download_service = MagicMock()
         self.notifier = MagicMock()
         self.timeline_logger = MagicMock()
 
@@ -32,6 +33,7 @@ class TestEventLifecycleService(unittest.TestCase):
             self.file_manager,
             self.consolidated_manager,
             self.video_service,
+            self.download_service,
             self.notifier,
             self.timeline_logger
         )
@@ -97,7 +99,7 @@ class TestEventLifecycleService(unittest.TestCase):
         self.service.process_event_end(event)
 
         # Assert
-        self.file_manager.download_snapshot.assert_called_with("evt1", "/tmp/evt1")
+        self.download_service.download_snapshot.assert_called_with("evt1", "/tmp/evt1")
         self.consolidated_manager.update_activity.assert_called()
         self.consolidated_manager.schedule_close_timer.assert_called_with("ce1")
         # Cleanup called
@@ -124,14 +126,14 @@ class TestEventLifecycleService(unittest.TestCase):
         self.state_manager.get_event.return_value = evt1
 
         self.file_manager.ensure_consolidated_camera_folder.return_value = "/tmp/ce1/cam1"
-        self.file_manager.export_and_transcode_clip.return_value = {"success": True}
+        self.download_service.export_and_transcode_clip.return_value = {"success": True}
 
         # Act
         self.service.finalize_consolidated_event(ce_id)
 
         # Assert
         self.consolidated_manager.mark_closing.assert_called_with(ce_id)
-        self.file_manager.export_and_transcode_clip.assert_called()
+        self.download_service.export_and_transcode_clip.assert_called()
         self.consolidated_manager.remove.assert_called_with(ce_id)
 
 if __name__ == '__main__':

@@ -20,6 +20,7 @@ from frigate_buffer.models import EventState, _is_no_concerns
 from frigate_buffer.managers.file import FileManager
 from frigate_buffer.managers.state import EventStateManager
 from frigate_buffer.services.video import VideoService
+from frigate_buffer.services.download import DownloadService
 from frigate_buffer.managers.consolidation import ConsolidatedEventManager
 from frigate_buffer.managers.reviews import DailyReviewManager
 from frigate_buffer.managers.zone_filter import SmartZoneFilter
@@ -42,11 +43,13 @@ class StateAwareOrchestrator:
         # Initialize components (file_manager first - needed by consolidated_manager)
         self.state_manager = EventStateManager()
         self.video_service = VideoService(config.get('FFMPEG_TIMEOUT', 60))
+        self.download_service = DownloadService(
+            config['FRIGATE_URL'],
+            self.video_service
+        )
         self.file_manager = FileManager(
             config['STORAGE_PATH'],
-            config['FRIGATE_URL'],
-            config['RETENTION_DAYS'],
-            self.video_service
+            config['RETENTION_DAYS']
         )
 
         # Initialize ConsolidatedEventManager with None callback first to break circular dependency
@@ -81,6 +84,7 @@ class StateAwareOrchestrator:
             self.file_manager,
             self.consolidated_manager,
             self.video_service,
+            self.download_service,
             self.notifier,
             self.timeline_logger
         )
@@ -426,7 +430,7 @@ class StateAwareOrchestrator:
                     {"url": url, "params": params}
                 )
 
-            summary = self.file_manager.fetch_review_summary(
+            summary = self.download_service.fetch_review_summary(
                 event.created_at, effective_end,
                 padding_before, padding_after
             )
