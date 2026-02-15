@@ -656,8 +656,13 @@
           if (isExpanded && fullEl.innerHTML === '') {
             let displayContent;
             if (b.format === 'markdown' && typeof marked !== 'undefined') {
-              displayContent = typeof DOMPurify !== 'undefined' ? DOMPurify.sanitize(marked.parse(b.content)) : marked.parse(b.content);
-              fullEl.innerHTML = '<div class="markdown-content">' + displayContent + '</div>';
+              if (typeof DOMPurify !== 'undefined') {
+                displayContent = DOMPurify.sanitize(marked.parse(b.content));
+                fullEl.innerHTML = '<div class="markdown-content">' + displayContent + '</div>';
+              } else {
+                displayContent = escapeHtml(b.content);
+                fullEl.innerHTML = '<p class="description-text" style="color:#e94560;">(Sanitizer not loaded - showing raw text)</p><p class="description-text">' + displayContent + '</p>';
+              }
             } else if (b.format === 'html') {
               fullEl.innerHTML = '<p class="description-text">' + b.content + '</p>';
             } else {

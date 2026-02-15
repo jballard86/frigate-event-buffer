@@ -5,12 +5,14 @@ import json
 import time
 import shutil
 import logging
+import threading
 from datetime import date, datetime, timedelta
 
 import requests
 from flask import Flask, Response, send_from_directory, jsonify, render_template, request, redirect
 
 from frigate_buffer.logging_utils import error_buffer
+from frigate_buffer.services.query import EventQueryService
 
 logger = logging.getLogger('frigate-buffer')
 
@@ -25,6 +27,8 @@ def create_app(orchestrator):
     allowed_cameras = orchestrator.config.get('ALLOWED_CAMERAS', [])
     state_manager = orchestrator.state_manager
     file_manager = orchestrator.file_manager
+
+    query_service = EventQueryService(storage_path)
 
     @app.before_request
     def _count_request():
@@ -97,324 +101,11 @@ def create_app(orchestrator):
             return jsonify(data)
         return jsonify({"error": "Failed to fetch review"}), 503
 
-    def _parse_summary(summary_text: str) -> dict:
-        """Parse key-value pairs from summary.txt format."""
-        parsed = {}
-        for line in summary_text.split('\n'):
-            if ':' in line:
-                key, _, value = line.partition(':')
-                parsed[key.strip()] = value.strip()
-        return parsed
-
-    def _extract_genai_entries(folder_path: str) -> list:
-        """Extract GenAI metadata entries from notification_timeline.json.
-        Identical descriptions (same title, shortSummary, scene) are deduplicated
-        so the AI Analysis section shows each unique analysis once; the raw timeline
-        file is unchanged for debugging."""
-        entries = []
-        seen = set()
-        timeline_path = os.path.join(folder_path, 'notification_timeline.json')
-        if not os.path.exists(timeline_path):
-            return entries
-        try:
-            with open(timeline_path, 'r') as f:
-                data = json.load(f)
-        except Exception:
-            return entries
-        for e in data.get('entries', []):
-            payload = (e.get('data') or {}).get('payload') or {}
-            if payload.get('type') != 'genai':
-                continue
-            after = payload.get('after') or {}
-            meta = (after.get('data') or {}).get('metadata')
-            if not meta:
-                continue
-            title = meta.get('title') or ''
-            scene = meta.get('scene') or ''
-            short_summary = meta.get('shortSummary') or meta.get('description') or ''
-            # Skip boilerplate "no concerns/activity" entries to avoid noise
-            lower = (title + ' ' + short_summary + ' ' + scene).lower()
-            if 'no concerns' in lower or 'no activity' in lower:
-                if not title and not scene and len(short_summary) < 80:
-                    continue
-            content_key = (title.strip(), short_summary.strip(), scene.strip())
-            if content_key in seen:
-                continue
-            seen.add(content_key)
-            entries.append({
-                'title': title,
-                'scene': scene,
-                'shortSummary': short_summary,
-                'time': meta.get('time'),
-                'potential_threat_level': meta.get('potential_threat_level', 0),
-            })
-        return entries
-
-    def _event_ended_in_timeline(folder_path: str) -> bool:
-        """Check if event has ended based on timeline (Event end from Frigate, or end_time set)."""
-        timeline_path = os.path.join(folder_path, 'notification_timeline.json')
-        if not os.path.exists(timeline_path):
-            return False
-        try:
-            with open(timeline_path, 'r') as f:
-                data = json.load(f)
-        except Exception:
-            return False
-        for e in data.get('entries', []):
-            label = (e.get('label') or '').lower()
-            if 'event end' in label:
-                return True
-            payload = (e.get('data') or {}).get('payload') or {}
-            if payload.get('type') == 'end':
-                return True
-            after = payload.get('after') or {}
-            if after.get('end_time') is not None:
-                return True
-        return False
-
-    def _extract_cameras_zones_from_timeline(folder_path: str) -> list:
-        """Extract cameras and zones from frigate_mqtt entries in notification_timeline.json."""
-        timeline_path = os.path.join(folder_path, 'notification_timeline.json')
-        if not os.path.exists(timeline_path):
-            return []
-        try:
-            with open(timeline_path, 'r') as f:
-                data = json.load(f)
-        except Exception:
-            return []
-        camera_zones = {}
-        for e in data.get('entries', []):
-            if e.get('source') != 'frigate_mqtt':
-                continue
-            payload = (e.get('data') or {}).get('payload') or {}
-            after = payload.get('after') or payload.get('before') or {}
-            camera = after.get('camera')
-            if not camera:
-                continue
-            zones = camera_zones.setdefault(camera, set())
-            for z in (after.get('entered_zones') or []):
-                if z:
-                    zones.add(z)
-            for z in (after.get('current_zones') or []):
-                if z:
-                    zones.add(z)
-        return [{"camera": cam, "zones": sorted(zones)} for cam, zones in sorted(camera_zones.items())]
-
-    def _get_events_from_consolidated() -> list:
-        """Get consolidated events from events/{ce_id}/{camera}/ structure."""
-        events_dir = os.path.join(storage_path, "events")
-        events_list = []
-        if not os.path.isdir(events_dir):
-            return events_list
-
-        for ce_id in sorted(os.listdir(events_dir), reverse=True):
-            ce_path = os.path.join(events_dir, ce_id)
-            if not os.path.isdir(ce_path):
-                continue
-            if '.' in ce_id and not ce_id.split('_')[0].isdigit():
-                continue
-
-            parts = ce_id.split('_', 1)
-            ts = parts[0] if len(parts) > 0 else "0"
-            summary_path = os.path.join(ce_path, 'summary.txt')
-            metadata_path = os.path.join(ce_path, 'metadata.json')
-            review_summary_path = os.path.join(ce_path, 'review_summary.md')
-            viewed_path = os.path.join(ce_path, '.viewed')
-
-            summary_text = "Analysis pending..."
-            parsed = {}
-            if os.path.exists(summary_path):
-                with open(summary_path, 'r') as f:
-                    summary_text = f.read().strip()
-                parsed = _parse_summary(summary_text)
-
-            cameras = [d for d in os.listdir(ce_path)
-                      if os.path.isdir(os.path.join(ce_path, d)) and not d.startswith('.')]
-
-            metadata = {}
-            if os.path.exists(metadata_path):
-                try:
-                    with open(metadata_path, 'r') as f:
-                        metadata = json.load(f)
-                except Exception:
-                    pass
-            # Consolidated: metadata may live in primary camera folder
-            if not metadata and cameras:
-                for cam in cameras:
-                    cam_meta = os.path.join(ce_path, cam, 'metadata.json')
-                    if os.path.exists(cam_meta):
-                        try:
-                            with open(cam_meta, 'r') as f:
-                                metadata = json.load(f)
-                            break
-                        except Exception:
-                            pass
-
-            genai_entries = _extract_genai_entries(ce_path)
-
-            review_summary = None
-            if os.path.exists(review_summary_path):
-                with open(review_summary_path, 'r') as f:
-                    review_summary = f.read().strip()
-            primary_clip = primary_snapshot = None
-            for cam in cameras:
-                cam_path = os.path.join(ce_path, cam)
-                if os.path.exists(os.path.join(cam_path, 'clip.mp4')):
-                    primary_clip = f"/files/events/{ce_id}/{cam}/clip.mp4"
-                    break
-            for cam in cameras:
-                cam_path = os.path.join(ce_path, cam)
-                if os.path.exists(os.path.join(cam_path, 'snapshot.jpg')):
-                    primary_snapshot = f"/files/events/{ce_id}/{cam}/snapshot.jpg"
-                    break
-
-            has_clip = any(os.path.exists(os.path.join(ce_path, cam, 'clip.mp4')) for cam in cameras)
-            has_snapshot = any(os.path.exists(os.path.join(ce_path, cam, 'snapshot.jpg')) for cam in cameras)
-
-            # "Not ongoing": event ended in timeline, or has clip, or older than 90 min
-            event_ended = _event_ended_in_timeline(ce_path)
-            try:
-                ts_float = float(ts)
-                age_seconds = time.time() - ts_float
-                ongoing = not has_clip and age_seconds < 5400 and not event_ended  # 90 min
-            except (ValueError, TypeError):
-                ongoing = not has_clip and not event_ended
-
-            cameras_with_zones = _extract_cameras_zones_from_timeline(ce_path)
-            if not cameras_with_zones and cameras:
-                cameras_with_zones = [{"camera": c, "zones": []} for c in cameras]
-
-            events_list.append({
-                "event_id": ce_id,
-                "camera": "events",
-                "subdir": ce_id,
-                "timestamp": ts,
-                "summary": summary_text,
-                "title": metadata.get("genai_title") or parsed.get("Title"),
-                "description": metadata.get("genai_description") or parsed.get("Description") or parsed.get("AI Description"),
-                "scene": metadata.get("genai_scene") or parsed.get("Scene"),
-                "label": metadata.get("label") or parsed.get("Label", "unknown"),
-                "severity": metadata.get("severity") or parsed.get("Severity"),
-                "threat_level": metadata.get("threat_level", 0),
-                "review_summary": review_summary,
-                "has_clip": has_clip,
-                "has_snapshot": has_snapshot,
-                "viewed": os.path.exists(viewed_path),
-                "hosted_clip": primary_clip or (f"/files/events/{ce_id}/{cameras[0]}/clip.mp4" if cameras else None),
-                "hosted_snapshot": primary_snapshot or (f"/files/events/{ce_id}/{cameras[0]}/snapshot.jpg" if cameras else None),
-                "cameras": cameras,
-                "cameras_with_zones": cameras_with_zones,
-                "consolidated": True,
-                "ongoing": ongoing,
-                "genai_entries": genai_entries
-            })
-
-        return events_list
-
-    def _get_events_for_camera(camera_name: str) -> list:
-        """Helper to get events for a specific camera. Special handling for 'events' (consolidated)."""
-        if camera_name == "events":
-            return _get_events_from_consolidated()
-
-        camera_path = os.path.join(storage_path, camera_name)
-        events = []
-
-        if not os.path.isdir(camera_path):
-            return events
-
-        subdirs = sorted(
-            [d for d in os.listdir(camera_path)
-             if os.path.isdir(os.path.join(camera_path, d))],
-            reverse=True
-        )
-
-        for subdir in subdirs:
-            folder_path = os.path.join(camera_path, subdir)
-            summary_path = os.path.join(folder_path, 'summary.txt')
-
-            parts = subdir.split('_', 1)
-            ts = parts[0] if len(parts) > 0 else "0"
-            eid = parts[1] if len(parts) > 1 else subdir
-
-            summary_text = "Analysis pending..."
-            parsed = {}
-            if os.path.exists(summary_path):
-                with open(summary_path, 'r') as f:
-                    summary_text = f.read().strip()
-                parsed = _parse_summary(summary_text)
-
-            metadata_path = os.path.join(folder_path, 'metadata.json')
-            metadata = {}
-            if os.path.exists(metadata_path):
-                try:
-                    with open(metadata_path, 'r') as f:
-                        metadata = json.load(f)
-                except Exception:
-                    pass
-
-            review_summary_path = os.path.join(folder_path, 'review_summary.md')
-            review_summary = None
-            if os.path.exists(review_summary_path):
-                with open(review_summary_path, 'r') as f:
-                    review_summary = f.read().strip()
-
-            clip_path = os.path.join(folder_path, 'clip.mp4')
-            snapshot_path = os.path.join(folder_path, 'snapshot.jpg')
-            viewed_path = os.path.join(folder_path, '.viewed')
-            has_clip = os.path.exists(clip_path)
-            event_ended = _event_ended_in_timeline(folder_path)
-            try:
-                ts_float = float(ts)
-                age_seconds = time.time() - ts_float
-                ongoing = not has_clip and age_seconds < 5400 and not event_ended
-            except (ValueError, TypeError):
-                ongoing = not has_clip and not event_ended
-            genai_entries = _extract_genai_entries(folder_path)
-
-            cameras_with_zones = _extract_cameras_zones_from_timeline(folder_path)
-            if not cameras_with_zones:
-                cameras_with_zones = [{"camera": camera_name, "zones": []}]
-
-            events.append({
-                "event_id": eid,
-                "camera": camera_name,
-                "subdir": subdir,
-                "timestamp": ts,
-                "summary": summary_text,
-                "title": metadata.get("genai_title") or parsed.get("Title"),
-                "description": metadata.get("genai_description") or parsed.get("Description") or parsed.get("AI Description"),
-                "scene": metadata.get("genai_scene") or parsed.get("Scene"),
-                "label": metadata.get("label") or parsed.get("Label", "unknown"),
-                "severity": metadata.get("severity") or parsed.get("Severity"),
-                "threat_level": metadata.get("threat_level", 0),
-                "review_summary": review_summary,
-                "has_clip": has_clip,
-                "has_snapshot": os.path.exists(snapshot_path),
-                "viewed": os.path.exists(viewed_path),
-                "hosted_clip": f"/files/{camera_name}/{subdir}/clip.mp4",
-                "hosted_snapshot": f"/files/{camera_name}/{subdir}/snapshot.jpg",
-                "cameras_with_zones": cameras_with_zones,
-                "ongoing": ongoing,
-                "genai_entries": genai_entries
-            })
-
-        return events
-
     @app.route('/cameras')
     def list_cameras():
         """List available cameras from config."""
-        active_cameras = []
-        try:
-            for item in os.listdir(storage_path):
-                item_path = os.path.join(storage_path, item)
-                if os.path.isdir(item_path):
-                    if not item.split('_')[0].isdigit():
-                        active_cameras.append(item)
-        except Exception as e:
-            logger.error(f"Error listing cameras: {e}")
+        active_cameras = query_service.get_cameras()
 
-        if os.path.isdir(os.path.join(storage_path, "events")) and "events" not in active_cameras:
-            active_cameras.append("events")
         all_cameras = list(set(active_cameras + [
             file_manager.sanitize_camera_name(c) for c in allowed_cameras
         ]))
@@ -445,7 +136,7 @@ def create_app(orchestrator):
         orchestrator._last_cleanup_deleted = deleted
 
         sanitized = file_manager.sanitize_camera_name(camera)
-        events = _filter_events(_get_events_for_camera(sanitized))
+        events = _filter_events(query_service.get_events(sanitized))
 
         return jsonify({
             "camera": sanitized,
@@ -461,23 +152,8 @@ def create_app(orchestrator):
         orchestrator._last_cleanup_time = time.time()
         orchestrator._last_cleanup_deleted = deleted
 
-        all_events = []
-        cameras_found = []
-
         try:
-            for camera_dir in os.listdir(storage_path):
-                camera_path = os.path.join(storage_path, camera_dir)
-                if not os.path.isdir(camera_path):
-                    continue
-                if camera_dir.split('_')[0].isdigit():
-                    continue
-
-                cameras_found.append(camera_dir)
-                events = _get_events_for_camera(camera_dir)
-                all_events.extend(events)
-
-            all_events.sort(key=lambda x: x['timestamp'], reverse=True)
-
+            all_events, cameras_found = query_service.get_all_events()
         except Exception as e:
             logger.error(f"Error listing events: {e}")
             return jsonify({"error": str(e)}), 500
@@ -690,7 +366,7 @@ def create_app(orchestrator):
         except Exception as e:
             logger.error(f"Error scanning events for stats: {e}")
 
-        storage_raw = file_manager.compute_storage_stats()
+        storage_raw = orchestrator._cached_storage_stats
         mb = 1024 * 1024
 
         def fmt_size(b):
@@ -793,6 +469,33 @@ def create_app(orchestrator):
         uptime_seconds = time.time() - orchestrator._start_time
         uptime_str = str(timedelta(seconds=int(uptime_seconds)))
 
+        # Gather active consolidated events
+        active_ce = []
+        try:
+            for ce in orchestrator.consolidated_manager.get_all():
+                state = "active"
+                if ce.closing:
+                    state = "closing"
+                if ce.closed:
+                    state = "closed"
+
+                active_ce.append({
+                    "id": ce.consolidated_id,
+                    "state": state,
+                    "cameras": ce.cameras,
+                    "start_time": ce.start_time
+                })
+        except Exception as e:
+            logger.error(f"Error gathering consolidated events for status: {e}")
+
+        # Gather metrics
+        metrics = {
+            "notification_queue_size": getattr(orchestrator.notifier, 'queue_size', 0),
+            "active_threads": threading.active_count(),
+            "active_consolidated_events": active_ce,
+            "recent_errors": error_buffer.get_all()[:5]
+        }
+
         return jsonify({
             "online": True,
             "mqtt_connected": orchestrator.mqtt_wrapper.mqtt_connected,
@@ -800,6 +503,7 @@ def create_app(orchestrator):
             "uptime": uptime_str,
             "started_at": time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(orchestrator._start_time)),
             "active_events": state_manager.get_stats(),
+            "metrics": metrics,
             "config": {
                 "retention_days": orchestrator.config['RETENTION_DAYS'],
                 "log_level": orchestrator.config.get('LOG_LEVEL', 'INFO'),

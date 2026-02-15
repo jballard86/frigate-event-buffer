@@ -14,16 +14,20 @@ from typing import Optional, List, Any
 
 import requests
 import schedule
+from urllib.parse import urlparse, urlunparse
 
 from frigate_buffer.models import EventState, _is_no_concerns
 from frigate_buffer.managers.file import FileManager
 from frigate_buffer.managers.state import EventStateManager
+from frigate_buffer.services.video import VideoService
+from frigate_buffer.services.download import DownloadService
 from frigate_buffer.managers.consolidation import ConsolidatedEventManager
 from frigate_buffer.managers.reviews import DailyReviewManager
 from frigate_buffer.managers.zone_filter import SmartZoneFilter
 from frigate_buffer.services.notifier import NotificationPublisher
 from frigate_buffer.services.timeline import TimelineLogger
 from frigate_buffer.services.mqtt_client import MqttClientWrapper
+from frigate_buffer.services.lifecycle import EventLifecycleService
 
 logger = logging.getLogger('frigate-buffer')
 
@@ -38,32 +42,31 @@ class StateAwareOrchestrator:
 
         # Initialize components (file_manager first - needed by consolidated_manager)
         self.state_manager = EventStateManager()
+        self.video_service = VideoService(config.get('FFMPEG_TIMEOUT', 60))
+        self.download_service = DownloadService(
+            config['FRIGATE_URL'],
+            self.video_service
+        )
         self.file_manager = FileManager(
             config['STORAGE_PATH'],
-            config['FRIGATE_URL'],
-            config['RETENTION_DAYS'],
-            config.get('FFMPEG_TIMEOUT', 60)
+            config['RETENTION_DAYS']
         )
+
+        # Initialize ConsolidatedEventManager with None callback first to break circular dependency
         self.consolidated_manager = ConsolidatedEventManager(
             self.file_manager,
             event_gap_seconds=config.get('EVENT_GAP_SECONDS', 120),
-            on_close_callback=self._on_consolidated_event_close
+            on_close_callback=None
         )
 
-        # Timeline logger (uses file_manager and consolidated_manager)
         self.timeline_logger = TimelineLogger(self.file_manager, self.consolidated_manager)
 
-        # Smart zone filter (uses config CAMERA_EVENT_FILTERS)
-        self.zone_filter = SmartZoneFilter(config)
-
-        # MQTT client wrapper (message routing stays in orchestrator via callback)
         self.mqtt_wrapper = MqttClientWrapper(
             broker=config['MQTT_BROKER'],
             port=config['MQTT_PORT'],
             on_message_callback=self._on_mqtt_message,
         )
 
-        # Notification publisher (uses underlying MQTT client)
         self.notifier = NotificationPublisher(
             self.mqtt_wrapper.client,
             config['BUFFER_IP'],
@@ -72,6 +75,22 @@ class StateAwareOrchestrator:
             storage_path=config['STORAGE_PATH']
         )
         self.notifier.timeline_callback = self.timeline_logger.log_ha
+
+        self.zone_filter = SmartZoneFilter(config)
+
+        self.lifecycle_service = EventLifecycleService(
+            config,
+            self.state_manager,
+            self.file_manager,
+            self.consolidated_manager,
+            self.video_service,
+            self.download_service,
+            self.notifier,
+            self.timeline_logger
+        )
+
+        # Update callback after lifecycle service creation
+        self.consolidated_manager.on_close_callback = self.lifecycle_service.finalize_consolidated_event
 
         # Daily review manager (Frigate review summarize API)
         self.daily_review_manager = DailyReviewManager(
@@ -91,9 +110,32 @@ class StateAwareOrchestrator:
         self._request_count = 0
         self._request_count_lock = threading.Lock()
 
-        # Last cleanup tracking (for stats dashboard)
-        self._last_cleanup_time: Optional[float] = None
-        self._last_cleanup_deleted: int = 0
+        # Cache for storage stats
+        self._cached_storage_stats = {
+            'clips': 0,
+            'snapshots': 0,
+            'descriptions': 0,
+            'total': 0,
+            'by_camera': {}
+        }
+
+        # Last cleanup tracking delegated to lifecycle service via properties
+
+    @property
+    def _last_cleanup_time(self):
+        return self.lifecycle_service.last_cleanup_time
+
+    @_last_cleanup_time.setter
+    def _last_cleanup_time(self, value):
+        self.lifecycle_service.last_cleanup_time = value
+
+    @property
+    def _last_cleanup_deleted(self):
+        return self.lifecycle_service.last_cleanup_deleted
+
+    @_last_cleanup_deleted.setter
+    def _last_cleanup_deleted(self, value):
+        self.lifecycle_service.last_cleanup_deleted = value
 
     def _fetch_ha_state(self, ha_url: str, ha_token: str, entity_id: str):
         """Fetch entity state from Home Assistant REST API. Returns state value or None on error."""
@@ -105,8 +147,8 @@ class StateAwareOrchestrator:
             if resp.ok:
                 data = resp.json()
                 return data.get("state")
-        except Exception:
-            pass
+        except requests.RequestException as e:
+            logger.warning(f"Error fetching HA state for {entity_id} from {url}: {e}")
         return None
 
     def _on_mqtt_message(self, client, userdata, msg):
@@ -195,55 +237,8 @@ class StateAwareOrchestrator:
 
     def _handle_event_new(self, event_id: str, camera: str, label: str,
                           start_time: float, mqtt_payload: Optional[dict] = None):
-        """Handle new event detection (Phase 1). Uses events/{ce_id}/{camera}/ storage."""
-        logger.info(f"New event: {event_id} - {label} on {camera}")
-
-        event = self.state_manager.create_event(event_id, camera, label, start_time)
-
-        ce, is_new, camera_folder = self.consolidated_manager.get_or_create(
-            event_id, camera, label, start_time
-        )
-        event.folder_path = camera_folder
-
-        if mqtt_payload:
-            mqtt_type = mqtt_payload.get("type", "new")
-            self.timeline_logger.log_mqtt(
-                ce.folder_path, "frigate/events",
-                mqtt_payload, f"Event {mqtt_type} (from Frigate)"
-            )
-
-        if not is_new:
-            logger.info(f"Event {event_id} grouped into consolidated event {ce.consolidated_id}, suppressing duplicate notification")
-            def _download_grouped_snapshot():
-                self.file_manager.download_snapshot(event_id, camera_folder)
-            threading.Thread(target=_download_grouped_snapshot, daemon=True).start()
-            return
-
-        delay = self.config.get('NOTIFICATION_DELAY', 5)
-        ce_tag = f"frigate_{ce.consolidated_id}" if ce else None
-        threading.Thread(
-            target=self._send_initial_notification,
-            args=(event, delay, ce_tag),
-            daemon=True
-        ).start()
-
-    def _send_initial_notification(self, event: EventState, delay: float,
-                                   tag_override: Optional[str] = None):
-        """Send notification immediately, then fetch snapshot and silently update."""
-        try:
-            self.notifier.publish_notification(event, "new", tag_override=tag_override)
-
-            if delay > 0:
-                time.sleep(delay)
-
-            if event.folder_path:
-                event.snapshot_downloaded = self.file_manager.download_snapshot(
-                    event.event_id, event.folder_path
-                )
-                if event.snapshot_downloaded:
-                    self.notifier.publish_notification(event, "snapshot_ready", tag_override=tag_override)
-        except Exception as e:
-            logger.error(f"Error in initial notification flow for {event.event_id}: {e}")
+        """Handle new event detection (Phase 1). Delegates to lifecycle service."""
+        self.lifecycle_service.handle_event_new(event_id, camera, label, start_time, mqtt_payload)
 
     def _handle_event_end(self, event_id: str, end_time: float,
                           has_clip: bool, has_snapshot: bool,
@@ -271,230 +266,9 @@ class StateAwareOrchestrator:
             daemon=True
         ).start()
 
-    def _on_consolidated_event_close(self, ce_id: str):
-        """Called when CE close timer fires. Export clips, fetch summary, send notifications."""
-        with self.consolidated_manager._lock:
-            ce = self.consolidated_manager._events.get(ce_id)
-        if not ce or not ce.closed:
-            return
-
-        export_before = self.config.get('EXPORT_BUFFER_BEFORE', 5)
-        export_after = self.config.get('EXPORT_BUFFER_AFTER', 30)
-        padding_before = self.config.get('SUMMARY_PADDING_BEFORE', 15)
-        padding_after = self.config.get('SUMMARY_PADDING_AFTER', 15)
-        camera_events = {}
-        for fid in ce.frigate_event_ids:
-            event = self.state_manager.get_event(fid)
-            if event:
-                if event.camera not in camera_events:
-                    camera_events[event.camera] = []
-                camera_events[event.camera].append(event)
-            else:
-                logger.warning(f"Event {fid} in consolidated event {ce_id} not found in state manager")
-
-        first_clip_path = None
-        primary_cam = ce.primary_camera or (ce.cameras[0] if ce.cameras else None)
-
-        # Calculate global start/end times across all cameras for unified export duration
-        all_events = []
-        for events in camera_events.values():
-            all_events.extend(events)
-
-        if all_events:
-            global_start_times = [e.created_at for e in all_events]
-            global_min_start = min(global_start_times)
-
-            global_end_times = []
-            for e in all_events:
-                if e.end_time:
-                    global_end_times.append(e.end_time)
-                else:
-                    # Fallback if end_time is missing (should be rare at close time)
-                    global_end_times.append(e.created_at + export_after)
-            global_max_end = max(global_end_times)
-        else:
-            global_min_start = ce.start_time
-            global_max_end = ce.end_time_max or ce.last_activity_time
-
-        for camera, events in camera_events.items():
-            camera_folder = self.file_manager.ensure_consolidated_camera_folder(ce.folder_path, camera)
-
-            def get_duration(e):
-                end = e.end_time if e.end_time else (e.created_at + export_after)
-                return end - e.created_at
-
-            representative_event = max(events, key=get_duration)
-            rep_id = representative_event.event_id
-
-            # For timeline logging
-            start_ts = int(global_min_start - export_before)
-            end_ts = int(global_max_end + export_after)
-
-            self.timeline_logger.log_frigate_api(
-                ce.folder_path, 'out',
-                f'Clip export for {camera} (CE close)',
-                {'url': f"{self.config.get('FRIGATE_URL', '')}/api/export/{camera}/start/{start_ts}/end/{end_ts}",
-                 'representative_id': rep_id}
-            )
-            result = self.file_manager.export_and_transcode_clip(
-                rep_id, camera_folder, camera,
-                global_min_start, global_max_end,
-                export_before, export_after
-            )
-            ok = result.get("success", False)
-            timeline_data = {"success": ok, "frigate_response": result.get("frigate_response")}
-            if "fallback" in result:
-                timeline_data["fallback"] = result["fallback"]
-            self.timeline_logger.log_frigate_api(ce.folder_path, 'in', f'Clip export response for {camera}', timeline_data)
-            if ok and first_clip_path is None:
-                first_clip_path = os.path.join(camera_folder, 'clip.mp4')
-        # Placeholder fallback: if all exports failed, try per-event clip for primary camera
-        if first_clip_path is None and primary_cam and ce.primary_event_id:
-            primary_folder = self.file_manager.ensure_consolidated_camera_folder(ce.folder_path, primary_cam)
-            ok = self.file_manager.download_and_transcode_clip(ce.primary_event_id, primary_folder)
-            if ok:
-                first_clip_path = os.path.join(primary_folder, 'clip.mp4')
-                self.timeline_logger.log_frigate_api(ce.folder_path, 'in', 'Placeholder clip (events API fallback)', {'success': True})
-
-        if first_clip_path:
-            gif_path = os.path.join(ce.folder_path, 'notification.gif')
-            if self.file_manager.generate_gif_from_clip(first_clip_path, gif_path):
-                ce.snapshot_downloaded = True
-            ce.clip_downloaded = True
-
-        padded_start = int(ce.start_time - padding_before)
-        padded_end = int((ce.end_time_max or ce.last_activity_time) + padding_after)
-        self.timeline_logger.log_frigate_api(
-            ce.folder_path, 'out',
-            'Review summarize (CE close)',
-            {'url': f"{self.config.get('FRIGATE_URL', '')}/api/review/summarize/start/{padded_start}/end/{padded_end}"}
-        )
-        summary = self.file_manager.fetch_review_summary(
-            ce.start_time, ce.end_time_max or ce.last_activity_time,
-            padding_before, padding_after
-        )
-        self.timeline_logger.log_frigate_api(
-            ce.folder_path, 'in',
-            'Review summarize response',
-            {'response': summary or '(empty or error)'}
-        )
-        if summary:
-            self.file_manager.write_review_summary(ce.folder_path, summary)
-
-        primary_cam = ce.primary_camera or (ce.cameras[0] if ce.cameras else None)
-        media_folder = os.path.join(ce.folder_path, self.file_manager.sanitize_camera_name(primary_cam or "")) if primary_cam else ce.folder_path
-        buf_base = f"http://{self.config['BUFFER_IP']}:{self.config['FLASK_PORT']}"
-        gif_url = f"{buf_base}/files/events/{ce.folder_name}/notification.gif" if os.path.exists(os.path.join(ce.folder_path, 'notification.gif')) else None
-        notify_target = type('NotifyTarget', (), {
-            'event_id': ce.consolidated_id, 'camera': ce.camera, 'label': ce.label,
-            'folder_path': media_folder, 'created_at': ce.start_time,
-            'end_time': ce.end_time, 'phase': ce.phase,
-            'genai_title': ce.best_title, 'genai_description': ce.best_description,
-            'ai_description': None, 'review_summary': summary,
-            'threat_level': ce.best_threat_level, 'severity': ce.severity,
-            'snapshot_downloaded': ce.snapshot_downloaded,
-            'clip_downloaded': ce.clip_downloaded,
-            'image_url_override': gif_url,
-        })()
-
-        if not ce.clip_ready_sent:
-            ce.clip_ready_sent = True
-            self.notifier.publish_notification(notify_target, "clip_ready")
-        if not ce.finalized_sent and (ce.best_title or ce.best_description):
-            ce.finalized_sent = True
-            self.notifier.publish_notification(notify_target, "finalized")
-        if summary and not _is_no_concerns(summary):
-            self.notifier.publish_notification(notify_target, "summarized")
-
-        for fid in ce.frigate_event_ids:
-            self.state_manager.remove_event(fid)
-        self.consolidated_manager.remove(ce_id)
-        logger.info(f"Consolidated event {ce_id} closed and cleaned up")
-
     def _process_event_end(self, event: EventState):
-        """Background processing when event ends. For consolidated events, defers clip export to CE close."""
-        try:
-            if event.has_snapshot:
-                event.snapshot_downloaded = self.file_manager.download_snapshot(
-                    event.event_id, event.folder_path
-                )
-
-            ce = self.consolidated_manager.get_by_frigate_event(event.event_id)
-            if ce:
-                self.consolidated_manager.update_activity(
-                    event.event_id,
-                    activity_time=time.time(),
-                    end_time=event.end_time or event.created_at
-                )
-                self.consolidated_manager.schedule_close_timer(ce.consolidated_id)
-                self.file_manager.write_summary(self.timeline_logger.folder_for_event(event) or event.folder_path, event)
-                active_ids = self.state_manager.get_active_event_ids()
-                active_ce_folders = [c.folder_name for c in self.consolidated_manager.get_all()]
-                deleted = self.file_manager.cleanup_old_events(active_ids, active_ce_folders)
-                if deleted > 0:
-                    logger.info(f"Cleaned up {deleted} old event folders")
-                return
-
-            if event.has_clip and event.folder_path:
-                export_before = self.config.get('EXPORT_BUFFER_BEFORE', 5)
-                export_after = self.config.get('EXPORT_BUFFER_AFTER', 30)
-                start_ts = int(event.created_at - export_before)
-                end_ts = int((event.end_time or event.created_at) + export_after)
-
-                self.timeline_logger.log_frigate_api(
-                    self.timeline_logger.folder_for_event(event), 'out',
-                    'Clip export request (to Frigate API)',
-                    {
-                        'url': f"{self.config.get('FRIGATE_URL', '')}/api/export/{event.camera}/start/{start_ts}/end/{end_ts}",
-                        'params': {'camera': event.camera, 'start': start_ts, 'end': end_ts},
-                    },
-                )
-
-                result = self.file_manager.export_and_transcode_clip(
-                    event.event_id,
-                    event.folder_path,
-                    camera=event.camera,
-                    start_time=event.created_at,
-                    end_time=event.end_time or event.created_at,
-                    export_buffer_before=export_before,
-                    export_buffer_after=export_after,
-                )
-                event.clip_downloaded = result.get("success", False)
-
-                timeline_data = {"success": event.clip_downloaded, "frigate_response": result.get("frigate_response")}
-                if "fallback" in result:
-                    timeline_data["fallback"] = result["fallback"]
-                self.timeline_logger.log_frigate_api(
-                    self.timeline_logger.folder_for_event(event), 'in',
-                    'Clip export response (from Frigate API)',
-                    timeline_data,
-                )
-
-            self.file_manager.write_summary(event.folder_path, event)
-
-            ce = self.consolidated_manager.get_by_frigate_event(event.event_id)
-            should_send_clip = True
-            if ce:
-                if ce.primary_event_id != event.event_id:
-                    should_send_clip = False
-                    logger.debug(f"Suppressing clip_ready for {event.event_id} (non-primary in CE {ce.consolidated_id})")
-                elif ce.clip_ready_sent:
-                    should_send_clip = False
-                else:
-                    ce.clip_ready_sent = True
-            if should_send_clip:
-                self.notifier.publish_notification(event, "clip_ready")
-
-            active_ids = self.state_manager.get_active_event_ids()
-            active_ce_folders = [ce.folder_name for ce in self.consolidated_manager.get_all()]
-            deleted = self.file_manager.cleanup_old_events(active_ids, active_ce_folders)
-            self._last_cleanup_time = time.time()
-            self._last_cleanup_deleted = deleted
-            if deleted > 0:
-                logger.info(f"Cleaned up {deleted} old event folders")
-
-        except Exception as e:
-            logger.exception(f"Error processing event end: {e}")
+        """Background processing when event ends. Delegates to lifecycle service."""
+        self.lifecycle_service.process_event_end(event)
 
     def _handle_tracked_update(self, payload: dict, topic: str):
         """Handle AI description update (Phase 2)."""
@@ -656,7 +430,7 @@ class StateAwareOrchestrator:
                     {"url": url, "params": params}
                 )
 
-            summary = self.file_manager.fetch_review_summary(
+            summary = self.download_service.fetch_review_summary(
                 event.created_at, effective_end,
                 padding_before, padding_after
             )
@@ -699,6 +473,7 @@ class StateAwareOrchestrator:
         cleanup_hours = self.config.get('CLEANUP_INTERVAL_HOURS', 1)
         schedule.every(cleanup_hours).hours.do(self._hourly_cleanup)
         schedule.every(5).minutes.do(self._log_request_stats)
+        schedule.every(5).minutes.do(self._update_storage_stats)
 
         review_hour = self.config.get('DAILY_REVIEW_SCHEDULE_HOUR', 1)
         schedule.every().day.at(f"{review_hour:02d}:00").do(self._daily_review_job)
@@ -717,6 +492,15 @@ class StateAwareOrchestrator:
         active = len(self.state_manager._events)
         logger.info(f"API stats (5m): {count} requests, {active} active events, MQTT {'connected' if self.mqtt_wrapper.mqtt_connected else 'disconnected'}")
 
+    def _update_storage_stats(self):
+        """Update cached storage stats (background task)."""
+        logger.debug("Updating storage stats...")
+        try:
+            self._cached_storage_stats = self.file_manager.compute_storage_stats()
+            logger.debug("Storage stats updated")
+        except Exception as e:
+            logger.error(f"Failed to update storage stats: {e}")
+
     def _daily_review_job(self):
         """Fetch yesterday's review from Frigate and save. Runs at configured hour (default 1am)."""
         yesterday = date.today() - timedelta(days=1)
@@ -731,14 +515,8 @@ class StateAwareOrchestrator:
             logger.info(f"Cleaned up {deleted} old daily reviews")
 
     def _hourly_cleanup(self):
-        """Hourly cleanup task."""
-        logger.info("Running scheduled cleanup...")
-        active_ids = self.state_manager.get_active_event_ids()
-        active_ce_folders = [ce.folder_name for ce in self.consolidated_manager.get_all()]
-        deleted = self.file_manager.cleanup_old_events(active_ids, active_ce_folders)
-        self._last_cleanup_time = time.time()
-        self._last_cleanup_deleted = deleted
-        logger.info(f"Scheduled cleanup complete. Deleted {deleted} folders.")
+        """Hourly cleanup task. Delegates to lifecycle service."""
+        self.lifecycle_service.run_cleanup()
 
     def start(self):
         """Start all components."""
@@ -746,7 +524,19 @@ class StateAwareOrchestrator:
         logger.info("Starting State-Aware Orchestrator")
         logger.info("=" * 60)
         logger.info(f"MQTT Broker: {self.config['MQTT_BROKER']}:{self.config['MQTT_PORT']}")
-        logger.info(f"Frigate URL: {self.config['FRIGATE_URL']}")
+
+        frigate_url = self.config['FRIGATE_URL']
+        try:
+            parsed = urlparse(frigate_url)
+            if parsed.password:
+                safe_netloc = f"{parsed.username or ''}:***@{parsed.hostname}"
+                if parsed.port:
+                    safe_netloc += f":{parsed.port}"
+                parsed = parsed._replace(netloc=safe_netloc)
+            logger.info(f"Frigate URL: {urlunparse(parsed)}")
+        except Exception:
+            logger.info(f"Frigate URL: (hidden)")
+
         logger.info(f"Storage Path: {self.config['STORAGE_PATH']}")
         logger.info(f"Retention: {self.config['RETENTION_DAYS']} days")
         logger.info(f"FFmpeg Timeout: {self.config.get('FFMPEG_TIMEOUT', 60)}s")
@@ -790,6 +580,12 @@ class StateAwareOrchestrator:
             daemon=True
         )
         self._scheduler_thread.start()
+
+        # Update storage stats immediately (background)
+        threading.Thread(
+            target=self._update_storage_stats,
+            daemon=True
+        ).start()
 
         logger.info(f"Starting Flask on port {self.config['FLASK_PORT']}...")
         self.flask_app.run(
