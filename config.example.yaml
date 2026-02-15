@@ -86,6 +86,8 @@ settings:
 network:
   mqtt_broker: "YOUR_MQTT_BROKER_IP"
   mqtt_port: 1883
+  # mqtt_user: "your_mqtt_user"
+  # mqtt_password: "your_mqtt_password"
   frigate_url: "http://YOUR_FRIGATE_IP:5000"
   # IP/hostname where this buffer container is reachable (used in notification image/video URLs)
   buffer_ip: "YOUR_BUFFER_IP"

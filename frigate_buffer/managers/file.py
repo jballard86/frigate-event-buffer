@@ -204,61 +204,65 @@ class FileManager:
 
         try:
             # Iterate through camera subdirectories and events/
-            for camera_dir in os.listdir(self.storage_path):
-                camera_path = os.path.join(self.storage_path, camera_dir)
-
-                if not os.path.isdir(camera_path):
-                    continue
-
-                # Check if this is a camera folder (contains event folders)
-                # or a legacy flat event folder (for migration period)
-                first_item = camera_dir.split('_', 1)
-                if len(first_item) > 1 and first_item[0].isdigit():
-                    # Legacy flat structure: {timestamp}_{event_id}
-                    try:
-                        ts = float(first_item[0])
-                        event_id = first_item[1]
-
-                        if event_id and event_id in active_event_ids:
-                            continue
-
-                        if ts < cutoff:
-                            shutil.rmtree(camera_path)
-                            logger.info(f"Cleaned up legacy event: {camera_dir}")
-                            deleted_count += 1
-                    except (ValueError, IndexError):
-                        pass
-                    continue
-
-                # New structure: iterate through event folders in camera dir
-                for event_dir in os.listdir(camera_path):
-                    event_path = os.path.join(camera_path, event_dir)
-
-                    if not os.path.isdir(event_path):
+            with os.scandir(self.storage_path) as it:
+                for camera_entry in it:
+                    if not camera_entry.is_dir():
                         continue
 
-                    try:
-                        parts = event_dir.split('_', 1)
-                        ts = float(parts[0])
-                        event_id = parts[1] if len(parts) > 1 else None
+                    camera_dir = camera_entry.name
+                    camera_path = camera_entry.path
 
-                        # Skip if event is still active (legacy) or CE is active (events/ folder)
-                        if event_id and event_id in active_event_ids:
-                            logger.debug(f"Skipping active event: {camera_dir}/{event_dir}")
-                            continue
-                        if camera_dir == "events" and event_dir in active_ce:
-                            logger.debug(f"Skipping active consolidated event: {camera_dir}/{event_dir}")
-                            continue
+                    # Check if this is a camera folder (contains event folders)
+                    # or a legacy flat event folder (for migration period)
+                    first_item = camera_dir.split('_', 1)
+                    if len(first_item) > 1 and first_item[0].isdigit():
+                        # Legacy flat structure: {timestamp}_{event_id}
+                        try:
+                            ts = float(first_item[0])
+                            event_id = first_item[1]
 
-                        # Delete if older than cutoff
-                        if ts < cutoff:
-                            shutil.rmtree(event_path)
-                            logger.info(f"Cleaned up old event: {camera_dir}/{event_dir}")
-                            deleted_count += 1
+                            if event_id and event_id in active_event_ids:
+                                continue
 
-                    except (ValueError, IndexError):
-                        logger.debug(f"Skipping malformed folder: {camera_dir}/{event_dir}")
+                            if ts < cutoff:
+                                shutil.rmtree(camera_path)
+                                logger.info(f"Cleaned up legacy event: {camera_dir}")
+                                deleted_count += 1
+                        except (ValueError, IndexError):
+                            pass
                         continue
+
+                    # New structure: iterate through event folders in camera dir
+                    with os.scandir(camera_path) as it_events:
+                        for event_entry in it_events:
+                            if not event_entry.is_dir():
+                                continue
+
+                            event_dir = event_entry.name
+                            event_path = event_entry.path
+
+                            try:
+                                parts = event_dir.split('_', 1)
+                                ts = float(parts[0])
+                                event_id = parts[1] if len(parts) > 1 else None
+
+                                # Skip if event is still active (legacy) or CE is active (events/ folder)
+                                if event_id and event_id in active_event_ids:
+                                    logger.debug(f"Skipping active event: {camera_dir}/{event_dir}")
+                                    continue
+                                if camera_dir == "events" and event_dir in active_ce:
+                                    logger.debug(f"Skipping active consolidated event: {camera_dir}/{event_dir}")
+                                    continue
+
+                                # Delete if older than cutoff
+                                if ts < cutoff:
+                                    shutil.rmtree(event_path)
+                                    logger.info(f"Cleaned up old event: {camera_dir}/{event_dir}")
+                                    deleted_count += 1
+
+                            except (ValueError, IndexError):
+                                logger.debug(f"Skipping malformed folder: {camera_dir}/{event_dir}")
+                                continue
 
         except Exception as e:
             logger.error(f"Cleanup error: {e}")
@@ -274,16 +278,20 @@ class FileManager:
 
         try:
             # Get list of cameras safely
+            camera_entries = []
             try:
-                camera_dirs = os.listdir(self.storage_path)
+                with os.scandir(self.storage_path) as it:
+                    camera_entries = list(it)
             except OSError:
-                camera_dirs = []
+                pass
 
-            for camera_dir in camera_dirs:
-                camera_path = os.path.join(self.storage_path, camera_dir)
-
-                if not os.path.isdir(camera_path):
+            for camera_entry in camera_entries:
+                if not camera_entry.is_dir():
                     continue
+
+                camera_dir = camera_entry.name
+                camera_path = camera_entry.path
+
                 if camera_dir.split('_')[0].isdigit():
                     continue
 
@@ -291,37 +299,37 @@ class FileManager:
 
                 # Get list of events safely
                 try:
-                    event_dirs = os.listdir(camera_path)
+                    with os.scandir(camera_path) as it_events:
+                        for event_entry in it_events:
+                            if not event_entry.is_dir():
+                                continue
+
+                            event_path = event_entry.path
+
+                            clip_path = os.path.join(event_path, 'clip.mp4')
+                            snapshot_path = os.path.join(event_path, 'snapshot.jpg')
+
+                            for f in ('summary.txt', 'review_summary.md', 'metadata.json'):
+                                p = os.path.join(event_path, f)
+                                try:
+                                    if os.path.exists(p):
+                                        cam_descriptions += os.path.getsize(p)
+                                except OSError:
+                                    pass
+
+                            try:
+                                if os.path.exists(clip_path):
+                                    cam_clips += os.path.getsize(clip_path)
+                            except OSError:
+                                pass
+
+                            try:
+                                if os.path.exists(snapshot_path):
+                                    cam_snapshots += os.path.getsize(snapshot_path)
+                            except OSError:
+                                pass
                 except OSError:
                     continue
-
-                for event_dir in event_dirs:
-                    event_path = os.path.join(camera_path, event_dir)
-                    if not os.path.isdir(event_path):
-                        continue
-
-                    clip_path = os.path.join(event_path, 'clip.mp4')
-                    snapshot_path = os.path.join(event_path, 'snapshot.jpg')
-
-                    for f in ('summary.txt', 'review_summary.md', 'metadata.json'):
-                        p = os.path.join(event_path, f)
-                        try:
-                            if os.path.exists(p):
-                                cam_descriptions += os.path.getsize(p)
-                        except OSError:
-                            pass
-
-                    try:
-                        if os.path.exists(clip_path):
-                            cam_clips += os.path.getsize(clip_path)
-                    except OSError:
-                        pass
-
-                    try:
-                        if os.path.exists(snapshot_path):
-                            cam_snapshots += os.path.getsize(snapshot_path)
-                    except OSError:
-                        pass
 
                 cam_total = cam_clips + cam_snapshots + cam_descriptions
                 if cam_total > 0:

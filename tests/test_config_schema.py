@@ -34,6 +34,28 @@ class TestConfigSchema(unittest.TestCase):
     @patch('builtins.open', new_callable=mock_open)
     @patch('os.path.exists')
     @patch('frigate_buffer.config.yaml.safe_load')
+    def test_mqtt_auth_config(self, mock_yaml_load, mock_exists, mock_file):
+        # Mock config with MQTT auth
+        auth_yaml = {
+            'cameras': [{'name': 'cam1'}],
+            'network': {
+                'mqtt_broker': 'localhost',
+                'mqtt_user': 'testuser',
+                'mqtt_password': 'testpassword',
+                'frigate_url': 'http://frigate',
+                'buffer_ip': 'localhost'
+            }
+        }
+        mock_exists.return_value = True
+        mock_yaml_load.return_value = auth_yaml
+
+        config = load_config()
+        self.assertEqual(config['MQTT_USER'], 'testuser')
+        self.assertEqual(config['MQTT_PASSWORD'], 'testpassword')
+
+    @patch('builtins.open', new_callable=mock_open)
+    @patch('os.path.exists')
+    @patch('frigate_buffer.config.yaml.safe_load')
     def test_missing_cameras(self, mock_yaml_load, mock_exists, mock_file):
         # Mock invalid config (missing cameras)
         invalid_yaml = {
