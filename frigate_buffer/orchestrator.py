@@ -295,19 +295,29 @@ class StateAwareOrchestrator:
         first_clip_path = None
         primary_cam = ce.primary_camera or (ce.cameras[0] if ce.cameras else None)
 
+        # Calculate global start/end times across all cameras for unified export duration
+        all_events = []
+        for events in camera_events.values():
+            all_events.extend(events)
+
+        if all_events:
+            global_start_times = [e.created_at for e in all_events]
+            global_min_start = min(global_start_times)
+
+            global_end_times = []
+            for e in all_events:
+                if e.end_time:
+                    global_end_times.append(e.end_time)
+                else:
+                    # Fallback if end_time is missing (should be rare at close time)
+                    global_end_times.append(e.created_at + export_after)
+            global_max_end = max(global_end_times)
+        else:
+            global_min_start = ce.start_time
+            global_max_end = ce.end_time_max or ce.last_activity_time
+
         for camera, events in camera_events.items():
             camera_folder = self.file_manager.ensure_consolidated_camera_folder(ce.folder_path, camera)
-
-            start_times = [e.created_at for e in events]
-            min_start = min(start_times) if start_times else ce.start_time
-
-            end_times = []
-            for e in events:
-                if e.end_time:
-                    end_times.append(e.end_time)
-                else:
-                    end_times.append(e.created_at + export_after)
-            max_end = max(end_times) if end_times else (ce.end_time_max or ce.last_activity_time)
 
             def get_duration(e):
                 end = e.end_time if e.end_time else (e.created_at + export_after)
@@ -317,8 +327,8 @@ class StateAwareOrchestrator:
             rep_id = representative_event.event_id
 
             # For timeline logging
-            start_ts = int(min_start - export_before)
-            end_ts = int(max_end + export_after)
+            start_ts = int(global_min_start - export_before)
+            end_ts = int(global_max_end + export_after)
 
             self.timeline_logger.log_frigate_api(
                 ce.folder_path, 'out',
@@ -328,7 +338,7 @@ class StateAwareOrchestrator:
             )
             result = self.file_manager.export_and_transcode_clip(
                 rep_id, camera_folder, camera,
-                min_start, max_end,
+                global_min_start, global_max_end,
                 export_before, export_after
             )
             ok = result.get("success", False)
