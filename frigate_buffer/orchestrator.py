@@ -42,7 +42,7 @@ class StateAwareOrchestrator:
 
         # Initialize components (file_manager first - needed by consolidated_manager)
         self.state_manager = EventStateManager()
-        self.video_service = VideoService(config.get('FFMPEG_TIMEOUT', 60))
+        self.video_service = VideoService(config.get('FFMPEG_TIMEOUT', VideoService.DEFAULT_FFMPEG_TIMEOUT))
         self.download_service = DownloadService(
             config['FRIGATE_URL'],
             self.video_service
@@ -539,7 +539,7 @@ class StateAwareOrchestrator:
 
         logger.info(f"Storage Path: {self.config['STORAGE_PATH']}")
         logger.info(f"Retention: {self.config['RETENTION_DAYS']} days")
-        logger.info(f"FFmpeg Timeout: {self.config.get('FFMPEG_TIMEOUT', 60)}s")
+        logger.info(f"FFmpeg Timeout: {self.config.get('FFMPEG_TIMEOUT', VideoService.DEFAULT_FFMPEG_TIMEOUT)}s")
         logger.info(f"Log Level: {self.config.get('LOG_LEVEL', 'INFO')}")
 
         camera_label_map = self.config.get('CAMERA_LABEL_MAP', {})
