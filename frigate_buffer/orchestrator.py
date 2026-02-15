@@ -105,6 +105,15 @@ class StateAwareOrchestrator:
         self._request_count = 0
         self._request_count_lock = threading.Lock()
 
+        # Cache for storage stats
+        self._cached_storage_stats = {
+            'clips': 0,
+            'snapshots': 0,
+            'descriptions': 0,
+            'total': 0,
+            'by_camera': {}
+        }
+
         # Last cleanup tracking delegated to lifecycle service via properties
 
     @property
@@ -459,6 +468,7 @@ class StateAwareOrchestrator:
         cleanup_hours = self.config.get('CLEANUP_INTERVAL_HOURS', 1)
         schedule.every(cleanup_hours).hours.do(self._hourly_cleanup)
         schedule.every(5).minutes.do(self._log_request_stats)
+        schedule.every(5).minutes.do(self._update_storage_stats)
 
         review_hour = self.config.get('DAILY_REVIEW_SCHEDULE_HOUR', 1)
         schedule.every().day.at(f"{review_hour:02d}:00").do(self._daily_review_job)
@@ -476,6 +486,15 @@ class StateAwareOrchestrator:
             self._request_count = 0
         active = len(self.state_manager._events)
         logger.info(f"API stats (5m): {count} requests, {active} active events, MQTT {'connected' if self.mqtt_wrapper.mqtt_connected else 'disconnected'}")
+
+    def _update_storage_stats(self):
+        """Update cached storage stats (background task)."""
+        logger.debug("Updating storage stats...")
+        try:
+            self._cached_storage_stats = self.file_manager.compute_storage_stats()
+            logger.debug("Storage stats updated")
+        except Exception as e:
+            logger.error(f"Failed to update storage stats: {e}")
 
     def _daily_review_job(self):
         """Fetch yesterday's review from Frigate and save. Runs at configured hour (default 1am)."""
@@ -544,6 +563,12 @@ class StateAwareOrchestrator:
             daemon=True
         )
         self._scheduler_thread.start()
+
+        # Update storage stats immediately (background)
+        threading.Thread(
+            target=self._update_storage_stats,
+            daemon=True
+        ).start()
 
         logger.info(f"Starting Flask on port {self.config['FLASK_PORT']}...")
         self.flask_app.run(
