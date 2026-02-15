@@ -14,6 +14,7 @@ from typing import Optional, List, Any
 
 import requests
 import schedule
+from urllib.parse import urlparse, urlunparse
 
 from frigate_buffer.models import EventState, _is_no_concerns
 from frigate_buffer.managers.file import FileManager
@@ -519,7 +520,19 @@ class StateAwareOrchestrator:
         logger.info("Starting State-Aware Orchestrator")
         logger.info("=" * 60)
         logger.info(f"MQTT Broker: {self.config['MQTT_BROKER']}:{self.config['MQTT_PORT']}")
-        logger.info(f"Frigate URL: {self.config['FRIGATE_URL']}")
+
+        frigate_url = self.config['FRIGATE_URL']
+        try:
+            parsed = urlparse(frigate_url)
+            if parsed.password:
+                safe_netloc = f"{parsed.username or ''}:***@{parsed.hostname}"
+                if parsed.port:
+                    safe_netloc += f":{parsed.port}"
+                parsed = parsed._replace(netloc=safe_netloc)
+            logger.info(f"Frigate URL: {urlunparse(parsed)}")
+        except Exception:
+            logger.info(f"Frigate URL: (hidden)")
+
         logger.info(f"Storage Path: {self.config['STORAGE_PATH']}")
         logger.info(f"Retention: {self.config['RETENTION_DAYS']} days")
         logger.info(f"FFmpeg Timeout: {self.config.get('FFMPEG_TIMEOUT', 60)}s")
