@@ -37,7 +37,15 @@ class FileManager:
         # Lowercase, replace spaces with underscores, remove special chars
         sanitized = camera.lower().replace(' ', '_')
         sanitized = re.sub(r'[^a-z0-9_]', '', sanitized)
-        return sanitized or 'unknown'
+        result = sanitized or 'unknown'
+
+        # Verify path security
+        final_path = os.path.realpath(os.path.join(self.storage_path, result))
+        real_storage_path = os.path.realpath(self.storage_path)
+        if os.path.commonpath([real_storage_path, final_path]) != real_storage_path:
+            raise ValueError(f"Invalid camera name: {camera}")
+
+        return result
 
     def create_event_folder(self, event_id: str, camera: str, timestamp: float) -> str:
         """Create folder for event: {camera}/{timestamp}_{event_id} (legacy)"""
@@ -45,6 +53,13 @@ class FileManager:
         folder_name = f"{int(timestamp)}_{event_id}"
         camera_path = os.path.join(self.storage_path, sanitized_camera)
         folder_path = os.path.join(camera_path, folder_name)
+
+        # Verify path security
+        real_storage_path = os.path.realpath(self.storage_path)
+        real_folder_path = os.path.realpath(folder_path)
+        if os.path.commonpath([real_storage_path, real_folder_path]) != real_storage_path:
+            raise ValueError(f"Invalid event path: {folder_path}")
+
         os.makedirs(folder_path, exist_ok=True)
         logger.info(f"Created folder: {sanitized_camera}/{folder_name}")
         return folder_path
@@ -53,6 +68,13 @@ class FileManager:
         """Create folder for consolidated event: events/{folder_name}"""
         events_dir = os.path.join(self.storage_path, "events")
         folder_path = os.path.join(events_dir, folder_name)
+
+        # Verify path security
+        real_storage_path = os.path.realpath(self.storage_path)
+        real_folder_path = os.path.realpath(folder_path)
+        if os.path.commonpath([real_storage_path, real_folder_path]) != real_storage_path:
+            raise ValueError(f"Invalid consolidated event path: {folder_path}")
+
         os.makedirs(folder_path, exist_ok=True)
         logger.info(f"Created consolidated folder: events/{folder_name}")
         return folder_path
