@@ -29,22 +29,33 @@ A state-aware orchestrator that listens to Frigate NVR events via MQTT, tracks t
 
 ## Architecture
 
+The **StateAwareOrchestrator** is the central coordinator. It owns event-handling logic (frigate/events, tracked_object_update, reviews) and delegates to dedicated components:
+
+- **MqttClientWrapper** (`services/mqtt_client.py`) — MQTT connection, subscriptions, and message callback; orchestrator provides the message handler.
+- **SmartZoneFilter** (`managers/zone_filter.py`) — Per-camera zone/exception rules (tracked_zones, exceptions); decides whether to start an event.
+- **TimelineLogger** (`services/timeline.py`) — Writes HA, MQTT, and Frigate API entries to event timeline files.
+- **EventStateManager**, **FileManager**, **ConsolidatedEventManager**, **DailyReviewManager** — State, storage, consolidation, and daily reviews.
+- **NotificationPublisher** — Publishes to `frigate/custom/notifications`; timeline callback is `TimelineLogger.log_ha`.
+- **Flask** — Web API (player, events, files, stats, daily review, status).
+
 ```
-┌─────────────────────────────────────────────────────────┐
-│              State-Aware Orchestrator                    │
-├─────────────────────────────────────────────────────────┤
-│  MQTT Client          EventStateManager    Flask API    │
-│  ├─ frigate/events    ├─ active_events     ├─ /player   │
-│  │   (new,update,end) ├─ smart zone filter  ├─ /events   │
-│  ├─ frigate/+/        ├─ phase tracking    ├─ /cameras  │
-│  │   tracked_object   │   (NEW→DESCRIBED   ├─ /files    │
-│  └─ frigate/reviews   │    →FINALIZED      ├─ /stats    │
-│                       │    →SUMMARIZED)    ├─ /stats-   │
-│                       │                    │   page     │
-│                       │                    ├─ /daily-   │
-│                       │                    │   review   │
-│                       │                    └─ /status   │
-└─────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────────┐
+│                    StateAwareOrchestrator (coordinator)                   │
+├─────────────────────────────────────────────────────────────────────────┤
+│  MqttClientWrapper     EventStateManager    SmartZoneFilter   Flask API  │
+│  ├─ connect/subscribe  ├─ active_events     ├─ should_start   ├─ /player │
+│  ├─ on_message →       ├─ phase tracking    │   _event        ├─ /events │
+│  │   orchestrator     │   NEW→DESCRIBED     └─ exceptions +   ├─ /files  │
+│  └─ frigate/events,   │   →FINALIZED           tracked_zones  ├─ /stats  │
+│      tracked_object,   │   →SUMMARIZED                         ├─ /stats-│
+│      reviews           │                                       │   page   │
+│  TimelineLogger        FileManager          ConsolidatedEvent  ├─ /daily- │
+│  ├─ folder_for_event  ├─ clip/snapshot     ├─ get_or_create   │   review │
+│  ├─ log_ha / log_mqtt │   export/transcode ├─ schedule_close  └─ /status │
+│  └─ log_frigate_api    └─ cleanup           └─ on_close → orchestrator   │
+│  NotificationPublisher DailyReviewManager                                │
+│  └─ timeline_callback = TimelineLogger.log_ha                            │
+└─────────────────────────────────────────────────────────────────────────┘
 ```
 
 ## Project Structure
@@ -57,13 +68,17 @@ The application is organized as a Python package `frigate_buffer/`:
 | `config.py` | Configuration loading. Merges YAML, env vars, and defaults. Searches config paths in order. |
 | `logging_utils.py` | Error buffer and logging. `ErrorBuffer` stores recent errors for the stats dashboard; `setup_logging()` configures log level and handlers. |
 | `models.py` | Data models: `EventPhase`, `EventState`, `ConsolidatedEvent`, plus helpers for consolidated IDs and "no concerns" detection. |
-| `orchestrator.py` | `StateAwareOrchestrator` — MQTT subscription, event phase tracking, notification publishing, and coordination of managers. |
+| `orchestrator.py` | `StateAwareOrchestrator` — Central coordinator: MQTT message routing (`_on_mqtt_message`), event handlers (frigate/events, tracked_object_update, reviews), CE close and event-end processing. Delegates to MqttClientWrapper, SmartZoneFilter, TimelineLogger, and managers. |
 | `managers/` | Business logic modules: |
 | `managers/file.py` | `FileManager` — clip/snapshot download, FFmpeg transcode, storage paths, cleanup. Export API uses JSON body (`playback`, `name`), polls by export_id, 90s poll timeout, 180s download timeout; returns rich result with Frigate response for timeline debugging. Export failures and `success: false` responses are logged at WARNING with full raw response. HTTP 404 on clip download is treated as "no recording available" and returns False without retries; retries remain for HTTP 400 (Not Ready) and other transient errors. |
 | `managers/state.py` | `EventStateManager` — per-event state (phase, metadata) and active event tracking. |
 | `managers/consolidation.py` | `ConsolidatedEventManager` — groups related Frigate events into consolidated events. |
 | `managers/reviews.py` | `DailyReviewManager` — fetches and caches Frigate daily review summaries. |
-| `services/notifier.py` | `NotificationPublisher` — publishes MQTT notifications to Home Assistant. |
+| `managers/zone_filter.py` | `SmartZoneFilter` — per-camera `CAMERA_EVENT_FILTERS` (tracked_zones, exceptions); `should_start_event` and `normalize_sub_label`. |
+| `services/` | External integrations and utilities: |
+| `services/notifier.py` | `NotificationPublisher` — publishes MQTT notifications to Home Assistant; optional `timeline_callback` (e.g. `TimelineLogger.log_ha`). |
+| `services/timeline.py` | `TimelineLogger` — resolves event/CE folder and appends HA, MQTT, and Frigate API entries to `notification_timeline.json` via `FileManager`. |
+| `services/mqtt_client.py` | `MqttClientWrapper` — Paho MQTT client lifecycle (connect, subscribe, loop), connect/disconnect logging; exposes `client` and `mqtt_connected`; message handling delegated to orchestrator callback. Requires `paho-mqtt>=2.0.0` (CallbackAPIVersion.VERSION2). |
 | `web/server.py` | Flask app factory `create_app(orchestrator)`. Routes for player, events, files, stats, daily review, API. |
 | `templates/` | Jinja2 templates (player, stats, daily review, timeline). Single location under `frigate_buffer/`; used by Flask at runtime. |
 | `static/` | Static assets (marked.min.js, purify.min.js). Located under `frigate_buffer/`. |
@@ -99,9 +114,10 @@ curl http://localhost:5055/status
 
 ### Running without Docker
 
-From the project root with dependencies installed:
+From the project root, install dependencies (see `requirements.txt`; requires `paho-mqtt>=2.0.0` for MQTT), then run:
 
 ```bash
+pip install -r requirements.txt
 python -m frigate_buffer.main
 ```
 
@@ -764,7 +780,7 @@ Debug output includes:
 
 ## FFmpeg Process Safety
 
-The orchestrator includes safeguards against hung FFmpeg processes:
+The application includes safeguards against hung FFmpeg processes (in `FileManager`):
 
 - **60-second timeout**: Configurable via `ffmpeg_timeout_seconds`
 - **Graceful termination**: SIGTERM first, wait 5s, then SIGKILL
