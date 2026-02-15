@@ -18,6 +18,7 @@ import schedule
 from frigate_buffer.models import EventState, _is_no_concerns
 from frigate_buffer.managers.file import FileManager
 from frigate_buffer.managers.state import EventStateManager
+from frigate_buffer.services.video import VideoService
 from frigate_buffer.managers.consolidation import ConsolidatedEventManager
 from frigate_buffer.managers.reviews import DailyReviewManager
 from frigate_buffer.managers.zone_filter import SmartZoneFilter
@@ -38,11 +39,12 @@ class StateAwareOrchestrator:
 
         # Initialize components (file_manager first - needed by consolidated_manager)
         self.state_manager = EventStateManager()
+        self.video_service = VideoService(config.get('FFMPEG_TIMEOUT', 60))
         self.file_manager = FileManager(
             config['STORAGE_PATH'],
             config['FRIGATE_URL'],
             config['RETENTION_DAYS'],
-            config.get('FFMPEG_TIMEOUT', 60)
+            self.video_service
         )
         self.consolidated_manager = ConsolidatedEventManager(
             self.file_manager,
@@ -358,7 +360,7 @@ class StateAwareOrchestrator:
 
         if first_clip_path:
             gif_path = os.path.join(ce.folder_path, 'notification.gif')
-            if self.file_manager.generate_gif_from_clip(first_clip_path, gif_path):
+            if self.video_service.generate_gif_from_clip(first_clip_path, gif_path):
                 ce.snapshot_downloaded = True
             ce.clip_downloaded = True
 
