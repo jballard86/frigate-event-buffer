@@ -184,6 +184,10 @@ class FileManager:
             elif resp.text:
                 frigate_response = {"status_code": resp.status_code, "raw": resp.text[:500]}
 
+            # Check if export failed (status not OK or success: false)
+            if not resp.ok or (frigate_response and isinstance(frigate_response, dict) and frigate_response.get("success") is False):
+                logger.warning(f"Export failed for {event_id}. Status: {resp.status_code}. Response: {resp.text}")
+
             resp.raise_for_status()
 
             # 2. Get export filename or export_id from response
@@ -324,10 +328,15 @@ class FileManager:
                     response.raise_for_status()
                     break
                 except requests.exceptions.HTTPError:
-                    if response is not None and response.status_code == 400 and attempt < 3:
-                        logger.warning(f"Clip not ready for {event_id} (HTTP 400), retrying in 5s ({attempt}/3)")
-                        time.sleep(5)
-                        continue
+                    if response is not None:
+                        if response.status_code == 404:
+                            logger.warning(f"No recording available for event {event_id}")
+                            return False
+
+                        if response.status_code == 400 and attempt < 3:
+                            logger.warning(f"Clip not ready for {event_id} (HTTP 400), retrying in 5s ({attempt}/3)")
+                            time.sleep(5)
+                            continue
                     raise
 
             bytes_downloaded = 0
