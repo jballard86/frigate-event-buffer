@@ -8,19 +8,15 @@ from unittest.mock import MagicMock
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from frigate_buffer.managers.file import FileManager
-from frigate_buffer.services.video import VideoService
 
 
 class TestFileManagerPathValidation(unittest.TestCase):
 
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
-        self.video = MagicMock(spec=VideoService)
         self.fm = FileManager(
             self.tmp,
-            "http://frigate",
-            3,
-            self.video
+            3
         )
 
     def tearDown(self):

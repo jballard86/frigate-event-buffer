@@ -9,7 +9,9 @@ logger = logging.getLogger('frigate-buffer')
 class VideoService:
     """Handles video processing tasks like transcoding and GIF generation."""
 
-    def __init__(self, ffmpeg_timeout: int = 60):
+    DEFAULT_FFMPEG_TIMEOUT = 60
+
+    def __init__(self, ffmpeg_timeout: int = DEFAULT_FFMPEG_TIMEOUT):
         self.ffmpeg_timeout = ffmpeg_timeout
         logger.debug(f"VideoService initialized with FFmpeg timeout: {ffmpeg_timeout}s")
 
