@@ -147,8 +147,8 @@ class StateAwareOrchestrator:
             if resp.ok:
                 data = resp.json()
                 return data.get("state")
-        except Exception:
-            pass
+        except requests.RequestException as e:
+            logger.warning(f"Error fetching HA state for {entity_id} from {url}: {e}")
         return None
 
     def _on_mqtt_message(self, client, userdata, msg):
