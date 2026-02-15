@@ -35,17 +35,6 @@ The application logs the configured `FRIGATE_URL` at startup. If this URL contai
 
 ## 2. Performance
 
-### High: Blocking I/O in Main Event Loop (Event Query Service)
-**File**: `frigate_buffer/services/query.py` (Lines ~58, ~107, ~137, ~241)
-
-**Description**:
-The `EventQueryService` performs excessive blocking file I/O operations directly in the main thread (during Flask request handling). For each event, it reads `notification_timeline.json` multiple times (once for `_extract_genai_entries`, once for `_extract_cameras_zones_from_timeline`, once for `_event_ended_in_timeline`), plus `summary.txt`, `metadata.json`, `review_summary.md`, and checks for `.viewed` and clip files. This results in 7+ file operations per event. When listing all events (`get_all_events`), this scales linearly with the number of events, potentially causing severe latency and blocking other requests.
-
-**Remediation**:
-- Consolidate file reads: Read `notification_timeline.json` once per event and extract all necessary data.
-- Implement an in-memory cache for parsed event objects with a smarter invalidation strategy (e.g., file mtime checks or specific cache keys) rather than a simple 5-second TTL.
-- Consider using a lightweight database (SQLite) to index event metadata instead of traversing the filesystem on every request.
-
 ### High: Blocking I/O in Storage Stats Calculation
 **File**: `frigate_buffer/managers/file.py` (Line ~438 in `compute_storage_stats`)
 **Called from**: `frigate_buffer/web/server.py` (Line ~336)
