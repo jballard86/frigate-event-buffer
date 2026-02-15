@@ -80,6 +80,10 @@ class TestFileManagerEnhancement(unittest.TestCase):
 
         mock_response = MagicMock()
         mock_response.status_code = 404
+        # Configure context manager
+        mock_response.__enter__.return_value = mock_response
+        mock_response.__exit__.return_value = None
+
         error = requests.exceptions.HTTPError("404 Client Error", response=mock_response)
         mock_response.raise_for_status.side_effect = error
 
@@ -110,6 +114,10 @@ class TestFileManagerEnhancement(unittest.TestCase):
         # Mock 400 response
         mock_response_400 = MagicMock()
         mock_response_400.status_code = 400
+        # Configure context manager
+        mock_response_400.__enter__.return_value = mock_response_400
+        mock_response_400.__exit__.return_value = None
+
         mock_response_400.raise_for_status.side_effect = requests.exceptions.HTTPError("400 Client Error", response=mock_response_400)
 
         # Setup mock to return 400 three times (exhaust retries)
