@@ -24,6 +24,8 @@ class MqttClientWrapper:
         client_id: str = "frigate-event-buffer",
         topics: Optional[List[Tuple[str, int]]] = None,
         on_message_callback: Optional[Callable[..., Any]] = None,
+        username: Optional[str] = None,
+        password: Optional[str] = None,
     ) -> None:
         self._broker = broker
         self._port = port
@@ -35,6 +37,8 @@ class MqttClientWrapper:
             mqtt.CallbackAPIVersion.VERSION2,
             client_id=client_id,
         )
+        if username:
+            self._client.username_pw_set(username, password)
         self._client.on_connect = self._on_connect
         self._client.on_disconnect = self._on_disconnect
         self._client.on_message = self._on_message
