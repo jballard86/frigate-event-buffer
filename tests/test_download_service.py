@@ -1,4 +1,3 @@
-
 import unittest
 from unittest.mock import MagicMock, patch, ANY
 import logging
@@ -9,14 +8,13 @@ import requests
 # Add parent dir to path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from frigate_buffer.managers.file import FileManager
+from frigate_buffer.services.download import DownloadService
 
-class TestFileManagerEnhancement(unittest.TestCase):
+class TestDownloadService(unittest.TestCase):
     def setUp(self):
-        self.storage_path = "/tmp/test_storage"
         self.frigate_url = "http://mock-frigate:5000"
         self.mock_video_service = MagicMock()
-        self.file_manager = FileManager(self.storage_path, self.frigate_url, 7, self.mock_video_service)
+        self.download_service = DownloadService(self.frigate_url, self.mock_video_service)
 
         # Configure logging to capture output
         self.logger = logging.getLogger('frigate-buffer')
@@ -31,9 +29,9 @@ class TestFileManagerEnhancement(unittest.TestCase):
     def tearDown(self):
         self.logger.removeHandler(self.log_capture_handler)
 
-    @patch('frigate_buffer.managers.file.requests.post')
-    @patch('frigate_buffer.managers.file.requests.get')
-    @patch('frigate_buffer.managers.file.FileManager.download_and_transcode_clip') # Mock fallback to avoid side effects
+    @patch('frigate_buffer.services.download.requests.post')
+    @patch('frigate_buffer.services.download.requests.get')
+    @patch('frigate_buffer.services.download.DownloadService.download_and_transcode_clip') # Mock fallback to avoid side effects
     @patch('time.sleep') # Speed up polling
     def test_export_success_false_logs_warning(self, mock_sleep, mock_fallback, mock_get, mock_post):
         # Scenario: Export API returns 200 OK but body has success: false
@@ -55,7 +53,7 @@ class TestFileManagerEnhancement(unittest.TestCase):
         mock_fallback.return_value = False
 
         # Call the method
-        self.file_manager.export_and_transcode_clip(
+        self.download_service.export_and_transcode_clip(
             event_id="evt1",
             folder_path="/tmp",
             camera="cam1",
@@ -74,7 +72,7 @@ class TestFileManagerEnhancement(unittest.TestCase):
 
         self.assertTrue(found_warning, "Should log WARNING with raw response when success: false")
 
-    @patch('frigate_buffer.managers.file.requests.get')
+    @patch('frigate_buffer.services.download.requests.get')
     def test_download_404_no_retry(self, mock_get):
         # Scenario: Download clip returns 404
 
@@ -90,7 +88,7 @@ class TestFileManagerEnhancement(unittest.TestCase):
         mock_get.return_value = mock_response
 
         # Call the method
-        result = self.file_manager.download_and_transcode_clip("evt_missing", "/tmp")
+        result = self.download_service.download_and_transcode_clip("evt_missing", "/tmp")
 
         self.assertFalse(result)
 
@@ -106,7 +104,7 @@ class TestFileManagerEnhancement(unittest.TestCase):
         # Verify retries
         self.assertEqual(mock_get.call_count, 1, "Should not retry on 404")
 
-    @patch('frigate_buffer.managers.file.requests.get')
+    @patch('frigate_buffer.services.download.requests.get')
     @patch('time.sleep')
     def test_download_400_retries(self, mock_sleep, mock_get):
         # Scenario: Download clip returns 400 (Not Ready) then succeeds (or fails after retries)
@@ -123,7 +121,7 @@ class TestFileManagerEnhancement(unittest.TestCase):
         # Setup mock to return 400 three times (exhaust retries)
         mock_get.return_value = mock_response_400
 
-        result = self.file_manager.download_and_transcode_clip("evt_notready", "/tmp")
+        result = self.download_service.download_and_transcode_clip("evt_notready", "/tmp")
 
         self.assertFalse(result)
         self.assertEqual(mock_get.call_count, 3, "Should retry 3 times on 400")

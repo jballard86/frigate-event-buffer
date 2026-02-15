@@ -17,12 +17,13 @@ class EventLifecycleService:
     """Service managing the lifecycle of events (new, end, consolidate, close)."""
 
     def __init__(self, config, state_manager, file_manager, consolidated_manager,
-                 video_service, notifier, timeline_logger):
+                 video_service, download_service, notifier, timeline_logger):
         self.config = config
         self.state_manager = state_manager
         self.file_manager = file_manager
         self.consolidated_manager = consolidated_manager
         self.video_service = video_service
+        self.download_service = download_service
         self.notifier = notifier
         self.timeline_logger = timeline_logger
 
@@ -51,7 +52,7 @@ class EventLifecycleService:
         if not is_new:
             logger.info(f"Event {event_id} grouped into consolidated event {ce.consolidated_id}, suppressing duplicate notification")
             def _download_grouped_snapshot():
-                self.file_manager.download_snapshot(event_id, camera_folder)
+                self.download_service.download_snapshot(event_id, camera_folder)
             threading.Thread(target=_download_grouped_snapshot, daemon=True).start()
             return
 
@@ -73,7 +74,7 @@ class EventLifecycleService:
                 time.sleep(delay)
 
             if event.folder_path:
-                event.snapshot_downloaded = self.file_manager.download_snapshot(
+                event.snapshot_downloaded = self.download_service.download_snapshot(
                     event.event_id, event.folder_path
                 )
                 if event.snapshot_downloaded:
@@ -85,7 +86,7 @@ class EventLifecycleService:
         """Background processing when event ends. For consolidated events, defers clip export to CE close."""
         try:
             if event.has_snapshot:
-                event.snapshot_downloaded = self.file_manager.download_snapshot(
+                event.snapshot_downloaded = self.download_service.download_snapshot(
                     event.event_id, event.folder_path
                 )
 
@@ -117,7 +118,7 @@ class EventLifecycleService:
                     },
                 )
 
-                result = self.file_manager.export_and_transcode_clip(
+                result = self.download_service.export_and_transcode_clip(
                     event.event_id,
                     event.folder_path,
                     camera=event.camera,
@@ -227,7 +228,7 @@ class EventLifecycleService:
                 {'url': f"{self.config.get('FRIGATE_URL', '')}/api/export/{camera}/start/{start_ts}/end/{end_ts}",
                  'representative_id': rep_id}
             )
-            result = self.file_manager.export_and_transcode_clip(
+            result = self.download_service.export_and_transcode_clip(
                 rep_id, camera_folder, camera,
                 global_min_start, global_max_end,
                 export_before, export_after
@@ -242,7 +243,7 @@ class EventLifecycleService:
         # Placeholder fallback: if all exports failed, try per-event clip for primary camera
         if first_clip_path is None and primary_cam and ce.primary_event_id:
             primary_folder = self.file_manager.ensure_consolidated_camera_folder(ce.folder_path, primary_cam)
-            ok = self.file_manager.download_and_transcode_clip(ce.primary_event_id, primary_folder)
+            ok = self.download_service.download_and_transcode_clip(ce.primary_event_id, primary_folder)
             if ok:
                 first_clip_path = os.path.join(primary_folder, 'clip.mp4')
                 self.timeline_logger.log_frigate_api(ce.folder_path, 'in', 'Placeholder clip (events API fallback)', {'success': True})
@@ -260,7 +261,7 @@ class EventLifecycleService:
             'Review summarize (CE close)',
             {'url': f"{self.config.get('FRIGATE_URL', '')}/api/review/summarize/start/{padded_start}/end/{padded_end}"}
         )
-        summary = self.file_manager.fetch_review_summary(
+        summary = self.download_service.fetch_review_summary(
             ce.start_time, ce.end_time_max or ce.last_activity_time,
             padding_before, padding_after
         )
