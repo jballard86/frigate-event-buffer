@@ -1,13 +1,27 @@
+import sys
+from unittest.mock import MagicMock
+
+# Mock dependencies before importing project modules
+sys.modules['requests'] = MagicMock()
+sys.modules['flask'] = MagicMock()
+sys.modules['paho'] = MagicMock()
+sys.modules['paho.mqtt'] = MagicMock()
+sys.modules['paho.mqtt.client'] = MagicMock()
+sys.modules['schedule'] = MagicMock()
+sys.modules['yaml'] = MagicMock()
+sys.modules['voluptuous'] = MagicMock()
+
 import unittest
-import time
 from frigate_buffer.managers.state import EventStateManager
 from frigate_buffer.models import EventPhase
 
 class TestEventStateManager(unittest.TestCase):
     def setUp(self):
+        """Set up the test environment."""
         self.manager = EventStateManager()
 
     def test_create_event_success(self):
+        """Test creating a new event successfully."""
         event_id = "test_event_1"
         camera = "front_door"
         label = "person"
@@ -25,6 +39,7 @@ class TestEventStateManager(unittest.TestCase):
         self.assertEqual(self.manager.get_event(event_id), event)
 
     def test_create_event_duplicate(self):
+        """Test creating an event that already exists preserves original (idempotency)."""
         event_id = "test_event_1"
         camera = "front_door"
         label = "person"
@@ -43,9 +58,28 @@ class TestEventStateManager(unittest.TestCase):
         self.assertEqual(event2.label, label)
         self.assertEqual(event2.created_at, start_time)
 
+    def test_create_event_existing(self):
+        """Test creating an event that already exists returns the existing one."""
+        event_id = "123456.789-new"
+        camera = "front_door"
+        label = "person"
+        start_time = 123456.789
+
+        event1 = self.manager.create_event(event_id, camera, label, start_time)
+        event1.phase = EventPhase.DESCRIBED  # Modify to distinguish
+
+        # Try creating again with same ID
+        event2 = self.manager.create_event(event_id, camera, label, start_time)
+
+        self.assertEqual(event1, event2)
+        self.assertEqual(event2.phase, EventPhase.DESCRIBED)  # Should still be DESCRIBED
+
     def test_get_event(self):
+        """Test retrieving events."""
+        # Non-existent
         self.assertIsNone(self.manager.get_event("non_existent"))
 
+        # Existent
         event_id = "test_event_1"
         self.manager.create_event(event_id, "cam", "label", 100.0)
 
@@ -54,6 +88,7 @@ class TestEventStateManager(unittest.TestCase):
         self.assertEqual(event.event_id, event_id)
 
     def test_remove_event(self):
+        """Test removing an event."""
         event_id = "test_event_1"
         self.manager.create_event(event_id, "cam", "label", 100.0)
 
@@ -67,6 +102,7 @@ class TestEventStateManager(unittest.TestCase):
         self.assertIsNone(self.manager.remove_event("non_existent"))
 
     def test_set_ai_description(self):
+        """Test setting AI description and advancing to DESCRIBED phase."""
         event_id = "test_event_1"
         self.manager.create_event(event_id, "cam", "label", 100.0)
 
@@ -85,7 +121,13 @@ class TestEventStateManager(unittest.TestCase):
         self.assertEqual(event.ai_description, new_description)
         self.assertEqual(event.phase, EventPhase.DESCRIBED)
 
+    def test_set_ai_description_nonexistent(self):
+        """Test setting AI description for non-existent event."""
+        success = self.manager.set_ai_description("nonexistent", "desc")
+        self.assertFalse(success)
+
     def test_set_genai_metadata(self):
+        """Test setting GenAI metadata and advancing to FINALIZED phase."""
         event_id = "test_event_1"
         self.manager.create_event(event_id, "cam", "label", 100.0)
 
@@ -107,7 +149,13 @@ class TestEventStateManager(unittest.TestCase):
         self.assertEqual(event.genai_scene, "Front yard at night")
         self.assertEqual(event.phase, EventPhase.FINALIZED)
 
+    def test_set_genai_metadata_nonexistent(self):
+        """Test setting GenAI metadata for non-existent event."""
+        success = self.manager.set_genai_metadata("nonexistent", "title", "desc", "severity")
+        self.assertFalse(success)
+
     def test_set_review_summary(self):
+        """Test setting review summary and advancing to SUMMARIZED phase."""
         event_id = "test_event_1"
         self.manager.create_event(event_id, "cam", "label", 100.0)
 
@@ -119,7 +167,13 @@ class TestEventStateManager(unittest.TestCase):
         self.assertEqual(event.review_summary, summary)
         self.assertEqual(event.phase, EventPhase.SUMMARIZED)
 
+    def test_set_review_summary_nonexistent(self):
+        """Test setting review summary for non-existent event."""
+        success = self.manager.set_review_summary("nonexistent", "summary")
+        self.assertFalse(success)
+
     def test_mark_event_ended(self):
+        """Test marking event as ended."""
         event_id = "test_event_1"
         self.manager.create_event(event_id, "cam", "label", 100.0)
 
@@ -131,6 +185,11 @@ class TestEventStateManager(unittest.TestCase):
         self.assertFalse(event.has_snapshot)
 
     def test_get_active_event_ids(self):
+        """Test getting list of active event IDs."""
+        # Empty initially
+        ids = self.manager.get_active_event_ids()
+        self.assertEqual(len(ids), 0)
+
         self.manager.create_event("evt1", "cam", "label", 100.0)
         self.manager.create_event("evt2", "cam", "label", 110.0)
 
@@ -140,6 +199,7 @@ class TestEventStateManager(unittest.TestCase):
         self.assertEqual(len(ids), 2)
 
     def test_get_stats(self):
+        """Test getting statistics with multiple events across phases and cameras."""
         self.manager.create_event("evt1", "cam1", "person", 100.0)
         self.manager.create_event("evt2", "cam2", "dog", 110.0)
         self.manager.set_ai_description("evt1", "desc")
@@ -149,6 +209,28 @@ class TestEventStateManager(unittest.TestCase):
         self.assertEqual(stats["by_phase"]["NEW"], 1)
         self.assertEqual(stats["by_phase"]["DESCRIBED"], 1)
         self.assertEqual(stats["by_camera"]["cam1"], 1)
+        self.assertEqual(stats["by_camera"]["cam2"], 1)
+
+    def test_get_stats_comprehensive(self):
+        """Test getting statistics with events in all phases."""
+        # NEW
+        self.manager.create_event("evt1", "cam1", "person", 100.0)
+
+        # DESCRIBED
+        self.manager.create_event("evt2", "cam1", "car", 100.0)
+        self.manager.set_ai_description("evt2", "desc")
+
+        # FINALIZED
+        self.manager.create_event("evt3", "cam2", "person", 100.0)
+        self.manager.set_genai_metadata("evt3", "title", "desc", "severity")
+
+        stats = self.manager.get_stats()
+
+        self.assertEqual(stats["total_active"], 3)
+        self.assertEqual(stats["by_phase"]["NEW"], 1)
+        self.assertEqual(stats["by_phase"]["DESCRIBED"], 1)
+        self.assertEqual(stats["by_phase"]["FINALIZED"], 1)
+        self.assertEqual(stats["by_camera"]["cam1"], 2)
         self.assertEqual(stats["by_camera"]["cam2"], 1)
 
 if __name__ == '__main__':
