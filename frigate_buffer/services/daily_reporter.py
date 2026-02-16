@@ -10,7 +10,7 @@ import json
 import logging
 import os
 from datetime import date, datetime, time as dt_time
-from typing import List, Optional, Tuple
+from typing import Iterator, List, Optional, Tuple
 
 from frigate_buffer.services.ai_analyzer import GeminiAnalysisService
 
@@ -65,11 +65,10 @@ class DailyReporterService:
         except (ValueError, IndexError):
             return None, None
 
-    def _collect_events_for_date(self, target_date: date) -> List[Tuple[str, dict, int]]:
-        """Scan storage for analysis_result.json; return list of (json_path, data, unix_ts) for target_date."""
-        results = []
+    def _collect_events_for_date(self, target_date: date) -> Iterator[Tuple[str, dict, int]]:
+        """Scan storage for analysis_result.json; yield (json_path, data, unix_ts) for target_date (generator to limit peak memory)."""
         if not os.path.isdir(self.storage_path):
-            return results
+            return
         for root, _dirs, files in os.walk(self.storage_path):
             if "analysis_result.json" not in files:
                 continue
@@ -89,8 +88,7 @@ class DailyReporterService:
             except (json.JSONDecodeError, OSError) as e:
                 logger.debug("Skip invalid or unreadable %s: %s", json_path, e)
                 continue
-            results.append((json_path, data, unix_ts))
-        return results
+            yield (json_path, data, unix_ts)
 
     def _aggregate_event_lines(self, events: List[Tuple[str, dict, int]]) -> List[str]:
         """Build sorted list of lines: '[{time}] {title}: {shortSummary} (Threat: {level})'."""
@@ -138,11 +136,40 @@ class DailyReporterService:
         """
         Scan for analysis_result.json for target_date, build event list, call AI, save Markdown.
         Returns True if a report was written, False otherwise.
+        Consumes _collect_events_for_date generator in one pass to limit peak memory.
         """
-        events = self._collect_events_for_date(target_date)
-        event_list_lines = self._aggregate_event_lines(events)
+        event_lines_with_ts: List[Tuple[int, str]] = []
+        event_objects: List[dict] = []
+        for json_path, data, unix_ts in self._collect_events_for_date(target_date):
+            title = (data.get("title") or "").strip()
+            short_summary = (data.get("shortSummary") or data.get("description") or "").strip()
+            try:
+                level = int(data.get("potential_threat_level", 0))
+            except (TypeError, ValueError):
+                level = 0
+            time_str = datetime.fromtimestamp(unix_ts).strftime("%H:%M")
+            line = f"[{time_str}] {title}: {short_summary} (Threat: {level})"
+            event_lines_with_ts.append((unix_ts, line))
+            event_dir = os.path.dirname(json_path)
+            parent_basename = os.path.basename(os.path.dirname(event_dir))
+            camera = os.path.basename(event_dir) if parent_basename == "events" else (os.path.basename(os.path.dirname(event_dir)) if os.path.dirname(event_dir) else "unknown")
+            try:
+                threat_level = int(data.get("potential_threat_level", 0))
+            except (TypeError, ValueError):
+                threat_level = 0
+            event_objects.append({
+                "title": data.get("title", ""),
+                "scene": data.get("scene", ""),
+                "confidence": data.get("confidence", 0),
+                "threat_level": threat_level,
+                "camera": camera,
+                "time": datetime.fromtimestamp(unix_ts).strftime("%Y-%m-%d %H:%M:%S"),
+                "context": data.get("context", []),
+            })
+        event_lines_with_ts.sort(key=lambda x: (x[0], x[1]))
+        event_list_lines = [line for _ts, line in event_lines_with_ts]
         event_list_str = "\n".join(event_list_lines) if event_list_lines else "(No events for this date.)"
-        list_of_event_json_objects = self._build_event_json_objects(events) if events else "[]"
+        list_of_event_json_objects = json.dumps(event_objects, indent=2, ensure_ascii=False) if event_objects else "[]"
 
         date_str = target_date.isoformat()
         report_date_string = date_str

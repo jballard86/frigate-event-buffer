@@ -6,6 +6,7 @@ OpenAI-compatible Gemini proxy, and returns the analysis metadata to the caller.
 Does NOT publish to MQTT; the orchestrator persists results and notifies HA.
 """
 
+import bisect
 import os
 import json
 import base64
@@ -235,6 +236,12 @@ class GeminiAnalysisService:
                 use_motion = self.motion_threshold_px > 0
                 candidates = []
                 prev_gray = None
+                # Pre-sort metadata by frame_time for O(log n) lookup per frame
+                sorted_meta: List[Any] = []
+                times: List[float] = []
+                if use_meta and frame_metadata:
+                    sorted_meta = sorted(frame_metadata, key=lambda m: m.frame_time)
+                    times = [m.frame_time for m in sorted_meta]
 
                 frame_idx = start_frame
                 while frame_idx <= end_frame:
@@ -245,11 +252,11 @@ class GeminiAnalysisService:
                     # Frame time for metadata lookup (approximate)
                     frame_time_approx = event_start_ts + (frame_idx - start_frame) / fps if fps else event_start_ts
                     meta = None
-                    if use_meta and frame_metadata:
-                        closest = min(
-                            frame_metadata,
-                            key=lambda m: abs(m.frame_time - frame_time_approx),
-                        )
+                    if sorted_meta and times:
+                        idx = bisect.bisect_left(times, frame_time_approx)
+                        closest = sorted_meta[min(idx, len(sorted_meta) - 1)]
+                        if idx > 0 and abs(sorted_meta[idx - 1].frame_time - frame_time_approx) < abs(closest.frame_time - frame_time_approx):
+                            closest = sorted_meta[idx - 1]
                         if abs(closest.frame_time - frame_time_approx) < 2.0:
                             meta = closest
                     if self.crop_width > 0 and self.crop_height > 0:

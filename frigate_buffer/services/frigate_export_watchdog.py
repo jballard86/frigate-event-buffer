@@ -11,7 +11,13 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import requests
 
+from frigate_buffer.services.query import read_timeline_merged
+
 logger = logging.getLogger("frigate-buffer")
+
+# Cap link verification to avoid unbounded HEAD requests per run
+MAX_LINK_CHECK_FOLDERS = 20
+MAX_HEAD_REQUESTS = 120
 
 
 def _sanitize_camera_name(camera: str) -> str:
@@ -23,19 +29,16 @@ def _sanitize_camera_name(camera: str) -> str:
 
 def _parse_export_response_entries(
     folder_path: str,
-    timeline_path: str,
-    storage_path: str,
 ) -> List[Tuple[str, Optional[str]]]:
     """
-    Read notification_timeline.json and return list of (export_id, camera_for_clip).
+    Read merged timeline (base + append JSONL) and return list of (export_id, camera_for_clip).
     camera_for_clip is None for single-camera event (clip at root); else camera name for consolidated (clip at camera/clip.mp4).
     """
     result: List[Tuple[str, Optional[str]]] = []
     try:
-        with open(timeline_path, "r") as f:
-            data = json.load(f)
+        data = read_timeline_merged(folder_path)
     except (OSError, json.JSONDecodeError) as e:
-        logger.debug(f"Watchdog: could not read timeline {timeline_path}: {e}")
+        logger.debug(f"Watchdog: could not read timeline in {folder_path}: {e}")
         return result
 
     entries = data.get("entries") or []
@@ -191,11 +194,7 @@ def run_once(config: Dict[str, Any]) -> None:
                             if not os.path.isfile(timeline_path):
                                 continue
 
-                            pairs = _parse_export_response_entries(
-                                event_path,
-                                timeline_path,
-                                storage_path,
-                            )
+                            pairs = _parse_export_response_entries(event_path)
                             for export_id, camera_for_clip in pairs:
                                 if export_id in seen_export_ids:
                                     continue
@@ -221,10 +220,15 @@ def run_once(config: Dict[str, Any]) -> None:
         logger.warning(f"Export watchdog: scan storage: {e}")
         return
 
-    # Verify download links
+    # Verify download links (capped to avoid unbounded HEAD requests)
     if base_url and events_checked_for_links:
-        for folder_path, camera, subdir in events_checked_for_links:
+        head_count = 0
+        for folder_path, camera, subdir in events_checked_for_links[:MAX_LINK_CHECK_FOLDERS]:
+            if head_count >= MAX_HEAD_REQUESTS:
+                break
             for f in _event_files_list(folder_path):
+                if head_count >= MAX_HEAD_REQUESTS:
+                    break
                 url = f"{base_url}/files/{camera}/{subdir}/{f}"
                 try:
                     r = requests.head(url, timeout=5)
@@ -232,6 +236,8 @@ def run_once(config: Dict[str, Any]) -> None:
                         logger.warning(f"Export watchdog: download link check failed: {url} status={r.status_code}")
                 except requests.exceptions.RequestException as e:
                     logger.debug(f"Export watchdog: link check {url}: {e}")
+                finally:
+                    head_count += 1
 
 
 if __name__ == "__main__":

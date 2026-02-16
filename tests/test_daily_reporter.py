@@ -42,7 +42,7 @@ class TestDailyReporterServiceScan(unittest.TestCase):
         config = {}
         mock_analyzer = MagicMock()
         service = DailyReporterService(config, storage, mock_analyzer)
-        events = service._collect_events_for_date(target)
+        events = list(service._collect_events_for_date(target))
         self.assertEqual(len(events), 1)
         self.assertEqual(events[0][1].get("title"), "Person at door")
 
@@ -64,7 +64,7 @@ class TestDailyReporterServiceScan(unittest.TestCase):
         config = {}
         mock_analyzer = MagicMock()
         service = DailyReporterService(config, storage, mock_analyzer)
-        events = service._collect_events_for_date(target)
+        events = list(service._collect_events_for_date(target))
         self.assertEqual(len(events), 1)
         self.assertEqual(events[0][1].get("title"), "CE event")
 

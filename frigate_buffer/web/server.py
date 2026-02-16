@@ -12,7 +12,7 @@ import requests
 from flask import Flask, Response, send_from_directory, jsonify, render_template, request, redirect
 
 from frigate_buffer.logging_utils import error_buffer
-from frigate_buffer.services.query import EventQueryService
+from frigate_buffer.services.query import EventQueryService, read_timeline_merged
 
 logger = logging.getLogger('frigate-buffer')
 
@@ -126,14 +126,22 @@ def create_app(orchestrator):
         else:
             return [e for e in events if not e.get('viewed')]
 
+    def _maybe_cleanup():
+        """Run cleanup at most once per 60 seconds to avoid full storage scan on every list request."""
+        now = time.time()
+        last = orchestrator._last_cleanup_time
+        if last is not None and (now - last) < 60:
+            return
+        active_ids = state_manager.get_active_event_ids()
+        active_ce_folders = list(orchestrator.consolidated_manager.get_active_ce_folders())
+        deleted = file_manager.cleanup_old_events(active_ids, active_ce_folders)
+        orchestrator._last_cleanup_time = now
+        orchestrator._last_cleanup_deleted = deleted
+
     @app.route('/events/<camera>')
     def list_camera_events(camera):
         """List events for a specific camera."""
-        active_ids = state_manager.get_active_event_ids()
-        active_ce_folders = [ce.folder_name for ce in orchestrator.consolidated_manager.get_all()]
-        deleted = file_manager.cleanup_old_events(active_ids, active_ce_folders)
-        orchestrator._last_cleanup_time = time.time()
-        orchestrator._last_cleanup_deleted = deleted
+        _maybe_cleanup()
 
         sanitized = file_manager.sanitize_camera_name(camera)
         events = _filter_events(query_service.get_events(sanitized))
@@ -146,11 +154,7 @@ def create_app(orchestrator):
     @app.route('/events')
     def list_events():
         """List all events across all cameras (global view)."""
-        active_ids = state_manager.get_active_event_ids()
-        active_ce_folders = [ce.folder_name for ce in orchestrator.consolidated_manager.get_all()]
-        deleted = file_manager.cleanup_old_events(active_ids, active_ce_folders)
-        orchestrator._last_cleanup_time = time.time()
-        orchestrator._last_cleanup_deleted = deleted
+        _maybe_cleanup()
 
         try:
             all_events, cameras_found = query_service.get_all_events()
@@ -265,14 +269,11 @@ def create_app(orchestrator):
         if not os.path.isdir(folder_path):
             return "Event not found", 404
 
-        timeline_path = os.path.join(folder_path, "notification_timeline.json")
-        timeline_data = {"event_id": None, "entries": []}
-        if os.path.exists(timeline_path):
-            try:
-                with open(timeline_path, 'r') as f:
-                    timeline_data = json.load(f)
-            except Exception as e:
-                logger.debug(f"Error reading timeline: {e}")
+        try:
+            timeline_data = read_timeline_merged(folder_path)
+        except Exception as e:
+            logger.debug(f"Error reading timeline: {e}")
+            timeline_data = {"event_id": None, "entries": []}
 
         entries = timeline_data.get("entries", [])
         entries.sort(key=lambda e: e.get("ts", ""), reverse=True)

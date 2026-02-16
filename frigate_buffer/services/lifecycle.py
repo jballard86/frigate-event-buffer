@@ -318,7 +318,7 @@ class EventLifecycleService:
     def run_cleanup(self):
         """Cleanup old event folders based on retention policy."""
         active_ids = self.state_manager.get_active_event_ids()
-        active_ce_folders = [ce.folder_name for ce in self.consolidated_manager.get_all()]
+        active_ce_folders = list(self.consolidated_manager.get_active_ce_folders())
         deleted = self.file_manager.cleanup_old_events(active_ids, active_ce_folders)
         self.last_cleanup_time = time.time()
         self.last_cleanup_deleted = deleted
