@@ -65,6 +65,22 @@ class TestFileManagerPathValidation(unittest.TestCase):
         self.assertTrue(path.startswith(os.path.realpath(self.tmp)))
         self.assertTrue(os.path.isdir(path))
 
+    def test_delete_event_folder_under_storage_succeeds(self):
+        sub = os.path.join(self.tmp, "cam1", "1000_evt1")
+        os.makedirs(sub, exist_ok=True)
+        self.assertTrue(os.path.isdir(sub))
+        result = self.fm.delete_event_folder(sub)
+        self.assertTrue(result)
+        self.assertFalse(os.path.exists(sub))
+
+    def test_delete_event_folder_outside_storage_returns_false(self):
+        result = self.fm.delete_event_folder("/tmp/outside")
+        self.assertFalse(result)
+
+    def test_delete_event_folder_nonexistent_returns_false(self):
+        result = self.fm.delete_event_folder(os.path.join(self.tmp, "nonexistent"))
+        self.assertFalse(result)
+
 
 if __name__ == '__main__':
     unittest.main()

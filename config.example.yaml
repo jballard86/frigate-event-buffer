@@ -84,6 +84,9 @@ settings:
   # If no events for 120s, the next event is new. If an event occurs within
   # this gap, it continues the group and the gap resets.
   event_gap_seconds: 120
+  # Events shorter than this (seconds) are discarded: data deleted, removed from state/CE,
+  # and a "discarded" MQTT notification is sent so HA can clear the phone notification.
+  # minimum_event_seconds: 5
   # Export time range buffers (seconds)
   export_buffer_before: 5
   export_buffer_after: 30
