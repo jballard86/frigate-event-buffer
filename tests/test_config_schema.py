@@ -127,5 +127,163 @@ class TestConfigSchema(unittest.TestCase):
 
         self.assertEqual(config['ALLOWED_CAMERAS'], ['cam1'])
 
+    @patch('builtins.open', new_callable=mock_open)
+    @patch('os.path.exists')
+    @patch('frigate_buffer.config.yaml.safe_load')
+    def test_multi_cam_and_gemini_proxy_config(self, mock_yaml_load, mock_exists, mock_file):
+        """Valid config with multi_cam and gemini_proxy passes and flattens correctly."""
+        yaml_with_new = {
+            'cameras': [{'name': 'cam1'}],
+            'network': {
+                'mqtt_broker': 'localhost',
+                'frigate_url': 'http://frigate',
+                'buffer_ip': 'localhost',
+                'storage_path': '/tmp',
+            },
+            'multi_cam': {
+                'max_multi_cam_frames_min': 60,
+                'max_multi_cam_frames_sec': 3,
+                'motion_threshold_px': 80,
+                'crop_width': 1920,
+                'crop_height': 1080,
+                'multi_cam_system_prompt_file': '/path/to/prompt.txt',
+            },
+            'gemini_proxy': {
+                'url': 'http://proxy:5050',
+                'model': 'gemini-2.0-flash',
+                'temperature': 0.5,
+                'top_p': 0.9,
+                'frequency_penalty': 0.1,
+                'presence_penalty': 0.1,
+            },
+        }
+        mock_exists.return_value = True
+        mock_yaml_load.return_value = yaml_with_new
+
+        config = load_config()
+        self.assertEqual(config['MAX_MULTI_CAM_FRAMES_MIN'], 60)
+        self.assertEqual(config['MAX_MULTI_CAM_FRAMES_SEC'], 3)
+        self.assertEqual(config['MOTION_THRESHOLD_PX'], 80)
+        self.assertEqual(config['CROP_WIDTH'], 1920)
+        self.assertEqual(config['CROP_HEIGHT'], 1080)
+        self.assertEqual(config['MULTI_CAM_SYSTEM_PROMPT_FILE'], '/path/to/prompt.txt')
+        self.assertEqual(config['GEMINI_PROXY_URL'], 'http://proxy:5050')
+        self.assertEqual(config['GEMINI_PROXY_MODEL'], 'gemini-2.0-flash')
+        self.assertEqual(config['GEMINI_PROXY_TEMPERATURE'], 0.5)
+        self.assertEqual(config['GEMINI_PROXY_TOP_P'], 0.9)
+        self.assertEqual(config['GEMINI_PROXY_FREQUENCY_PENALTY'], 0.1)
+        self.assertEqual(config['GEMINI_PROXY_PRESENCE_PENALTY'], 0.1)
+
+    @patch('builtins.open', new_callable=mock_open)
+    @patch('os.path.exists')
+    @patch('frigate_buffer.config.yaml.safe_load')
+    def test_multi_cam_gemini_proxy_defaults_when_omitted(self, mock_yaml_load, mock_exists, mock_file):
+        """When multi_cam and gemini_proxy are omitted, flat keys use source defaults."""
+        yaml_minimal = {
+            'cameras': [{'name': 'cam1'}],
+            'network': {
+                'mqtt_broker': 'localhost',
+                'frigate_url': 'http://frigate',
+                'buffer_ip': 'localhost',
+                'storage_path': '/tmp',
+            },
+        }
+        mock_exists.return_value = True
+        mock_yaml_load.return_value = yaml_minimal
+
+        config = load_config()
+        self.assertEqual(config['MAX_MULTI_CAM_FRAMES_MIN'], 45)
+        self.assertEqual(config['MAX_MULTI_CAM_FRAMES_SEC'], 2)
+        self.assertEqual(config['MOTION_THRESHOLD_PX'], 50)
+        self.assertEqual(config['CROP_WIDTH'], 1280)
+        self.assertEqual(config['CROP_HEIGHT'], 720)
+        self.assertEqual(config['MULTI_CAM_SYSTEM_PROMPT_FILE'], '')
+        self.assertEqual(config['GEMINI_PROXY_URL'], '')
+        self.assertEqual(config['GEMINI_PROXY_MODEL'], 'gemini-2.5-flash-lite')
+        self.assertEqual(config['GEMINI_PROXY_TEMPERATURE'], 0.3)
+        self.assertEqual(config['GEMINI_PROXY_TOP_P'], 1)
+        self.assertEqual(config['GEMINI_PROXY_FREQUENCY_PENALTY'], 0)
+        self.assertEqual(config['GEMINI_PROXY_PRESENCE_PENALTY'], 0)
+
+    @patch('builtins.open', new_callable=mock_open)
+    @patch('os.path.exists')
+    @patch('frigate_buffer.config.yaml.safe_load')
+    def test_gemini_proxy_from_gemini_when_gemini_proxy_absent(self, mock_yaml_load, mock_exists, mock_file):
+        """When only gemini is set (no gemini_proxy), GEMINI_PROXY_URL and MODEL come from gemini."""
+        yaml_gemini_only = {
+            'cameras': [{'name': 'cam1'}],
+            'network': {
+                'mqtt_broker': 'localhost',
+                'frigate_url': 'http://frigate',
+                'buffer_ip': 'localhost',
+                'storage_path': '/tmp',
+            },
+            'gemini': {
+                'proxy_url': 'http://gemini-only:5050',
+                'api_key': '',
+                'model': 'gemini-special',
+                'enabled': True,
+            },
+        }
+        mock_exists.return_value = True
+        mock_yaml_load.return_value = yaml_gemini_only
+
+        config = load_config()
+        self.assertEqual(config['GEMINI_PROXY_URL'], 'http://gemini-only:5050')
+        self.assertEqual(config['GEMINI_PROXY_MODEL'], 'gemini-special')
+        self.assertEqual(config['GEMINI_PROXY_TEMPERATURE'], 0.3)
+        self.assertEqual(config['GEMINI_PROXY_TOP_P'], 1)
+
+    @patch('builtins.open', new_callable=mock_open)
+    @patch('os.path.exists')
+    @patch('os.getenv')
+    @patch('frigate_buffer.config.yaml.safe_load')
+    def test_gemini_proxy_url_env_override(self, mock_yaml_load, mock_getenv, mock_exists, mock_file):
+        """GEMINI_PROXY_URL from env overrides config."""
+        def getenv(key, default=None):
+            if key == 'GEMINI_PROXY_URL':
+                return 'http://env-proxy:6060'
+            return default  # so other keys get their default and load_config still works
+
+        mock_getenv.side_effect = getenv
+        mock_exists.return_value = True
+        mock_yaml_load.return_value = {
+            'cameras': [{'name': 'cam1'}],
+            'network': {
+                'mqtt_broker': 'localhost',
+                'frigate_url': 'http://frigate',
+                'buffer_ip': 'localhost',
+                'storage_path': '/tmp',
+            },
+            'gemini_proxy': {'url': 'http://file-proxy:5050'},
+        }
+
+        config = load_config()
+        self.assertEqual(config['GEMINI_PROXY_URL'], 'http://env-proxy:6060')
+
+    @patch('builtins.open', new_callable=mock_open)
+    @patch('os.path.exists')
+    @patch('frigate_buffer.config.yaml.safe_load')
+    def test_invalid_multi_cam_field_type(self, mock_yaml_load, mock_exists, mock_file):
+        """Invalid type for multi_cam field fails schema validation."""
+        invalid_yaml = {
+            'cameras': [{'name': 'cam1'}],
+            'network': {
+                'mqtt_broker': 'localhost',
+                'frigate_url': 'http://frigate',
+                'buffer_ip': 'localhost',
+                'storage_path': '/tmp',
+            },
+            'multi_cam': {
+                'max_multi_cam_frames_min': 'not_an_int',
+            },
+        }
+        mock_exists.return_value = True
+        mock_yaml_load.return_value = invalid_yaml
+
+        with self.assertRaises(SystemExit) as cm:
+            load_config()
+        self.assertEqual(cm.exception.code, 1)
+
 if __name__ == '__main__':
     unittest.main()
