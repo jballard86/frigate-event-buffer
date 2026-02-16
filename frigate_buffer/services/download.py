@@ -149,7 +149,8 @@ class DownloadService:
                 export_filename = frigate_response.get("export") or frigate_response.get("filename") or frigate_response.get("name")
                 export_id = frigate_response.get("export_id")
 
-            # 3. Poll exports list until our export appears (match by export_id or use newest)
+            # 3. Poll exports list until our export is completed (in_progress false or missing)
+            # Do not download until completed; Frigate muxes the file asynchronously (10-20s for 4K).
             poll_count = 0
             poll_max = 36  # 36 * 2.5s = 90s max
             while not export_filename and poll_count < poll_max:
@@ -160,24 +161,38 @@ class DownloadService:
                     list_resp.raise_for_status()
                     exports = list_resp.json() if list_resp.content else []
                     if isinstance(exports, list) and exports:
-                        # Prefer match by export_id if we have it
+                        matched = None
                         if export_id:
                             for e in exports:
                                 if e.get("export_id") == export_id or e.get("id") == export_id:
-                                    export_filename = e.get("export") or e.get("filename") or e.get("name") or e.get("path")
-                                    if export_filename:
-                                        break
-                        if not export_filename:
+                                    matched = e
+                                    break
+                        if not matched:
                             # Fallback: use newest export (likely ours)
                             newest = max(
                                 exports,
                                 key=lambda e: e.get("created", 0) or e.get("start_time", 0) or e.get("modified", 0)
                             )
-                            export_filename = newest.get("export") or newest.get("filename") or newest.get("name") or newest.get("path")
+                            if not export_id or newest.get("export_id") == export_id or newest.get("id") == export_id:
+                                matched = newest
+                        if matched:
+                            # Only proceed when in_progress is false or missing (export completed)
+                            if not matched.get("in_progress", False):
+                                export_filename = (
+                                    matched.get("video_path")
+                                    or matched.get("export")
+                                    or matched.get("filename")
+                                    or matched.get("name")
+                                    or matched.get("path")
+                                )
+                                if export_filename:
+                                    break
+                            else:
+                                logger.debug("Export still processing..., waiting for in_progress false")
                     elif isinstance(exports, dict):
-                        export_filename = exports.get("export") or exports.get("filename") or exports.get("name")
-                    if export_filename:
-                        break
+                        e = exports
+                        if not e.get("in_progress", False):
+                            export_filename = e.get("video_path") or e.get("export") or e.get("filename") or e.get("name")
                 except Exception as e:
                     logger.debug(f"Exports poll: {e}")
 

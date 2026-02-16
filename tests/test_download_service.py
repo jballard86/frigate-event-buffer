@@ -280,5 +280,85 @@ class TestDownloadService(unittest.TestCase):
         name = call_kw.get("json", {}).get("name", "")
         self.assertLessEqual(len(name), 256, "name must be truncated to 256 chars")
 
+    @patch('frigate_buffer.services.download.requests.get')
+    @patch('frigate_buffer.services.download.requests.post')
+    @patch('frigate_buffer.services.download.DownloadService.download_and_transcode_clip')
+    @patch('time.sleep')
+    def test_export_in_progress_true_waits_does_not_download_immediately(self, mock_sleep, mock_fallback, mock_post, mock_get):
+        """When GET /api/exports returns in_progress True, do not set export_filename; keep polling until timeout then fall back."""
+        mock_post.return_value = MagicMock(status_code=200, headers={"content-type": "application/json"}, text='{}')
+        mock_post.return_value.json.return_value = {"export_id": "exp1"}
+        mock_post.return_value.ok = True
+        mock_post.return_value.raise_for_status = MagicMock()
+        mock_fallback.return_value = False
+        # Exports list always returns our export but still in_progress (file not ready)
+        mock_get.return_value.raise_for_status = MagicMock()
+        mock_get.return_value.json.return_value = [
+            {"id": "exp1", "export_id": "exp1", "in_progress": True, "export": "file.mp4"}
+        ]
+        self.download_service.export_and_transcode_clip(
+            event_id="evt1", folder_path="/tmp", camera="cam1",
+            start_time=1000, end_time=1010, export_buffer_before=0, export_buffer_after=0
+        )
+        # Should fall back (never got export_filename because in_progress was True)
+        mock_fallback.assert_called_once()
+        # get was only used for polling /api/exports, not for downloading /exports/
+        for call in mock_get.call_args_list:
+            url = call[0][0]
+            self.assertIn("api/exports", url, "Should only poll exports list, not download from /exports/")
+
+    @patch('frigate_buffer.services.download.requests.get')
+    @patch('frigate_buffer.services.download.requests.post')
+    @patch('time.sleep')
+    def test_export_in_progress_false_proceeds_to_download(self, mock_sleep, mock_post, mock_get):
+        """When GET /api/exports returns in_progress False, set export_filename and proceed to download."""
+        self.download_service.video_service.transcode_clip_to_h264.return_value = True
+        mock_post.return_value = MagicMock(status_code=200, headers={"content-type": "application/json"}, text='{}')
+        mock_post.return_value.json.return_value = {"export_id": "exp1"}
+        mock_post.return_value.ok = True
+        mock_post.return_value.raise_for_status = MagicMock()
+        # First get: exports list with in_progress False (completed)
+        list_resp = MagicMock()
+        list_resp.raise_for_status = MagicMock()
+        list_resp.json.return_value = [
+            {"id": "exp1", "export_id": "exp1", "in_progress": False, "export": "export_file.mp4"}
+        ]
+        # Second get: download file
+        dl_resp = MagicMock()
+        dl_resp.raise_for_status = MagicMock()
+        dl_resp.iter_content = lambda chunk_size: (b"x" for _ in range(1))
+        mock_get.side_effect = [list_resp, dl_resp]
+        self.download_service.export_and_transcode_clip(
+            event_id="evt1", folder_path="/tmp", camera="cam1",
+            start_time=1000, end_time=1010, export_buffer_before=0, export_buffer_after=0
+        )
+        self.assertEqual(mock_get.call_count, 2, "First call exports list, second call download")
+        self.assertIn("/exports/", mock_get.call_args_list[1][0][0], "Second get should be download URL")
+        self.download_service.video_service.transcode_clip_to_h264.assert_called_once()
+
+    @patch('frigate_buffer.services.download.requests.get')
+    @patch('frigate_buffer.services.download.requests.post')
+    @patch('time.sleep')
+    def test_export_in_progress_missing_proceeds_backward_compat(self, mock_sleep, mock_post, mock_get):
+        """When in_progress key is missing (older Frigate), treat as completed and proceed."""
+        self.download_service.video_service.transcode_clip_to_h264.return_value = True
+        mock_post.return_value = MagicMock(status_code=200, headers={"content-type": "application/json"}, text='{}')
+        mock_post.return_value.json.return_value = {"export_id": "exp1"}
+        mock_post.return_value.ok = True
+        mock_post.return_value.raise_for_status = MagicMock()
+        list_resp = MagicMock()
+        list_resp.raise_for_status = MagicMock()
+        list_resp.json.return_value = [{"id": "exp1", "export_id": "exp1", "export": "legacy.mp4"}]
+        dl_resp = MagicMock()
+        dl_resp.raise_for_status = MagicMock()
+        dl_resp.iter_content = lambda chunk_size: (b"x" for _ in range(1))
+        mock_get.side_effect = [list_resp, dl_resp]
+        self.download_service.export_and_transcode_clip(
+            event_id="evt1", folder_path="/tmp", camera="cam1",
+            start_time=1000, end_time=1010, export_buffer_before=0, export_buffer_after=0
+        )
+        self.assertEqual(mock_get.call_count, 2)
+        self.download_service.video_service.transcode_clip_to_h264.assert_called_once()
+
 if __name__ == "__main__":
     unittest.main()
