@@ -98,7 +98,10 @@ class DailyReporterService:
         for _path, data, unix_ts in events:
             title = (data.get("title") or "").strip()
             short_summary = (data.get("shortSummary") or data.get("description") or "").strip()
-            level = int(data.get("potential_threat_level", 0))
+            try:
+                level = int(data.get("potential_threat_level", 0))
+            except (TypeError, ValueError):
+                level = 0
             time_str = datetime.fromtimestamp(unix_ts).strftime("%H:%M")
             line = f"[{time_str}] {title}: {short_summary} (Threat: {level})"
             lines.append((unix_ts, line))
@@ -115,11 +118,15 @@ class DailyReporterService:
                 camera = os.path.basename(event_dir)
             else:
                 camera = os.path.basename(os.path.dirname(event_dir)) if os.path.dirname(event_dir) else "unknown"
+            try:
+                threat_level = int(data.get("potential_threat_level", 0))
+            except (TypeError, ValueError):
+                threat_level = 0
             obj = {
                 "title": data.get("title", ""),
                 "scene": data.get("scene", ""),
                 "confidence": data.get("confidence", 0),
-                "threat_level": int(data.get("potential_threat_level", 0)),
+                "threat_level": threat_level,
                 "camera": camera,
                 "time": datetime.fromtimestamp(unix_ts).strftime("%Y-%m-%d %H:%M:%S"),
                 "context": data.get("context", []),

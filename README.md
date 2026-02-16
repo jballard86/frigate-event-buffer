@@ -9,6 +9,8 @@ A state-aware orchestrator that listens to Frigate NVR events via MQTT, tracks t
 - **Four-Phase Lifecycle**: Tracks events through NEW → DESCRIBED → FINALIZED → SUMMARIZED phases
 - **Ring-Style Notifications**: Sends progressive updates to Home Assistant with phase-specific messages as event details emerge
 - **GenAI Integration**: Captures GenAI titles, descriptions, and threat levels from (1) Frigate — via `data.metadata` in `frigate/reviews` and `description` in tracked object updates — and (2) optional **in-process Gemini analyzer**: when `gemini.enabled` in config, clips are analyzed via an OpenAI-compatible Gemini proxy; the service returns the result to the orchestrator, which updates state, writes summary/metadata, POSTs the description to Frigate's API (`/api/events/{id}/description`), and sends the "finalized" notification to Home Assistant. The buffer does **not** publish to `frigate/reviews` (that topic is Frigate output-only).
+- **Multi-cam frame extractor**: When the Gemini analyzer is enabled, frame extraction is motion-aware (grayscale differencing), keeps first and last frames, and supports optional center crop or **smart crop** (when per-frame metadata from `frigate/+/tracked_object_update` is available). Configurable frame limits, crop size, and system prompt file. Writes **analysis_result.json** in each event folder (title, shortSummary, scene, potential_threat_level) for the Daily Report.
+- **Daily Report**: At a configurable hour (default 1am), aggregates the previous calendar day's **analysis_result.json** files from event folders, builds a prompt from a template (e.g. `frigate_buffer/services/report_prompt.txt`), sends a text-only request to the Gemini proxy, and saves the AI-generated Markdown report to `{STORAGE_PATH}/daily_reports/YYYY-MM-DD_report.md`.
 - **Review Summaries**: Fetches rich markdown security reports from Frigate's review summary API with cross-camera context, timeline, and assessments
 - **Threat Level Alerts**: Three-tier threat classification (0=Normal, 1=Suspicious, 2=Critical) — Level 2 alerts bypass phone volume/DND and keep all follow-up notifications audible
 - **Camera/Label Filtering**: Only process events from specific cameras or with specific labels
@@ -42,7 +44,8 @@ The **StateAwareOrchestrator** is the central coordinator. It owns event-handlin
 
 - **VideoService** (`services/video.py`) — FFmpeg transcoding and GIF generation; used by FileManager so clip handling is isolated and process/timeout logic is in one place.
 - **EventLifecycleService** (`services/lifecycle.py`) — Handles event creation, event end (clip export, cleanup), and consolidated-event finalization (export, review summary, notifications); orchestrator delegates to it instead of inlining logic.
-- **GeminiAnalysisService** (`services/ai_analyzer.py`) — Optional. When `gemini.enabled`, extracts frames (motion-aware selection, optional center crop), sends them to an OpenAI-compatible Gemini proxy, and **returns** the analysis metadata (title, shortSummary, scene, potential_threat_level) to the orchestrator. Does not publish to MQTT; the orchestrator persists the result (state, files, Frigate API, HA notification).
+- **GeminiAnalysisService** (`services/ai_analyzer.py`) — Optional. When `gemini.enabled`, extracts frames (motion-aware selection, optional center/smart crop from per-frame metadata), sends them to an OpenAI-compatible Gemini proxy, and **returns** the analysis metadata to the orchestrator. Writes **analysis_result.json** in the event folder for the Daily Report. Does not publish to MQTT; the orchestrator persists the result (state, files, Frigate API, HA notification).
+- **DailyReporterService** (`services/daily_reporter.py`) — Optional. When the Gemini analyzer is enabled, runs at **DAILY_REPORT_SCHEDULE_HOUR** (default 1am) for the previous calendar day: scans storage for **analysis_result.json** in event folders, aggregates event lines, fills the report prompt template (e.g. `report_prompt.txt`), calls **send_text_prompt** on the analyzer (text-only, no images), and writes the proxy response to `{STORAGE_PATH}/daily_reports/{date}_report.md`.
 - **EventQueryService** (`services/query.py`) — Reads and parses event data from the filesystem with TTL and per-folder caching; used by the Flask server for event lists and stats so path and parsing logic are centralized.
 - **NotificationEvent protocol** (`models.py`) — Shared interface for EventState and ConsolidatedEvent so the notifier accepts a single contract.
 - **ConsolidatedEventManager “closing” state** — A CE can be `closing` before removal; `mark_closing(ce_id)` prevents new sub-events and timer rescheduling; avoids races during finalization.
@@ -93,7 +96,8 @@ The application is organized as a Python package `frigate_buffer/`:
 | `services/notifier.py` | `NotificationPublisher` — publishes MQTT notifications to Home Assistant; accepts `NotificationEvent` protocol; optional `timeline_callback` (e.g. `TimelineLogger.log_ha`). |
 | `services/timeline.py` | `TimelineLogger` — resolves event/CE folder and appends HA, MQTT, and Frigate API entries to `notification_timeline.json` via `FileManager`. |
 | `services/mqtt_client.py` | `MqttClientWrapper` — Paho MQTT client lifecycle (connect, subscribe, loop), connect/disconnect logging; exposes `client` and `mqtt_connected`; message handling delegated to orchestrator callback. Requires `paho-mqtt>=2.0.0` (CallbackAPIVersion.VERSION2). |
-| `services/ai_analyzer.py` | `GeminiAnalysisService` — Optional. When gemini config is enabled, analyzes clips with motion-aware frame selection (grayscale differencing), optional center crop, configurable prompt file; sends frames to Gemini proxy; returns metadata to the orchestrator. No MQTT publish; orchestrator updates state, writes files, POSTs to Frigate API, and notifies HA. |
+| `services/ai_analyzer.py` | `GeminiAnalysisService` — Optional. When gemini config is enabled, analyzes clips with motion-aware frame selection (grayscale differencing), optional center/smart crop from per-frame metadata, configurable prompt file; sends frames to Gemini proxy; returns metadata to the orchestrator; writes **analysis_result.json** in the event folder. No MQTT publish; orchestrator updates state, writes files, POSTs to Frigate API, and notifies HA. Prompt template: `ai_analyzer_system_prompt.txt` (same dir) or `MULTI_CAM_SYSTEM_PROMPT_FILE`. |
+| `services/daily_reporter.py` | `DailyReporterService` — Optional. When analyzer is enabled, scheduled at **DAILY_REPORT_SCHEDULE_HOUR** (default 1am): scans storage for **analysis_result.json**, filters by target date, builds event list and prompt from **report_prompt.txt** (or `REPORT_PROMPT_FILE`), calls analyzer `send_text_prompt`, writes Markdown to `{STORAGE_PATH}/daily_reports/{date}_report.md`. |
 | `services/download.py` | `DownloadService` — Frigate API: snapshot download, clip export/transcode, review summary fetch. Also `post_event_description(event_id, description)` to POST AI result to Frigate (`/api/events/{id}/description`). |
 | `web/server.py` | Flask app factory `create_app(orchestrator)`. Routes for player, events, files, stats, daily review, API. |
 | `templates/` | Jinja2 templates (player, stats, daily review, timeline). Single location under `frigate_buffer/`; used by Flask at runtime. |
@@ -200,6 +204,8 @@ settings:
   stats_refresh_seconds: 60    # Stats panel auto-refresh interval (seconds)
   daily_review_retention_days: 90   # How long to keep saved daily reviews (days)
   daily_review_schedule_hour: 1     # Hour (0-23) to fetch previous day's review
+  daily_report_schedule_hour: 1     # Hour (0-23) to run Daily Report (aggregate analysis_result.json → Gemini → daily_reports/)
+  report_prompt_file: ""            # Path to report prompt template; empty = use built-in report_prompt.txt
   event_gap_seconds: 120      # Seconds of no activity before new consolidated event
   export_buffer_before: 5     # Seconds before event start for clip export time range
   export_buffer_after: 30    # Seconds after event end for clip export time range
@@ -257,8 +263,18 @@ Environment variables override config.yaml values:
 | `HA_TOKEN` | *(optional)* | Home Assistant long-lived access token (for stats page API Usage display) |
 | `GEMINI_API_KEY` | *(optional)* | API key for the Gemini proxy (single key for all proxy usage; overrides `gemini.api_key` in config). |
 | `GEMINI_PROXY_URL` | *(optional)* | Overrides proxy URL for Gemini (e.g. multi-cam). No default fallback; set explicitly in config or env. |
+| `DAILY_REPORT_SCHEDULE_HOUR` | `1` | Hour (0–23) to run the Daily Report job for the previous calendar day. |
+| `REPORT_PROMPT_FILE` | *(empty)* | Path to report prompt template for Daily Report; empty = use `frigate_buffer/services/report_prompt.txt`. |
 
-Optional **gemini** config section (in `config.yaml`): `proxy_url`, `api_key`, `model`, `enabled`. When `enabled` is true and proxy is configured, the buffer runs in-process clip analysis via the proxy, then updates state, writes files, POSTs the description to Frigate, and notifies HA. **Optional multi_cam and gemini_proxy** sections (see `config.example.yaml`) provide defaults for the multi-cam frame extractor: frame limits (`max_multi_cam_frames_min`, `max_multi_cam_frames_sec`), motion-aware selection (grayscale frame differencing, `motion_threshold_px`), optional center cropping (`crop_width`, `crop_height`) to reduce token usage, and proxy tuning (temperature, top_p, etc.). The system prompt can be loaded from a file via `multi_cam.multi_cam_system_prompt_file` (or `MULTI_CAM_SYSTEM_PROMPT_FILE`); empty = use built-in prompt. Default proxy URL is `""` (no Google fallback); use `GEMINI_PROXY_URL` or config for the proxy. See [Configuration](#configuration).
+Optional **gemini** config section (in `config.yaml`): `proxy_url`, `api_key`, `model`, `enabled`. When `enabled` is true and proxy is configured, the buffer runs in-process clip analysis via the proxy, then updates state, writes files, POSTs the description to Frigate, and notifies HA.
+
+### Multi-cam frame extractor and Daily Report
+
+When **gemini.enabled** is true, the buffer uses **GeminiAnalysisService** for clip analysis and optionally **DailyReporterService** for a daily AI report.
+
+**Frame extraction (multi-cam):** Optional **multi_cam** and **gemini_proxy** sections in `config.yaml` (see `config.example.yaml`) control frame limits (`max_multi_cam_frames_min`, `max_multi_cam_frames_sec`), motion-aware selection (grayscale differencing, `motion_threshold_px`), center/smart crop (`crop_width`, `crop_height`, `smart_crop_padding`), and proxy tuning (temperature, top_p, frequency_penalty, presence_penalty). The analyzer loads its system prompt from **multi_cam.multi_cam_system_prompt_file** (flat key `MULTI_CAM_SYSTEM_PROMPT_FILE`); if empty, it uses the built-in `frigate_buffer/services/ai_analyzer_system_prompt.txt`. Per-frame metadata from `frigate/+/tracked_object_update` is used when available for smart crop and score-based frame selection. After a successful proxy response, the analyzer writes **analysis_result.json** (title, shortSummary, scene, potential_threat_level, etc.) in the same directory as the clip (event folder); this file is the input for the Daily Report.
+
+**Daily Report:** At **DAILY_REPORT_SCHEDULE_HOUR** (default 1am), the buffer scans **STORAGE_PATH** for **analysis_result.json** in event folders (single-event: `camera/timestamp_eventid/`; consolidated: `events/timestamp_uuid/camera/`), filters by the previous calendar day, aggregates event lines, and fills the report prompt template. The template is loaded from **REPORT_PROMPT_FILE** or `frigate_buffer/services/report_prompt.txt`; placeholders include `{date}`, `{event_list}`, `{report_start_time}`, `{report_end_time}`, `{list_of_event_json_objects}`, and `{known_person_name}` (from config **REPORT_KNOWN_PERSON_NAME** or settings, default "Unspecified"). The buffer sends a text-only request to the same Gemini proxy (no images) and writes the response to **{STORAGE_PATH}/daily_reports/YYYY-MM-DD_report.md**. Edit the prompt file to change report style. No separate API or UI for Daily Report; the file is written to disk for you to open or integrate elsewhere.
 
 ## Daily Review
 
@@ -291,6 +307,10 @@ Fetch current day review (midnight to now) from Frigate. Saves as partial review
 ### Scheduled Job
 
 At the configured hour (default 1am), the buffer fetches the previous day's review from Frigate and saves it. Old reviews are removed based on `daily_review_retention_days`.
+
+### Daily Report (AI-generated from event analyses)
+
+Separate from Frigate's Daily Review (which fetches Frigate's review summarize API), the buffer can generate its **own** daily report from the events it has analyzed with the Gemini proxy. When **gemini.enabled** is true, the analyzer writes **analysis_result.json** in each event folder after each clip analysis. At **DAILY_REPORT_SCHEDULE_HOUR** (default 1am), **DailyReporterService** scans storage for those files for the **previous calendar day**, builds an event list, fills a report prompt template (e.g. `frigate_buffer/services/report_prompt.txt`), sends a text-only request to the Gemini proxy, and saves the response as **{STORAGE_PATH}/daily_reports/YYYY-MM-DD_report.md**. Configure the schedule and prompt file via [Multi-cam frame extractor and Daily Report](#multi-cam-frame-extractor-and-daily-report); the report file is written to disk for you to open or integrate elsewhere.
 
 ## Camera/Label Filtering
 
@@ -859,6 +879,7 @@ Events are organized by camera. Event subdir format: `{timestamp}_{frigate_event
 │   │   ├── metadata.json           # Structured metadata (threat_level, etc.)
 │   │   ├── review_summary.md       # Frigate review summary (markdown)
 │   │   ├── notification_timeline.json  # Data pipeline log (Frigate MQTT, clip export request/response, review summarize, HA)
+│   │   ├── analysis_result.json        # (Optional) AI analysis result when Gemini analyzer enabled; used by Daily Report
 │   │   └── .viewed                 # Review marker (created when marked as reviewed)
 │   └── 1234567891_1234567891.456-ghijkl/
 │       └── ...
@@ -867,7 +888,7 @@ Events are organized by camera. Event subdir format: `{timestamp}_{frigate_event
 │       └── ...
 ```
 
-Camera folder names are sanitized (lowercase, spaces to underscores).
+Camera folder names are sanitized (lowercase, spaces to underscores). When the Gemini analyzer is enabled, **analysis_result.json** is written in each event folder after clip analysis. The **daily_reports/** directory (under storage) holds AI-generated daily reports as **YYYY-MM-DD_report.md**.
 
 ## Troubleshooting
 
@@ -933,10 +954,13 @@ python -m unittest discover -s tests -p "test_*.py" -v
 
 | Test module | What it tests |
 |-------------|----------------|
+| `test_ai_analyzer.py` | GeminiAnalysisService: config validation, payload structure, send_text_prompt (success/empty/5xx/missing config), proxy failure handling, flat config and tuning params, prompt file loading, center/smart crop, first/last frame kept, frame_metadata, analyze_clip return value. |
 | `test_config_schema.py` | Config validation: valid config loads; missing `cameras` or wrong types (e.g. cameras not a list, mqtt_port not int) cause `SystemExit(1)`; extra root keys allowed; multi_cam/gemini_proxy flatten to flat keys, defaults when omitted, backward compat from gemini, `GEMINI_PROXY_URL` env override, invalid multi_cam type fails. |
 | `test_consolidation.py` | ConsolidatedEventManager closing state: `mark_closing` returns True once then False; unknown CE returns False; `schedule_close_timer` does nothing when CE is closing or closed; `get_or_create` does not add events to a closing or closed CE (creates new CE instead). |
+| `test_daily_reporter.py` | DailyReporterService: scan for analysis_result.json by date (single and consolidated layout), aggregate event lines format, prompt replacement (date, event_list, known_person_name), save to daily_reports, edge cases (no events, proxy returns None). |
 | `test_file_manager_enhancement.py` | FileManager download/export: HTTP 400 retries (up to 3), HTTP 404 no retry, export `success: false` logs warning. |
 | `test_file_manager_path_validation.py` | FileManager path safety: `sanitize_camera_name` valid names and stripping of path characters; `create_event_folder` and `create_consolidated_event_folder` raise `ValueError` on path-traversal inputs; valid folder creation succeeds under storage root. |
+| `test_integration_step_5_6.py` | Step 5/6: analysis_result.json persistence (expected fields and partial result still saved), orchestrator _handle_analysis_result calls post_event_description and publish_notification("finalized"), error handling (invalid JSON and proxy 500 do not create file). |
 | `test_lifecycle_service.py` | EventLifecycleService: `handle_event_new` (new event and grouped event paths, threads); `process_event_end` (standalone and CE paths); `finalize_consolidated_event` (mark_closing, export, notify, remove). |
 | `test_notification_models.py` | NotificationEvent protocol: `EventState` and `ConsolidatedEvent` both satisfy the protocol (attributes required by notifier). |
 | `test_query_caching.py` | EventQueryService caching: TTL and cache key behavior. |

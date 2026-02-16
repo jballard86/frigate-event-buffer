@@ -90,7 +90,39 @@ class TestDailyReporterServiceAggregate(unittest.TestCase):
 
 
 class TestDailyReporterServicePrompt(unittest.TestCase):
-    """Test that template placeholders {date} and {event_list} are replaced."""
+    """Test that template placeholders {date}, {event_list}, {known_person_name} are replaced."""
+
+    def test_known_person_name_replaced_in_system_prompt(self):
+        """REPORT_KNOWN_PERSON_NAME from config is used for {known_person_name} placeholder."""
+        storage = tempfile.mkdtemp()
+        self.addCleanup(lambda: shutil.rmtree(storage, ignore_errors=True))
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False, encoding="utf-8") as f:
+            f.write("Report for {date}. Known person: {known_person_name}.")
+            prompt_path = f.name
+        self.addCleanup(lambda: os.path.exists(prompt_path) and os.unlink(prompt_path))
+        config = {"REPORT_PROMPT_FILE": prompt_path, "REPORT_KNOWN_PERSON_NAME": "Joe"}
+        mock_analyzer = MagicMock()
+        mock_analyzer.send_text_prompt.return_value = "# Done"
+        service = DailyReporterService(config, storage, mock_analyzer)
+        service.generate_report(date(2025, 1, 15))
+        call_args = mock_analyzer.send_text_prompt.call_args
+        system_prompt = call_args[0][0]
+        self.assertIn("Known person: Joe.", system_prompt)
+
+    def test_known_person_name_defaults_to_unspecified_when_empty(self):
+        storage = tempfile.mkdtemp()
+        self.addCleanup(lambda: shutil.rmtree(storage, ignore_errors=True))
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False, encoding="utf-8") as f:
+            f.write("Known: {known_person_name}")
+            prompt_path = f.name
+        self.addCleanup(lambda: os.path.exists(prompt_path) and os.unlink(prompt_path))
+        config = {"REPORT_PROMPT_FILE": prompt_path}
+        mock_analyzer = MagicMock()
+        mock_analyzer.send_text_prompt.return_value = "# Done"
+        service = DailyReporterService(config, storage, mock_analyzer)
+        service.generate_report(date(2025, 1, 15))
+        system_prompt = mock_analyzer.send_text_prompt.call_args[0][0]
+        self.assertIn("Known: Unspecified", system_prompt)
 
     def test_load_prompt_replaces_date_and_event_list(self):
         storage = tempfile.mkdtemp()
@@ -171,3 +203,64 @@ class TestDailyReporterServiceEdgeCases(unittest.TestCase):
         self.assertFalse(result)
         out_path = os.path.join(storage, "daily_reports", "2025-02-15_report.md")
         self.assertFalse(os.path.isfile(out_path))
+
+
+class TestDailyReporterServiceFolderNameAndTimestamp(unittest.TestCase):
+    """Edge cases for _folder_name_and_timestamp (invalid or odd folder names)."""
+
+    def test_folder_name_no_underscore_returns_none_ts(self):
+        config = {}
+        mock_analyzer = MagicMock()
+        service = DailyReporterService(config, "/tmp", mock_analyzer)
+        # Folder name "single" has no underscore -> split("_")[0] is "single" -> int("single") raises ValueError -> returns (None, None)
+        json_path = os.path.join("/tmp", "camera", "single", "analysis_result.json")
+        folder_name, unix_ts = service._folder_name_and_timestamp(json_path)
+        self.assertIsNone(unix_ts)
+        self.assertIsNone(folder_name)
+
+    def test_folder_name_non_numeric_prefix_returns_none_ts(self):
+        config = {}
+        mock_analyzer = MagicMock()
+        service = DailyReporterService(config, "/tmp", mock_analyzer)
+        json_path = os.path.join("/tmp", "camera", "abc_evt1", "analysis_result.json")
+        folder_name, unix_ts = service._folder_name_and_timestamp(json_path)
+        self.assertIsNone(unix_ts)
+
+    def test_folder_name_events_layout_uses_parent_basename(self):
+        config = {}
+        mock_analyzer = MagicMock()
+        service = DailyReporterService(config, "/tmp", mock_analyzer)
+        json_path = os.path.join("/tmp", "events", "1739617200_abc12", "doorbell", "analysis_result.json")
+        folder_name, unix_ts = service._folder_name_and_timestamp(json_path)
+        self.assertEqual(folder_name, "1739617200_abc12")
+        self.assertEqual(unix_ts, 1739617200)
+
+
+class TestDailyReporterServiceAggregateEdgeCases(unittest.TestCase):
+    """Edge cases for _aggregate_event_lines: missing or invalid potential_threat_level."""
+
+    def test_aggregate_handles_missing_threat_level(self):
+        config = {}
+        mock_analyzer = MagicMock()
+        service = DailyReporterService(config, "/tmp", mock_analyzer)
+        events = [
+            ("/path/a.json", {"title": "T", "shortSummary": "S"}, 1234567890),
+        ]
+        # potential_threat_level missing -> default 0
+        lines = service._aggregate_event_lines(events)
+        self.assertEqual(len(lines), 1)
+        self.assertIn("(Threat: 0)", lines[0])
+
+    def test_aggregate_handles_invalid_threat_level_gracefully(self):
+        config = {}
+        mock_analyzer = MagicMock()
+        service = DailyReporterService(config, "/tmp", mock_analyzer)
+        events = [
+            ("/path/a.json", {"title": "T", "shortSummary": "S", "potential_threat_level": "high"}, 1234567890),
+        ]
+        # int("high") would raise ValueError; we need the code to tolerate that
+        try:
+            lines = service._aggregate_event_lines(events)
+            self.assertEqual(len(lines), 1)
+        except ValueError:
+            self.fail("_aggregate_event_lines should not raise for non-int potential_threat_level")

@@ -1,0 +1,33 @@
+# Config and compose (mount at runtime; avoid baking into image)
+config.yaml
+docker-compose.yaml
+
+# Environment and secrets
+.env
+*.env
+.env.*
+
+# Git
+.git
+.gitignore
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.venv/
+venv/
+env/
+
+# Local data and logs
+storage/
+*.log
+
+# IDE and OS
+.vscode/
+.idea/
+.DS_Store
+
+# Tests (not needed in production image)
+tests/
