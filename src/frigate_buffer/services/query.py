@@ -225,6 +225,20 @@ class EventQueryService:
                 return True
         return False
 
+    def _extract_end_timestamp_from_timeline(self, timeline_data: Dict[str, Any]) -> Optional[float]:
+        """Return the first end_time from timeline entries (payload.after.end_time), or None.
+        Used so the player can show event end time and duration when available."""
+        for e in (timeline_data or {}).get('entries', []):
+            payload = (e.get('data') or {}).get('payload') or {}
+            after = payload.get('after') or {}
+            end_time = after.get('end_time')
+            if end_time is not None:
+                try:
+                    return float(end_time)
+                except (TypeError, ValueError):
+                    continue
+        return None
+
     def _extract_cameras_zones_from_timeline(self, timeline_data: Dict[str, Any]) -> List[Dict[str, Any]]:
         """Extract cameras and zones from frigate_mqtt entries in notification_timeline.json."""
         data = timeline_data
@@ -321,7 +335,8 @@ class EventQueryService:
             if not cameras_with_zones and cameras:
                 cameras_with_zones = [{"camera": c, "zones": []} for c in cameras]
 
-            events_list.append({
+            end_ts = self._extract_end_timestamp_from_timeline(timeline) or metadata.get('end_time')
+            event_dict = {
                 "event_id": ce_id,
                 "camera": "events",
                 "subdir": ce_id,
@@ -344,7 +359,10 @@ class EventQueryService:
                 "consolidated": True,
                 "ongoing": ongoing,
                 "genai_entries": genai_entries
-            })
+            }
+            if end_ts is not None:
+                event_dict["end_timestamp"] = end_ts
+            events_list.append(event_dict)
 
         return events_list
 
@@ -398,7 +416,8 @@ class EventQueryService:
             if not cameras_with_zones:
                 cameras_with_zones = [{"camera": camera_name, "zones": []}]
 
-            events.append({
+            end_ts = self._extract_end_timestamp_from_timeline(timeline) or metadata.get('end_time')
+            event_dict = {
                 "event_id": eid,
                 "camera": camera_name,
                 "subdir": subdir,
@@ -419,7 +438,10 @@ class EventQueryService:
                 "cameras_with_zones": cameras_with_zones,
                 "ongoing": ongoing,
                 "genai_entries": genai_entries
-            })
+            }
+            if end_ts is not None:
+                event_dict["end_timestamp"] = end_ts
+            events.append(event_dict)
 
         return events
 
