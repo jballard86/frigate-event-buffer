@@ -38,6 +38,24 @@ class DownloadService:
             f"export_download_timeout={export_download_timeout}s, events_clip_timeout={events_clip_timeout}s"
         )
 
+    def _request_export(self, export_url: str, body: dict) -> requests.Response:
+        """
+        POST to Frigate export URL with a JSON body. Frigate 0.17+ requires the body
+        object to exist for validation; do not remove json={} even if it appears redundant.
+        On non-200, response.text is logged so Pydantic validation errors are visible.
+        """
+        resp = requests.post(
+            export_url,
+            json=body,
+            headers={"Content-Type": "application/json"},
+            timeout=60,
+        )
+        if resp.status_code != 200:
+            logger.warning(
+                f"Export API non-200: status={resp.status_code} response.text={resp.text or '(empty)'}"
+            )
+        return resp
+
     def download_snapshot(self, event_id: str, folder_path: str) -> bool:
         """Download snapshot from Frigate API."""
         url = f"{self.frigate_url}/api/events/{event_id}/snapshot.jpg"
@@ -82,7 +100,7 @@ class DownloadService:
 
         Returns dict with keys: success (bool), frigate_response (dict), optionally fallback (str).
         """
-        # Compute export time range (Unix epoch seconds)
+        # Compute export time range (Unix epoch seconds); Frigate 0.17 expects integers
         start_ts = int(start_time - export_buffer_before)
         end_ts = int(end_time + export_buffer_after)
 
@@ -94,31 +112,29 @@ class DownloadService:
         final_path = os.path.join(folder_path, "clip.mp4")
         frigate_response: Optional[dict] = None
 
+        # Body must always be a dict; Frigate 0.17+ requires it for validation (json={} minimum)
+        body = {}
+        body["name"] = f"export_{event_id}"[:256]
+        body["playback"] = "realtime"
+        body["source"] = "recordings"
+
         try:
-            # 1. Trigger export via POST (Frigate/FastAPI requires JSON body with playback, name)
-            payload = {
-                "playback": "realtime",
-                "name": f"export_{event_id}"[:256],
-            }
             logger.info(f"Requesting clip export: {export_url}")
-            resp = requests.post(
-                export_url,
-                json=payload,
-                headers={"Content-Type": "application/json"},
-                timeout=60
-            )
+            resp = self._request_export(export_url, body)
+
             # Capture response for timeline debugging before raise_for_status
             if resp.headers.get("content-type", "").startswith("application/json"):
                 try:
                     frigate_response = resp.json()
                 except Exception:
-                    frigate_response = {"status_code": resp.status_code, "raw": resp.text[:500] if resp.text else ""}
-            elif resp.text:
-                frigate_response = {"status_code": resp.status_code, "raw": resp.text[:500]}
+                    frigate_response = {"status_code": resp.status_code, "raw": (resp.text or "")[:500]}
+            else:
+                if resp.text or resp.status_code != 200:
+                    frigate_response = {"status_code": resp.status_code, "raw": (resp.text or "")[:500]}
 
-            # Check if export failed (status not OK or success: false)
-            if not resp.ok or (frigate_response and isinstance(frigate_response, dict) and frigate_response.get("success") is False):
-                logger.warning(f"Export failed for {event_id}. Status: {resp.status_code}. Response: {resp.text}")
+            # Log failure payload if 200 but success: false (already logged non-200 in _request_export)
+            if resp.ok and frigate_response and isinstance(frigate_response, dict) and frigate_response.get("success") is False:
+                logger.warning(f"Export failed for {event_id}. Status: {resp.status_code}. Response: {resp.text or '(empty)'}")
 
             resp.raise_for_status()
 
@@ -191,7 +207,10 @@ class DownloadService:
             return {"success": transcode_ok, "frigate_response": frigate_response}
 
         except requests.exceptions.RequestException as e:
-            logger.warning(f"Export API failed for {event_id}: {e}, falling back to events API")
+            if getattr(e, "response", None) is not None and e.response.text:
+                logger.warning(f"Export API request failed for {event_id}: response.text={e.response.text}")
+            else:
+                logger.warning(f"Export API failed for {event_id}: {e}, falling back to events API")
             fallback_ok = self.download_and_transcode_clip(event_id, folder_path)
             return {
                 "success": fallback_ok,
