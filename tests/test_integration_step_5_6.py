@@ -70,6 +70,40 @@ class TestIntegrationStep5Persistence(unittest.TestCase):
         self.assertEqual(saved["shortSummary"], payload["shortSummary"])
         self.assertEqual(saved["potential_threat_level"], payload["potential_threat_level"])
 
+    @patch("frigate_buffer.services.ai_analyzer.requests.post")
+    @patch("frigate_buffer.services.ai_analyzer.cv2.VideoCapture")
+    def test_analysis_result_saved_even_when_required_fields_missing(self, mock_vc, mock_post):
+        """When proxy returns partial result (e.g. missing potential_threat_level), we still save the dict."""
+        event_dir = tempfile.mkdtemp()
+        self.addCleanup(lambda: os.path.exists(event_dir) and shutil.rmtree(event_dir))
+        clip_path = os.path.join(event_dir, "clip.mp4")
+        with open(clip_path, "wb") as f:
+            f.write(b"fake mp4")
+        mock_cap = MagicMock()
+        mock_cap.isOpened.return_value = True
+        mock_cap.get.side_effect = lambda k: 1.0 if k == 5 else (2 if k == 7 else 0)
+        mock_cap.read.return_value = (True, np.zeros((100, 100, 3), dtype=np.uint8))
+        mock_cap.release = MagicMock()
+        mock_vc.return_value = mock_cap
+
+        partial_payload = {"title": "Partial", "shortSummary": "No threat level in response."}
+        mock_post.return_value.status_code = 200
+        mock_post.return_value.json.return_value = {
+            "choices": [{"message": {"content": json.dumps(partial_payload)}}]
+        }
+
+        config = {"GEMINI": {"enabled": True, "proxy_url": "http://proxy", "api_key": "key"}}
+        service = GeminiAnalysisService(config)
+        result = service.analyze_clip("evt-partial", clip_path)
+
+        self.assertIsNotNone(result)
+        out_path = os.path.join(event_dir, "analysis_result.json")
+        self.assertTrue(os.path.isfile(out_path), "Should save analysis_result.json even when fields missing")
+        with open(out_path, "r", encoding="utf-8") as f:
+            saved = json.load(f)
+        self.assertEqual(saved["title"], "Partial")
+        self.assertEqual(saved["shortSummary"], "No threat level in response.")
+
 
 # --- Test Case 2: Orchestrator hand-off ---
 
@@ -95,9 +129,9 @@ class TestIntegrationStep6OrchestratorHandoff(unittest.TestCase):
         }
         with patch("frigate_buffer.orchestrator.MqttClientWrapper"), \
              patch("frigate_buffer.orchestrator.NotificationPublisher"), \
-             patch("frigate_buffer.orchestrator.EventLifecycleService"), \
-             patch("frigate_buffer.web.server.create_app", return_value=MagicMock()):
+             patch("frigate_buffer.orchestrator.EventLifecycleService"):
             orch = StateAwareOrchestrator(config)
+        orch.flask_app = MagicMock()
 
         orch.download_service = MagicMock()
         orch.download_service.post_event_description = MagicMock(return_value=True)

@@ -458,3 +458,25 @@ class TestGeminiAnalysisServiceFrameMetadata(unittest.TestCase):
         service = GeminiAnalysisService(config)
         result = service.analyze_clip("evt1", clip_path, event_start_ts=0, event_end_ts=1.0, frame_metadata=[])
         self.assertIsNotNone(result)
+
+
+class TestGeminiAnalysisServiceSaveAnalysisResult(unittest.TestCase):
+    """Test _save_analysis_result: path handling and OSError does not crash."""
+
+    def test_save_analysis_result_oserror_does_not_raise(self):
+        """When writing analysis_result.json raises OSError (e.g. read-only fs), we log and do not raise."""
+        event_dir = tempfile.mkdtemp()
+        self.addCleanup(lambda: os.path.exists(event_dir) and __import__("shutil").rmtree(event_dir, ignore_errors=True))
+        clip_path = os.path.join(event_dir, "clip.mp4")
+        with open(clip_path, "wb") as f:
+            f.write(b"fake")
+        config = {"GEMINI": {"enabled": True, "proxy_url": "http://p", "api_key": "k"}}
+        service = GeminiAnalysisService(config)
+        result = {"title": "T", "shortSummary": "S", "potential_threat_level": 0}
+        out_path = os.path.join(event_dir, "analysis_result.json")
+        with patch("frigate_buffer.services.ai_analyzer.open", side_effect=OSError(13, "Permission denied")):
+            try:
+                service._save_analysis_result("evt1", clip_path, result)
+            except OSError:
+                self.fail("_save_analysis_result should catch OSError and not re-raise")
+        self.assertFalse(os.path.isfile(out_path), "File should not be created when open raises OSError")

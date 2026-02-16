@@ -36,6 +36,10 @@ class TestFileManagerPathValidation(unittest.TestCase):
         self.assertNotIn("/", out)
         self.assertNotIn("\\", out)
 
+    def test_sanitize_camera_name_empty_or_all_special_returns_unknown(self):
+        self.assertEqual(self.fm.sanitize_camera_name(""), "unknown")
+        self.assertEqual(self.fm.sanitize_camera_name("!!!@@@###"), "unknown")
+
     def test_create_event_folder_path_traversal_raises(self):
         with self.assertRaises(ValueError) as ctx:
             self.fm.create_event_folder(
@@ -48,6 +52,12 @@ class TestFileManagerPathValidation(unittest.TestCase):
     def test_create_consolidated_event_folder_path_traversal_raises(self):
         with self.assertRaises(ValueError) as ctx:
             self.fm.create_consolidated_event_folder("../../../evil")
+        self.assertIn("Invalid consolidated event path", str(ctx.exception))
+
+    def test_create_consolidated_event_folder_dotdot_escape_raises(self):
+        # folder_name that resolves outside storage (path traversal)
+        with self.assertRaises(ValueError) as ctx:
+            self.fm.create_consolidated_event_folder("../../outside")
         self.assertIn("Invalid consolidated event path", str(ctx.exception))
 
     def test_create_event_folder_valid_succeeds(self):
