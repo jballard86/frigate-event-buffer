@@ -40,13 +40,11 @@ This folder holds a **standalone mock** of the multi-cam frame extractor. It is 
 - Clips from Frigate export often include 5–10 seconds of pre-capture buffer before the event start. The script currently uses the first metadata timestamp as vid_start; that can make seeking wrong (e.g. seek to 0:00 is actually 10s before event).
 - **Fix when merging:** Use clip start from the export request (same export_buffer_before logic as the main app: see frigate_buffer/services/download.py and lifecycle.py) or derive from folder name / export response. Otherwise crops may miss the action.
 
-### 3. Move and wire the service
+### 3. Move and wire the service — [x] Completed
 
-- Move **multi_cam_frame_extracter.py** into **frigate_buffer/services/** (same name or e.g. `multi_cam_frame_extractor.py`).
-- Remove the one-line "Lives in multi_cam_frame_extract_mock" comment.
-- Have the service read config from the main app:
-  - **If run by the orchestrator:** Pass the orchestrator's config (same object as rest of app).
-  - **If run standalone:** Use the same config path list as main: `frigate_buffer.config.load_config()` and map nested keys (network, settings, multi_cam, gemini_proxy) into the flat keys the script expects, or add a small adapter that reads from the main config dict.
+- Logic ported into **frigate_buffer/services/ai_analyzer.py** (no separate multi_cam_frame_extracter in services). Service reads from main app config (flat keys).
+- **If run by the orchestrator:** Pass the orchestrator's config (same object as rest of app).
+- **If run standalone:** Use the same config path list as main: `frigate_buffer.config.load_config()` and map nested keys (network, settings, multi_cam, gemini_proxy) into the flat keys the script expects, or add a small adapter that reads from the main config dict.
 
 ### 4. MQTT and per-frame data
 
@@ -95,11 +93,18 @@ This folder holds a **standalone mock** of the multi-cam frame extractor. It is 
 
 ---
 
+## What was done (Step 3)
+
+- **frigate_buffer/services/ai_analyzer.py:** Motion-aware selection via **grayscale** frame differencing (no MQTT); `MOTION_THRESHOLD_PX` wired; first and last frames always kept for context. Center crop using `CROP_WIDTH`/`CROP_HEIGHT`. Flat config keys used for proxy URL, model, and tuning (`GEMINI_PROXY_*`). Prompt loaded from `MULTI_CAM_SYSTEM_PROMPT_FILE` when set and valid file; else built-in path or hardcoded default. Proxy request includes `temperature`, `top_p`, `frequency_penalty`, `presence_penalty`.
+- **frigate_buffer/orchestrator.py:** Analyzer enable check updated to accept `GEMINI_PROXY_URL` (flat) or `gemini.proxy_url`; API key from config or `GEMINI_API_KEY` env. Single API key; `GEMINI_API_KEY` env overrides config.yaml for security (enforced in config load order).
+
+---
+
 ## Notes for future AI (next steps)
 
 - **Step 2 (Clip paths and Clip timing):** Done. Smart seeking and timestamp wiring are in place; orchestrator does the event lookup so lifecycle stays decoupled.
-- **Step 3:** When moving multi_cam_frame_extracter into frigate_buffer/services, have it read from the **flat** config keys (e.g. `config['MAX_MULTI_CAM_FRAMES_MIN']`, `config['GEMINI_PROXY_URL']`, `config['EXPORT_BUFFER_BEFORE']`). The mock uses a flat dict; no adapter needed if keys match. For proxy API key, use `config['GEMINI']['api_key']` (which is already filled from `GEMINI_API_KEY`).
-- **Config keys reference:** Multi-cam: `MAX_MULTI_CAM_FRAMES_MIN`, `MAX_MULTI_CAM_FRAMES_SEC`, `MOTION_THRESHOLD_PX`, `CROP_WIDTH`, `CROP_HEIGHT`, `MULTI_CAM_SYSTEM_PROMPT_FILE`. Gemini proxy: `GEMINI_PROXY_URL`, `GEMINI_PROXY_MODEL`, `GEMINI_PROXY_TEMPERATURE`, `GEMINI_PROXY_TOP_P`, `GEMINI_PROXY_FREQUENCY_PENALTY`, `GEMINI_PROXY_PRESENCE_PENALTY`. Single API key: `config['GEMINI']['api_key']` or env `GEMINI_API_KEY`.
+- **Step 3:** Done. Production logic lives in `ai_analyzer.py`. Motion is **grayscale frame differencing** (no EventMetadataStore in analyzer); first and last frames always kept; crop is center crop. Next: Step 4 (MQTT tracked_object_update, EventMetadataStore) for per-frame box/metadata if needed for multi-event recap.
+- **Config keys reference:** Multi-cam: `MAX_MULTI_CAM_FRAMES_MIN`, `MAX_MULTI_CAM_FRAMES_SEC`, `MOTION_THRESHOLD_PX`, `CROP_WIDTH`, `CROP_HEIGHT`, `MULTI_CAM_SYSTEM_PROMPT_FILE`. Gemini proxy: `GEMINI_PROXY_URL`, `GEMINI_PROXY_MODEL`, `GEMINI_PROXY_TEMPERATURE`, `GEMINI_PROXY_TOP_P`, `GEMINI_PROXY_FREQUENCY_PENALTY`, `GEMINI_PROXY_PRESENCE_PENALTY`. Single API key: `config['GEMINI']['api_key']` (env `GEMINI_API_KEY` overrides config.yaml for security).
 
 ---
 
@@ -107,7 +112,7 @@ This folder holds a **standalone mock** of the multi-cam frame extractor. It is 
 
 1. ~~Config schema and load_config~~ **Done.** No Google Fallback, Single API Key (`GEMINI_API_KEY` only).
 2. ~~Clip paths and clip timing (vid_start) in **ai_analyzer.py**~~ **Done.** Smart seeking (buffer_offset, seek, limit, stride); orchestrator looks up event and passes timestamps; lifecycle unchanged.
-3. Move multi_cam_frame_extracter into frigate_buffer/services and make it use main config (flat keys above).
+3. ~~Move and wire the service~~ **Done.** Motion (grayscale diff), center crop, flat config, prompt file, proxy tuning in `ai_analyzer.py`; orchestrator enable uses `GEMINI_PROXY_URL` and API key from config/env.
 4. Add tracked_object_update subscription and feed EventMetadataStore from it only.
 5. Proxy HTTP call and config/env are already wired; optional: save analysis_result.json for Reporter.
 6. Orchestrator hook is done; update README and clean up mock folder when ready.

@@ -53,3 +53,5 @@ Edit **report_prompt.txt** to change how the daily report is written. When merge
 Do **not** merge anything from this folder into the main project until you are ready. When you are, follow **PLAN_TO_MERGE_LATER.md**.
 
 **Step 1 (Config) is done:** The main app’s `frigate_buffer/config.py` and `config.example.yaml` now define `multi_cam` and `gemini_proxy` with flat keys (e.g. `MAX_MULTI_CAM_FRAMES_MIN`, `GEMINI_PROXY_URL`). Defaults live there; no Google fallback, single API key (`GEMINI_API_KEY`). The mock still uses its own `DEFAULT_CONFIG`; when the service is moved (Step 3), it will read from the main config.
+
+**Step 3 (Move and wire) is done:** Motion-aware frame selection (grayscale differencing), center cropping, flat config, and prompt-file loading are ported into `frigate_buffer/services/ai_analyzer.py`. The mock folder remains reference only; production does not depend on it.
