@@ -54,7 +54,8 @@ This folder holds a **standalone mock** of the multi-cam frame extractor. It is 
 
 ### 5. Gemini proxy call and analysis_result.json (bridge to Reporter) — [x] Completed
 
-- **Done in `frigate_buffer/services/ai_analyzer.py`:** HTTP POST in **send_to_proxy** (OpenAI-compatible), system prompt + base64 frames, Bearer auth. Response parsed and published to `frigate/reviews` (Main App and HA consume it). Optional: save **analysis_result.json** for Reporter (daily_report_to_proxy.py) if that script is merged later.
+- **Done in `frigate_buffer/services/ai_analyzer.py`:** HTTP POST in **send_to_proxy** (OpenAI-compatible), system prompt + base64 frames, Bearer auth. Response parsed and returned to orchestrator (buffer does not publish to `frigate/reviews`). After a successful proxy response, **analysis_result.json** is saved in the same directory as the clip (event folder) via **\_save_analysis_result**; this file is the source of truth for the Daily Reporter (Step 7). Required fields for Reporter: `shortSummary`, `title`, `potential_threat_level` (missing fields are logged but the full dict is still saved).
+- Integration tests in **tests/test_integration_step_5_6.py** verify: (1) persistence of `analysis_result.json` with expected content, (2) orchestrator hand-off to Frigate and HA, (3) error handling (invalid JSON or 500: no crash, no corrupt file).
 - Payload shapes: see **multi_cam_frame_extractor_input_output.md** in this folder (can be moved to `docs/` or kept next to the service).
 
 ### 6. Orchestrator integration (optional) — [x] Completed
@@ -110,11 +111,20 @@ This folder holds a **standalone mock** of the multi-cam frame extractor. It is 
 
 ---
 
+## What was done (Step 5/6)
+
+- **Persistence:** **frigate_buffer/services/ai_analyzer.py** — After a successful proxy response, `analyze_clip` calls **\_save_analysis_result(event_id, clip_path, result)**. The result dict is written as **analysis_result.json** in the same directory as `clip.mp4` (i.e. the event folder, or camera subfolder in consolidated layout). Required for Step 7 (Daily Reporter). Verification: `shortSummary`, `title`, and `potential_threat_level` are checked for presence (warning if missing); full dict is saved in all cases.
+- **Orchestrator:** **\_handle_analysis_result** receives the dict from the background thread and calls **download_service.post_event_description(event_id, description)** (Frigate API) and **notifier.publish_notification(..., "finalized")** (Home Assistant). No code changes were required; behavior verified by integration tests.
+- **Integration tests:** **tests/test_integration_step_5_6.py** — (1) Persistence: mock proxy success, assert `analysis_result.json` created in event folder with expected keys. (2) Orchestrator: assert `post_event_description` and `publish_notification("finalized")` called when `_handle_analysis_result` runs. (3) Error handling: invalid JSON and proxy 500 — no `analysis_result.json` created, no crash. All five tests pass. Full test suite: 101 passed; 1 pre-existing failure in **tests/test_mqtt_auth.py** (test_mqtt_auth_credentials_set), unrelated to Step 5/6.
+
+---
+
 ## Notes for future AI (next steps)
 
 - **Step 2 (Clip paths and Clip timing):** Done. Smart seeking and timestamp wiring are in place; orchestrator does the event lookup so lifecycle stays decoupled.
 - **Step 3:** Done. Production logic lives in `ai_analyzer.py`. Motion is **grayscale frame differencing**; first and last frames always kept; crop is center or smart crop when per-frame metadata is available.
-- **Step 4:** Done. Per-frame data from `frigate/+/tracked_object_update` is stored in state (normalized box [ymin, xmin, ymax, xmax] 0–1); cleanup on `remove_event` and after `analyze_clip`. Smart crop uses `SMART_CROP_PADDING` (default 0.15). Use the **same event_id** as the clip for frame_metadata (do not merge CE members). Next: Step 7 (Daily report script) or Step 8 (docs and cleanup).
+- **Step 4:** Done. Per-frame data from `frigate/+/tracked_object_update` is stored in state (normalized box [ymin, xmin, ymax, xmax] 0–1); cleanup on `remove_event` and after `analyze_clip`. Smart crop uses `SMART_CROP_PADDING` (default 0.15). Use the **same event_id** as the clip for frame_metadata (do not merge CE members).
+- **Step 5/6:** Done. Persistence: `_save_analysis_result` writes `analysis_result.json` in the clip’s directory (event folder). Orchestrator hand-off confirmed. Integration tests in `tests/test_integration_step_5_6.py` (5 tests, all pass). **Next:** Step 7 (Daily report script) or Step 8 (docs and cleanup). For Step 7, Reporter should scan storage for **analysis_result.json** in event folders (path: same directory as `clip.mp4`, i.e. `os.path.join(event_folder, "analysis_result.json")`).
 - **Config keys reference:** Multi-cam: `MAX_MULTI_CAM_FRAMES_MIN`, `MAX_MULTI_CAM_FRAMES_SEC`, `MOTION_THRESHOLD_PX`, `CROP_WIDTH`, `CROP_HEIGHT`, `MULTI_CAM_SYSTEM_PROMPT_FILE`, `SMART_CROP_PADDING`. Gemini proxy: `GEMINI_PROXY_URL`, `GEMINI_PROXY_MODEL`, `GEMINI_PROXY_TEMPERATURE`, `GEMINI_PROXY_TOP_P`, `GEMINI_PROXY_FREQUENCY_PENALTY`, `GEMINI_PROXY_PRESENCE_PENALTY`. Single API key: `config['GEMINI']['api_key']` (env `GEMINI_API_KEY` overrides config.yaml for security).
 
 ---
@@ -125,6 +135,6 @@ This folder holds a **standalone mock** of the multi-cam frame extractor. It is 
 2. ~~Clip paths and clip timing (vid_start) in **ai_analyzer.py**~~ **Done.** Smart seeking (buffer_offset, seek, limit, stride); orchestrator looks up event and passes timestamps; lifecycle unchanged.
 3. ~~Move and wire the service~~ **Done.** Motion (grayscale diff), center crop, flat config, prompt file, proxy tuning in `ai_analyzer.py`; orchestrator enable uses `GEMINI_PROXY_URL` and API key from config/env.
 4. ~~Add tracked_object_update subscription and feed EventMetadataStore from it only.~~ **Done.** Per-frame metadata in state; smart crop and score-based selection in ai_analyzer; orchestrator wires get/clear frame_metadata.
-5. Proxy HTTP call and config/env are already wired; optional: save analysis_result.json for Reporter.
-6. Orchestrator hook is done; update README and clean up mock folder when ready.
+5. ~~Proxy HTTP call; save analysis_result.json for Reporter~~ **Done.** `_save_analysis_result` in ai_analyzer.py; integration tests verify persistence and pipeline.
+6. ~~Orchestrator hook~~ **Done.** Hand-off to Frigate and HA verified. Update README and clean up mock folder when ready.
 7. Daily report: move daily_report_to_proxy.py (e.g. to services/), add config for schedule and report path, define recap storage layout and implement get_previous_day_recaps; implement send_report_to_proxy; schedule at 1am (cron or in-process).

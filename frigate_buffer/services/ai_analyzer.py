@@ -368,6 +368,25 @@ class GeminiAnalysisService:
             logger.exception("Failed to parse proxy JSON: %s", e)
             return None
 
+    def _save_analysis_result(self, event_id: str, clip_path: str, result: Dict[str, Any]) -> None:
+        """
+        Save the analysis result as analysis_result.json in the same directory as the clip.
+        Required for Step 7 (Daily Reporter). Logs a warning if shortSummary, title, or
+        potential_threat_level are missing but still saves the full dict.
+        """
+        required = ("shortSummary", "title", "potential_threat_level")
+        missing = [k for k in required if k not in result]
+        if missing:
+            logger.warning("Analysis result for %s missing fields %s; saving anyway", event_id, missing)
+        event_dir = os.path.dirname(os.path.abspath(clip_path))
+        out_path = os.path.join(event_dir, "analysis_result.json")
+        try:
+            with open(out_path, "w", encoding="utf-8") as f:
+                json.dump(result, f, indent=2, ensure_ascii=False)
+            logger.debug("Saved analysis_result.json for %s to %s", event_id, out_path)
+        except OSError as e:
+            logger.warning("Failed to write analysis_result.json for %s: %s", event_id, e)
+
     def analyze_clip(
         self,
         event_id: str,
@@ -414,7 +433,10 @@ class GeminiAnalysisService:
                 zones_str="none recorded",
                 labels_str="(none recorded)",
             )
-            return self.send_to_proxy(system_prompt, frames)
+            result = self.send_to_proxy(system_prompt, frames)
+            if result and isinstance(result, dict):
+                self._save_analysis_result(event_id, clip_path, result)
+            return result
         except Exception as e:
             logger.exception("Analyze clip failed for %s: %s", event_id, e)
             return None
