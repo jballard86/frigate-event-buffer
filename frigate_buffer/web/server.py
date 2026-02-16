@@ -294,13 +294,32 @@ def create_app(orchestrator):
         except OSError:
             pass
 
+        # Export duration and clip files for intro line
+        export_duration_seconds = None
+        export_file_list = [f for f in event_files if f == 'clip.mp4' or f.endswith('/clip.mp4')]
+        request_entries = [e for e in entries if e.get("source") == "frigate_api" and e.get("direction") == "out" and "Clip export request" in (e.get("label") or "")]
+        response_entries = [e for e in entries if e.get("source") == "frigate_api" and e.get("direction") == "in" and "Clip export response" in (e.get("label") or "")]
+        if request_entries and response_entries:
+            try:
+                ts_fmt = "%Y-%m-%dT%H:%M:%S"
+                first_request_ts = min(e.get("ts", "") for e in request_entries)
+                last_response_ts = max(e.get("ts", "") for e in response_entries)
+                if first_request_ts and last_response_ts:
+                    t0 = datetime.strptime(first_request_ts[:19], ts_fmt)
+                    t1 = datetime.strptime(last_response_ts[:19], ts_fmt)
+                    export_duration_seconds = (t1 - t0).total_seconds()
+            except (ValueError, TypeError):
+                pass
+
         return render_template(
             'timeline.html',
             event_id=timeline_data.get("event_id", subdir),
             camera=camera,
             subdir=subdir,
             entries=entries,
-            event_files=event_files
+            event_files=event_files,
+            export_duration_seconds=export_duration_seconds,
+            export_file_list=export_file_list
         )
 
     @app.route('/files/<path:filename>')

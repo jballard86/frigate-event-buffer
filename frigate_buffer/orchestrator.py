@@ -34,6 +34,7 @@ from frigate_buffer.services.mqtt_client import MqttClientWrapper
 from frigate_buffer.services.lifecycle import EventLifecycleService
 from frigate_buffer.services.ai_analyzer import GeminiAnalysisService
 from frigate_buffer.services.daily_reporter import DailyReporterService
+from frigate_buffer.services.frigate_export_watchdog import run_once as export_watchdog_run_once
 
 logger = logging.getLogger('frigate-buffer')
 
@@ -618,6 +619,10 @@ class StateAwareOrchestrator:
         schedule.every(5).minutes.do(self._log_request_stats)
         schedule.every(5).minutes.do(self._update_storage_stats)
 
+        watchdog_minutes = self.config.get('EXPORT_WATCHDOG_INTERVAL_MINUTES', 2)
+        schedule.every(watchdog_minutes).minutes.do(self._run_export_watchdog)
+        logger.info(f"Scheduled export watchdog every {watchdog_minutes} minute(s)")
+
         review_hour = self.config.get('DAILY_REVIEW_SCHEDULE_HOUR', 1)
         schedule.every().day.at(f"{review_hour:02d}:00").do(self._daily_review_job)
         logger.info(f"Scheduled daily review at {review_hour:02d}:00")
@@ -675,6 +680,13 @@ class StateAwareOrchestrator:
     def _hourly_cleanup(self):
         """Hourly cleanup task. Delegates to lifecycle service."""
         self.lifecycle_service.run_cleanup()
+
+    def _run_export_watchdog(self):
+        """Check event folders for completed exports, remove from Frigate, verify download links."""
+        try:
+            export_watchdog_run_once(self.config)
+        except Exception as e:
+            logger.exception(f"Export watchdog error: {e}")
 
     def start(self):
         """Start all components."""

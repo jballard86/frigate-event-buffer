@@ -34,6 +34,7 @@ CONFIG_SCHEMA = Schema({
     Optional('settings'): {
         Optional('retention_days'): int,
         Optional('cleanup_interval_hours'): int,
+        Optional('export_watchdog_interval_minutes'): int,
         Optional('ffmpeg_timeout_seconds'): int,
         Optional('notification_delay_seconds'): int,
         Optional('log_level'): Any('DEBUG', 'INFO', 'WARNING', 'ERROR'),
@@ -108,6 +109,7 @@ def load_config() -> dict:
         # Settings defaults
         'RETENTION_DAYS': 3,
         'CLEANUP_INTERVAL_HOURS': 1,
+        'EXPORT_WATCHDOG_INTERVAL_MINUTES': 2,
         'FFMPEG_TIMEOUT': 60,
         'NOTIFICATION_DELAY': 2,
         'LOG_LEVEL': 'INFO',
@@ -202,6 +204,7 @@ def load_config() -> dict:
                     settings = yaml_config['settings']
                     config['RETENTION_DAYS'] = settings.get('retention_days', config['RETENTION_DAYS'])
                     config['CLEANUP_INTERVAL_HOURS'] = settings.get('cleanup_interval_hours', config['CLEANUP_INTERVAL_HOURS'])
+                    config['EXPORT_WATCHDOG_INTERVAL_MINUTES'] = settings.get('export_watchdog_interval_minutes', config['EXPORT_WATCHDOG_INTERVAL_MINUTES'])
                     config['FFMPEG_TIMEOUT'] = settings.get('ffmpeg_timeout_seconds', config['FFMPEG_TIMEOUT'])
                     config['NOTIFICATION_DELAY'] = settings.get('notification_delay_seconds', config['NOTIFICATION_DELAY'])
                     config['LOG_LEVEL'] = settings.get('log_level', config['LOG_LEVEL'])
@@ -296,6 +299,7 @@ def load_config() -> dict:
     config['DAILY_REVIEW_SCHEDULE_HOUR'] = int(os.getenv('DAILY_REVIEW_SCHEDULE_HOUR', str(config['DAILY_REVIEW_SCHEDULE_HOUR'])))
     config['DAILY_REPORT_SCHEDULE_HOUR'] = int(os.getenv('DAILY_REPORT_SCHEDULE_HOUR', str(config['DAILY_REPORT_SCHEDULE_HOUR'])))
     config['EVENT_GAP_SECONDS'] = int(os.getenv('EVENT_GAP_SECONDS', str(config['EVENT_GAP_SECONDS'])))
+    config['EXPORT_WATCHDOG_INTERVAL_MINUTES'] = int(os.getenv('EXPORT_WATCHDOG_INTERVAL_MINUTES', str(config['EXPORT_WATCHDOG_INTERVAL_MINUTES'])))
     config['EXPORT_BUFFER_BEFORE'] = int(os.getenv('EXPORT_BUFFER_BEFORE', str(config['EXPORT_BUFFER_BEFORE'])))
     config['EXPORT_BUFFER_AFTER'] = int(os.getenv('EXPORT_BUFFER_AFTER', str(config['EXPORT_BUFFER_AFTER'])))
     config['HA_URL'] = os.getenv('HA_URL') or config['HA_URL']
