@@ -14,13 +14,29 @@ from frigate_buffer.services.video import VideoService
 logger = logging.getLogger('frigate-buffer')
 
 
+# Default timeouts (seconds); can be overridden via config for slow Frigate exports
+DEFAULT_EXPORT_DOWNLOAD_TIMEOUT = 360
+DEFAULT_EVENTS_CLIP_TIMEOUT = 300
+
+
 class DownloadService:
     """Handles network downloads and API interactions with Frigate."""
 
-    def __init__(self, frigate_url: str, video_service: VideoService):
+    def __init__(
+        self,
+        frigate_url: str,
+        video_service: VideoService,
+        export_download_timeout: int = DEFAULT_EXPORT_DOWNLOAD_TIMEOUT,
+        events_clip_timeout: int = DEFAULT_EVENTS_CLIP_TIMEOUT,
+    ):
         self.frigate_url = frigate_url
         self.video_service = video_service
-        logger.info(f"DownloadService initialized with Frigate URL: {frigate_url}")
+        self.export_download_timeout = export_download_timeout
+        self.events_clip_timeout = events_clip_timeout
+        logger.info(
+            f"DownloadService initialized with Frigate URL: {frigate_url}, "
+            f"export_download_timeout={export_download_timeout}s, events_clip_timeout={events_clip_timeout}s"
+        )
 
     def download_snapshot(self, event_id: str, folder_path: str) -> bool:
         """Download snapshot from Frigate API."""
@@ -159,7 +175,7 @@ class DownloadService:
             download_path = export_filename.lstrip("/").split("/")[-1] if "/" in export_filename else export_filename
             download_url = f"{self.frigate_url.rstrip('/')}/exports/{download_path}"
             logger.info(f"Downloading export clip from {download_url}")
-            dl_resp = requests.get(download_url, timeout=180, stream=True)
+            dl_resp = requests.get(download_url, timeout=self.export_download_timeout, stream=True)
             dl_resp.raise_for_status()
 
             bytes_downloaded = 0
@@ -204,7 +220,7 @@ class DownloadService:
             for attempt in range(1, 4):
                 logger.debug(f"Downloading clip from {url} (attempt {attempt}/3)")
                 try:
-                    with requests.get(url, timeout=120, stream=True) as response:
+                    with requests.get(url, timeout=self.events_clip_timeout, stream=True) as response:
                         response.raise_for_status()
 
                         bytes_downloaded = 0
