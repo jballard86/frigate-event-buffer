@@ -45,6 +45,7 @@ CONFIG_SCHEMA = Schema({
         Optional('event_gap_seconds'): int,
         Optional('export_buffer_before'): int,
         Optional('export_buffer_after'): int,
+        Optional('final_review_image_count'): int,
     },
     Optional('ha'): {
         Optional('base_url'): str,
@@ -52,6 +53,12 @@ CONFIG_SCHEMA = Schema({
         Optional('token'): str,
         Optional('gemini_cost_entity'): str,
         Optional('gemini_tokens_entity'): str,
+    },
+    Optional('gemini'): {
+        Optional('proxy_url'): str,
+        Optional('api_key'): str,
+        Optional('model'): str,
+        Optional('enabled'): bool,
     }
 }, extra=ALLOW_EXTRA)
 
@@ -92,6 +99,7 @@ def load_config() -> dict:
         'EVENT_GAP_SECONDS': 120,
         'EXPORT_BUFFER_BEFORE': 5,
         'EXPORT_BUFFER_AFTER': 30,
+        'FINAL_REVIEW_IMAGE_COUNT': 20,
 
         # Optional HA REST API (for stats page token/cost display)
         'HA_URL': None,
@@ -105,6 +113,9 @@ def load_config() -> dict:
         'CAMERA_LABEL_MAP': {},
         # Smart Zone Filtering: per-camera event_filters (zones_to_ignore, exceptions)
         'CAMERA_EVENT_FILTERS': {},
+
+        # Gemini proxy (AI analysis) - optional
+        'GEMINI': None,
     }
 
     # Load from config.yaml if exists
@@ -162,6 +173,7 @@ def load_config() -> dict:
                     config['EVENT_GAP_SECONDS'] = settings.get('event_gap_seconds', config['EVENT_GAP_SECONDS'])
                     config['EXPORT_BUFFER_BEFORE'] = settings.get('export_buffer_before', config['EXPORT_BUFFER_BEFORE'])
                     config['EXPORT_BUFFER_AFTER'] = settings.get('export_buffer_after', config['EXPORT_BUFFER_AFTER'])
+                    config['FINAL_REVIEW_IMAGE_COUNT'] = settings.get('final_review_image_count', config.get('FINAL_REVIEW_IMAGE_COUNT', 20))
 
                 if 'network' in yaml_config:
                     network = yaml_config['network']
@@ -181,6 +193,15 @@ def load_config() -> dict:
                     config['HA_GEMINI_COST_ENTITY'] = ha_cfg.get('gemini_cost_entity', config['HA_GEMINI_COST_ENTITY'])
                     config['HA_GEMINI_TOKENS_ENTITY'] = ha_cfg.get('gemini_tokens_entity', config['HA_GEMINI_TOKENS_ENTITY'])
 
+                if 'gemini' in yaml_config:
+                    gemini_cfg = yaml_config['gemini']
+                    config['GEMINI'] = {
+                        'proxy_url': gemini_cfg.get('proxy_url', ''),
+                        'api_key': gemini_cfg.get('api_key', ''),
+                        'model': gemini_cfg.get('model', 'gemini-2.5-flash-lite'),
+                        'enabled': bool(gemini_cfg.get('enabled', False)),
+                    }
+
                 config_loaded = True
                 break
 
@@ -189,6 +210,8 @@ def load_config() -> dict:
 
     if not config_loaded:
         logger.info("No config.yaml found, using defaults")
+    if config.get('GEMINI') is None:
+        config['GEMINI'] = {'proxy_url': '', 'api_key': '', 'model': 'gemini-2.5-flash-lite', 'enabled': False}
 
     # Environment variables override everything (for secrets/deployment)
     config['MQTT_BROKER'] = os.getenv('MQTT_BROKER') or config['MQTT_BROKER']
@@ -210,6 +233,14 @@ def load_config() -> dict:
     config['EXPORT_BUFFER_AFTER'] = int(os.getenv('EXPORT_BUFFER_AFTER', str(config['EXPORT_BUFFER_AFTER'])))
     config['HA_URL'] = os.getenv('HA_URL') or config['HA_URL']
     config['HA_TOKEN'] = os.getenv('HA_TOKEN') or config['HA_TOKEN']
+
+    # Gemini env overrides (api_key for secrets)
+    config['GEMINI'] = dict(config.get('GEMINI') or {})
+    config['GEMINI'].setdefault('proxy_url', '')
+    config['GEMINI'].setdefault('api_key', '')
+    config['GEMINI'].setdefault('model', 'gemini-2.5-flash-lite')
+    config['GEMINI'].setdefault('enabled', False)
+    config['GEMINI']['api_key'] = os.getenv('GEMINI_API_KEY') or config['GEMINI'].get('api_key') or ''
 
     # Validate required settings
     missing = []

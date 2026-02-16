@@ -4,3 +4,4 @@ requests
 schedule
 pyyaml
 voluptuous
+opencv-python

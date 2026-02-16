@@ -94,6 +94,14 @@ network:
   flask_port: 5055
   storage_path: "/app/storage"
 
+# Optional: Gemini proxy (AI analysis) - for clip GenAI summaries
+# Set GEMINI_API_KEY in environment for production
+# gemini:
+#   proxy_url: "http://YOUR_PROXY_IP:5050"
+#   api_key: ""
+#   model: "gemini-2.5-flash-lite"
+#   enabled: true
+
 # Optional: Home Assistant REST API (for stats page API Usage display)
 # Uncomment and set to show Gemini cost/token usage on the stats page
 # ha:

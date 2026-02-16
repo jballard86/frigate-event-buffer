@@ -6,7 +6,7 @@ import time
 import logging
 import threading
 import os
-from typing import Optional
+from typing import Optional, Callable
 
 from frigate_buffer.models import EventState, ConsolidatedEvent, _is_no_concerns
 
@@ -17,7 +17,8 @@ class EventLifecycleService:
     """Service managing the lifecycle of events (new, end, consolidate, close)."""
 
     def __init__(self, config, state_manager, file_manager, consolidated_manager,
-                 video_service, download_service, notifier, timeline_logger):
+                 video_service, download_service, notifier, timeline_logger,
+                 on_clip_ready_for_analysis: Optional[Callable[[str, str], None]] = None):
         self.config = config
         self.state_manager = state_manager
         self.file_manager = file_manager
@@ -26,6 +27,7 @@ class EventLifecycleService:
         self.download_service = download_service
         self.notifier = notifier
         self.timeline_logger = timeline_logger
+        self.on_clip_ready_for_analysis = on_clip_ready_for_analysis
 
         self.last_cleanup_time: Optional[float] = None
         self.last_cleanup_deleted: int = 0
@@ -152,6 +154,10 @@ class EventLifecycleService:
                     ce.clip_ready_sent = True
             if should_send_clip:
                 self.notifier.publish_notification(event, "clip_ready")
+                if self.on_clip_ready_for_analysis and self.config.get('GEMINI', {}).get('enabled'):
+                    clip_path = os.path.join(event.folder_path, "clip.mp4")
+                    if os.path.isfile(clip_path):
+                        self.on_clip_ready_for_analysis(event.event_id, clip_path)
 
             self.run_cleanup()
 
@@ -240,6 +246,10 @@ class EventLifecycleService:
             self.timeline_logger.log_frigate_api(ce.folder_path, 'in', f'Clip export response for {camera}', timeline_data)
             if ok and first_clip_path is None:
                 first_clip_path = os.path.join(camera_folder, 'clip.mp4')
+            if ok and self.on_clip_ready_for_analysis and self.config.get('GEMINI', {}).get('enabled'):
+                clip_path = os.path.join(camera_folder, 'clip.mp4')
+                if os.path.isfile(clip_path):
+                    self.on_clip_ready_for_analysis(rep_id, clip_path)
         # Placeholder fallback: if all exports failed, try per-event clip for primary camera
         if first_clip_path is None and primary_cam and ce.primary_event_id:
             primary_folder = self.file_manager.ensure_consolidated_camera_folder(ce.folder_path, primary_cam)
@@ -247,6 +257,8 @@ class EventLifecycleService:
             if ok:
                 first_clip_path = os.path.join(primary_folder, 'clip.mp4')
                 self.timeline_logger.log_frigate_api(ce.folder_path, 'in', 'Placeholder clip (events API fallback)', {'success': True})
+                if self.on_clip_ready_for_analysis and self.config.get('GEMINI', {}).get('enabled') and os.path.isfile(first_clip_path):
+                    self.on_clip_ready_for_analysis(ce.primary_event_id, first_clip_path)
 
         if first_clip_path:
             gif_path = os.path.join(ce.folder_path, 'notification.gif')

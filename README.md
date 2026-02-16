@@ -8,7 +8,7 @@ A state-aware orchestrator that listens to Frigate NVR events via MQTT, tracks t
 - **MQTT Event Tracking**: Subscribes to Frigate's MQTT topics to detect and track events in real-time
 - **Four-Phase Lifecycle**: Tracks events through NEW → DESCRIBED → FINALIZED → SUMMARIZED phases
 - **Ring-Style Notifications**: Sends progressive updates to Home Assistant with phase-specific messages as event details emerge
-- **GenAI Integration**: Captures Frigate's GenAI titles, descriptions, and threat levels (via `data.metadata` in reviews and `description` type in tracked object updates)
+- **GenAI Integration**: Captures GenAI titles, descriptions, and threat levels from (1) Frigate — via `data.metadata` in `frigate/reviews` and `description` in tracked object updates — and (2) optional **in-process Gemini analyzer**: when `gemini.enabled` in config, clips are analyzed via an OpenAI-compatible Gemini proxy; the service returns the result to the orchestrator, which updates state, writes summary/metadata, POSTs the description to Frigate's API (`/api/events/{id}/description`), and sends the "finalized" notification to Home Assistant. The buffer does **not** publish to `frigate/reviews` (that topic is Frigate output-only).
 - **Review Summaries**: Fetches rich markdown security reports from Frigate's review summary API with cross-camera context, timeline, and assessments
 - **Threat Level Alerts**: Three-tier threat classification (0=Normal, 1=Suspicious, 2=Critical) — Level 2 alerts bypass phone volume/DND and keep all follow-up notifications audible
 - **Camera/Label Filtering**: Only process events from specific cameras or with specific labels
@@ -42,6 +42,7 @@ The **StateAwareOrchestrator** is the central coordinator. It owns event-handlin
 
 - **VideoService** (`services/video.py`) — FFmpeg transcoding and GIF generation; used by FileManager so clip handling is isolated and process/timeout logic is in one place.
 - **EventLifecycleService** (`services/lifecycle.py`) — Handles event creation, event end (clip export, cleanup), and consolidated-event finalization (export, review summary, notifications); orchestrator delegates to it instead of inlining logic.
+- **GeminiAnalysisService** (`services/ai_analyzer.py`) — Optional. When `gemini.enabled`, extracts frames from a clip, sends them to an OpenAI-compatible Gemini proxy, and **returns** the analysis metadata (title, shortSummary, scene, potential_threat_level) to the orchestrator. Does not publish to MQTT; the orchestrator persists the result (state, files, Frigate API, HA notification).
 - **EventQueryService** (`services/query.py`) — Reads and parses event data from the filesystem with TTL and per-folder caching; used by the Flask server for event lists and stats so path and parsing logic are centralized.
 - **NotificationEvent protocol** (`models.py`) — Shared interface for EventState and ConsolidatedEvent so the notifier accepts a single contract.
 - **ConsolidatedEventManager “closing” state** — A CE can be `closing` before removal; `mark_closing(ce_id)` prevents new sub-events and timer rescheduling; avoids races during finalization.
@@ -92,6 +93,8 @@ The application is organized as a Python package `frigate_buffer/`:
 | `services/notifier.py` | `NotificationPublisher` — publishes MQTT notifications to Home Assistant; accepts `NotificationEvent` protocol; optional `timeline_callback` (e.g. `TimelineLogger.log_ha`). |
 | `services/timeline.py` | `TimelineLogger` — resolves event/CE folder and appends HA, MQTT, and Frigate API entries to `notification_timeline.json` via `FileManager`. |
 | `services/mqtt_client.py` | `MqttClientWrapper` — Paho MQTT client lifecycle (connect, subscribe, loop), connect/disconnect logging; exposes `client` and `mqtt_connected`; message handling delegated to orchestrator callback. Requires `paho-mqtt>=2.0.0` (CallbackAPIVersion.VERSION2). |
+| `services/ai_analyzer.py` | `GeminiAnalysisService` — Optional. When gemini config is enabled, analyzes clips (frame extraction, Gemini proxy request); returns metadata to the orchestrator. No MQTT publish; orchestrator updates state, writes files, POSTs to Frigate API, and notifies HA. |
+| `services/download.py` | `DownloadService` — Frigate API: snapshot download, clip export/transcode, review summary fetch. Also `post_event_description(event_id, description)` to POST AI result to Frigate (`/api/events/{id}/description`). |
 | `web/server.py` | Flask app factory `create_app(orchestrator)`. Routes for player, events, files, stats, daily review, API. |
 | `templates/` | Jinja2 templates (player, stats, daily review, timeline). Single location under `frigate_buffer/`; used by Flask at runtime. |
 | `static/` | Static assets (marked.min.js, purify.min.js). Located under `frigate_buffer/`. |
@@ -252,6 +255,9 @@ Environment variables override config.yaml values:
 | `EXPORT_BUFFER_AFTER` | `30` | Seconds after event end for clip export time range |
 | `HA_URL` | *(optional)* | Home Assistant API base URL, e.g. `http://YOUR_HA_IP:8123/api` (for stats page API Usage display) |
 | `HA_TOKEN` | *(optional)* | Home Assistant long-lived access token (for stats page API Usage display) |
+| `GEMINI_API_KEY` | *(optional)* | API key for the Gemini proxy when `gemini.enabled` is true (overrides `gemini.api_key` in config). |
+
+Optional **gemini** config section (in `config.yaml`): `proxy_url`, `api_key`, `model`, `enabled`. When `enabled` is true and proxy is configured, the buffer runs in-process clip analysis via the proxy, then updates state, writes files, POSTs the description to Frigate, and notifies HA. See [Configuration](#configuration).
 
 ## Daily Review
 
@@ -821,8 +827,9 @@ The buffer listens to **`frigate/events`** for `type: new`, `type: update`, and 
 | T+0s | `frigate/events` (type=new or update) | NEW | Create folder if not deferred by Smart Zone Filtering; send instant notification; fetch local snapshot after delay. With tracked_zones, may defer until object enters tracked zone (Late Start). |
 | T+5s | `frigate/{camera}/tracked_object_update` (type=description) | DESCRIBED | Update with AI description |
 | T+30s | `frigate/events` (type=end) | - | Download snapshot; request clip via Frigate Export API (POST with `playback`/`name` JSON body; poll by export_id). For consolidated events, each camera gets its own time range and representative event ID from sub-events. |
-| T+35s | *(background processing)* | - | Transcode clip, write summary, send `clip_ready`; falls back to per-event clip if export fails or times out. Export failures log full response at WARNING; 404 on clip download is not retried. |
-| T+45s | `frigate/reviews` (type=genai) | FINALIZED | Update with GenAI metadata (title, description, threat_level) from `data.metadata` |
+| T+35s | *(background processing)* | - | Transcode clip, write summary, send `clip_ready`; falls back to per-event clip if export fails or times out. Export failures log full response at WARNING; 404 on clip download is not retried. If **gemini.enabled**, orchestrator starts Gemini analysis in a background thread. |
+| T+40s | *(Gemini analyzer, when enabled)* | FINALIZED | Analyzer returns metadata; orchestrator updates state, writes summary/metadata, POSTs description to Frigate API (`/api/events/{id}/description`), sends "finalized" notification to HA. The buffer does **not** publish to `frigate/reviews`. |
+| T+45s | `frigate/reviews` (type=genai) | FINALIZED | When Frigate itself produces GenAI: update with metadata from `data.metadata`. (If using the buffer's Gemini analyzer, FINALIZED is already applied in the previous step.) |
 | T+55s | Frigate Review Summary API | SUMMARIZED | Fetch cross-camera review summary with configurable time padding, write `review_summary.md` |
 
 ### Threat Level Behavior
