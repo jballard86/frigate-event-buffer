@@ -83,7 +83,9 @@ class StateAwareOrchestrator:
 
         # AI analyzer (Gemini proxy) - only when enabled; returns result to orchestrator (no MQTT publish)
         gemini = config.get('GEMINI') or {}
-        if gemini.get('enabled') and gemini.get('proxy_url') and gemini.get('api_key'):
+        proxy_url = config.get('GEMINI_PROXY_URL') or gemini.get('proxy_url') or ''
+        api_key = gemini.get('api_key') or os.getenv('GEMINI_API_KEY') or ''
+        if gemini.get('enabled') and proxy_url and api_key:
             self.ai_analyzer = GeminiAnalysisService(config)
         else:
             self.ai_analyzer = None

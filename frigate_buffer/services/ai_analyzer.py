@@ -32,26 +32,43 @@ class GeminiAnalysisService:
     def __init__(self, config: dict):
         self.config = config
         gemini = config.get('GEMINI') or {}
-        self._proxy_url = (gemini.get('proxy_url') or '').rstrip('/')
+        # Prefer flat keys; fallback to nested for backward compat. API key: config already applies env override in load_config.
+        self._proxy_url = (config.get('GEMINI_PROXY_URL') or gemini.get('proxy_url') or '').strip().rstrip('/')
         self._api_key = gemini.get('api_key') or ''
-        self._model = gemini.get('model') or 'gemini-2.5-flash-lite'
+        self._model = config.get('GEMINI_PROXY_MODEL') or gemini.get('model') or 'gemini-2.5-flash-lite'
         self._enabled = bool(gemini.get('enabled', False))
         self._max_frames = int(config.get('FINAL_REVIEW_IMAGE_COUNT', DEFAULT_MAX_FRAMES) or DEFAULT_MAX_FRAMES)
         self._prompt_template: Optional[str] = None
-        # Smart seeking: skip pre-capture buffer and limit to event segment
+        # Proxy tuning (flat keys)
+        self._temperature = float(config.get('GEMINI_PROXY_TEMPERATURE', 0.3))
+        self._top_p = float(config.get('GEMINI_PROXY_TOP_P', 1))
+        self._frequency_penalty = float(config.get('GEMINI_PROXY_FREQUENCY_PENALTY', 0))
+        self._presence_penalty = float(config.get('GEMINI_PROXY_PRESENCE_PENALTY', 0))
+        # Smart seeking and multi-cam
         self.buffer_offset = config.get('EXPORT_BUFFER_BEFORE', 5)
         self.max_frames_sec = config.get('MAX_MULTI_CAM_FRAMES_SEC', 2)
         self.max_frames_min = config.get('MAX_MULTI_CAM_FRAMES_MIN', 45)
+        self.motion_threshold_px = int(config.get('MOTION_THRESHOLD_PX', 0))
+        self.crop_width = int(config.get('CROP_WIDTH', 0) or 0)
+        self.crop_height = int(config.get('CROP_HEIGHT', 0) or 0)
 
     def _load_system_prompt_template(self) -> str:
         if self._prompt_template is not None:
             return self._prompt_template
-        prompt_path = os.path.join(
+        prompt_file = (self.config.get('MULTI_CAM_SYSTEM_PROMPT_FILE') or '').strip()
+        if prompt_file and os.path.isfile(prompt_file):
+            try:
+                with open(prompt_file, 'r', encoding='utf-8') as f:
+                    self._prompt_template = f.read()
+                return self._prompt_template
+            except Exception as e:
+                logger.warning("Could not read prompt file %s: %s", prompt_file, e)
+        default_path = os.path.join(
             os.path.dirname(os.path.abspath(__file__)),
             'ai_analyzer_system_prompt.txt'
         )
-        if os.path.isfile(prompt_path):
-            with open(prompt_path, 'r', encoding='utf-8') as f:
+        if os.path.isfile(default_path):
+            with open(default_path, 'r', encoding='utf-8') as f:
                 self._prompt_template = f.read()
         else:
             self._prompt_template = (
@@ -93,13 +110,29 @@ class GeminiAnalysisService:
             pass
         return "unknown"
 
+    def _center_crop(self, frame: Any, target_w: int, target_h: int) -> Any:
+        """Crop frame to target_w x target_h centered. Resize if crop larger than frame."""
+        h, w = frame.shape[:2]
+        if target_w <= 0 or target_h <= 0:
+            return frame
+        x1 = max(0, (w - target_w) // 2)
+        y1 = max(0, (h - target_h) // 2)
+        x2 = min(w, x1 + target_w)
+        y2 = min(h, y1 + target_h)
+        crop = frame[y1:y2, x1:x2]
+        if crop.shape[1] != target_w or crop.shape[0] != target_h:
+            crop = cv2.resize(crop, (target_w, target_h))
+        return crop
+
     def _extract_frames(
         self,
         clip_path: str,
         event_start_ts: float = 0,
         event_end_ts: float = 0,
     ) -> List[Any]:
-        """Extract frames from video. With event_start_ts > 0, seeks past pre-capture buffer and limits to event segment; samples at max_frames_sec. Returns list of numpy arrays (BGR)."""
+        """Extract frames from video. With event_start_ts > 0, seeks past pre-capture buffer and limits to event segment.
+        Uses grayscale frame differencing for motion-aware selection when MOTION_THRESHOLD_PX > 0; first and last frame
+        are always kept. Optional center crop when CROP_WIDTH/CROP_HEIGHT set. Returns list of numpy arrays (BGR)."""
         frames = []
         cap = cv2.VideoCapture(clip_path)
         if not cap.isOpened():
@@ -110,7 +143,6 @@ class GeminiAnalysisService:
             total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
 
             if event_start_ts > 0 and total_frames > 0:
-                # Smart seeking: skip first buffer_offset seconds (pre-capture), then sample until event end
                 start_frame = int(fps * self.buffer_offset)
                 event_duration_sec = (event_end_ts - event_start_ts) if event_end_ts > event_start_ts else 0
                 end_frame = (
@@ -121,14 +153,44 @@ class GeminiAnalysisService:
                 end_frame = min(end_frame, total_frames)
                 start_frame = min(start_frame, end_frame)
                 step = max(1, int(fps / self.max_frames_sec)) if self.max_frames_sec > 0 else 1
+
+                # Collect candidates (frame_idx, frame, motion_score) with grayscale differencing
+                use_motion = self.motion_threshold_px > 0
+                candidates = []
+                prev_gray = None
+
                 frame_idx = start_frame
-                while frame_idx <= end_frame and len(frames) < self._max_frames:
+                while frame_idx <= end_frame:
                     cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
                     ret, frame = cap.read()
                     if not ret:
                         break
-                    frames.append(frame)
+                    if self.crop_width > 0 and self.crop_height > 0:
+                        frame = self._center_crop(frame, self.crop_width, self.crop_height)
+                    motion_score = 0.0
+                    if use_motion:
+                        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                        if prev_gray is not None:
+                            diff = cv2.absdiff(prev_gray, gray)
+                            motion_score = float(cv2.sumElems(diff)[0])
+                        prev_gray = gray
+                    candidates.append((frame_idx, frame, motion_score))
                     frame_idx += step
+
+                if not candidates:
+                    return frames
+                # Always keep first and last for context (before/after for the model)
+                first_idx, first_frame, _ = candidates[0]
+                last_idx, last_frame, _ = candidates[-1]
+                if len(candidates) <= self._max_frames:
+                    frames = [c[1] for c in candidates]
+                else:
+                    middle = candidates[1:-1]
+                    n_keep = self._max_frames - 2
+                    # Keep middle frames with highest motion, then sort by frame index
+                    middle_sorted = sorted(middle, key=lambda c: c[2], reverse=True)[:n_keep]
+                    middle_sorted.sort(key=lambda c: c[0])
+                    frames = [first_frame] + [c[1] for c in middle_sorted] + [last_frame]
                 return frames
 
             if total_frames <= 0:
@@ -136,6 +198,8 @@ class GeminiAnalysisService:
                     ret, frame = cap.read()
                     if not ret:
                         break
+                    if self.crop_width > 0 and self.crop_height > 0:
+                        frame = self._center_crop(frame, self.crop_width, self.crop_height)
                     if len(frames) % max(1, int(fps * FRAME_SAMPLE_INTERVAL_SEC)) == 0:
                         frames.append(frame)
                     if len(frames) >= self._max_frames:
@@ -148,6 +212,8 @@ class GeminiAnalysisService:
                 ret, frame = cap.read()
                 if not ret:
                     break
+                if self.crop_width > 0 and self.crop_height > 0:
+                    frame = self._center_crop(frame, self.crop_width, self.crop_height)
                 frames.append(frame)
                 frame_idx += step
         finally:
@@ -190,6 +256,10 @@ class GeminiAnalysisService:
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_content},
             ],
+            "temperature": self._temperature,
+            "top_p": self._top_p,
+            "frequency_penalty": self._frequency_penalty,
+            "presence_penalty": self._presence_penalty,
         }
         try:
             resp = requests.post(
