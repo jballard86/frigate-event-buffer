@@ -76,7 +76,7 @@ The **StateAwareOrchestrator** is the central coordinator. It owns event-handlin
 
 ## Project Structure
 
-The application is organized as a Python package `frigate_buffer/`. Paths below are relative to the package root (e.g. `main.py` is `frigate_buffer/main.py`).
+The application uses a **src layout**: the package lives in `src/frigate_buffer/`. Install from repo root with `pip install -e .`; then run `python -m frigate_buffer.main`. Paths below are relative to the package (e.g. `main.py` is `src/frigate_buffer/main.py`).
 
 | File / Directory | Description |
 |------------------|-------------|
@@ -102,14 +102,14 @@ The application is organized as a Python package `frigate_buffer/`. Paths below 
 | `services/daily_reporter.py` | `DailyReporterService` — Optional. When analyzer is enabled, scheduled at **DAILY_REPORT_SCHEDULE_HOUR** (default 1am): scans storage for **analysis_result.json**, filters by target date, builds event list and prompt from **report_prompt.txt** (or `REPORT_PROMPT_FILE`), calls analyzer `send_text_prompt`, writes Markdown to `{STORAGE_PATH}/daily_reports/{date}_report.md`. |
 | `services/download.py` | `DownloadService` — Frigate API: snapshot download, clip export/transcode, review summary fetch. Also `post_event_description(event_id, description)` to POST AI result to Frigate (`/api/events/{id}/description`). |
 | `services/frigate_export_watchdog.py` | Export watchdog: `run_once(config)` parses `notification_timeline.json` in event folders (legacy and consolidated), finds completed export IDs, verifies clip files exist, calls Frigate `DELETE /api/export/{export_id}`, and optionally verifies buffer file URLs. Invoked on a schedule by the orchestrator. |
-| `services/multi_cam_frame_extracter.py` | **Standalone/template**: Optional multi-cam frame extraction and MQTT-driven processing (e.g. `process_multi_cam_event`, `EventMetadataStore`, smart_crop). Not invoked by the main orchestrator; the in-process Gemini analysis uses frame logic inside `GeminiAnalysisService` (`services/ai_analyzer.py`). |
 | `web/server.py` | Flask app factory `create_app(orchestrator)`. Routes for player, events, files, stats, daily review, API. |
-| `templates/` | Jinja2 templates (player, stats, daily review, timeline). Single location under `frigate_buffer/`; used by Flask at runtime. |
-| `static/` | Static assets (marked.min.js, purify.min.js). Located under `frigate_buffer/`. |
-| `Dockerfile` | Builds from Python 3.10 slim and `frigate_buffer/`; runs `python -m frigate_buffer.main`. |
+| `web/templates/` | Jinja2 templates (player, stats, daily review, timeline). Used by Flask at runtime. |
+| `web/static/` | Static assets (marked.min.js, purify.min.js). |
+| `scripts/multi_cam_recap.py` | **Standalone entrypoint**: Optional multi-cam frame extraction and MQTT-driven processing. Run with the package installed (`pip install -e .` then `python scripts/multi_cam_recap.py`). Not invoked by the main orchestrator. |
+| `Dockerfile` | Builds from Python 3.10 slim; copies `src/` and `pyproject.toml`, runs `pip install -e .`, then `python -m frigate_buffer.main`. |
 | `docker-compose.example.yaml` | Template for Docker Compose — local build or token pull from private GitHub. |
 | `config.example.yaml` | Example configuration for cameras, event_filters (Smart Zone Filtering), settings, network, optional HA integration. |
-| `tests/` | Unit tests (`test_*.py`). Run with `python -m unittest discover -s tests -p "test_*.py" -v`. See [Tests](#tests). |
+| `tests/` | Unit tests (`test_*.py`). Run with `pytest tests/` (or `python -m pytest tests/`); `pyproject.toml` sets `pythonpath = ["src"]`. See [Tests](#tests). |
 
 ## Quick Start
 
@@ -976,7 +976,7 @@ docker logs -f frigate-buffer  # Follow logs
 Run all tests from the project root (requires `pip install -r requirements.txt`):
 
 ```bash
-python -m unittest discover -s tests -p "test_*.py" -v
+python -m pytest tests/ -v
 ```
 
 | Test module | What it tests |

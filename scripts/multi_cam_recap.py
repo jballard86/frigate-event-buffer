@@ -1,4 +1,8 @@
+#!/usr/bin/env python3
 # ==============================================================================
+# Multi-Cam Recap - Standalone entrypoint (run with package installed: pip install -e .)
+# Usage: python scripts/multi_cam_recap.py   OR   python -m scripts.multi_cam_recap
+#
 # TODO / ARCHITECTURE NOTES:
 # 1. TEMPLATE STATUS: This script is currently a standalone microservice template.
 #    It needs to be integrated with the actual Frigate volume paths and ENV vars.
@@ -9,13 +13,11 @@
 #    - Encode images to Base64 strings.
 #    - Pack everything into a JSON payload compatible with the Gemini API.
 #
-# 3. PROXY ROUTING: Requests must be POSTed to the 'gemini-proxy' container 
-#    (e.g., REDACTED_LOCAL_IP:5050..) using the internal Docker network.  should be configurable in config.yaml/config.example.yaml
-#    Do not send directly to Google; let the proxy handle rate limits/billing.
+# 3. PROXY ROUTING: Requests must be POSTed to the 'gemini-proxy' container
+#    (e.g., REDACTED_LOCAL_IP:5050..) using the internal Docker network.
 #
-# 4. ASYNC HANDLING: We must wait for the proxy's JSON reply.
-#    CRITICAL: This network call MUST happen inside the background thread 
-#    (process_multi_cam_event). If placed in the main MQTT loop, we will drop 
+# 4. ASYNC HANDLING: This network call MUST happen inside the background thread
+#    (process_multi_cam_event). If placed in the main MQTT loop, we will drop
 #    incoming Frigate events while waiting for the AI.
 # ==============================================================================
 
@@ -49,16 +51,16 @@ STORAGE_PATH = os.getenv("STORAGE_PATH", "/media/frigate")
 CONFIG_FILE = os.getenv("CONFIG_FILE", "config.yaml")
 
 # Default limits
-DEFAULT_CONFIG = {   # should be configurable in config.yaml/config.example.yaml    
+DEFAULT_CONFIG = {
     "max_multi_cam_frames_min": 45,
-    "max_multi_cam_frames_sec": 2,    # max Target capture rate (approx 0.5 fps)  variable rates should occur where more motion is detected
-    "motion_threshold_px": 50,        # Min pixels movement to trigger "high rate" capture
+    "max_multi_cam_frames_sec": 2,
+    "motion_threshold_px": 50,
     "crop_width": 1280,
     "crop_height": 720,
     "motion_crop_min_area_fraction": 0.001,
     "motion_crop_min_px": 500,
     "gemini_proxy_url": "REDACTED_LOCAL_IP:5050",
-    "gemini_proxy_api_key": "YOUR_GEMINI_PROXY_API_KEY",    # should be configurable in config.yaml/config.example.yaml
+    "gemini_proxy_api_key": "YOUR_GEMINI_PROXY_API_KEY",
     "gemini_proxy_model": "gemini-2.5-flash-lite",
     "gemini_proxy_temperature": 0.3,
     "gemini_proxy_top_p": 1,
@@ -85,15 +87,13 @@ CONF = load_config()
 # --- State Management ---
 class EventMetadataStore:
     """
-    Independent state manager. Stores high-frequency metadata (boxes, scores) 
-    directly from MQTT 'after' payloads to build a granular timeline 
+    Independent state manager. Stores high-frequency metadata (boxes, scores)
+    directly from MQTT 'after' payloads to build a granular timeline
     that might be missing from the standard database export.
     """
     def __init__(self):
         self._lock = threading.Lock()
-        # { event_id: [ {timestamp, box, score, area}, ... ] }
         self.data = defaultdict(list)
-        # { camera_name: {id: event_id, start: timestamp} }
         self.active_events = {}
 
     def add_frame_data(self, event_id, payload):
@@ -101,7 +101,7 @@ class EventMetadataStore:
         with self._lock:
             self.data[event_id].append({
                 "timestamp": payload.get("frame_time", time.time()),
-                "box": payload.get("box", []), # [ymin, xmin, ymax, xmax]
+                "box": payload.get("box", []),
                 "area": payload.get("area", 0),
                 "score": payload.get("score", 0)
             })
@@ -115,28 +115,21 @@ class EventMetadataStore:
                 self.active_events[camera] = {"id": event_id, "start": start_time}
 
     def get_overlaps(self, target_event_id):
-        """
-        Find other events that overlap in time with the target event.
-        Returns a list of overlapping event_ids.
-        """
-        if target_event_id not in self.data: return []
-        
+        """Find other events that overlap in time with the target event."""
+        if target_event_id not in self.data:
+            return []
         target_frames = self.data[target_event_id]
-        if not target_frames: return []
-        
-        # Define the target's time window
+        if not target_frames:
+            return []
         t_start = target_frames[0]['timestamp']
         t_end = target_frames[-1]['timestamp']
-        
         overlaps = []
         with self._lock:
             for eid, frames in self.data.items():
-                if eid == target_event_id or not frames: continue
-                
+                if eid == target_event_id or not frames:
+                    continue
                 e_start = frames[0]['timestamp']
                 e_end = frames[-1]['timestamp']
-                
-                # Check for temporal intersection
                 if (t_start < e_end) and (t_end > e_start):
                     overlaps.append(eid)
         return overlaps
@@ -148,20 +141,16 @@ class EventMetadataStore:
     def cleanup(self, event_ids):
         with self._lock:
             for eid in event_ids:
-                if eid in self.data: del self.data[eid]
+                if eid in self.data:
+                    del self.data[eid]
 
 metadata_store = EventMetadataStore()
 
 # --- Processing Logic (crop via shared crop_utils) ---
 
 def wait_for_video_file(event_id, timeout=60):
-    """
-    Polls the storage path until the clip.mp4 appears or timeout reached.
-    Returns path or None.
-    """
+    """Poll storage path until clip.mp4 appears or timeout. Returns path or None."""
     start = time.time()
-    # Search logic: We don't know the exact camera folder, so we walk the specific structure
-    # Optimization: Metadata store *could* track camera name, but let's scan safely.
     while time.time() - start < timeout:
         for root, _, files in os.walk(STORAGE_PATH):
             if event_id in root and "clip.mp4" in files:
@@ -171,20 +160,17 @@ def wait_for_video_file(event_id, timeout=60):
 
 def process_multi_cam_event(main_event_id, linked_event_ids):
     logger.info(f"Generating Multi-Cam Recap for {main_event_id} + {linked_event_ids}")
-    
     all_events = [main_event_id] + linked_event_ids
     video_paths = {}
     event_cameras = {}
-    
-    # 1. Acquire Video Sources
+
     for eid in all_events:
         path = wait_for_video_file(eid)
         if path:
             video_paths[eid] = path
-            # Extract camera name from folder structure: .../camera_name/event_id/clip.mp4
             try:
                 event_cameras[eid] = path.split(os.sep)[-3]
-            except:
+            except Exception:
                 event_cameras[eid] = "unknown"
         else:
             logger.warning(f"Clip for {eid} not found after timeout.")
@@ -194,17 +180,16 @@ def process_multi_cam_event(main_event_id, linked_event_ids):
         metadata_store.cleanup(all_events)
         return
 
-    # 2. Determine Time Range
     timestamps = []
     for eid in video_paths:
         data = metadata_store.get_data(eid)
-        if data: timestamps.extend([d['timestamp'] for d in data])
-        
-    if not timestamps: return
+        if data:
+            timestamps.extend([d['timestamp'] for d in data])
+    if not timestamps:
+        return
     start_time = min(timestamps)
     end_time = max(timestamps)
-    
-    # 3. Setup Output: ai_frame_analysis/frames (stitched color+B/W per frame)
+
     main_clip_path = video_paths.get(main_event_id)
     if main_clip_path:
         base_dir = os.path.dirname(main_clip_path)
@@ -214,15 +199,14 @@ def process_multi_cam_event(main_event_id, linked_event_ids):
         logger.error("Main event clip missing, cannot determine output folder.")
         return
 
-    # 4. The Loop (Variable Rate + Smart Selection) — collect (timestamp, camera, frame) for intertwining
     caps = {eid: cv2.VideoCapture(path) for eid, path in video_paths.items()}
     current_time = start_time
-    step = 1.0 / CONF['max_multi_cam_frames_sec']  # Base step (e.g. 0.5s)
+    step = 1.0 / CONF['max_multi_cam_frames_sec']
     last_centers = {eid: (0, 0) for eid in video_paths}
     prev_grays = {eid: None for eid in video_paths}
     min_area_frac = float(CONF.get('motion_crop_min_area_fraction', 0.001))
     min_area_px = int(CONF.get('motion_crop_min_px', 500))
-    collected = []  # list of (current_time, camera_name, frame) for time-ordered output
+    collected = []
 
     while current_time <= end_time:
         candidates = []
@@ -284,7 +268,6 @@ def process_multi_cam_event(main_event_id, linked_event_ids):
 
         current_time += step
 
-    # 5. Intertwined output: sort by timestamp, add overlay with global seq, save stitched (color top + B/W bottom)
     collected.sort(key=lambda x: (x[0], x[1]))
     total = len(collected)
     save_frames = bool(CONF.get("save_ai_frames", True))
@@ -325,35 +308,24 @@ def on_message(client, userdata, msg):
     try:
         payload = json.loads(msg.payload.decode())
         topic = msg.topic
-        
-        # Handle 'frigate/events'
         if topic == "frigate/events":
             evt_type = payload.get('type')
             after = payload.get('after', {})
             eid = after.get('id')
             cam = after.get('camera')
-            
-            if not eid: return
-
-            # Record Metadata
+            if not eid:
+                return
             metadata_store.add_frame_data(eid, after)
-
             if evt_type == 'new':
                 metadata_store.update_status(cam, eid, after.get('start_time'), "active")
-            
             elif evt_type == 'end':
                 metadata_store.update_status(cam, eid, after.get('start_time'), "end")
-                
-                # Check for overlaps (The "Director")
                 overlaps = metadata_store.get_overlaps(eid)
                 if overlaps:
-                    # Spawn thread to process after delay (waiting for video writes)
-                    threading.Thread(target=process_multi_cam_event, 
-                                   args=(eid, overlaps)).start()
+                    threading.Thread(target=process_multi_cam_event,
+                                     args=(eid, overlaps)).start()
                 else:
-                    # Cleanup metadata for single events after a safety delay
                     threading.Timer(60, metadata_store.cleanup, args=([eid],)).start()
-
     except Exception as e:
         logger.error(f"MQTT Error: {e}")
 
@@ -362,6 +334,5 @@ if __name__ == "__main__":
     client.on_message = on_message
     client.connect(MQTT_BROKER, MQTT_PORT, 60)
     client.subscribe("frigate/events")
-    
     logger.info("Multi-Cam Service Started. Listening for overlap events...")
     client.loop_forever()
