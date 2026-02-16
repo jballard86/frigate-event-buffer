@@ -347,6 +347,8 @@ def create_app(orchestrator):
         most_recent = None
 
         try:
+            # Top-level dirs: legacy cameras (e.g. carport) and "events" for consolidated events.
+            # For "events", each direct child is a CE folder (events/ce_id/); we count one event per CE.
             with os.scandir(storage_path) as it:
                 for camera_entry in it:
                     if not camera_entry.is_dir():
@@ -395,23 +397,28 @@ def create_app(orchestrator):
             logger.error(f"Error scanning events for stats: {e}")
 
         storage_raw = orchestrator._cached_storage_stats
-        mb = 1024 * 1024
+        kb, mb = 1024, 1024 * 1024
+        gb = 1024 * mb
 
         def fmt_size(b):
-            if b >= 1024 * mb:
-                return {'gb': round(b / (1024 * mb), 2), 'mb': None}
-            return {'mb': round(b / mb, 2), 'gb': None}
+            """Return {value, unit} with unit KB/MB/GB for human-readable display (e.g. 500 KB not 0.5 MB)."""
+            if b <= 0:
+                return {'value': 0, 'unit': 'KB'}
+            if b < mb:
+                return {'value': round(b / kb, 2), 'unit': 'KB'}
+            if b < gb:
+                return {'value': round(b / mb, 2), 'unit': 'MB'}
+            return {'value': round(b / gb, 2), 'unit': 'GB'}
 
         by_camera_storage = {}
         for cam, data in storage_raw.get('by_camera', {}).items():
-            total = data['total']
-            by_camera_storage[cam] = fmt_size(total)
+            by_camera_storage[cam] = fmt_size(data['total'])
 
         total_bytes = storage_raw.get('total', 0)
         breakdown = {
-            'clips_mb': round(storage_raw.get('clips', 0) / mb, 2),
-            'snapshots_mb': round(storage_raw.get('snapshots', 0) / mb, 2),
-            'descriptions_mb': round(storage_raw.get('descriptions', 0) / mb, 2)
+            'clips': fmt_size(storage_raw.get('clips', 0)),
+            'snapshots': fmt_size(storage_raw.get('snapshots', 0)),
+            'descriptions': fmt_size(storage_raw.get('descriptions', 0))
         }
 
         most_recent_out = None
@@ -469,8 +476,7 @@ def create_app(orchestrator):
                 'by_camera': by_camera
             },
             'storage': {
-                'total_mb': round(total_bytes / mb, 2),
-                'total_gb': round(total_bytes / (1024 * mb), 2) if total_bytes >= 1024 * mb else None,
+                'total_display': fmt_size(total_bytes),
                 'by_camera': by_camera_storage,
                 'breakdown': breakdown
             },

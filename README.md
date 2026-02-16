@@ -23,7 +23,7 @@ A state-aware orchestrator that listens to Frigate NVR events via MQTT, tracks t
 - **Rolling Retention**: Automatically cleans up events older than the retention period (default: 3 days)
 - **Notification Rate Limiting**: Max 2 notifications per 5 seconds with queue overflow protection
 - **Built-in Event Viewer**: Self-contained web page at `/player` with video playback, expandable AI analysis (each GenAI event from timeline with its own expand/collapse; cross-camera review; single-camera shows "Review Summary"), "Event ongoing" badge clears when clip available, when Frigate signals event end (timeline), or after 90 min, event navigation, reviewed/unreviewed filtering, download, and **View Timeline** (per-event data pipeline log with all files including clips/snapshots from camera subdirs) — embeddable as an HA iframe
-- **Stats Dashboard**: Stats as a header button (like Daily Review) linking to `/stats-page`; standalone stats page with event counts (today/week/month), API Usage (Month to Date API cost and token usage from HA helpers when configured), storage by camera, recent errors, last cleanup, system info; configurable auto-refresh with manual Refresh button
+- **Stats Dashboard**: Stats as a header button (like Daily Review) linking to `/stats-page`; standalone stats page with event counts (today/week/month), Events by Camera (legacy camera folders and consolidated `events/`), API Usage (Month to Date API cost and token usage from HA helpers when configured), storage (Total, Clips/Snapshots/Descriptions breakdown, and by camera) in human-readable KB/MB/GB, recent errors, last cleanup, system info; configurable auto-refresh with manual Refresh button. Storage totals include legacy event folders, consolidated `events/{ce_id}/{camera}/` and CE-root files, and `daily_reports/` and `daily_reviews/`.
 - **Daily Review**: Frigate review summarize integration — scheduled fetch at 1am for previous day, 90-day retention (configurable), date selector, "Current Day Review" for midnight-to-now; markdown rendering
 - **Event Review Tracking**: Mark events as reviewed with per-event or bulk "mark all" controls; defaults to showing unreviewed events
 - **REST API**: Serves events, clips, and snapshots to your Home Assistant dashboard
@@ -84,7 +84,7 @@ The application is organized as a Python package `frigate_buffer/`:
 | `models.py` | Data models: `EventPhase`, `EventState`, `ConsolidatedEvent`, plus helpers for consolidated IDs and "no concerns" detection. |
 | `orchestrator.py` | `StateAwareOrchestrator` — Central coordinator: MQTT message routing (`_on_mqtt_message`), event handlers (frigate/events, tracked_object_update, reviews), CE close and event-end processing. Delegates to MqttClientWrapper, SmartZoneFilter, TimelineLogger, and managers. |
 | `managers/` | Business logic modules: |
-| `managers/file.py` | `FileManager` — clip/snapshot download, storage paths, cleanup; transcoding delegated to `VideoService`. Path validation via `realpath`/`commonpath` prevents traversal outside storage. Export API uses JSON body (`playback`, `name`), polls by export_id, 90s poll timeout, 180s download timeout; returns rich result with Frigate response for timeline debugging. Export failures and `success: false` responses are logged at WARNING with full raw response. HTTP 404 on clip download is treated as "no recording available" and returns False without retries; retries remain for HTTP 400 (Not Ready) and other transient errors. |
+| `managers/file.py` | `FileManager` — clip/snapshot download, storage paths, cleanup; transcoding delegated to `VideoService`. Path validation via `realpath`/`commonpath` prevents traversal outside storage. **Storage stats** (`compute_storage_stats`): sums clips, snapshots, and description files for legacy layout (`{camera}/{event_id}/`), consolidated layout (`events/{ce_id}/` CE-root files and `events/{ce_id}/{camera}/` per-camera files), and `daily_reports/` and `daily_reviews/`; returns bytes by type and by_camera for the stats dashboard. Export API uses JSON body (`playback`, `name`), polls by export_id, 90s poll timeout, 180s download timeout; returns rich result with Frigate response for timeline debugging. Export failures and `success: false` responses are logged at WARNING with full raw response. HTTP 404 on clip download is treated as "no recording available" and returns False without retries; retries remain for HTTP 400 (Not Ready) and other transient errors. |
 | `managers/state.py` | `EventStateManager` — per-event state (phase, metadata) and active event tracking. |
 | `managers/consolidation.py` | `ConsolidatedEventManager` — groups related Frigate events; supports `closing` state and `mark_closing()` to avoid races during finalization. |
 | `managers/reviews.py` | `DailyReviewManager` — fetches and caches Frigate daily review summaries. |
@@ -536,17 +536,16 @@ Response:
     "this_month": 120,
     "total_reviewed": 80,
     "total_unreviewed": 40,
-    "by_camera": {"doorbell": 60, "front_yard": 60}
+    "by_camera": {"doorbell": 60, "front_yard": 60, "events": 30}
   },
   "ha_helpers": {
     "gemini_month_cost": 0.00123,
     "gemini_month_tokens": 1234567
   },
   "storage": {
-    "total_mb": 1250,
-    "total_gb": 1.22,
-    "by_camera": {"doorbell": {"mb": 600, "gb": null}, "front_yard": {"mb": null, "gb": 1.2}},
-    "breakdown": {"clips_mb": 1100, "snapshots_mb": 80, "descriptions_mb": 2}
+    "total_display": {"value": 205.5, "unit": "MB"},
+    "by_camera": {"doorbell": {"value": 100, "unit": "MB"}, "front_yard": {"value": 105.5, "unit": "MB"}, "events": {"value": 500, "unit": "KB"}},
+    "breakdown": {"clips": {"value": 200, "unit": "MB"}, "snapshots": {"value": 5, "unit": "MB"}, "descriptions": {"value": 512, "unit": "KB"}}
   },
   "errors": [
     {"ts": "2025-02-12 10:30:00", "level": "ERROR", "message": "FFmpeg timeout for event xyz"}
@@ -565,7 +564,7 @@ Response:
 }
 ```
 
-Errors are limited to the last 10 (see container logs for full history). Storage is shown in MB or GB (GB when over 1 GB per camera). The `most_recent.url` links to `/player?filter=all` so the most recent event is shown first when the page loads. The `ha_helpers` object is optional and only included when HA is configured via `ha.base_url` and `ha.token` in config.yaml (or `HA_URL` and `HA_TOKEN` env vars).
+Errors are limited to the last 10 (see container logs for full history). **Event counts**: Top-level dirs under storage are scanned (legacy camera folders and `events/`); for `events/`, each direct child is a consolidated event (CE) folder, so `by_camera.events` is the count of CE folders. **Storage**: `total_display` and each entry in `breakdown` and `by_camera` use `{value, unit}` with unit one of `KB`, `MB`, or `GB` (chosen for readability, e.g. 500 KB instead of 0.5 MB). Storage totals include legacy event folders, consolidated `events/{ce_id}/{camera}/` and CE-root files, and `daily_reports/` and `daily_reviews/`. The `most_recent.url` links to `/player?filter=all` so the most recent event is shown first when the page loads. The `ha_helpers` object is optional and only included when HA is configured via `ha.base_url` and `ha.token` in config.yaml (or `HA_URL` and `HA_TOKEN` env vars).
 
 ### GET /status
 
@@ -867,11 +866,17 @@ The threat level is determined by Frigate's GenAI analysis based on the `activit
 
 ## Storage Structure
 
-Events are organized by camera. Event subdir format: `{timestamp}_{frigate_event_id}` (e.g. Frigate event ID `1234567890.123-abcdef` becomes subdir `1234567890_1234567890.123-abcdef`).
+Events use two layouts; both are included in stats (event counts and storage totals).
+
+**Legacy (per-camera):** Events are organized by camera. Event subdir format: `{timestamp}_{frigate_event_id}` (e.g. Frigate event ID `1234567890.123-abcdef` becomes subdir `1234567890_1234567890.123-abcdef`).
+
+**Consolidated (multi-camera):** Consolidated events live under `events/{ce_id}/` where each `ce_id` is a folder (e.g. `1700000001_abc123`). CE-root files (e.g. `notification.gif`, `review_summary.md`) and per-camera subdirs `events/{ce_id}/{camera}/` (each with `clip.mp4`, `snapshot.jpg`, summary/metadata, etc.) are all counted in storage stats. Event counts treat each CE folder as one event; the Stats page shows an "events" row for consolidated event count.
+
+**Stats totals** include: legacy camera event folders, consolidated `events/{ce_id}/` (CE-root + all `events/{ce_id}/{camera}/`), and the **daily_reports/** and **daily_reviews/** directories (file sizes added to descriptions and total).
 
 ```
 /app/storage/
-├── doorbell/
+├── doorbell/                          # Legacy: one row per camera in Events by Camera
 │   ├── 1234567890_1234567890.123-abcdef/
 │   │   ├── clip.mp4                # H.264 transcoded video (from Frigate Export API; full event + buffer; downloadable from timeline)
 │   │   ├── snapshot.jpg            # Event snapshot
@@ -881,14 +886,24 @@ Events are organized by camera. Event subdir format: `{timestamp}_{frigate_event
 │   │   ├── notification_timeline.json  # Data pipeline log (Frigate MQTT, clip export request/response, review summarize, HA)
 │   │   ├── analysis_result.json        # (Optional) AI analysis result when Gemini analyzer enabled; used by Daily Report
 │   │   └── .viewed                 # Review marker (created when marked as reviewed)
-│   └── 1234567891_1234567891.456-ghijkl/
-│       └── ...
-├── front_yard/
-│   └── 1234567892_1234567892.789-mnopqr/
-│       └── ...
+│   └── ...
+├── events/                             # Consolidated: one "events" row in Events by Camera; storage summed in one "events" bucket
+│   └── 1700000001_ce1/
+│       ├── notification.gif        # CE-root (counted in storage)
+│       ├── review_summary.md       # CE-root (counted in storage)
+│       ├── carport/                 # Per-camera: clip.mp4, snapshot.jpg, summary.txt, metadata.json, etc.
+│       │   ├── clip.mp4
+│       │   ├── snapshot.jpg
+│       │   └── ...
+│       └── doorbell/
+│           └── ...
+├── daily_reports/                     # AI daily reports; sizes included in storage total
+│   └── 2025-02-12_report.md
+└── daily_reviews/                     # Cached Frigate daily reviews; sizes included in storage total
+    └── ...
 ```
 
-Camera folder names are sanitized (lowercase, spaces to underscores). When the Gemini analyzer is enabled, **analysis_result.json** is written in each event folder after clip analysis. The **daily_reports/** directory (under storage) holds AI-generated daily reports as **YYYY-MM-DD_report.md**.
+Camera folder names are sanitized (lowercase, spaces to underscores). When the Gemini analyzer is enabled, **analysis_result.json** is written in each event folder after clip analysis. The **daily_reports/** directory holds AI-generated daily reports as **YYYY-MM-DD_report.md**. Storage on the Stats page is shown in KB, MB, or GB (chosen per value for readability).
 
 ## Troubleshooting
 
@@ -960,6 +975,7 @@ python -m unittest discover -s tests -p "test_*.py" -v
 | `test_daily_reporter.py` | DailyReporterService: scan for analysis_result.json by date (single and consolidated layout), aggregate event lines format, prompt replacement (date, event_list, known_person_name), save to daily_reports, edge cases (no events, proxy returns None). |
 | `test_file_manager_enhancement.py` | FileManager download/export: HTTP 400 retries (up to 3), HTTP 404 no retry, export `success: false` logs warning. |
 | `test_file_manager_path_validation.py` | FileManager path safety: `sanitize_camera_name` valid names and stripping of path characters; `create_event_folder` and `create_consolidated_event_folder` raise `ValueError` on path-traversal inputs; valid folder creation succeeds under storage root. |
+| `test_storage_stats.py` | FileManager `compute_storage_stats`: empty storage returns zeros; legacy camera/event folders counted; consolidated `events/ce_id/camera/` and CE-root counted; `daily_reports/` and `daily_reviews/` included in total; GET /stats returns storage with `total_display` and `breakdown` using `{value, unit}` (KB/MB/GB). |
 | `test_integration_step_5_6.py` | Step 5/6: analysis_result.json persistence (expected fields and partial result still saved), orchestrator _handle_analysis_result calls post_event_description and publish_notification("finalized"), error handling (invalid JSON and proxy 500 do not create file). |
 | `test_lifecycle_service.py` | EventLifecycleService: `handle_event_new` (new event and grouped event paths, threads); `process_event_end` (standalone and CE paths); `finalize_consolidated_event` (mark_closing, export, notify, remove). |
 | `test_notification_models.py` | NotificationEvent protocol: `EventState` and `ConsolidatedEvent` both satisfy the protocol (attributes required by notifier). |

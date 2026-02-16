@@ -159,11 +159,15 @@
 
     const fmtStorage = (cam) => {
       if (!cam) return '-';
+      if (cam.value != null && cam.unit) return cam.value + ' ' + cam.unit;
       if (cam.gb != null) return cam.gb + ' GB';
       if (cam.mb != null) return cam.mb + ' MB';
+      if (cam.kb != null) return cam.kb + ' KB';
       return '-';
     };
-    const totalStorage = s.total_gb != null ? s.total_gb + ' GB' : (s.total_mb != null ? s.total_mb + ' MB' : '-');
+    const totalStorage = (s.total_display && s.total_display.value != null && s.total_display.unit)
+      ? (s.total_display.value + ' ' + s.total_display.unit)
+      : (s.total_gb != null ? s.total_gb + ' GB' : (s.total_mb != null ? s.total_mb + ' MB' : '-'));
 
     const byCam = c.by_camera || {};
     const camRows = Object.entries(byCam).map(([name, count]) =>
@@ -175,6 +179,7 @@
     ).join('');
 
     const bd = s.breakdown || {};
+    const fmtBreakdown = (x) => (x && x.value != null && x.unit) ? (x.value + ' ' + x.unit) : '0 KB';
     const errItems = errs.slice(0, 10).map(e =>
       `<div class="err-item"><span class="err-ts">${escapeHtml(e.ts || '')}</span>${escapeHtml((e.message || '').substring(0, 300))}</div>`
     ).join('');
@@ -220,9 +225,9 @@
             <span class="stats-item"><strong>Total:</strong> ${totalStorage}</span>
           </div>
           <div class="stats-row" style="margin-top:8px;">
-            <span class="meta-label">Clips:</span> ${bd.clips_mb ?? 0} MB |
-            <span class="meta-label">Snapshots:</span> ${bd.snapshots_mb ?? 0} MB |
-            <span class="meta-label">Descriptions:</span> ${bd.descriptions_mb ?? 0} MB
+            <span class="meta-label">Clips:</span> ${fmtBreakdown(bd.clips)} |
+            <span class="meta-label">Snapshots:</span> ${fmtBreakdown(bd.snapshots)} |
+            <span class="meta-label">Descriptions:</span> ${fmtBreakdown(bd.descriptions)}
           </div>
           ${storageRows ? `<table class="camera-table" style="margin-top:8px;"><tbody>${storageRows}</tbody></table>` : ''}
         </div>

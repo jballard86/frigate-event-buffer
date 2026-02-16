@@ -269,15 +269,61 @@ class FileManager:
 
         return deleted_count
 
+    def _sum_event_folder(self, event_path: str) -> tuple:
+        """Sum clip, snapshot, and description sizes in an event folder. Returns (clips, snapshots, descriptions) in bytes."""
+        clip_path = os.path.join(event_path, 'clip.mp4')
+        snapshot_path = os.path.join(event_path, 'snapshot.jpg')
+        desc_files = (
+            'summary.txt', 'review_summary.md', 'metadata.json',
+            'notification_timeline.json', 'analysis_result.json'
+        )
+        cam_clips = cam_snapshots = cam_descriptions = 0
+        try:
+            if os.path.exists(clip_path):
+                cam_clips = os.path.getsize(clip_path)
+        except OSError:
+            pass
+        try:
+            if os.path.exists(snapshot_path):
+                cam_snapshots = os.path.getsize(snapshot_path)
+        except OSError:
+            pass
+        for f in desc_files:
+            p = os.path.join(event_path, f)
+            try:
+                if os.path.exists(p):
+                    cam_descriptions += os.path.getsize(p)
+            except OSError:
+                pass
+        return (cam_clips, cam_snapshots, cam_descriptions)
+
+    def _dir_total_bytes(self, path: str) -> int:
+        """Return total size in bytes of all files under path. Returns 0 if path does not exist or is not a dir."""
+        if not os.path.isdir(path):
+            return 0
+        total = 0
+        try:
+            for root, _dirs, files in os.walk(path):
+                for f in files:
+                    try:
+                        total += os.path.getsize(os.path.join(root, f))
+                    except OSError:
+                        pass
+        except OSError:
+            pass
+        return total
+
     def compute_storage_stats(self) -> dict:
-        """Compute storage usage by camera and type. Returns bytes."""
+        """Compute storage usage by camera and type. Returns bytes.
+        Covers: legacy camera/event folders, consolidated events/ce_id/camera/ and CE-root,
+        and daily_reports/ and daily_reviews/ under storage_path.
+        """
         clips = 0
         snapshots = 0
         descriptions = 0
         by_camera = {}
 
         try:
-            # Get list of cameras safely
             camera_entries = []
             try:
                 with os.scandir(self.storage_path) as it:
@@ -297,39 +343,49 @@ class FileManager:
 
                 cam_clips = cam_snapshots = cam_descriptions = 0
 
-                # Get list of events safely
-                try:
-                    with os.scandir(camera_path) as it_events:
-                        for event_entry in it_events:
-                            if not event_entry.is_dir():
-                                continue
-
-                            event_path = event_entry.path
-
-                            clip_path = os.path.join(event_path, 'clip.mp4')
-                            snapshot_path = os.path.join(event_path, 'snapshot.jpg')
-
-                            for f in ('summary.txt', 'review_summary.md', 'metadata.json'):
-                                p = os.path.join(event_path, f)
+                if camera_dir == "events":
+                    # Consolidated layout: events/{ce_id}/ (CE root files) and events/{ce_id}/{camera}/ (event files)
+                    try:
+                        with os.scandir(camera_path) as it_ce:
+                            for ce_entry in it_ce:
+                                if not ce_entry.is_dir():
+                                    continue
+                                ce_path = ce_entry.path
+                                # CE-root files (notification.gif, review_summary.md)
+                                for f in ('notification.gif', 'review_summary.md'):
+                                    p = os.path.join(ce_path, f)
+                                    try:
+                                        if os.path.exists(p) and os.path.isfile(p):
+                                            cam_descriptions += os.path.getsize(p)
+                                    except OSError:
+                                        pass
+                                # Camera subdirs: events/ce_id/camera/ with clip.mp4, snapshot.jpg, etc.
                                 try:
-                                    if os.path.exists(p):
-                                        cam_descriptions += os.path.getsize(p)
+                                    with os.scandir(ce_path) as it_cam:
+                                        for cam_entry in it_cam:
+                                            if not cam_entry.is_dir() or cam_entry.name.startswith('.'):
+                                                continue
+                                            c, s, d = self._sum_event_folder(cam_entry.path)
+                                            cam_clips += c
+                                            cam_snapshots += s
+                                            cam_descriptions += d
                                 except OSError:
                                     pass
-
-                            try:
-                                if os.path.exists(clip_path):
-                                    cam_clips += os.path.getsize(clip_path)
-                            except OSError:
-                                pass
-
-                            try:
-                                if os.path.exists(snapshot_path):
-                                    cam_snapshots += os.path.getsize(snapshot_path)
-                            except OSError:
-                                pass
-                except OSError:
-                    continue
+                    except OSError:
+                        pass
+                else:
+                    # Legacy layout: camera/event_id/ with clip, snapshot, descriptions
+                    try:
+                        with os.scandir(camera_path) as it_events:
+                            for event_entry in it_events:
+                                if not event_entry.is_dir():
+                                    continue
+                                c, s, d = self._sum_event_folder(event_entry.path)
+                                cam_clips += c
+                                cam_snapshots += s
+                                cam_descriptions += d
+                    except OSError:
+                        continue
 
                 cam_total = cam_clips + cam_snapshots + cam_descriptions
                 if cam_total > 0:
@@ -343,13 +399,22 @@ class FileManager:
                 snapshots += cam_snapshots
                 descriptions += cam_descriptions
 
+            # Include daily_reports and daily_reviews in total and descriptions
+            for subdir in ('daily_reports', 'daily_reviews'):
+                path = os.path.join(self.storage_path, subdir)
+                size = self._dir_total_bytes(path)
+                if size > 0:
+                    descriptions += size
+            total = clips + snapshots + descriptions
+
         except Exception as e:
             logger.error(f"Error computing storage stats: {e}")
+            total = clips + snapshots + descriptions
 
         return {
             'clips': clips,
             'snapshots': snapshots,
             'descriptions': descriptions,
-            'total': clips + snapshots + descriptions,
+            'total': total,
             'by_camera': by_camera
         }
