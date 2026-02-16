@@ -17,6 +17,7 @@ from frigate_buffer.models import FrameMetadata
 
 import cv2
 import requests
+import urllib3.exceptions
 
 logger = logging.getLogger('frigate-buffer')
 
@@ -335,38 +336,58 @@ class GeminiAnalysisService:
             "frequency_penalty": self._frequency_penalty,
             "presence_penalty": self._presence_penalty,
         }
-        try:
-            resp = requests.post(
-                url,
-                json=payload,
-                headers={
-                    "Authorization": f"Bearer {self._api_key}",
-                    "Content-Type": "application/json",
-                },
-                timeout=60,
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            content = (data.get("choices") or [{}])[0].get("message", {}).get("content")
-            if not content or not content.strip():
-                logger.warning("Empty response content from proxy")
-                return None
-            # Strip markdown code blocks if present
-            raw = content.strip()
-            if raw.startswith("```"):
-                lines = raw.split("\n")
-                if lines[0].startswith("```"):
-                    lines = lines[1:]
-                if lines and lines[-1].strip() == "```":
-                    lines = lines[:-1]
-                raw = "\n".join(lines)
-            return json.loads(raw)
-        except requests.exceptions.RequestException as e:
-            logger.exception("Proxy request failed: %s", e)
-            return None
-        except json.JSONDecodeError as e:
-            logger.exception("Failed to parse proxy JSON: %s", e)
-            return None
+        base_headers = {
+            "Authorization": f"Bearer {self._api_key}",
+            "Content-Type": "application/json",
+        }
+        for attempt in range(2):
+            headers = dict(base_headers)
+            if attempt == 1:
+                headers["Accept-Encoding"] = "identity"
+                headers["Connection"] = "close"
+            try:
+                resp = requests.post(
+                    url,
+                    json=payload,
+                    headers=headers,
+                    timeout=60,
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                content = (data.get("choices") or [{}])[0].get("message", {}).get("content")
+                if not content or not content.strip():
+                    logger.warning("Empty response content from proxy")
+                    return None
+                # Strip markdown code blocks if present
+                raw = content.strip()
+                if raw.startswith("```"):
+                    lines = raw.split("\n")
+                    if lines[0].startswith("```"):
+                        lines = lines[1:]
+                    if lines and lines[-1].strip() == "```":
+                        lines = lines[:-1]
+                    raw = "\n".join(lines)
+                return json.loads(raw)
+            except (requests.exceptions.ChunkedEncodingError, urllib3.exceptions.ProtocolError) as e:
+                logger.warning(
+                    "Proxy attempt %s/2 failed with ChunkedEncodingError: %s. Retrying with 'Connection: close'...",
+                    attempt + 1, e,
+                )
+                continue
+            except json.JSONDecodeError as e:
+                logger.exception("Failed to parse proxy JSON: %s", e)
+                if attempt == 1:
+                    return None
+                continue
+            except Exception as e:
+                logger.error(
+                    "Proxy request failed on attempt %s/2: %s: %s",
+                    attempt + 1, type(e).__name__, e,
+                )
+                if attempt == 1:
+                    return None
+                continue
+        return None
 
     def send_text_prompt(self, system_prompt: str, user_prompt: str) -> Optional[str]:
         """
@@ -389,26 +410,44 @@ class GeminiAnalysisService:
             "frequency_penalty": self._frequency_penalty,
             "presence_penalty": self._presence_penalty,
         }
-        try:
-            resp = requests.post(
-                url,
-                json=payload,
-                headers={
-                    "Authorization": f"Bearer {self._api_key}",
-                    "Content-Type": "application/json",
-                },
-                timeout=60,
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            content = (data.get("choices") or [{}])[0].get("message", {}).get("content")
-            if not content or not str(content).strip():
-                logger.warning("Empty response content from proxy (text prompt)")
-                return None
-            return str(content).strip()
-        except requests.exceptions.RequestException as e:
-            logger.exception("Proxy request failed (text prompt): %s", e)
-            return None
+        base_headers = {
+            "Authorization": f"Bearer {self._api_key}",
+            "Content-Type": "application/json",
+        }
+        for attempt in range(2):
+            headers = dict(base_headers)
+            if attempt == 1:
+                headers["Accept-Encoding"] = "identity"
+                headers["Connection"] = "close"
+            try:
+                resp = requests.post(
+                    url,
+                    json=payload,
+                    headers=headers,
+                    timeout=60,
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                content = (data.get("choices") or [{}])[0].get("message", {}).get("content")
+                if not content or not str(content).strip():
+                    logger.warning("Empty response content from proxy (text prompt)")
+                    return None
+                return str(content).strip()
+            except (requests.exceptions.ChunkedEncodingError, urllib3.exceptions.ProtocolError) as e:
+                logger.warning(
+                    "Proxy attempt %s/2 failed with ChunkedEncodingError: %s. Retrying with 'Connection: close'...",
+                    attempt + 1, e,
+                )
+                continue
+            except Exception as e:
+                logger.error(
+                    "Proxy request failed on attempt %s/2: %s: %s",
+                    attempt + 1, type(e).__name__, e,
+                )
+                if attempt == 1:
+                    return None
+                continue
+        return None
 
     def _save_analysis_result(self, event_id: str, clip_path: str, result: Dict[str, Any]) -> None:
         """

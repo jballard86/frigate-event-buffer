@@ -88,27 +88,33 @@ class StateAwareOrchestrator:
         api_key = gemini.get('api_key') or os.getenv('GEMINI_API_KEY') or ''
         if gemini.get('enabled') and proxy_url and api_key:
             self.ai_analyzer = GeminiAnalysisService(config)
+            max_concurrent = max(1, int(config.get('GEMINI_MAX_CONCURRENT_ANALYSES', 3)))
+            self._gemini_analysis_semaphore = threading.Semaphore(max_concurrent)
         else:
             self.ai_analyzer = None
+            self._gemini_analysis_semaphore = None
 
         on_clip_ready = None
         if self.ai_analyzer:
             def _on_clip_ready_for_analysis(event_id: str, clip_path: str):
                 def _run():
-                    if not self.ai_analyzer:
+                    if not self.ai_analyzer or not self._gemini_analysis_semaphore:
                         return
-                    event = self.state_manager.get_event(event_id)
-                    event_start_ts = event.created_at if event else 0
-                    event_end_ts = (event.end_time or event.created_at) if event else 0
-                    # Use frame metadata for the event whose clip is being analyzed (single or CE primary).
-                    frame_metadata = self.state_manager.get_frame_metadata(event_id)
-                    result = self.ai_analyzer.analyze_clip(
-                        event_id, clip_path, event_start_ts, event_end_ts,
-                        frame_metadata=frame_metadata,
-                    )
-                    if result:
-                        self._handle_analysis_result(event_id, result)
-                    self.state_manager.clear_frame_metadata(event_id)
+                    self._gemini_analysis_semaphore.acquire()
+                    try:
+                        event = self.state_manager.get_event(event_id)
+                        event_start_ts = event.created_at if event else 0
+                        event_end_ts = (event.end_time or event.created_at) if event else 0
+                        frame_metadata = self.state_manager.get_frame_metadata(event_id)
+                        result = self.ai_analyzer.analyze_clip(
+                            event_id, clip_path, event_start_ts, event_end_ts,
+                            frame_metadata=frame_metadata,
+                        )
+                        if result:
+                            self._handle_analysis_result(event_id, result)
+                    finally:
+                        self.state_manager.clear_frame_metadata(event_id)
+                        self._gemini_analysis_semaphore.release()
                 threading.Thread(target=_run, daemon=True).start()
             on_clip_ready = _on_clip_ready_for_analysis
 
@@ -287,6 +293,12 @@ class StateAwareOrchestrator:
                           has_clip: bool, has_snapshot: bool,
                           mqtt_payload: Optional[dict] = None):
         """Handle event end - trigger downloads/transcoding."""
+        # Skip duplicate "end" to avoid double clip export and double Gemini API call
+        event = self.state_manager.get_event(event_id)
+        if event and event.end_time is not None:
+            logger.debug("Duplicate event end for %s (already ended), skipping", event_id)
+            return
+
         logger.info(f"Event ended: {event_id}")
 
         event = self.state_manager.mark_event_ended(
@@ -300,7 +312,7 @@ class StateAwareOrchestrator:
             )
 
         if not event or not event.folder_path:
-            logger.warning(f"Unknown event ended: {event_id}")
+            logger.debug(f"Unknown event ended: {event_id}")
             return
 
         threading.Thread(

@@ -48,6 +48,7 @@ CONFIG_SCHEMA = Schema({
         Optional('export_buffer_before'): int,
         Optional('export_buffer_after'): int,
         Optional('final_review_image_count'): int,
+        Optional('gemini_max_concurrent_analyses'): int,
     },
     Optional('ha'): {
         Optional('base_url'): str,
@@ -121,6 +122,7 @@ def load_config() -> dict:
         'EXPORT_BUFFER_BEFORE': 5,
         'EXPORT_BUFFER_AFTER': 30,
         'FINAL_REVIEW_IMAGE_COUNT': 20,
+        'GEMINI_MAX_CONCURRENT_ANALYSES': 3,
 
         # Optional HA REST API (for stats page token/cost display)
         'HA_URL': None,
@@ -214,6 +216,7 @@ def load_config() -> dict:
                     config['EXPORT_BUFFER_BEFORE'] = settings.get('export_buffer_before', config['EXPORT_BUFFER_BEFORE'])
                     config['EXPORT_BUFFER_AFTER'] = settings.get('export_buffer_after', config['EXPORT_BUFFER_AFTER'])
                     config['FINAL_REVIEW_IMAGE_COUNT'] = settings.get('final_review_image_count', config.get('FINAL_REVIEW_IMAGE_COUNT', 20))
+                    config['GEMINI_MAX_CONCURRENT_ANALYSES'] = settings.get('gemini_max_concurrent_analyses', config.get('GEMINI_MAX_CONCURRENT_ANALYSES', 3))
 
                 if 'network' in yaml_config:
                     network = yaml_config['network']
