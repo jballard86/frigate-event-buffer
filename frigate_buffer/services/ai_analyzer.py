@@ -21,6 +21,20 @@ import urllib3.exceptions
 
 logger = logging.getLogger('frigate-buffer')
 
+
+def _log_proxy_failure(proxy_url: str, attempt: int, exc: Exception) -> None:
+    """Log proxy request failure with URL and a hint for connection errors."""
+    err_name = type(exc).__name__
+    err_msg = str(exc)
+    hint = ""
+    if "refused" in err_msg.lower() or "Connection refused" in err_msg:
+        hint = f" Ensure the AI proxy is running at {proxy_url}."
+    logger.error(
+        "Proxy request failed on attempt %s/2: %s: %s. url=%s.%s",
+        attempt, err_name, err_msg, proxy_url, hint,
+    )
+
+
 # Default max frames to send to proxy (cap token/image cost)
 DEFAULT_MAX_FRAMES = 20
 # Frame sampling interval in seconds when extracting from video
@@ -380,10 +394,7 @@ class GeminiAnalysisService:
                     return None
                 continue
             except Exception as e:
-                logger.error(
-                    "Proxy request failed on attempt %s/2: %s: %s",
-                    attempt + 1, type(e).__name__, e,
-                )
+                _log_proxy_failure(url, attempt + 1, e)
                 if attempt == 1:
                     return None
                 continue
@@ -440,10 +451,7 @@ class GeminiAnalysisService:
                 )
                 continue
             except Exception as e:
-                logger.error(
-                    "Proxy request failed on attempt %s/2: %s: %s",
-                    attempt + 1, type(e).__name__, e,
-                )
+                _log_proxy_failure(url, attempt + 1, e)
                 if attempt == 1:
                     return None
                 continue

@@ -20,7 +20,11 @@ from frigate_buffer.models import EventState, _is_no_concerns
 from frigate_buffer.managers.file import FileManager
 from frigate_buffer.managers.state import EventStateManager
 from frigate_buffer.services.video import VideoService
-from frigate_buffer.services.download import DownloadService
+from frigate_buffer.services.download import (
+    DownloadService,
+    DEFAULT_EXPORT_DOWNLOAD_TIMEOUT,
+    DEFAULT_EVENTS_CLIP_TIMEOUT,
+)
 from frigate_buffer.managers.consolidation import ConsolidatedEventManager
 from frigate_buffer.managers.reviews import DailyReviewManager
 from frigate_buffer.managers.zone_filter import SmartZoneFilter
@@ -47,7 +51,9 @@ class StateAwareOrchestrator:
         self.video_service = VideoService(config.get('FFMPEG_TIMEOUT', VideoService.DEFAULT_FFMPEG_TIMEOUT))
         self.download_service = DownloadService(
             config['FRIGATE_URL'],
-            self.video_service
+            self.video_service,
+            export_download_timeout=int(config.get('EXPORT_DOWNLOAD_TIMEOUT', DEFAULT_EXPORT_DOWNLOAD_TIMEOUT)),
+            events_clip_timeout=int(config.get('EVENTS_CLIP_TIMEOUT', DEFAULT_EVENTS_CLIP_TIMEOUT)),
         )
         self.file_manager = FileManager(
             config['STORAGE_PATH'],
@@ -375,6 +381,7 @@ class StateAwareOrchestrator:
                         'threat_level': ce.best_threat_level, 'severity': ce.severity,
                         'snapshot_downloaded': ce.snapshot_downloaded,
                         'clip_downloaded': ce.clip_downloaded,
+                        'image_url_override': getattr(primary, 'image_url_override', None) if primary else None,
                     })()
                 else:
                     notify_target = event
@@ -515,6 +522,7 @@ class StateAwareOrchestrator:
                                 'threat_level': ce.best_threat_level, 'severity': ce.severity,
                                 'snapshot_downloaded': ce.snapshot_downloaded,
                                 'clip_downloaded': ce.clip_downloaded,
+                                'image_url_override': getattr(primary, 'image_url_override', None) if primary else None,
                             })()
                         else:
                             notify_target = event

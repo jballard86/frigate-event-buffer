@@ -189,8 +189,8 @@ class NotificationPublisher:
                 folder_name = os.path.basename(event.folder_path)
                 camera_dir = os.path.basename(os.path.dirname(event.folder_path))
                 base_url = f"{buffer_base}/files/{camera_dir}/{folder_name}"
-            if event.image_url_override:
-                image_url = event.image_url_override
+            if getattr(event, 'image_url_override', None):
+                image_url = getattr(event, 'image_url_override', None)
             elif event.snapshot_downloaded:
                 image_url = f"{base_url}/snapshot.jpg"
             else:
