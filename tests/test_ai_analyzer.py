@@ -9,6 +9,7 @@ from unittest.mock import MagicMock, patch
 import cv2
 import numpy as np
 
+from frigate_buffer.models import FrameMetadata
 from frigate_buffer.services.ai_analyzer import GeminiAnalysisService
 
 
@@ -337,3 +338,66 @@ class TestGeminiAnalysisServiceCropAppliedDuringExtraction(unittest.TestCase):
         self.assertGreater(len(result), 0)
         for frame in result:
             self.assertEqual(frame.shape, (240, 320, 3), "Each frame should be center-cropped to 320x240")
+
+
+class TestGeminiAnalysisServiceSmartCrop(unittest.TestCase):
+    """Test _smart_crop with normalized box and padding."""
+
+    def test_smart_crop_returns_exact_dimensions(self):
+        config = {"GEMINI": {"enabled": True, "proxy_url": "http://p", "api_key": "k"}, "SMART_CROP_PADDING": 0.15}
+        service = GeminiAnalysisService(config)
+        frame = np.zeros((200, 320, 3), dtype=np.uint8)
+        box = (0.25, 0.25, 0.75, 0.75)
+        crop = service._smart_crop(frame, box, 160, 100)
+        self.assertEqual(crop.shape, (100, 160, 3))
+
+    def test_smart_crop_empty_box_falls_back_to_center_crop(self):
+        config = {"GEMINI": {"enabled": True, "proxy_url": "http://p", "api_key": "k"}}
+        service = GeminiAnalysisService(config)
+        frame = np.zeros((100, 100, 3), dtype=np.uint8)
+        out = service._smart_crop(frame, [], 50, 50)
+        self.assertEqual(out.shape, (50, 50, 3))
+        out = service._smart_crop(frame, None, 50, 50)
+        self.assertEqual(out.shape, (50, 50, 3))
+
+    def test_smart_crop_with_padding_produces_larger_region(self):
+        config = {"GEMINI": {"enabled": True, "proxy_url": "http://p", "api_key": "k"}, "SMART_CROP_PADDING": 0.2}
+        service = GeminiAnalysisService(config)
+        frame = np.zeros((100, 100, 3), dtype=np.uint8)
+        box = (0.4, 0.4, 0.6, 0.6)
+        crop_padded = service._smart_crop(frame, box, 50, 50, padding=0.2)
+        crop_no_pad = service._smart_crop(frame, box, 50, 50, padding=0.0)
+        self.assertEqual(crop_padded.shape, (50, 50, 3))
+        self.assertEqual(crop_no_pad.shape, (50, 50, 3))
+
+
+class TestGeminiAnalysisServiceFrameMetadata(unittest.TestCase):
+    """Test analyze_clip and _extract_frames with frame_metadata."""
+
+    def test_smart_crop_padding_from_config(self):
+        config = {"GEMINI": {"enabled": True, "proxy_url": "http://p", "api_key": "k"}, "SMART_CROP_PADDING": 0.25}
+        service = GeminiAnalysisService(config)
+        self.assertEqual(service.smart_crop_padding, 0.25)
+
+    @patch("frigate_buffer.services.ai_analyzer.requests.post")
+    @patch("frigate_buffer.services.ai_analyzer.cv2.VideoCapture")
+    def test_analyze_clip_with_frame_metadata_empty_does_not_crash(self, mock_vc, mock_post):
+        with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as f:
+            clip_path = f.name
+        self.addCleanup(lambda: os.path.exists(clip_path) and os.unlink(clip_path))
+        mock_cap = MagicMock()
+        mock_cap.isOpened.return_value = True
+        mock_cap.get.side_effect = lambda key: 1.0 if key == cv2.CAP_PROP_FPS else (5 if key == cv2.CAP_PROP_FRAME_COUNT else 0)
+        mock_cap.read.return_value = (True, np.zeros((100, 100, 3), dtype=np.uint8))
+        mock_cap.release = MagicMock()
+        mock_vc.return_value = mock_cap
+        mock_post.return_value.status_code = 200
+        mock_post.return_value.json.return_value = {
+            "choices": [{"message": {"content": json.dumps({
+                "title": "T", "shortSummary": "S", "scene": "Sc", "confidence": 0.8, "potential_threat_level": 0
+            })}}]
+        }
+        config = {"GEMINI": {"enabled": True, "proxy_url": "http://p", "api_key": "k"}}
+        service = GeminiAnalysisService(config)
+        result = service.analyze_clip("evt1", clip_path, event_start_ts=0, event_end_ts=1.0, frame_metadata=[])
+        self.assertIsNotNone(result)

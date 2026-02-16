@@ -11,7 +11,9 @@ import json
 import base64
 import logging
 from datetime import datetime
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Sequence
+
+from frigate_buffer.models import FrameMetadata
 
 import cv2
 import requests
@@ -51,6 +53,7 @@ class GeminiAnalysisService:
         self.motion_threshold_px = int(config.get('MOTION_THRESHOLD_PX', 0))
         self.crop_width = int(config.get('CROP_WIDTH', 0) or 0)
         self.crop_height = int(config.get('CROP_HEIGHT', 0) or 0)
+        self.smart_crop_padding = float(config.get('SMART_CROP_PADDING', 0.15))
 
     def _load_system_prompt_template(self) -> str:
         if self._prompt_template is not None:
@@ -124,15 +127,74 @@ class GeminiAnalysisService:
             crop = cv2.resize(crop, (target_w, target_h))
         return crop
 
+    def _smart_crop(
+        self,
+        frame: Any,
+        box: Sequence[float],
+        target_w: int,
+        target_h: int,
+        padding: Optional[float] = None,
+    ) -> Any:
+        """
+        Crop frame centered on the bounding box with padding for visual context.
+        box is [ymin, xmin, ymax, xmax] normalized 0-1. Expands box by padding (e.g. 0.15)
+        so the model sees subject plus immediate environment.
+        """
+        h, w = frame.shape[:2]
+        if target_w <= 0 or target_h <= 0:
+            return frame
+        if not box or len(box) != 4:
+            return self._center_crop(frame, target_w, target_h)
+        pad = padding if padding is not None else self.smart_crop_padding
+        ymin, xmin, ymax, xmax = float(box[0]), float(box[1]), float(box[2]), float(box[3])
+        # Expand by padding (fraction of box size or frame)
+        bw, bh = xmax - xmin, ymax - ymin
+        dx = max(bw * pad, 0.05)
+        dy = max(bh * pad, 0.05)
+        ymin = max(0.0, ymin - dy)
+        xmin = max(0.0, xmin - dx)
+        ymax = min(1.0, ymax + dy)
+        xmax = min(1.0, xmax + dx)
+        # To pixel coords
+        py1, px1 = int(ymin * h), int(xmin * w)
+        py2, px2 = int(ymax * h), int(xmax * w)
+        cy = (py1 + py2) // 2
+        cx = (px1 + px2) // 2
+        x1 = cx - target_w // 2
+        y1 = cy - target_h // 2
+        x2 = x1 + target_w
+        y2 = y1 + target_h
+        if x1 < 0:
+            x2 -= x1
+            x1 = 0
+        if y1 < 0:
+            y2 -= y1
+            y1 = 0
+        if x2 > w:
+            x1 -= x2 - w
+            x2 = w
+        if y2 > h:
+            y1 -= y2 - h
+            y2 = h
+        x1, y1 = max(0, x1), max(0, y1)
+        crop = frame[y1:y2, x1:x2]
+        if crop.size == 0:
+            return self._center_crop(frame, target_w, target_h)
+        if crop.shape[1] != target_w or crop.shape[0] != target_h:
+            crop = cv2.resize(crop, (target_w, target_h))
+        return crop
+
     def _extract_frames(
         self,
         clip_path: str,
         event_start_ts: float = 0,
         event_end_ts: float = 0,
+        frame_metadata: Optional[Sequence[FrameMetadata]] = None,
     ) -> List[Any]:
         """Extract frames from video. With event_start_ts > 0, seeks past pre-capture buffer and limits to event segment.
         Uses grayscale frame differencing for motion-aware selection when MOTION_THRESHOLD_PX > 0; first and last frame
-        are always kept. Optional center crop when CROP_WIDTH/CROP_HEIGHT set. Returns list of numpy arrays (BGR)."""
+        are always kept. When frame_metadata is provided, prioritizes by score*area and uses smart crop per frame.
+        Optional center/smart crop when CROP_WIDTH/CROP_HEIGHT set. Returns list of numpy arrays (BGR)."""
         frames = []
         cap = cv2.VideoCapture(clip_path)
         if not cap.isOpened():
@@ -141,6 +203,7 @@ class GeminiAnalysisService:
         try:
             fps = cap.get(cv2.CAP_PROP_FPS) or 1.0
             total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+            use_meta = bool(frame_metadata)
 
             if event_start_ts > 0 and total_frames > 0:
                 start_frame = int(fps * self.buffer_offset)
@@ -154,7 +217,6 @@ class GeminiAnalysisService:
                 start_frame = min(start_frame, end_frame)
                 step = max(1, int(fps / self.max_frames_sec)) if self.max_frames_sec > 0 else 1
 
-                # Collect candidates (frame_idx, frame, motion_score) with grayscale differencing
                 use_motion = self.motion_threshold_px > 0
                 candidates = []
                 prev_gray = None
@@ -165,8 +227,21 @@ class GeminiAnalysisService:
                     ret, frame = cap.read()
                     if not ret:
                         break
+                    # Frame time for metadata lookup (approximate)
+                    frame_time_approx = event_start_ts + (frame_idx - start_frame) / fps if fps else event_start_ts
+                    meta = None
+                    if use_meta and frame_metadata:
+                        closest = min(
+                            frame_metadata,
+                            key=lambda m: abs(m.frame_time - frame_time_approx),
+                        )
+                        if abs(closest.frame_time - frame_time_approx) < 2.0:
+                            meta = closest
                     if self.crop_width > 0 and self.crop_height > 0:
-                        frame = self._center_crop(frame, self.crop_width, self.crop_height)
+                        if meta and meta.box and meta.box != (0.0, 0.0, 1.0, 1.0):
+                            frame = self._smart_crop(frame, meta.box, self.crop_width, self.crop_height)
+                        else:
+                            frame = self._center_crop(frame, self.crop_width, self.crop_height)
                     motion_score = 0.0
                     if use_motion:
                         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
@@ -174,21 +249,20 @@ class GeminiAnalysisService:
                             diff = cv2.absdiff(prev_gray, gray)
                             motion_score = float(cv2.sumElems(diff)[0])
                         prev_gray = gray
-                    candidates.append((frame_idx, frame, motion_score))
+                    priority = (meta.score * meta.area) if meta else motion_score
+                    candidates.append((frame_idx, frame, motion_score, meta, priority))
                     frame_idx += step
 
                 if not candidates:
                     return frames
-                # Always keep first and last for context (before/after for the model)
-                first_idx, first_frame, _ = candidates[0]
-                last_idx, last_frame, _ = candidates[-1]
+                first_frame = candidates[0][1]
+                last_frame = candidates[-1][1]
                 if len(candidates) <= self._max_frames:
                     frames = [c[1] for c in candidates]
                 else:
                     middle = candidates[1:-1]
                     n_keep = self._max_frames - 2
-                    # Keep middle frames with highest motion, then sort by frame index
-                    middle_sorted = sorted(middle, key=lambda c: c[2], reverse=True)[:n_keep]
+                    middle_sorted = sorted(middle, key=lambda c: c[4], reverse=True)[:n_keep]
                     middle_sorted.sort(key=lambda c: c[0])
                     frames = [first_frame] + [c[1] for c in middle_sorted] + [last_frame]
                 return frames
@@ -300,10 +374,12 @@ class GeminiAnalysisService:
         clip_path: str,
         event_start_ts: float = 0,
         event_end_ts: float = 0,
+        frame_metadata: Optional[Sequence[FrameMetadata]] = None,
     ) -> Optional[Dict[str, Any]]:
         """
         Extract frames from clip_path, call proxy, return analysis metadata.
         When event_start_ts > 0, seeks past pre-capture buffer and limits to event segment.
+        When frame_metadata is provided, uses smart crop and score*area prioritization.
         Called from orchestrator (e.g. in a background thread). Returns None if disabled, path missing, or proxy failure.
         Does NOT publish to MQTT; caller is responsible for persisting and notifying.
         """
@@ -317,7 +393,10 @@ class GeminiAnalysisService:
             logger.warning("Clip not found: %s", clip_path)
             return None
         try:
-            frames = self._extract_frames(clip_path, event_start_ts, event_end_ts)
+            frames = self._extract_frames(
+                clip_path, event_start_ts, event_end_ts,
+                frame_metadata=frame_metadata,
+            )
             if not frames:
                 logger.warning("No frames extracted from %s", clip_path)
                 return None

@@ -67,6 +67,7 @@ CONFIG_SCHEMA = Schema({
         Optional('crop_width'): int,
         Optional('crop_height'): int,
         Optional('multi_cam_system_prompt_file'): str,
+        Optional('smart_crop_padding'): Any(int, float),
     },
     Optional('gemini_proxy'): {
         Optional('url'): str,
@@ -140,6 +141,7 @@ def load_config() -> dict:
         'CROP_WIDTH': 1280,
         'CROP_HEIGHT': 720,
         'MULTI_CAM_SYSTEM_PROMPT_FILE': '',
+        'SMART_CROP_PADDING': 0.15,
 
         # Gemini proxy (extended): Single API Key (GEMINI_API_KEY only). Default URL "" (no Google fallback).
         'GEMINI_PROXY_URL': '',
@@ -242,6 +244,7 @@ def load_config() -> dict:
                     config['CROP_WIDTH'] = mc.get('crop_width', config['CROP_WIDTH'])
                     config['CROP_HEIGHT'] = mc.get('crop_height', config['CROP_HEIGHT'])
                     config['MULTI_CAM_SYSTEM_PROMPT_FILE'] = mc.get('multi_cam_system_prompt_file', config['MULTI_CAM_SYSTEM_PROMPT_FILE']) or ''
+                    config['SMART_CROP_PADDING'] = float(mc.get('smart_crop_padding', config.get('SMART_CROP_PADDING', 0.15)))
 
                 if 'gemini_proxy' in yaml_config:
                     gp = yaml_config['gemini_proxy']
