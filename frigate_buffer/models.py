@@ -4,7 +4,18 @@ import time
 import uuid
 from enum import Enum, auto
 from dataclasses import dataclass, field
-from typing import Optional, List, Protocol, runtime_checkable
+from typing import Optional, List, Protocol, runtime_checkable, Tuple
+
+
+@dataclass(frozen=True)
+class FrameMetadata:
+    """Per-frame tracked object data from Frigate MQTT (tracked_object_update).
+    Box is always [ymin, xmin, ymax, xmax] normalized 0-1 (see state manager normalization).
+    """
+    frame_time: float
+    box: Tuple[float, float, float, float]  # ymin, xmin, ymax, xmax normalized 0-1
+    area: float
+    score: float
 
 # Patterns that indicate "no concerns" from GenAI review summary (skip summarized notification)
 NO_CONCERNS_PATTERNS = (

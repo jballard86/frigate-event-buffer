@@ -99,11 +99,15 @@ class StateAwareOrchestrator:
                     event = self.state_manager.get_event(event_id)
                     event_start_ts = event.created_at if event else 0
                     event_end_ts = (event.end_time or event.created_at) if event else 0
+                    # Use frame metadata for the event whose clip is being analyzed (single or CE primary).
+                    frame_metadata = self.state_manager.get_frame_metadata(event_id)
                     result = self.ai_analyzer.analyze_clip(
-                        event_id, clip_path, event_start_ts, event_end_ts
+                        event_id, clip_path, event_start_ts, event_end_ts,
+                        frame_metadata=frame_metadata,
                     )
                     if result:
                         self._handle_analysis_result(event_id, result)
+                    self.state_manager.clear_frame_metadata(event_id)
                 threading.Thread(target=_run, daemon=True).start()
             on_clip_ready = _on_clip_ready_for_analysis
 
@@ -360,20 +364,41 @@ class StateAwareOrchestrator:
         logger.info(f"Analysis result applied for {event_id}: title={title or 'N/A'}, threat_level={threat_level}")
 
     def _handle_tracked_update(self, payload: dict, topic: str):
-        """Handle AI description update (Phase 2)."""
-        update_type = payload.get("type")
-        if update_type and update_type != "description":
-            logger.debug(f"Skipping tracked update type: {update_type}")
-            return
-
+        """Handle tracked_object_update: AI description (Phase 2) or per-frame metadata (frame_time, box, area, score)."""
         parts = topic.split("/")
         camera = parts[1] if len(parts) >= 2 else "unknown"
-
         event_id = payload.get("id")
-        description = payload.get("description")
 
+        # Per-frame metadata: store box/score/area for smart cropping (only for known events)
+        if event_id:
+            after = payload.get("after") or payload.get("before") or {}
+            has_frame_data = (
+                after.get("frame_time") is not None
+                or "box" in after
+                or after.get("area") is not None
+                or after.get("score") is not None
+            )
+            if has_frame_data and self.state_manager.get_event(event_id):
+                region = after.get("region")
+                fw = (region[2] - region[0]) if isinstance(region, (list, tuple)) and len(region) >= 4 else None
+                fh = (region[3] - region[1]) if isinstance(region, (list, tuple)) and len(region) >= 4 else None
+                self.state_manager.add_frame_metadata(
+                    event_id,
+                    frame_time=float(after.get("frame_time") or 0),
+                    box=after.get("box"),
+                    area=float(after.get("area") or 0),
+                    score=float(after.get("score") or 0),
+                    frame_width=fw,
+                    frame_height=fh,
+                )
+
+        # AI description (Phase 2)
+        update_type = payload.get("type")
+        if update_type and update_type != "description":
+            return
+
+        description = payload.get("description")
         if not event_id or not description:
-            logger.debug(f"Skipping tracked update: event_id={event_id}, has_description={bool(description)}")
             return
 
         event = self.state_manager.get_event(event_id)

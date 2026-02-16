@@ -46,7 +46,7 @@ This folder holds a **standalone mock** of the multi-cam frame extractor. It is 
 - **If run by the orchestrator:** Pass the orchestrator's config (same object as rest of app).
 - **If run standalone:** Use the same config path list as main: `frigate_buffer.config.load_config()` and map nested keys (network, settings, multi_cam, gemini_proxy) into the flat keys the script expects, or add a small adapter that reads from the main config dict.
 
-### 4. MQTT and per-frame data
+### 4. MQTT and per-frame data — [x] Completed
 
 - Subscribe to **both** `frigate/events` and `frigate/+/tracked_object_update`.
 - **EventMetadataStore:** Populate **only** from `tracked_object_update` (frame_time, box, area, score); use `frigate/events` only for new/end and overlap logic.
@@ -100,11 +100,22 @@ This folder holds a **standalone mock** of the multi-cam frame extractor. It is 
 
 ---
 
+## What was done (Step 4)
+
+- **MQTT:** The app already subscribed to `frigate/+/tracked_object_update`. In **frigate_buffer/orchestrator.py**, `_handle_tracked_update` now handles two payload shapes: (1) `type == "description"` — existing Phase 2 AI description path (set_ai_description, timeline log); (2) per-frame payloads with `id` and `after`/`before` containing `frame_time`, `box`, `area`, `score` — stored only for known events via `state_manager.add_frame_metadata`. Camera is parsed from topic `frigate/<camera>/tracked_object_update`.
+- **State:** **frigate_buffer/managers/state.py** has a per-frame metadata store keyed by `event_id`. `_normalize_box(box, frame_width, frame_height)` normalizes Frigate box to `[ymin, xmin, ymax, xmax]` normalized 0–1 (handles pixels or normalized, both orderings). `add_frame_metadata`, `get_frame_metadata`, `clear_frame_metadata`; `remove_event` clears frame metadata to avoid leaks. **frigate_buffer/models.py** adds `FrameMetadata` dataclass (frame_time, box, area, score).
+- **AI analyzer:** **frigate_buffer/services/ai_analyzer.py** — `analyze_clip(..., frame_metadata=...)`; `_extract_frames(..., frame_metadata=...)` uses metadata when present: prioritizes frames by `score * area`, matches frame time to closest metadata entry, and applies **smart crop** (crop centered on object box with configurable padding) when box is available; otherwise center crop. `_smart_crop(frame, box, target_w, target_h, padding)` with **SMART_CROP_PADDING** config (default 0.15) for visual context around the subject.
+- **Orchestrator wiring:** Clip-ready callback gets `frame_metadata = self.state_manager.get_frame_metadata(event_id)` (same event_id as the clip being analyzed — single or CE primary), passes it to `analyze_clip`, and calls `clear_frame_metadata(event_id)` after analysis.
+- **Config:** Optional `SMART_CROP_PADDING` (default 0.15) under `multi_cam` in **frigate_buffer/config.py**.
+
+---
+
 ## Notes for future AI (next steps)
 
 - **Step 2 (Clip paths and Clip timing):** Done. Smart seeking and timestamp wiring are in place; orchestrator does the event lookup so lifecycle stays decoupled.
-- **Step 3:** Done. Production logic lives in `ai_analyzer.py`. Motion is **grayscale frame differencing** (no EventMetadataStore in analyzer); first and last frames always kept; crop is center crop. Next: Step 4 (MQTT tracked_object_update, EventMetadataStore) for per-frame box/metadata if needed for multi-event recap.
-- **Config keys reference:** Multi-cam: `MAX_MULTI_CAM_FRAMES_MIN`, `MAX_MULTI_CAM_FRAMES_SEC`, `MOTION_THRESHOLD_PX`, `CROP_WIDTH`, `CROP_HEIGHT`, `MULTI_CAM_SYSTEM_PROMPT_FILE`. Gemini proxy: `GEMINI_PROXY_URL`, `GEMINI_PROXY_MODEL`, `GEMINI_PROXY_TEMPERATURE`, `GEMINI_PROXY_TOP_P`, `GEMINI_PROXY_FREQUENCY_PENALTY`, `GEMINI_PROXY_PRESENCE_PENALTY`. Single API key: `config['GEMINI']['api_key']` (env `GEMINI_API_KEY` overrides config.yaml for security).
+- **Step 3:** Done. Production logic lives in `ai_analyzer.py`. Motion is **grayscale frame differencing**; first and last frames always kept; crop is center or smart crop when per-frame metadata is available.
+- **Step 4:** Done. Per-frame data from `frigate/+/tracked_object_update` is stored in state (normalized box [ymin, xmin, ymax, xmax] 0–1); cleanup on `remove_event` and after `analyze_clip`. Smart crop uses `SMART_CROP_PADDING` (default 0.15). Use the **same event_id** as the clip for frame_metadata (do not merge CE members). Next: Step 7 (Daily report script) or Step 8 (docs and cleanup).
+- **Config keys reference:** Multi-cam: `MAX_MULTI_CAM_FRAMES_MIN`, `MAX_MULTI_CAM_FRAMES_SEC`, `MOTION_THRESHOLD_PX`, `CROP_WIDTH`, `CROP_HEIGHT`, `MULTI_CAM_SYSTEM_PROMPT_FILE`, `SMART_CROP_PADDING`. Gemini proxy: `GEMINI_PROXY_URL`, `GEMINI_PROXY_MODEL`, `GEMINI_PROXY_TEMPERATURE`, `GEMINI_PROXY_TOP_P`, `GEMINI_PROXY_FREQUENCY_PENALTY`, `GEMINI_PROXY_PRESENCE_PENALTY`. Single API key: `config['GEMINI']['api_key']` (env `GEMINI_API_KEY` overrides config.yaml for security).
 
 ---
 
@@ -113,7 +124,7 @@ This folder holds a **standalone mock** of the multi-cam frame extractor. It is 
 1. ~~Config schema and load_config~~ **Done.** No Google Fallback, Single API Key (`GEMINI_API_KEY` only).
 2. ~~Clip paths and clip timing (vid_start) in **ai_analyzer.py**~~ **Done.** Smart seeking (buffer_offset, seek, limit, stride); orchestrator looks up event and passes timestamps; lifecycle unchanged.
 3. ~~Move and wire the service~~ **Done.** Motion (grayscale diff), center crop, flat config, prompt file, proxy tuning in `ai_analyzer.py`; orchestrator enable uses `GEMINI_PROXY_URL` and API key from config/env.
-4. Add tracked_object_update subscription and feed EventMetadataStore from it only.
+4. ~~Add tracked_object_update subscription and feed EventMetadataStore from it only.~~ **Done.** Per-frame metadata in state; smart crop and score-based selection in ai_analyzer; orchestrator wires get/clear frame_metadata.
 5. Proxy HTTP call and config/env are already wired; optional: save analysis_result.json for Reporter.
 6. Orchestrator hook is done; update README and clean up mock folder when ready.
 7. Daily report: move daily_report_to_proxy.py (e.g. to services/), add config for schedule and report path, define recap storage layout and implement get_previous_day_recaps; implement send_report_to_proxy; schedule at 1am (cron or in-process).

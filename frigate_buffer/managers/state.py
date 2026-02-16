@@ -3,11 +3,53 @@
 import logging
 import threading
 import time
-from typing import Dict, Optional, List
+from typing import Dict, Optional, List, Tuple, Any
 
-from frigate_buffer.models import EventState, EventPhase
+from frigate_buffer.models import EventState, EventPhase, FrameMetadata
 
 logger = logging.getLogger('frigate-buffer')
+
+# Max per-frame metadata entries per event to bound memory
+MAX_FRAME_METADATA_PER_EVENT = 500
+
+
+def _normalize_box(
+    box: Any,
+    frame_width: Optional[int] = None,
+    frame_height: Optional[int] = None,
+) -> Optional[Tuple[float, float, float, float]]:
+    """
+    Normalize box to [ymin, xmin, ymax, xmax] in 0-1 range.
+    Frigate may send [x1, y1, x2, y2] in pixels or normalized.
+    Returns None if box is invalid or cannot be normalized.
+    """
+    if not box or not isinstance(box, (list, tuple)) or len(box) != 4:
+        return None
+    try:
+        a, b, c, d = float(box[0]), float(box[1]), float(box[2]), float(box[3])
+    except (TypeError, ValueError):
+        return None
+    # Assume [x1, y1, x2, y2] (Frigate convention): xmin=a, ymin=b, xmax=c, ymax=d
+    # Convert to [ymin, xmin, ymax, xmax]
+    xmin, ymin = min(a, c), min(b, d)
+    xmax, ymax = max(a, c), max(b, d)
+    if frame_width and frame_height and frame_width > 0 and frame_height > 0:
+        # Pixel coordinates: normalize to 0-1
+        ymin, xmin = ymin / frame_height, xmin / frame_width
+        ymax, xmax = ymax / frame_height, xmax / frame_width
+    else:
+        # If any value > 1, assume pixels but we have no dimensions: use 1920x1080 as fallback
+        if max(xmin, ymin, xmax, ymax) > 1.0:
+            ymin, xmin = ymin / 1080.0, xmin / 1920.0
+            ymax, xmax = ymax / 1080.0, xmax / 1920.0
+    # Clamp to [0, 1]
+    ymin = max(0.0, min(1.0, ymin))
+    xmin = max(0.0, min(1.0, xmin))
+    ymax = max(0.0, min(1.0, ymax))
+    xmax = max(0.0, min(1.0, xmax))
+    if ymax <= ymin or xmax <= xmin:
+        return None
+    return (ymin, xmin, ymax, xmax)
 
 
 class EventStateManager:
@@ -15,6 +57,7 @@ class EventStateManager:
 
     def __init__(self):
         self._events: Dict[str, EventState] = {}
+        self._frame_metadata: Dict[str, List[FrameMetadata]] = {}
         self._lock = threading.RLock()
 
     def create_event(self, event_id: str, camera: str, label: str,
@@ -103,9 +146,50 @@ class EventStateManager:
                 logger.debug(f"Event {event_id} marked ended (clip={has_clip}, snapshot={has_snapshot})")
             return event
 
-    def remove_event(self, event_id: str) -> Optional[EventState]:
-        """Remove event from active tracking."""
+    def add_frame_metadata(
+        self,
+        event_id: str,
+        frame_time: float,
+        box: Any,
+        area: float,
+        score: float,
+        frame_width: Optional[int] = None,
+        frame_height: Optional[int] = None,
+    ) -> bool:
+        """Append per-frame metadata for an event. Box is normalized to [ymin, xmin, ymax, xmax] 0-1. Capped at MAX_FRAME_METADATA_PER_EVENT."""
+        normalized = _normalize_box(box, frame_width, frame_height)
+        if normalized is None and box:
+            logger.debug("Skipping frame metadata: box could not be normalized")
         with self._lock:
+            if event_id not in self._frame_metadata:
+                self._frame_metadata[event_id] = []
+            lst = self._frame_metadata[event_id]
+            if len(lst) >= MAX_FRAME_METADATA_PER_EVENT:
+                lst.pop(0)
+            self._frame_metadata[event_id].append(
+                FrameMetadata(
+                    frame_time=frame_time,
+                    box=normalized if normalized else (0.0, 0.0, 1.0, 1.0),
+                    area=float(area or 0),
+                    score=float(score or 0),
+                )
+            )
+        return True
+
+    def get_frame_metadata(self, event_id: str) -> List[FrameMetadata]:
+        """Return a copy of frame metadata list for the event (or empty list)."""
+        with self._lock:
+            return list(self._frame_metadata.get(event_id, []))
+
+    def clear_frame_metadata(self, event_id: str) -> None:
+        """Remove all frame metadata for the event (e.g. after analysis or on event removal)."""
+        with self._lock:
+            self._frame_metadata.pop(event_id, None)
+
+    def remove_event(self, event_id: str) -> Optional[EventState]:
+        """Remove event from active tracking and clear its frame metadata."""
+        with self._lock:
+            self._frame_metadata.pop(event_id, None)
             removed = self._events.pop(event_id, None)
             if removed:
                 logger.info(f"Removed event from tracking: {event_id}")
