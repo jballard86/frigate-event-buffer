@@ -6,18 +6,61 @@ import os
 import json
 import time
 import logging
+from collections import OrderedDict
 from typing import List, Dict, Optional, Tuple, Any
 
 logger = logging.getLogger('frigate-buffer')
 
+
+def read_timeline_merged(folder_path: str) -> Dict[str, Any]:
+    """
+    Read timeline from folder: merge notification_timeline.json (if present)
+    with notification_timeline_append.jsonl (append-only log). Returns
+    dict with 'event_id' and 'entries' (list).
+    """
+    data = {"event_id": None, "entries": []}
+    base_path = os.path.join(folder_path, "notification_timeline.json")
+    append_path = os.path.join(folder_path, "notification_timeline_append.jsonl")
+    if os.path.exists(base_path):
+        try:
+            with open(base_path, 'r') as f:
+                base = json.load(f)
+            data["event_id"] = base.get("event_id")
+            data["entries"] = list(base.get("entries") or [])
+        except (IOError, json.JSONDecodeError):
+            pass
+    if data["event_id"] is None:
+        folder_name = os.path.basename(folder_path)
+        parts = folder_name.split("_", 1)
+        data["event_id"] = parts[1] if len(parts) > 1 else folder_name
+    if os.path.exists(append_path):
+        try:
+            with open(append_path, 'r') as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        entry = json.loads(line)
+                        data["entries"].append(entry)
+                        if data["event_id"] is None and entry.get("data", {}).get("event_id"):
+                            data["event_id"] = entry["data"]["event_id"]
+                    except json.JSONDecodeError:
+                        continue
+        except IOError:
+            pass
+    return data
+
+
 class EventQueryService:
     """Service for querying events from the filesystem."""
 
-    def __init__(self, storage_path: str, cache_ttl: int = 5):
+    def __init__(self, storage_path: str, cache_ttl: int = 5, event_cache_max: int = 500):
         self.storage_path = storage_path
         self._cache = {}
         self._cache_ttl = cache_ttl
-        self._event_cache = {}  # Cache keyed by folder path
+        self._event_cache: OrderedDict = OrderedDict()  # LRU cache keyed by folder path
+        self._event_cache_max = event_cache_max
 
     def _get_cached(self, key: str) -> Optional[Any]:
         if key in self._cache:
@@ -33,8 +76,9 @@ class EventQueryService:
         }
 
     def _get_event_cached(self, folder_path: str, mtime: float) -> Dict[str, Any]:
-        """Get parsed event data from cache if valid, otherwise parse and cache."""
+        """Get parsed event data from cache if valid, otherwise parse and cache (LRU eviction when over cap)."""
         if folder_path in self._event_cache:
+            self._event_cache.move_to_end(folder_path)
             entry = self._event_cache[folder_path]
             if entry['mtime'] == mtime:
                 return entry['data']
@@ -45,6 +89,8 @@ class EventQueryService:
             'mtime': mtime,
             'data': data
         }
+        if len(self._event_cache) > self._event_cache_max:
+            self._event_cache.popitem(last=False)
         return data
 
     def _parse_event_files(self, folder_path: str) -> Dict[str, Any]:
@@ -72,8 +118,7 @@ class EventQueryService:
             pass
 
         try:
-            with open(os.path.join(folder_path, 'notification_timeline.json'), 'r') as f:
-                data['timeline'] = json.load(f)
+            data['timeline'] = read_timeline_merged(folder_path)
         except (FileNotFoundError, IOError, json.JSONDecodeError):
             pass
 

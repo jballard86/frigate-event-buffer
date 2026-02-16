@@ -57,19 +57,23 @@ class DownloadService:
         return resp
 
     def download_snapshot(self, event_id: str, folder_path: str) -> bool:
-        """Download snapshot from Frigate API."""
+        """Download snapshot from Frigate API (streamed to file to avoid loading full response into memory)."""
         url = f"{self.frigate_url}/api/events/{event_id}/snapshot.jpg"
         logger.debug(f"Downloading snapshot from {url}")
 
         try:
-            response = requests.get(url, timeout=30)
+            response = requests.get(url, timeout=30, stream=True)
             response.raise_for_status()
 
             snapshot_path = os.path.join(folder_path, "snapshot.jpg")
+            bytes_downloaded = 0
             with open(snapshot_path, 'wb') as f:
-                f.write(response.content)
+                for chunk in response.iter_content(chunk_size=65536):
+                    if chunk:
+                        f.write(chunk)
+                        bytes_downloaded += len(chunk)
 
-            logger.info(f"Downloaded snapshot for {event_id} ({len(response.content)} bytes)")
+            logger.info(f"Downloaded snapshot for {event_id} ({bytes_downloaded} bytes)")
             return True
         except requests.exceptions.Timeout:
             logger.error(f"Timeout downloading snapshot for {event_id}")

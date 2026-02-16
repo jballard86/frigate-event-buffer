@@ -166,7 +166,7 @@ class StateAwareOrchestrator:
         self._request_count = 0
         self._request_count_lock = threading.Lock()
 
-        # Cache for storage stats
+        # Cache for storage stats (full recompute at most every 30 min)
         self._cached_storage_stats = {
             'clips': 0,
             'snapshots': 0,
@@ -174,6 +174,8 @@ class StateAwareOrchestrator:
             'total': 0,
             'by_camera': {}
         }
+        self._cached_storage_stats_time: Optional[float] = None
+        self._storage_stats_max_age_seconds = 30 * 60  # 30 minutes
 
         # Last cleanup tracking delegated to lifecycle service via properties
 
@@ -644,10 +646,15 @@ class StateAwareOrchestrator:
         logger.info(f"API stats (5m): {count} requests, {active} active events, MQTT {'connected' if self.mqtt_wrapper.mqtt_connected else 'disconnected'}")
 
     def _update_storage_stats(self):
-        """Update cached storage stats (background task)."""
+        """Update cached storage stats (background task). Skip if cache is fresh (< 30 min)."""
+        now = time.time()
+        if self._cached_storage_stats_time is not None and (now - self._cached_storage_stats_time) < self._storage_stats_max_age_seconds:
+            logger.debug("Skipping storage stats update (cache still fresh)")
+            return
         logger.debug("Updating storage stats...")
         try:
             self._cached_storage_stats = self.file_manager.compute_storage_stats()
+            self._cached_storage_stats_time = now
             logger.debug("Storage stats updated")
         except Exception as e:
             logger.error(f"Failed to update storage stats: {e}")

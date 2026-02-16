@@ -144,26 +144,13 @@ class FileManager:
             return False
 
     def append_timeline_entry(self, folder_path: str, entry: dict) -> None:
-        """Append an entry to notification_timeline.json in the event folder."""
-        timeline_path = os.path.join(folder_path, "notification_timeline.json")
+        """Append an entry to the event folder timeline (append-only JSONL for efficiency)."""
         entry = dict(entry)
         entry["ts"] = entry.get("ts") or datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+        append_path = os.path.join(folder_path, "notification_timeline_append.jsonl")
         try:
-            data = {"event_id": None, "entries": []}
-            if os.path.exists(timeline_path):
-                with open(timeline_path, 'r') as f:
-                    data = json.load(f)
-            if not data.get("event_id"):
-                folder_name = os.path.basename(folder_path)
-                parts = folder_name.split("_", 1)
-                if len(parts) > 1:
-                    data["event_id"] = parts[1]
-                elif entry.get("data", {}).get("event_id"):
-                    data["event_id"] = entry["data"]["event_id"]
-            data["entries"] = data.get("entries", [])
-            data["entries"].append(entry)
-            with open(timeline_path, 'w') as f:
-                json.dump(data, f, indent=2)
+            with open(append_path, 'a') as f:
+                f.write(json.dumps(entry) + '\n')
         except Exception as e:
             logger.debug(f"Failed to append timeline entry: {e}")
 

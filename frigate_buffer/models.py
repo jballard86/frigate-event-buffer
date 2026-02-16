@@ -60,7 +60,7 @@ class NotificationEvent(Protocol):
     image_url_override: Optional[str]
 
 
-@dataclass
+@dataclass(slots=True)
 class EventState:
     """Represents the current state of a tracked Frigate event."""
     event_id: str
@@ -107,7 +107,7 @@ def _generate_consolidated_id(start_ts: float) -> tuple:
     return full_id, folder_name
 
 
-@dataclass
+@dataclass(slots=True)
 class ConsolidatedEvent:
     """A consolidated event grouping multiple Frigate events (same real-world activity)."""
 

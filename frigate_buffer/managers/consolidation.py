@@ -3,7 +3,7 @@
 import logging
 import threading
 import time
-from typing import Dict, Optional, List, TYPE_CHECKING
+from typing import Dict, Optional, List, Tuple, TYPE_CHECKING
 
 from frigate_buffer.models import ConsolidatedEvent, _generate_consolidated_id
 
@@ -181,6 +181,11 @@ class ConsolidatedEventManager:
     def get_active_consolidated_ids(self) -> List[str]:
         with self._lock:
             return list(self._events.keys())
+
+    def get_active_ce_folders(self) -> Tuple[str, ...]:
+        """Return folder names of active consolidated events (for cleanup protection). Avoids building full CE list."""
+        with self._lock:
+            return tuple(ce.folder_name for ce in self._events.values())
 
     def get_all(self) -> List[ConsolidatedEvent]:
         with self._lock:
