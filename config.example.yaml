@@ -44,6 +44,9 @@ settings:
   # How often to run cleanup (in hours)
   cleanup_interval_hours: 1
 
+  # How often to check and remove completed exports from Frigate (minutes)
+  export_watchdog_interval_minutes: 2
+
   # FFmpeg transcode timeout in seconds (kills hung processes)
   ffmpeg_timeout_seconds: 60
 

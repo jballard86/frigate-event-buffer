@@ -143,6 +143,10 @@
     <strong>Event:</strong> {{ event_id }} &bull; <strong>Camera:</strong> {{ camera }}
     <br>
     Data received from Frigate, sent to Frigate API, responses, and data sent to Home Assistant.
+    {% if export_duration_seconds is not none and export_file_list %}
+    <br>
+    Export took {{ "%.1f"|format(export_duration_seconds) }}s. Files: {{ export_file_list | join(", ") }}.
+    {% endif %}
   </div>
 
   {% if entries %}
