@@ -288,12 +288,15 @@ def create_app(orchestrator):
             for sub in os.listdir(folder_path):
                 sub_fp = os.path.join(folder_path, sub)
                 if os.path.isdir(sub_fp) and not sub.startswith('.'):
-                    for sf in ('clip.mp4', 'snapshot.jpg', 'metadata.json', 'summary.txt', 'review_summary.md'):
+                    for sf in ('clip.mp4', 'snapshot.jpg', 'metadata.json', 'summary.txt', 'review_summary.md', 'ai_analysis_debug.zip'):
                         if os.path.isfile(os.path.join(sub_fp, sf)):
                             event_files.append(f"{sub}/{sf}")
             event_files.sort()
         except OSError:
             pass
+        zip_entries = [f for f in event_files if f == 'ai_analysis_debug.zip' or f.endswith('/ai_analysis_debug.zip')]
+        has_ai_analysis_zip = bool(zip_entries)
+        first_ai_analysis_zip_path = zip_entries[0] if zip_entries else None
 
         # Export duration and clip files for intro line
         export_duration_seconds = None
@@ -320,7 +323,9 @@ def create_app(orchestrator):
             entries=entries,
             event_files=event_files,
             export_duration_seconds=export_duration_seconds,
-            export_file_list=export_file_list
+            export_file_list=export_file_list,
+            has_ai_analysis_zip=has_ai_analysis_zip,
+            first_ai_analysis_zip_path=first_ai_analysis_zip_path
         )
 
     @app.route('/files/<path:filename>')
