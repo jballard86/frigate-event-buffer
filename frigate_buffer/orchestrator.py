@@ -94,7 +94,12 @@ class StateAwareOrchestrator:
                 def _run():
                     if not self.ai_analyzer:
                         return
-                    result = self.ai_analyzer.analyze_clip(event_id, clip_path)
+                    event = self.state_manager.get_event(event_id)
+                    event_start_ts = event.created_at if event else 0
+                    event_end_ts = (event.end_time or event.created_at) if event else 0
+                    result = self.ai_analyzer.analyze_clip(
+                        event_id, clip_path, event_start_ts, event_end_ts
+                    )
                     if result:
                         self._handle_analysis_result(event_id, result)
                 threading.Thread(target=_run, daemon=True).start()
