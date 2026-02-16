@@ -12,6 +12,7 @@ This folder holds a **standalone mock** of the multi-cam frame extractor. It is 
 - **Contents:** `multi_cam_frame_extracter.py` (mock), `daily_report_to_proxy.py` (mock), `multi_cam_system_prompt.txt`, `report_prompt.txt`, `multi_cam_frame_extractor_input_output.md` (payload spec), this plan, and README.
 - **Main project:** Uses `frigate_buffer/services/ai_analyzer.py` for clip analysis; this mock folder is reference only.
 - **Step 1 (Config) — [x] Done:** Schema and load_config in `frigate_buffer/config.py` and `config.example.yaml` support `multi_cam` and `gemini_proxy`; flat keys (e.g. `MAX_MULTI_CAM_FRAMES_MIN`, `GEMINI_PROXY_URL`) with No Google Fallback and Single API Key. See "What was done (Step 1)" and "Notes for future AI" below.
+- **Step 2 (Clip paths and Clip timing) — [x] Done:** Smart seeking in `ai_analyzer.py` (buffer_offset, seek, limit, stride); orchestrator looks up event and passes timestamps to `analyze_clip`; lifecycle callback stays `(event_id, clip_path)`. See "What was done (Step 2)" below.
 
 ---
 
@@ -23,7 +24,7 @@ This folder holds a **standalone mock** of the multi-cam frame extractor. It is 
 - **Single API Key:** Use `GEMINI_API_KEY` only for proxy authentication. Do not create a separate proxy-specific API key config; the same key is used for the Gemini proxy (and any future proxy usage).
 - **Implemented in** **frigate_buffer/config.py**: Optional schema `multi_cam` (max_multi_cam_frames_min, max_multi_cam_frames_sec, motion_threshold_px, crop_width, crop_height, multi_cam_system_prompt_file) and `gemini_proxy` (url, model, temperature, top_p, frequency_penalty, presence_penalty). Flattened to flat keys; default proxy URL `""`; env override `GEMINI_PROXY_URL`; API key from `GEMINI_API_KEY` only. **config.example.yaml** has commented `multi_cam:` and `gemini_proxy:` blocks.
 
-### 2. Clip paths and Clip timing (vid_start)
+### 2. Clip paths and Clip timing (vid_start) — [x] Completed
 
 - **Reasoning:** We cannot verify analysis accuracy if we are looking at the wrong part of the video (pre-capture buffer). Path resolution and clip timing must be correct in **ai_analyzer.py** immediately after config is available, before adding complex multi-cam logic.
 
@@ -60,7 +61,7 @@ This folder holds a **standalone mock** of the multi-cam frame extractor. It is 
 
 ### 6. Orchestrator integration (optional) — [x] Completed
 
-- **Done:** The main app triggers analysis from the orchestrator/lifecycle when a clip is ready. `GeminiAnalysisService.analyze_clip(event_id, clip_path)` is called in a background thread; no separate process or MQTT bridge.
+- **Done:** The main app triggers analysis from the orchestrator/lifecycle when a clip is ready. The orchestrator looks up the event and calls `GeminiAnalysisService.analyze_clip(event_id, clip_path, event_start_ts, event_end_ts)` in a background thread; no separate process or MQTT bridge.
 
 ### 7. Daily report script (daily_report_to_proxy.py)
 
@@ -87,10 +88,17 @@ This folder holds a **standalone mock** of the multi-cam frame extractor. It is 
 
 ---
 
+## What was done (Step 2)
+
+- **frigate_buffer/services/ai_analyzer.py:** Smart seeking: `__init__` reads `EXPORT_BUFFER_BEFORE` (buffer_offset), `MAX_MULTI_CAM_FRAMES_SEC`, `MAX_MULTI_CAM_FRAMES_MIN`. `analyze_clip(event_id, clip_path, event_start_ts=0, event_end_ts=0)`; when `event_start_ts > 0`, `_extract_frames` seeks to `fps * buffer_offset`, limits to event duration, and samples at `max_frames_sec` (stride). Paths unchanged; analyzer trusts path from caller.
+- **frigate_buffer/orchestrator.py:** In `_on_clip_ready_for_analysis(event_id, clip_path)`, the orchestrator looks up `event = self.state_manager.get_event(event_id)` and passes `event_start_ts`/`event_end_ts` (from `event.created_at`, `event.end_time or event.created_at`) to `analyze_clip`. Lifecycle callback signature remains `(event_id, clip_path)`; no changes to **lifecycle.py**.
+
+---
+
 ## Notes for future AI (next steps)
 
-- **Step 2 (Clip paths and Clip timing):** Do this **before** moving the mock service or adding MQTT. Fix **ai_analyzer.py** (and any clip consumer) so clip paths match the main app (single-event and consolidated layouts) and **vid_start** / segment is correct (use export_buffer_before/export_buffer_after or export response; see frigate_buffer/services/download.py and lifecycle.py). Without this, analysis can run on the wrong part of the video (pre-capture buffer).
-- **Step 3:** When moving multi_cam_frame_extracter into frigate_buffer/services, have it read from the **flat** config keys (e.g. `config['MAX_MULTI_CAM_FRAMES_MIN']`, `config['GEMINI_PROXY_URL']`). The mock uses a flat dict; no adapter needed if keys match. For proxy API key, use `config['GEMINI']['api_key']` (which is already filled from `GEMINI_API_KEY`).
+- **Step 2 (Clip paths and Clip timing):** Done. Smart seeking and timestamp wiring are in place; orchestrator does the event lookup so lifecycle stays decoupled.
+- **Step 3:** When moving multi_cam_frame_extracter into frigate_buffer/services, have it read from the **flat** config keys (e.g. `config['MAX_MULTI_CAM_FRAMES_MIN']`, `config['GEMINI_PROXY_URL']`, `config['EXPORT_BUFFER_BEFORE']`). The mock uses a flat dict; no adapter needed if keys match. For proxy API key, use `config['GEMINI']['api_key']` (which is already filled from `GEMINI_API_KEY`).
 - **Config keys reference:** Multi-cam: `MAX_MULTI_CAM_FRAMES_MIN`, `MAX_MULTI_CAM_FRAMES_SEC`, `MOTION_THRESHOLD_PX`, `CROP_WIDTH`, `CROP_HEIGHT`, `MULTI_CAM_SYSTEM_PROMPT_FILE`. Gemini proxy: `GEMINI_PROXY_URL`, `GEMINI_PROXY_MODEL`, `GEMINI_PROXY_TEMPERATURE`, `GEMINI_PROXY_TOP_P`, `GEMINI_PROXY_FREQUENCY_PENALTY`, `GEMINI_PROXY_PRESENCE_PENALTY`. Single API key: `config['GEMINI']['api_key']` or env `GEMINI_API_KEY`.
 
 ---
@@ -98,7 +106,7 @@ This folder holds a **standalone mock** of the multi-cam frame extractor. It is 
 ## Order of work
 
 1. ~~Config schema and load_config~~ **Done.** No Google Fallback, Single API Key (`GEMINI_API_KEY` only).
-2. Clip paths and clip timing (vid_start) in **ai_analyzer.py** so analysis uses correct segment and paths; required before multi-cam logic.
+2. ~~Clip paths and clip timing (vid_start) in **ai_analyzer.py**~~ **Done.** Smart seeking (buffer_offset, seek, limit, stride); orchestrator looks up event and passes timestamps; lifecycle unchanged.
 3. Move multi_cam_frame_extracter into frigate_buffer/services and make it use main config (flat keys above).
 4. Add tracked_object_update subscription and feed EventMetadataStore from it only.
 5. Proxy HTTP call and config/env are already wired; optional: save analysis_result.json for Reporter.

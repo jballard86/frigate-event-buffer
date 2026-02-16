@@ -38,6 +38,10 @@ class GeminiAnalysisService:
         self._enabled = bool(gemini.get('enabled', False))
         self._max_frames = int(config.get('FINAL_REVIEW_IMAGE_COUNT', DEFAULT_MAX_FRAMES) or DEFAULT_MAX_FRAMES)
         self._prompt_template: Optional[str] = None
+        # Smart seeking: skip pre-capture buffer and limit to event segment
+        self.buffer_offset = config.get('EXPORT_BUFFER_BEFORE', 5)
+        self.max_frames_sec = config.get('MAX_MULTI_CAM_FRAMES_SEC', 2)
+        self.max_frames_min = config.get('MAX_MULTI_CAM_FRAMES_MIN', 45)
 
     def _load_system_prompt_template(self) -> str:
         if self._prompt_template is not None:
@@ -89,8 +93,13 @@ class GeminiAnalysisService:
             pass
         return "unknown"
 
-    def _extract_frames(self, clip_path: str) -> List[Any]:
-        """Extract frames from video at regular time intervals. Returns list of numpy arrays (BGR)."""
+    def _extract_frames(
+        self,
+        clip_path: str,
+        event_start_ts: float = 0,
+        event_end_ts: float = 0,
+    ) -> List[Any]:
+        """Extract frames from video. With event_start_ts > 0, seeks past pre-capture buffer and limits to event segment; samples at max_frames_sec. Returns list of numpy arrays (BGR)."""
         frames = []
         cap = cv2.VideoCapture(clip_path)
         if not cap.isOpened():
@@ -99,8 +108,30 @@ class GeminiAnalysisService:
         try:
             fps = cap.get(cv2.CAP_PROP_FPS) or 1.0
             total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+
+            if event_start_ts > 0 and total_frames > 0:
+                # Smart seeking: skip first buffer_offset seconds (pre-capture), then sample until event end
+                start_frame = int(fps * self.buffer_offset)
+                event_duration_sec = (event_end_ts - event_start_ts) if event_end_ts > event_start_ts else 0
+                end_frame = (
+                    start_frame + int(fps * event_duration_sec)
+                    if event_duration_sec > 0
+                    else total_frames
+                )
+                end_frame = min(end_frame, total_frames)
+                start_frame = min(start_frame, end_frame)
+                step = max(1, int(fps / self.max_frames_sec)) if self.max_frames_sec > 0 else 1
+                frame_idx = start_frame
+                while frame_idx <= end_frame and len(frames) < self._max_frames:
+                    cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
+                    ret, frame = cap.read()
+                    if not ret:
+                        break
+                    frames.append(frame)
+                    frame_idx += step
+                return frames
+
             if total_frames <= 0:
-                # Fallback: read until no more frames
                 while len(frames) < self._max_frames:
                     ret, frame = cap.read()
                     if not ret:
@@ -193,9 +224,16 @@ class GeminiAnalysisService:
             logger.exception("Failed to parse proxy JSON: %s", e)
             return None
 
-    def analyze_clip(self, event_id: str, clip_path: str) -> Optional[Dict[str, Any]]:
+    def analyze_clip(
+        self,
+        event_id: str,
+        clip_path: str,
+        event_start_ts: float = 0,
+        event_end_ts: float = 0,
+    ) -> Optional[Dict[str, Any]]:
         """
         Extract frames from clip_path, call proxy, return analysis metadata.
+        When event_start_ts > 0, seeks past pre-capture buffer and limits to event segment.
         Called from orchestrator (e.g. in a background thread). Returns None if disabled, path missing, or proxy failure.
         Does NOT publish to MQTT; caller is responsible for persisting and notifying.
         """
@@ -209,7 +247,7 @@ class GeminiAnalysisService:
             logger.warning("Clip not found: %s", clip_path)
             return None
         try:
-            frames = self._extract_frames(clip_path)
+            frames = self._extract_frames(clip_path, event_start_ts, event_end_ts)
             if not frames:
                 logger.warning("No frames extracted from %s", clip_path)
                 return None
