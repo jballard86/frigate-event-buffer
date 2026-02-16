@@ -32,6 +32,7 @@ from datetime import datetime
 from collections import defaultdict
 
 from frigate_buffer.services import crop_utils
+from frigate_buffer.managers.file import write_stitched_frame, create_ai_analysis_zip
 
 # --- Configuration & Setup ---
 logging.basicConfig(
@@ -63,6 +64,8 @@ DEFAULT_CONFIG = {   # should be configurable in config.yaml/config.example.yaml
     "gemini_proxy_top_p": 1,
     "gemini_proxy_frequency_penalty": 0,
     "gemini_proxy_presence_penalty": 0,
+    "save_ai_frames": True,
+    "create_ai_analysis_zip": True,
 }
 
 def load_config():
@@ -201,13 +204,12 @@ def process_multi_cam_event(main_event_id, linked_event_ids):
     start_time = min(timestamps)
     end_time = max(timestamps)
     
-    # 3. Setup Output
-    # Place folder INSIDE the main event's directory as requested
+    # 3. Setup Output: ai_frame_analysis/frames (stitched color+B/W per frame)
     main_clip_path = video_paths.get(main_event_id)
     if main_clip_path:
         base_dir = os.path.dirname(main_clip_path)
-        output_dir = os.path.join(base_dir, "multi_cam_frames")
-        os.makedirs(output_dir, exist_ok=True)
+        frames_dir = os.path.join(base_dir, "ai_frame_analysis", "frames")
+        os.makedirs(frames_dir, exist_ok=True)
     else:
         logger.error("Main event clip missing, cannot determine output folder.")
         return
@@ -282,20 +284,40 @@ def process_multi_cam_event(main_event_id, linked_event_ids):
 
         current_time += step
 
-    # 5. Intertwined output: sort by timestamp, add overlay with global seq, save
+    # 5. Intertwined output: sort by timestamp, add overlay with global seq, save stitched (color top + B/W bottom)
     collected.sort(key=lambda x: (x[0], x[1]))
     total = len(collected)
+    save_frames = bool(CONF.get("save_ai_frames", True))
+    create_zip = bool(CONF.get("create_ai_analysis_zip", True))
+    manifest_entries = []
     for seq, (ts, camera_name, frame) in enumerate(collected, start=1):
         time_str = datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S")
         crop_utils.draw_timestamp_overlay(frame, time_str, camera_name, seq, total)
         time_part = datetime.fromtimestamp(ts).strftime("%H-%M-%S")
         fname = f"frame_{seq:03d}_{time_part}_{camera_name}.jpg"
-        cv2.imwrite(os.path.join(output_dir, fname), frame)
+        out_path = os.path.join(frames_dir, fname)
+        if save_frames and write_stitched_frame(frame, out_path):
+            manifest_entries.append({
+                "filename": fname,
+                "timestamp_sec": ts,
+                "camera": camera_name,
+                "seq": seq,
+                "total": total,
+            })
+    if manifest_entries:
+        manifest_path = os.path.join(base_dir, "ai_frame_analysis", "manifest.json")
+        try:
+            with open(manifest_path, "w", encoding="utf-8") as mf:
+                json.dump(manifest_entries, mf, indent=2)
+        except OSError as e:
+            logger.warning("Failed to write ai_frame_analysis manifest: %s", e)
+    if create_zip:
+        create_ai_analysis_zip(base_dir)
 
     for cap in caps.values():
         cap.release()
     metadata_store.cleanup(all_events)
-    logger.info("Multi-Cam Recap Complete. Saved %d frames to %s", total, output_dir)
+    logger.info("Multi-Cam Recap Complete. Saved %d frames to %s", total, frames_dir)
 
 # --- MQTT Loop ---
 

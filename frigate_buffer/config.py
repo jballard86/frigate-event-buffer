@@ -51,6 +51,8 @@ CONFIG_SCHEMA = Schema({
         Optional('export_buffer_after'): int,
         Optional('final_review_image_count'): int,
         Optional('gemini_max_concurrent_analyses'): int,
+        Optional('save_ai_frames'): bool,
+        Optional('create_ai_analysis_zip'): bool,
     },
     Optional('ha'): {
         Optional('base_url'): str,
@@ -129,6 +131,8 @@ def load_config() -> dict:
         'EXPORT_BUFFER_AFTER': 30,
         'FINAL_REVIEW_IMAGE_COUNT': 20,
         'GEMINI_MAX_CONCURRENT_ANALYSES': 3,
+        'SAVE_AI_FRAMES': True,
+        'CREATE_AI_ANALYSIS_ZIP': True,
 
         # Optional HA REST API (for stats page token/cost display)
         'HA_URL': None,
@@ -227,6 +231,8 @@ def load_config() -> dict:
                     config['EXPORT_BUFFER_AFTER'] = settings.get('export_buffer_after', config['EXPORT_BUFFER_AFTER'])
                     config['FINAL_REVIEW_IMAGE_COUNT'] = settings.get('final_review_image_count', config.get('FINAL_REVIEW_IMAGE_COUNT', 20))
                     config['GEMINI_MAX_CONCURRENT_ANALYSES'] = settings.get('gemini_max_concurrent_analyses', config.get('GEMINI_MAX_CONCURRENT_ANALYSES', 3))
+                    config['SAVE_AI_FRAMES'] = settings.get('save_ai_frames', config.get('SAVE_AI_FRAMES', True))
+                    config['CREATE_AI_ANALYSIS_ZIP'] = settings.get('create_ai_analysis_zip', config.get('CREATE_AI_ANALYSIS_ZIP', True))
 
                 if 'network' in yaml_config:
                     network = yaml_config['network']
@@ -314,6 +320,12 @@ def load_config() -> dict:
     config['EXPORT_BUFFER_AFTER'] = int(os.getenv('EXPORT_BUFFER_AFTER', str(config['EXPORT_BUFFER_AFTER'])))
     config['HA_URL'] = os.getenv('HA_URL') or config['HA_URL']
     config['HA_TOKEN'] = os.getenv('HA_TOKEN') or config['HA_TOKEN']
+    _save_ai = os.getenv('SAVE_AI_FRAMES')
+    if _save_ai is not None:
+        config['SAVE_AI_FRAMES'] = str(_save_ai).lower() in ('true', '1', 'yes')
+    _create_zip = os.getenv('CREATE_AI_ANALYSIS_ZIP')
+    if _create_zip is not None:
+        config['CREATE_AI_ANALYSIS_ZIP'] = str(_create_zip).lower() in ('true', '1', 'yes')
 
     # Gemini env overrides (api_key for secrets). Single API Key: GEMINI_API_KEY only.
     config['GEMINI'] = dict(config.get('GEMINI') or {})

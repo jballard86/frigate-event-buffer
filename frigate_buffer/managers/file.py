@@ -5,13 +5,102 @@ import re
 import json
 import time
 import shutil
+import zipfile
 import logging
 from datetime import datetime
-from typing import List, Optional
+from typing import List, Optional, Any, Tuple
 
 from frigate_buffer.models import EventState
 
 logger = logging.getLogger('frigate-buffer')
+
+# Optional imports for AI frame stitched write (color + B/W)
+try:
+    import cv2
+    import numpy as np
+    _CV2_AVAILABLE = True
+except ImportError:
+    _CV2_AVAILABLE = False
+
+
+def write_stitched_frame(frame_bgr: Any, filepath: str) -> bool:
+    """Write a single image as color (top) + B/W (bottom) stitched vertically.
+    frame_bgr: BGR numpy array from cv2. Returns True on success."""
+    if not _CV2_AVAILABLE:
+        logger.warning("cv2/numpy not available, cannot write stitched frame")
+        return False
+    try:
+        gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
+        bw_bgr = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+        stitched = np.vstack([frame_bgr, bw_bgr])
+        os.makedirs(os.path.dirname(filepath), exist_ok=True)
+        return cv2.imwrite(filepath, stitched)
+    except Exception as e:
+        logger.warning("Failed to write stitched frame %s: %s", filepath, e)
+        return False
+
+
+def write_ai_frame_analysis_single_cam(
+    event_dir: str,
+    frames_with_time: List[Tuple[Any, float]],
+    camera: str,
+    write_manifest: bool = True,
+    create_zip_flag: bool = True,
+    save_frames: bool = True,
+) -> None:
+    """Write ai_frame_analysis/frames (stitched color+B/W per frame), optional manifest, and optional zip.
+    Only runs when save_frames is True; create_zip_flag controls zip creation after frames."""
+    if not save_frames or not frames_with_time:
+        return
+    if not _CV2_AVAILABLE:
+        logger.warning("cv2/numpy not available, skipping AI frame analysis write")
+        return
+    frames_dir = os.path.join(event_dir, "ai_frame_analysis", "frames")
+    os.makedirs(frames_dir, exist_ok=True)
+    total = len(frames_with_time)
+    manifest_entries = []
+    for seq, (frame, frame_time_sec) in enumerate(frames_with_time, start=1):
+        fname = f"frame_{seq:03d}.jpg"
+        out_path = os.path.join(frames_dir, fname)
+        if write_stitched_frame(frame, out_path):
+            manifest_entries.append({
+                "filename": fname,
+                "timestamp_sec": frame_time_sec,
+                "camera": camera,
+                "seq": seq,
+                "total": total,
+            })
+    if write_manifest and manifest_entries:
+        manifest_path = os.path.join(event_dir, "ai_frame_analysis", "manifest.json")
+        try:
+            with open(manifest_path, "w", encoding="utf-8") as f:
+                json.dump(manifest_entries, f, indent=2)
+        except OSError as e:
+            logger.warning("Failed to write ai_frame_analysis manifest: %s", e)
+    if create_zip_flag:
+        create_ai_analysis_zip(event_dir)
+
+
+def create_ai_analysis_zip(event_dir: str) -> None:
+    """Create event_dir/ai_analysis_debug.zip containing ai_frame_analysis/ and analysis_result.json."""
+    zip_path = os.path.join(event_dir, "ai_analysis_debug.zip")
+    analysis_root = os.path.join(event_dir, "analysis_result.json")
+    ai_dir = os.path.join(event_dir, "ai_frame_analysis")
+    if not os.path.isdir(ai_dir):
+        logger.debug("No ai_frame_analysis dir, skipping zip")
+        return
+    try:
+        with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+            for root, _dirs, files in os.walk(ai_dir):
+                for f in files:
+                    abspath = os.path.join(root, f)
+                    arcname = os.path.relpath(abspath, event_dir)
+                    zf.write(abspath, arcname)
+            if os.path.isfile(analysis_root):
+                zf.write(analysis_root, "analysis_result.json")
+        logger.debug("Created %s", zip_path)
+    except OSError as e:
+        logger.warning("Failed to create ai_analysis_debug.zip: %s", e)
 
 
 class FileManager:

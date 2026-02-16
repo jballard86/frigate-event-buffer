@@ -15,6 +15,7 @@ from datetime import datetime
 from typing import Optional, List, Dict, Any, Sequence
 
 from frigate_buffer.models import FrameMetadata
+from frigate_buffer.managers.file import write_ai_frame_analysis_single_cam
 
 from frigate_buffer.services import crop_utils
 
@@ -598,6 +599,17 @@ class GeminiAnalysisService:
             result = self.send_to_proxy(system_prompt, frames)
             if result and isinstance(result, dict):
                 self._save_analysis_result(event_id, clip_path, result)
+                event_dir = os.path.dirname(os.path.abspath(clip_path))
+                save_frames = bool(self.config.get("SAVE_AI_FRAMES", True))
+                create_zip = bool(self.config.get("CREATE_AI_ANALYSIS_ZIP", True))
+                write_ai_frame_analysis_single_cam(
+                    event_dir,
+                    frames_with_time,
+                    camera,
+                    write_manifest=True,
+                    create_zip_flag=create_zip,
+                    save_frames=save_frames,
+                )
             return result
         except Exception as e:
             logger.exception("Analyze clip failed for %s: %s", event_id, e)
