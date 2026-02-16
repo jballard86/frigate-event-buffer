@@ -1,0 +1,5 @@
+---
+alwaysApply: true
+---
+
+Dependency Awareness: When modifying logic, check @pyproject.toml to ensure new imports are compatible with existing dependencies.

@@ -19,8 +19,8 @@ logger = logging.getLogger('frigate-buffer')
 
 def create_app(orchestrator):
     """Create Flask app with all endpoints. Routes close over orchestrator."""
-    _template_dir = os.path.join(os.path.dirname(__file__), '..', 'templates')
-    _static_dir = os.path.join(os.path.dirname(__file__), '..', 'static')
+    _template_dir = os.path.join(os.path.dirname(__file__), 'templates')
+    _static_dir = os.path.join(os.path.dirname(__file__), 'static')
     app = Flask(__name__, template_folder=_template_dir, static_folder=_static_dir)
 
     storage_path = orchestrator.config['STORAGE_PATH']

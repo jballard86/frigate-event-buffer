@@ -32,12 +32,12 @@ RUN apt-get update && \
 
 WORKDIR /app
 
-# Copy and install dependencies
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# Copy project and install package (src layout)
+COPY pyproject.toml .
+COPY src/ ./src/
+RUN pip install --no-cache-dir -e .
 
-# Copy application package and example config
-COPY frigate_buffer/ ./frigate_buffer/
+# Example config
 COPY config.example.yaml .
 
 # Create storage directory
