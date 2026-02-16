@@ -106,7 +106,7 @@ The application is organized as a Python package `frigate_buffer/`. Paths below 
 | `web/server.py` | Flask app factory `create_app(orchestrator)`. Routes for player, events, files, stats, daily review, API. |
 | `templates/` | Jinja2 templates (player, stats, daily review, timeline). Single location under `frigate_buffer/`; used by Flask at runtime. |
 | `static/` | Static assets (marked.min.js, purify.min.js). Located under `frigate_buffer/`. |
-| `Dockerfile` | Builds from `frigate_buffer/` and runs `python -m frigate_buffer.main`. |
+| `Dockerfile` | Builds from Python 3.10 slim and `frigate_buffer/`; runs `python -m frigate_buffer.main`. |
 | `docker-compose.example.yaml` | Template for Docker Compose — local build or token pull from private GitHub. |
 | `config.example.yaml` | Example configuration for cameras, event_filters (Smart Zone Filtering), settings, network, optional HA integration. |
 | `tests/` | Unit tests (`test_*.py`). Run with `python -m unittest discover -s tests -p "test_*.py" -v`. See [Tests](#tests). |
@@ -139,7 +139,7 @@ curl http://localhost:5055/status
 
 ### Running without Docker
 
-From the project root, install dependencies (see `requirements.txt`; requires `paho-mqtt>=2.0.0` for MQTT), then run:
+Requires **Python 3.10+**. From the project root, install dependencies (see `requirements.txt`; requires `paho-mqtt>=2.0.0` for MQTT), then run:
 
 ```bash
 pip install -r requirements.txt
