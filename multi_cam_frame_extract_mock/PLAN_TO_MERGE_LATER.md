@@ -62,7 +62,7 @@ This folder holds a **standalone mock** of the multi-cam frame extractor. It is 
 
 - **Done:** The main app triggers analysis from the orchestrator/lifecycle when a clip is ready. The orchestrator looks up the event and calls `GeminiAnalysisService.analyze_clip(event_id, clip_path, event_start_ts, event_end_ts)` in a background thread; no separate process or MQTT bridge.
 
-### 7. Daily report script (daily_report_to_proxy.py)
+### 7. Daily report script (daily_report_to_proxy.py) — [x] Completed
 
 - **Purpose:** At 1am (configurable), compile all multi-cam recap responses from the previous calendar day and send them to the Gemini proxy to produce one AI daily report.
 - **Prompt:** Load from **report_prompt.txt** (same dir or config path); edit file to change report style.
@@ -119,12 +119,24 @@ This folder holds a **standalone mock** of the multi-cam frame extractor. It is 
 
 ---
 
+## What was done (Step 7)
+
+- **frigate_buffer/services/ai_analyzer.py:** Added **send_text_prompt(system_prompt, user_prompt)** — OpenAI-style POST with text-only messages (no images); same `GEMINI_PROXY_URL` and `GEMINI_API_KEY`; returns raw response content string (e.g. Markdown) or `None` on failure.
+- **frigate_buffer/services/daily_reporter.py:** New **DailyReporterService**. **generate_report(target_date)** scans `STORAGE_PATH` for `analysis_result.json` in event folders (single: `camera/timestamp_eventid/`; consolidated: `events/timestamp_uuid/camera/`), filters by folder-date, aggregates lines `[{time}] {title}: {shortSummary} (Threat: {level})`, loads report prompt template (default `frigate_buffer/services/report_prompt.txt` or `REPORT_PROMPT_FILE`), replaces `{date}`, `{event_list}`, and optional mock-style placeholders, calls **ai_analyzer.send_text_prompt**, writes Markdown to **{STORAGE_PATH}/daily_reports/{target_date}_report.md**.
+- **frigate_buffer/services/report_prompt.txt:** Default template with `{date}` and `{event_list}` (and optional extended placeholders for compatibility).
+- **frigate_buffer/config.py:** Schema and load_config: **DAILY_REPORT_SCHEDULE_HOUR** (default 1), **REPORT_PROMPT_FILE** (default ""); env override `DAILY_REPORT_SCHEDULE_HOUR`.
+- **frigate_buffer/orchestrator.py:** **DailyReporterService** created when `ai_analyzer` is enabled; **\_daily_report_job** runs at **DAILY_REPORT_SCHEDULE_HOUR** (default 1am) for yesterday; schedule registered in **\_run_scheduler**.
+- **Tests:** **tests/test_ai_analyzer.py** — send_text_prompt: success returns content, empty/5xx/missing config return None. **tests/test_daily_reporter.py** — scan (single + consolidated folder date), aggregate format, prompt replacement, save to daily_reports, edge (no events, proxy None). No code changes in mock directory except this plan doc.
+
+---
+
 ## Notes for future AI (next steps)
 
 - **Step 2 (Clip paths and Clip timing):** Done. Smart seeking and timestamp wiring are in place; orchestrator does the event lookup so lifecycle stays decoupled.
 - **Step 3:** Done. Production logic lives in `ai_analyzer.py`. Motion is **grayscale frame differencing**; first and last frames always kept; crop is center or smart crop when per-frame metadata is available.
 - **Step 4:** Done. Per-frame data from `frigate/+/tracked_object_update` is stored in state (normalized box [ymin, xmin, ymax, xmax] 0–1); cleanup on `remove_event` and after `analyze_clip`. Smart crop uses `SMART_CROP_PADDING` (default 0.15). Use the **same event_id** as the clip for frame_metadata (do not merge CE members).
-- **Step 5/6:** Done. Persistence: `_save_analysis_result` writes `analysis_result.json` in the clip’s directory (event folder). Orchestrator hand-off confirmed. Integration tests in `tests/test_integration_step_5_6.py` (5 tests, all pass). **Next:** Step 7 (Daily report script) or Step 8 (docs and cleanup). For Step 7, Reporter should scan storage for **analysis_result.json** in event folders (path: same directory as `clip.mp4`, i.e. `os.path.join(event_folder, "analysis_result.json")`).
+- **Step 5/6:** Done. Persistence: `_save_analysis_result` writes `analysis_result.json` in the clip’s directory (event folder). Orchestrator hand-off confirmed. Integration tests in `tests/test_integration_step_5_6.py` (5 tests, all pass). **Next:** Step 8 (docs and cleanup).
+- **Step 7:** Done. DailyReporterService in `frigate_buffer/services/daily_reporter.py`; `send_text_prompt` in ai_analyzer; orchestrator schedule at `DAILY_REPORT_SCHEDULE_HOUR`; report output to `{STORAGE_PATH}/daily_reports/{date}_report.md`; config keys `DAILY_REPORT_SCHEDULE_HOUR`, `REPORT_PROMPT_FILE`. No code changes in mock directory except this plan doc.
 - **Config keys reference:** Multi-cam: `MAX_MULTI_CAM_FRAMES_MIN`, `MAX_MULTI_CAM_FRAMES_SEC`, `MOTION_THRESHOLD_PX`, `CROP_WIDTH`, `CROP_HEIGHT`, `MULTI_CAM_SYSTEM_PROMPT_FILE`, `SMART_CROP_PADDING`. Gemini proxy: `GEMINI_PROXY_URL`, `GEMINI_PROXY_MODEL`, `GEMINI_PROXY_TEMPERATURE`, `GEMINI_PROXY_TOP_P`, `GEMINI_PROXY_FREQUENCY_PENALTY`, `GEMINI_PROXY_PRESENCE_PENALTY`. Single API key: `config['GEMINI']['api_key']` (env `GEMINI_API_KEY` overrides config.yaml for security).
 
 ---
@@ -137,4 +149,4 @@ This folder holds a **standalone mock** of the multi-cam frame extractor. It is 
 4. ~~Add tracked_object_update subscription and feed EventMetadataStore from it only.~~ **Done.** Per-frame metadata in state; smart crop and score-based selection in ai_analyzer; orchestrator wires get/clear frame_metadata.
 5. ~~Proxy HTTP call; save analysis_result.json for Reporter~~ **Done.** `_save_analysis_result` in ai_analyzer.py; integration tests verify persistence and pipeline.
 6. ~~Orchestrator hook~~ **Done.** Hand-off to Frigate and HA verified. Update README and clean up mock folder when ready.
-7. Daily report: move daily_report_to_proxy.py (e.g. to services/), add config for schedule and report path, define recap storage layout and implement get_previous_day_recaps; implement send_report_to_proxy; schedule at 1am (cron or in-process).
+7. ~~Daily report~~ **Done.** Native **DailyReporterService** in `frigate_buffer/services/daily_reporter.py`; **send_text_prompt** in ai_analyzer; config `DAILY_REPORT_SCHEDULE_HOUR`, `REPORT_PROMPT_FILE`; orchestrator runs report for yesterday at configured hour; output `{STORAGE_PATH}/daily_reports/{date}_report.md`. Tests in test_daily_reporter.py and test_ai_analyzer.py (send_text_prompt).
