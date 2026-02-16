@@ -74,6 +74,11 @@ settings:
   # Hour (0-23) to run daily review fetch for previous day
   daily_review_schedule_hour: 1
 
+  # Daily Report (AI-generated from analysis_result.json)
+  # daily_report_schedule_hour: 1
+  # report_prompt_file: ""
+  # report_known_person_name: ""   # Placeholder {known_person_name} in report prompt; default "Unspecified"
+
   # Consolidated event series
   # Time since last event before the next one starts a NEW consolidated group.
   # If no events for 120s, the next event is new. If an event occurs within

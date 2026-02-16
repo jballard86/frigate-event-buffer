@@ -45,6 +45,7 @@ CONFIG_SCHEMA = Schema({
         Optional('daily_review_schedule_hour'): int,
         Optional('daily_report_schedule_hour'): int,
         Optional('report_prompt_file'): str,
+        Optional('report_known_person_name'): str,
         Optional('event_gap_seconds'): int,
         Optional('export_buffer_before'): int,
         Optional('export_buffer_after'): int,
@@ -120,6 +121,7 @@ def load_config() -> dict:
         'DAILY_REVIEW_SCHEDULE_HOUR': 1,
         'DAILY_REPORT_SCHEDULE_HOUR': 1,
         'REPORT_PROMPT_FILE': '',
+        'REPORT_KNOWN_PERSON_NAME': '',
         'EVENT_GAP_SECONDS': 120,
         'EXPORT_BUFFER_BEFORE': 5,
         'EXPORT_BUFFER_AFTER': 30,
@@ -215,6 +217,7 @@ def load_config() -> dict:
                     config['DAILY_REVIEW_SCHEDULE_HOUR'] = settings.get('daily_review_schedule_hour', config['DAILY_REVIEW_SCHEDULE_HOUR'])
                     config['DAILY_REPORT_SCHEDULE_HOUR'] = settings.get('daily_report_schedule_hour', config['DAILY_REPORT_SCHEDULE_HOUR'])
                     config['REPORT_PROMPT_FILE'] = (settings.get('report_prompt_file') or config['REPORT_PROMPT_FILE']) or ''
+                    config['REPORT_KNOWN_PERSON_NAME'] = (settings.get('report_known_person_name') or config['REPORT_KNOWN_PERSON_NAME']) or ''
                     config['EVENT_GAP_SECONDS'] = settings.get('event_gap_seconds', config['EVENT_GAP_SECONDS'])
                     config['EXPORT_BUFFER_BEFORE'] = settings.get('export_buffer_before', config['EXPORT_BUFFER_BEFORE'])
                     config['EXPORT_BUFFER_AFTER'] = settings.get('export_buffer_after', config['EXPORT_BUFFER_AFTER'])
@@ -298,6 +301,7 @@ def load_config() -> dict:
     config['DAILY_REVIEW_RETENTION_DAYS'] = int(os.getenv('DAILY_REVIEW_RETENTION_DAYS', str(config['DAILY_REVIEW_RETENTION_DAYS'])))
     config['DAILY_REVIEW_SCHEDULE_HOUR'] = int(os.getenv('DAILY_REVIEW_SCHEDULE_HOUR', str(config['DAILY_REVIEW_SCHEDULE_HOUR'])))
     config['DAILY_REPORT_SCHEDULE_HOUR'] = int(os.getenv('DAILY_REPORT_SCHEDULE_HOUR', str(config['DAILY_REPORT_SCHEDULE_HOUR'])))
+    config['REPORT_KNOWN_PERSON_NAME'] = (os.getenv('REPORT_KNOWN_PERSON_NAME') or config['REPORT_KNOWN_PERSON_NAME']) or ''
     config['EVENT_GAP_SECONDS'] = int(os.getenv('EVENT_GAP_SECONDS', str(config['EVENT_GAP_SECONDS'])))
     config['EXPORT_WATCHDOG_INTERVAL_MINUTES'] = int(os.getenv('EXPORT_WATCHDOG_INTERVAL_MINUTES', str(config['EXPORT_WATCHDOG_INTERVAL_MINUTES'])))
     config['EXPORT_BUFFER_BEFORE'] = int(os.getenv('EXPORT_BUFFER_BEFORE', str(config['EXPORT_BUFFER_BEFORE'])))
