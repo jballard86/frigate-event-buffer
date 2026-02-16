@@ -31,6 +31,8 @@ import paho.mqtt.client as mqtt
 from datetime import datetime
 from collections import defaultdict
 
+from frigate_buffer.services import crop_utils
+
 # --- Configuration & Setup ---
 logging.basicConfig(
     level=logging.INFO,
@@ -52,6 +54,8 @@ DEFAULT_CONFIG = {   # should be configurable in config.yaml/config.example.yaml
     "motion_threshold_px": 50,        # Min pixels movement to trigger "high rate" capture
     "crop_width": 1280,
     "crop_height": 720,
+    "motion_crop_min_area_fraction": 0.001,
+    "motion_crop_min_px": 500,
     "gemini_proxy_url": "192.168.21.189:5050",
     "gemini_proxy_api_key": "YOUR_GEMINI_PROXY_API_KEY",    # should be configurable in config.yaml/config.example.yaml
     "gemini_proxy_model": "gemini-2.5-flash-lite",
@@ -145,49 +149,7 @@ class EventMetadataStore:
 
 metadata_store = EventMetadataStore()
 
-# --- Processing Logic ---
-
-def smart_crop(frame, box, target_w, target_h):
-    """
-    Crops the frame centered on the box.
-    Handles boundary clamping and upscaling if the crop is too small.
-    """
-    h, w, _ = frame.shape
-    if not box: return cv2.resize(frame, (target_w, target_h))
-
-    # Unpack Normalized Coordinates (Frigate MQTT uses 0-1)
-    y_min, x_min, y_max, x_max = box
-    
-    # Convert to Pixels
-    py_min, px_min = int(y_min * h), int(x_min * w)
-    py_max, px_max = int(y_max * h), int(x_max * w)
-    
-    center_y = (py_min + py_max) // 2
-    center_x = (px_min + px_max) // 2
-    
-    # Calculate Crop Window
-    x1 = center_x - (target_w // 2)
-    y1 = center_y - (target_h // 2)
-    x2 = x1 + target_w
-    y2 = y1 + target_h
-    
-    # Clamp to Image Bounds
-    if x1 < 0: x2 += abs(x1); x1 = 0
-    if y1 < 0: y2 += abs(y1); y1 = 0
-    if x2 > w: x1 -= (x2 - w); x2 = w
-    if y2 > h: y1 -= (y2 - h); y2 = h
-    
-    # Final Safety Clamp
-    x1, y1 = max(0, x1), max(0, y1)
-    x2, y2 = min(w, x2), min(h, y2)
-    
-    crop = frame[y1:y2, x1:x2]
-    
-    # Resize/Pad if dimensions don't match target
-    if crop.shape[1] != target_w or crop.shape[0] != target_h:
-        crop = cv2.resize(crop, (target_w, target_h))
-        
-    return crop
+# --- Processing Logic (crop via shared crop_utils) ---
 
 def wait_for_video_file(event_id, timeout=60):
     """
@@ -250,103 +212,90 @@ def process_multi_cam_event(main_event_id, linked_event_ids):
         logger.error("Main event clip missing, cannot determine output folder.")
         return
 
-    # 4. The Loop (Variable Rate + Smart Selection)
+    # 4. The Loop (Variable Rate + Smart Selection) — collect (timestamp, camera, frame) for intertwining
     caps = {eid: cv2.VideoCapture(path) for eid, path in video_paths.items()}
     current_time = start_time
-    step = 1.0 / CONF['max_multi_cam_frames_sec'] # Base step (e.g. 0.5s)
-    
-    last_centers = {eid: (0,0) for eid in video_paths} # For motion delta
+    step = 1.0 / CONF['max_multi_cam_frames_sec']  # Base step (e.g. 0.5s)
+    last_centers = {eid: (0, 0) for eid in video_paths}
+    prev_grays = {eid: None for eid in video_paths}
+    min_area_frac = float(CONF.get('motion_crop_min_area_fraction', 0.001))
+    min_area_px = int(CONF.get('motion_crop_min_px', 500))
+    collected = []  # list of (current_time, camera_name, frame) for time-ordered output
 
     while current_time <= end_time:
         candidates = []
-        
-        # A. Gather Candidates
         for eid in video_paths:
-            # Get frame data closest to current_time
             frames = metadata_store.get_data(eid)
-            # Find closest metadata entry
-            # Simple linear search (can be optimized)
+            if not frames:
+                continue
             closest = min(frames, key=lambda x: abs(x['timestamp'] - current_time))
-            
-            # Validity check: is this metadata actually from this second?
-            if abs(closest['timestamp'] - current_time) > 1.0: continue
-            
-            # Action Score = Area * Score
+            if abs(closest['timestamp'] - current_time) > 1.0:
+                continue
             action_score = closest['area'] * closest['score']
             candidates.append({
-                "eid": eid, "score": action_score, "meta": closest, 
+                "eid": eid, "score": action_score, "meta": closest,
                 "camera": event_cameras[eid]
             })
-            
+
         if not candidates:
             current_time += step
             continue
 
-        # B. Selection Algorithm (Mixed Strategy)
         candidates.sort(key=lambda x: x['score'], reverse=True)
         winner = candidates[0]
         selected = [winner]
-        
-        # Scenario B: Complex Scene (others are close to winner)
         for contender in candidates[1:]:
             if winner['score'] < (1.5 * contender['score']):
                 selected.append(contender)
 
-        # C. Variable Rate Filter (Motion Check)
         final_selection = []
         for item in selected:
             eid = item['eid']
-            box = item['meta']['box'] # [ymin, xmin, ymax, xmax]
-            
-            # Calculate Center in Normalized Coords
-            cy = (box[0] + box[2]) / 2
-            cx = (box[1] + box[3]) / 2
-            
-            # Convert to approx pixels for threshold check (assuming 1080p source relative)
-            py, px = cy * 1080, cx * 1920 
+            box = item['meta'].get('box') or []
+            cy = (box[0] + box[2]) / 2 if len(box) >= 4 else 0.5
+            cx = (box[1] + box[3]) / 2 if len(box) >= 4 else 0.5
+            py, px = cy * 1080, cx * 1920
             last_py, last_px = last_centers[eid]
-            
             dist = abs(py - last_py) + abs(px - last_px)
-            
-            # Save if moved enough OR first frame
-            if dist > CONF['motion_threshold_px'] or last_centers[eid] == (0,0):
+            if dist > CONF['motion_threshold_px'] or last_centers[eid] == (0, 0):
                 final_selection.append(item)
                 last_centers[eid] = (py, px)
 
-        # D. Extract & Save
         for item in final_selection:
             eid = item['eid']
             cap = caps[eid]
-            
-            # Seek video
-            # Video start time is needed. Assuming first metadata timestamp is start.
             vid_start = metadata_store.get_data(eid)[0]['timestamp']
             offset_sec = current_time - vid_start
             cap.set(cv2.CAP_PROP_POS_MSEC, max(0, offset_sec * 1000))
-            
             ret, frame = cap.read()
             if ret:
-                # Crop
-                processed = smart_crop(frame, item['meta']['box'], 
-                                     CONF['crop_width'], CONF['crop_height'])
-                
-                # Overlay
-                label = f"{item['camera']} | {datetime.fromtimestamp(current_time).strftime('%Y-%m-%d %H:%M:%S')}"
-                cv2.putText(processed, label, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 
-                            0.7, (255, 255, 255), 2) # White
-                cv2.putText(processed, label, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 
-                            0.7, (0, 0, 0), 1)       # Black Border
-                
-                # Save
-                fname = f"frame_{int(current_time)}_{item['camera']}.jpg"
-                cv2.imwrite(os.path.join(output_dir, fname), processed)
+                processed, next_gray = crop_utils.motion_crop(
+                    frame,
+                    prev_grays[eid],
+                    CONF['crop_width'],
+                    CONF['crop_height'],
+                    min_area_fraction=min_area_frac,
+                    min_area_px=min_area_px,
+                )
+                prev_grays[eid] = next_gray
+                collected.append((current_time, item['camera'], processed))
 
         current_time += step
 
-    # Cleanup
-    for cap in caps.values(): cap.release()
+    # 5. Intertwined output: sort by timestamp, add overlay with global seq, save
+    collected.sort(key=lambda x: (x[0], x[1]))
+    total = len(collected)
+    for seq, (ts, camera_name, frame) in enumerate(collected, start=1):
+        time_str = datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S")
+        crop_utils.draw_timestamp_overlay(frame, time_str, camera_name, seq, total)
+        time_part = datetime.fromtimestamp(ts).strftime("%H-%M-%S")
+        fname = f"frame_{seq:03d}_{time_part}_{camera_name}.jpg"
+        cv2.imwrite(os.path.join(output_dir, fname), frame)
+
+    for cap in caps.values():
+        cap.release()
     metadata_store.cleanup(all_events)
-    logger.info(f"Multi-Cam Recap Complete. Saved to {output_dir}")
+    logger.info("Multi-Cam Recap Complete. Saved %d frames to %s", total, output_dir)
 
 # --- MQTT Loop ---
 

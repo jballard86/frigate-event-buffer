@@ -363,9 +363,9 @@ class TestGeminiAnalysisServiceFirstLastFrames(unittest.TestCase):
         # event_start_ts > 0 required to enter motion/first-last branch. Segment 1.0..3.0s -> 2s duration -> 5 frames at fps=2
         result = service._extract_frames(clip_path, event_start_ts=1.0, event_end_ts=3.0)
         self.assertEqual(len(result), 3, "Should cap at max_frames=3 (first + one middle + last)")
-        # First and last in result must be segment start/end (identify by unique pixel value)
-        self.assertEqual(int(result[0][0, 0, 0]), 10, "First frame should be segment start")
-        self.assertEqual(int(result[-1][0, 0, 0]), 50, "Last frame should be segment end")
+        # result is list of (frame, frame_time_sec)
+        self.assertEqual(int(result[0][0][0, 0, 0]), 10, "First frame should be segment start")
+        self.assertEqual(int(result[-1][0][0, 0, 0]), 50, "Last frame should be segment end")
 
 
 class TestGeminiAnalysisServiceCropAppliedDuringExtraction(unittest.TestCase):
@@ -393,7 +393,7 @@ class TestGeminiAnalysisServiceCropAppliedDuringExtraction(unittest.TestCase):
         service = GeminiAnalysisService(config)
         result = service._extract_frames(clip_path, event_start_ts=0, event_end_ts=1.0)
         self.assertGreater(len(result), 0)
-        for frame in result:
+        for frame, _ in result:
             self.assertEqual(frame.shape, (240, 320, 3), "Each frame should be center-cropped to 320x240")
 
 

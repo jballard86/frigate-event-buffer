@@ -16,6 +16,8 @@ from typing import Optional, List, Dict, Any, Sequence
 
 from frigate_buffer.models import FrameMetadata
 
+from frigate_buffer.services import crop_utils
+
 import cv2
 import requests
 import urllib3.exceptions
@@ -99,6 +101,8 @@ class GeminiAnalysisService:
         self.crop_width = int(config.get('CROP_WIDTH', 0) or 0)
         self.crop_height = int(config.get('CROP_HEIGHT', 0) or 0)
         self.smart_crop_padding = float(config.get('SMART_CROP_PADDING', 0.15))
+        self.motion_crop_min_area_fraction = float(config.get('MOTION_CROP_MIN_AREA_FRACTION', 0.001))
+        self.motion_crop_min_px = int(config.get('MOTION_CROP_MIN_PX', 500))
 
     def _load_system_prompt_template(self) -> str:
         if self._prompt_template is not None:
@@ -235,20 +239,22 @@ class GeminiAnalysisService:
         event_start_ts: float = 0,
         event_end_ts: float = 0,
         frame_metadata: Optional[Sequence[FrameMetadata]] = None,
-    ) -> List[Any]:
+    ) -> List[tuple]:
         """Extract frames from video. With event_start_ts > 0, seeks past pre-capture buffer and limits to event segment.
+        Uses CV-based motion crop (crop_utils.motion_crop) when CROP_WIDTH/CROP_HEIGHT set; otherwise center crop.
         Uses grayscale frame differencing for motion-aware selection when MOTION_THRESHOLD_PX > 0; first and last frame
-        are always kept. When frame_metadata is provided, prioritizes by score*area and uses smart crop per frame.
-        Optional center/smart crop when CROP_WIDTH/CROP_HEIGHT set. Returns list of numpy arrays (BGR)."""
-        frames = []
+        are always kept. When frame_metadata is provided, prioritizes by score*area.
+        Returns list of (frame, frame_time_sec) for overlay in analyze_clip."""
+        result: List[tuple] = []
         cap = cv2.VideoCapture(clip_path)
         if not cap.isOpened():
-            logger.warning(f"Could not open video: {clip_path}")
-            return frames
+            logger.warning("Could not open video: %s", clip_path)
+            return result
         try:
             fps = cap.get(cv2.CAP_PROP_FPS) or 1.0
             total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
             use_meta = bool(frame_metadata)
+            use_cv_crop = self.crop_width > 0 and self.crop_height > 0
 
             if event_start_ts > 0 and total_frames > 0:
                 start_frame = int(fps * self.buffer_offset)
@@ -263,9 +269,8 @@ class GeminiAnalysisService:
                 step = max(1, int(fps / self.max_frames_sec)) if self.max_frames_sec > 0 else 1
 
                 use_motion = self.motion_threshold_px > 0
-                candidates = []
+                candidates: List[tuple] = []
                 prev_gray = None
-                # Pre-sort metadata by frame_time for O(log n) lookup per frame
                 sorted_meta: List[Any] = []
                 times: List[float] = []
                 if use_meta and frame_metadata:
@@ -278,7 +283,6 @@ class GeminiAnalysisService:
                     ret, frame = cap.read()
                     if not ret:
                         break
-                    # Frame time for metadata lookup (approximate)
                     frame_time_approx = event_start_ts + (frame_idx - start_frame) / fps if fps else event_start_ts
                     meta = None
                     if sorted_meta and times:
@@ -288,62 +292,86 @@ class GeminiAnalysisService:
                             closest = sorted_meta[idx - 1]
                         if abs(closest.frame_time - frame_time_approx) < 2.0:
                             meta = closest
-                    if self.crop_width > 0 and self.crop_height > 0:
-                        if meta and meta.box and meta.box != (0.0, 0.0, 1.0, 1.0):
-                            frame = self._smart_crop(frame, meta.box, self.crop_width, self.crop_height)
-                        else:
-                            frame = self._center_crop(frame, self.crop_width, self.crop_height)
+
                     motion_score = 0.0
-                    if use_motion:
-                        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-                        if prev_gray is not None:
-                            diff = cv2.absdiff(prev_gray, gray)
-                            motion_score = float(cv2.sumElems(diff)[0])
-                        prev_gray = gray
+                    if use_cv_crop:
+                        frame, next_gray = crop_utils.motion_crop(
+                            frame,
+                            prev_gray,
+                            self.crop_width,
+                            self.crop_height,
+                            min_area_fraction=self.motion_crop_min_area_fraction,
+                            min_area_px=self.motion_crop_min_px,
+                        )
+                        if use_motion and prev_gray is not None:
+                            motion_score = float(cv2.sumElems(cv2.absdiff(prev_gray, next_gray))[0])
+                        prev_gray = next_gray
+                    else:
+                        if self.crop_width > 0 and self.crop_height > 0:
+                            frame = self._center_crop(frame, self.crop_width, self.crop_height)
+                        if use_motion:
+                            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                            if prev_gray is not None:
+                                motion_score = float(cv2.sumElems(cv2.absdiff(prev_gray, gray))[0])
+                            prev_gray = gray
+
                     priority = (meta.score * meta.area) if meta else motion_score
-                    candidates.append((frame_idx, frame, motion_score, meta, priority))
+                    candidates.append((frame_idx, frame, frame_time_approx, motion_score, meta, priority))
                     frame_idx += step
 
                 if not candidates:
-                    return frames
-                first_frame = candidates[0][1]
-                last_frame = candidates[-1][1]
+                    return result
                 if len(candidates) <= self._max_frames:
-                    frames = [c[1] for c in candidates]
+                    result = [(c[1], c[2]) for c in candidates]
                 else:
                     middle = candidates[1:-1]
                     n_keep = self._max_frames - 2
-                    middle_sorted = sorted(middle, key=lambda c: c[4], reverse=True)[:n_keep]
+                    middle_sorted = sorted(middle, key=lambda c: c[5], reverse=True)[:n_keep]
                     middle_sorted.sort(key=lambda c: c[0])
-                    frames = [first_frame] + [c[1] for c in middle_sorted] + [last_frame]
-                return frames
+                    result = [(candidates[0][1], candidates[0][2])] + [(c[1], c[2]) for c in middle_sorted] + [(candidates[-1][1], candidates[-1][2])]
+                return result
 
             if total_frames <= 0:
-                while len(frames) < self._max_frames:
+                idx = 0
+                while len(result) < self._max_frames:
                     ret, frame = cap.read()
                     if not ret:
                         break
-                    if self.crop_width > 0 and self.crop_height > 0:
+                    if use_cv_crop:
+                        frame, _ = crop_utils.motion_crop(
+                            frame, None, self.crop_width, self.crop_height,
+                            min_area_fraction=self.motion_crop_min_area_fraction,
+                            min_area_px=self.motion_crop_min_px,
+                        )
+                    elif self.crop_width > 0 and self.crop_height > 0:
                         frame = self._center_crop(frame, self.crop_width, self.crop_height)
-                    if len(frames) % max(1, int(fps * FRAME_SAMPLE_INTERVAL_SEC)) == 0:
-                        frames.append(frame)
-                    if len(frames) >= self._max_frames:
+                    if len(result) % max(1, int(fps * FRAME_SAMPLE_INTERVAL_SEC)) == 0:
+                        result.append((frame, event_start_ts + idx / fps if fps else event_start_ts))
+                    if len(result) >= self._max_frames:
                         break
-                return frames
+                    idx += 1
+                return result
             step = max(1, int(fps * FRAME_SAMPLE_INTERVAL_SEC))
             frame_idx = 0
-            while frame_idx < total_frames and len(frames) < self._max_frames:
+            while frame_idx < total_frames and len(result) < self._max_frames:
                 cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
                 ret, frame = cap.read()
                 if not ret:
                     break
-                if self.crop_width > 0 and self.crop_height > 0:
+                if use_cv_crop:
+                    frame, _ = crop_utils.motion_crop(
+                        frame, None, self.crop_width, self.crop_height,
+                        min_area_fraction=self.motion_crop_min_area_fraction,
+                        min_area_px=self.motion_crop_min_px,
+                    )
+                elif self.crop_width > 0 and self.crop_height > 0:
                     frame = self._center_crop(frame, self.crop_width, self.crop_height)
-                frames.append(frame)
+                frame_time = (event_start_ts + frame_idx / fps) if (event_start_ts > 0 and fps) else (frame_idx / fps if fps else 0)
+                result.append((frame, frame_time))
                 frame_idx += step
         finally:
             cap.release()
-        return frames
+        return result
 
     def _frame_to_base64_url(self, frame: Any) -> str:
         """Encode a BGR frame as JPEG base64 data URL."""
@@ -537,16 +565,25 @@ class GeminiAnalysisService:
             logger.warning("Clip not found: %s", clip_path)
             return None
         try:
-            frames = self._extract_frames(
+            frames_with_time = self._extract_frames(
                 clip_path, event_start_ts, event_end_ts,
                 frame_metadata=frame_metadata,
             )
-            if not frames:
+            if not frames_with_time:
                 logger.warning("No frames extracted from %s", clip_path)
                 return None
             camera = self._camera_from_clip_path(clip_path)
-            image_count = len(frames)
-            activity_start_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            image_count = len(frames_with_time)
+            for i, (frame, frame_time_sec) in enumerate(frames_with_time):
+                time_str = datetime.fromtimestamp(frame_time_sec).strftime("%Y-%m-%d %H:%M:%S")
+                crop_utils.draw_timestamp_overlay(
+                    frame, time_str, camera, i + 1, image_count
+                )
+            frames = [f for f, _ in frames_with_time]
+            activity_start_str = (
+                datetime.fromtimestamp(frames_with_time[0][1]).strftime("%Y-%m-%d %H:%M:%S")
+                if frames_with_time else datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            )
             duration_str = "unknown"
             system_prompt = self._build_system_prompt(
                 image_count=image_count,
