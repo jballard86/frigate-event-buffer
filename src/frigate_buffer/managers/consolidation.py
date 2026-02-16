@@ -93,6 +93,30 @@ class ConsolidatedEventManager:
             ce_id = self._frigate_to_ce.get(event_id)
             return self._events.get(ce_id) if ce_id else None
 
+    def remove_event_from_ce(self, event_id: str) -> Optional[str]:
+        """Remove a single Frigate event from its consolidated event. Caller must hold state.
+        Returns the CE folder path if the CE became empty and was removed (so caller can delete it), else None."""
+        with self._lock:
+            ce_id = self._frigate_to_ce.get(event_id)
+            if not ce_id or ce_id not in self._events:
+                return None
+            ce = self._events[ce_id]
+            ce_folder_path = ce.folder_path
+            try:
+                ce.frigate_event_ids.remove(event_id)
+            except ValueError:
+                return None
+            if ce.primary_event_id == event_id:
+                ce.primary_event_id = ce.frigate_event_ids[0] if ce.frigate_event_ids else None
+                ce.primary_camera = ce.cameras[0] if ce.cameras else None
+            self._frigate_to_ce.pop(event_id, None)
+            if not ce.frigate_event_ids:
+                self._events.pop(ce_id, None)
+                if self._active_ce_id == ce_id:
+                    self._active_ce_id = None
+                return ce_folder_path
+            return None
+
     def update_activity(self, event_id: str, activity_time: Optional[float] = None,
                        end_time: Optional[float] = None) -> None:
         with self._lock:

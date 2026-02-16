@@ -267,6 +267,24 @@ class FileManager:
             logger.error(f"Failed to write metadata.json: {e}")
             return False
 
+    def delete_event_folder(self, folder_path: str) -> bool:
+        """Delete a single event folder (or CE camera subfolder). Path must be under storage_path.
+        Returns True if the folder was deleted, False if path invalid or not found."""
+        try:
+            base = os.path.realpath(self.storage_path)
+            target = os.path.realpath(folder_path)
+            if not target.startswith(base) or target == base:
+                logger.warning(f"Refusing to delete path outside storage: {folder_path}")
+                return False
+            if not os.path.isdir(target):
+                return False
+            shutil.rmtree(target)
+            logger.info(f"Deleted event folder: {folder_path}")
+            return True
+        except OSError as e:
+            logger.warning(f"Failed to delete event folder {folder_path}: {e}")
+            return False
+
     def cleanup_old_events(self, active_event_ids: List[str],
                           active_ce_folder_names: Optional[List[str]] = None) -> int:
         """Delete folders older than retention period. Returns count deleted.

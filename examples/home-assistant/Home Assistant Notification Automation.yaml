@@ -16,59 +16,71 @@ actions:
   - condition: template
     value_template: "{{ target_phone | length > 0 }}"
 
-  - action: "notify.{{ target_phone }}"
-    data:
-      title: "{{ payload.title }}"
-      message: "{{ payload.message }}"
-      data:
-        # Tagging manages sticky accumulation per event
-        tag: "{{ payload.tag }}"
-
-        # Clicking the notification opens the event viewer
-        url: "{{ states('input_text.frigate_buffer_url') }}/player"
-        clickAction: "{{ states('input_text.frigate_buffer_url') }}/player"
-
-        # Phase-based Media (omit field when null to avoid "None" string)
-        image: >-
-          {% if payload.image_url %}{{ payload.image_url }}{% endif %}
-        video: >-
-          {% if payload.video_url %}{{ payload.video_url }}{% endif %}
-
-        # Threat level 2 (critical): ALL notifications are audible and bypass DND
-        # Normal (0-1): only "new" status gets sound
-        importance: >-
-          {% if is_critical %}max{% elif is_new %}high{% else %}low{% endif %}
-        ttl: 0
-        sound: >-
-          {% if is_critical or is_new %}default{% else %}none{% endif %}
-
-        # Critical alerts: use alarm channel (Android) to bypass DND/volume
-        channel: >-
-          {% if is_critical %}alarm{% else %}general{% endif %}
-
-        # iOS critical alert support
-        push:
-          interruption-level: >-
-            {% if is_critical %}critical{% elif is_new %}time-sensitive{% else %}passive{% endif %}
-
-        # Persistence settings
-        sticky: true
-        notification_icon: >-
-          {% if is_critical %}mdi:shield-alert{% else %}mdi:shield-check{% endif %}
-
-  # --- Dashboard Refresh Logic ---
-  - if:
-      - condition: template
-        value_template: "{{ payload.status in ['clip_ready', 'finalized', 'summarized'] }}"
-    then:
-      - action: homeassistant.update_entity
-        target:
-          entity_id: sensor.frigate_feed_raw
-      - action: input_number.set_value
-        target:
-          entity_id: input_number.security_event_index
+  # When buffer discards a short event (e.g. under minimum_event_seconds), clear the matching notification from the phone.
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: "{{ payload.status == 'discarded' }}"
+        sequence:
+          - action: "notify.{{ target_phone }}"
+            data:
+              message: "clear_notification"
+              data:
+                tag: "{{ payload.tag }}"
+    default:
+      - action: "notify.{{ target_phone }}"
         data:
-          value: 0
+          title: "{{ payload.title }}"
+          message: "{{ payload.message }}"
+          data:
+            # Tagging manages sticky accumulation per event
+            tag: "{{ payload.tag }}"
+
+            # Clicking the notification opens the event viewer
+            url: "{{ states('input_text.frigate_buffer_url') }}/player"
+            clickAction: "{{ states('input_text.frigate_buffer_url') }}/player"
+
+            # Phase-based Media (omit field when null to avoid "None" string)
+            image: >-
+              {% if payload.image_url %}{{ payload.image_url }}{% endif %}
+            video: >-
+              {% if payload.video_url %}{{ payload.video_url }}{% endif %}
+
+            # Threat level 2 (critical): ALL notifications are audible and bypass DND
+            # Normal (0-1): only "new" status gets sound
+            importance: >-
+              {% if is_critical %}max{% elif is_new %}high{% else %}low{% endif %}
+            ttl: 0
+            sound: >-
+              {% if is_critical or is_new %}default{% else %}none{% endif %}
+
+            # Critical alerts: use alarm channel (Android) to bypass DND/volume
+            channel: >-
+              {% if is_critical %}alarm{% else %}general{% endif %}
+
+            # iOS critical alert support
+            push:
+              interruption-level: >-
+                {% if is_critical %}critical{% elif is_new %}time-sensitive{% else %}passive{% endif %}
+
+            # Persistence settings
+            sticky: true
+            notification_icon: >-
+              {% if is_critical %}mdi:shield-alert{% else %}mdi:shield-check{% endif %}
+
+      # --- Dashboard Refresh Logic ---
+      - if:
+          - condition: template
+            value_template: "{{ payload.status in ['clip_ready', 'finalized', 'summarized'] }}"
+        then:
+          - action: homeassistant.update_entity
+            target:
+              entity_id: sensor.frigate_feed_raw
+          - action: input_number.set_value
+            target:
+              entity_id: input_number.security_event_index
+            data:
+              value: 0
 
 #Helper Creation instructions:
   #First, go to Settings > Devices & Services > Helpers and create a new Text helper:

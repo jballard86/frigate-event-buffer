@@ -47,6 +47,7 @@ CONFIG_SCHEMA = Schema({
         Optional('report_prompt_file'): str,
         Optional('report_known_person_name'): str,
         Optional('event_gap_seconds'): int,
+        Optional('minimum_event_seconds'): int,
         Optional('export_buffer_before'): int,
         Optional('export_buffer_after'): int,
         Optional('final_review_image_count'): int,
@@ -127,6 +128,7 @@ def load_config() -> dict:
         'REPORT_PROMPT_FILE': '',
         'REPORT_KNOWN_PERSON_NAME': '',
         'EVENT_GAP_SECONDS': 120,
+        'MINIMUM_EVENT_SECONDS': 5,
         'EXPORT_BUFFER_BEFORE': 5,
         'EXPORT_BUFFER_AFTER': 30,
         'FINAL_REVIEW_IMAGE_COUNT': 20,
@@ -227,6 +229,7 @@ def load_config() -> dict:
                     config['REPORT_PROMPT_FILE'] = (settings.get('report_prompt_file') or config['REPORT_PROMPT_FILE']) or ''
                     config['REPORT_KNOWN_PERSON_NAME'] = (settings.get('report_known_person_name') or config['REPORT_KNOWN_PERSON_NAME']) or ''
                     config['EVENT_GAP_SECONDS'] = settings.get('event_gap_seconds', config['EVENT_GAP_SECONDS'])
+                    config['MINIMUM_EVENT_SECONDS'] = settings.get('minimum_event_seconds', config['MINIMUM_EVENT_SECONDS'])
                     config['EXPORT_BUFFER_BEFORE'] = settings.get('export_buffer_before', config['EXPORT_BUFFER_BEFORE'])
                     config['EXPORT_BUFFER_AFTER'] = settings.get('export_buffer_after', config['EXPORT_BUFFER_AFTER'])
                     config['FINAL_REVIEW_IMAGE_COUNT'] = settings.get('final_review_image_count', config.get('FINAL_REVIEW_IMAGE_COUNT', 20))

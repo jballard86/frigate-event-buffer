@@ -8,7 +8,7 @@ import threading
 import os
 from typing import Optional, Callable
 
-from frigate_buffer.models import EventState, ConsolidatedEvent, _is_no_concerns
+from frigate_buffer.models import EventState, ConsolidatedEvent, _is_no_concerns, EventPhase
 
 logger = logging.getLogger('frigate-buffer')
 
@@ -84,9 +84,49 @@ class EventLifecycleService:
         except Exception as e:
             logger.error(f"Error in initial notification flow for {event.event_id}: {e}")
 
+    def _discard_short_event(self, event: EventState) -> None:
+        """Discard an event that ended before minimum_event_seconds: delete data, remove from state/CE, publish discarded notification so HA can clear the phone notification."""
+        logger.info(f"Discarding short event {event.event_id} (under minimum_event_seconds)")
+        if event.folder_path:
+            self.file_manager.delete_event_folder(event.folder_path)
+        ce = self.consolidated_manager.get_by_frigate_event(event.event_id)
+        if ce:
+            ce_folder = self.consolidated_manager.remove_event_from_ce(event.event_id)
+            if ce_folder:
+                self.file_manager.delete_event_folder(ce_folder)
+        self.state_manager.remove_event(event.event_id)
+        discard_target = type('NotifyTarget', (), {
+            'event_id': event.event_id,
+            'camera': event.camera,
+            'label': event.label,
+            'created_at': event.created_at,
+            'phase': EventPhase.NEW,
+            'threat_level': 0,
+            'clip_downloaded': False,
+            'snapshot_downloaded': False,
+            'folder_path': None,
+            'genai_title': None,
+            'genai_description': None,
+            'review_summary': None,
+            'ai_description': None,
+            'image_url_override': None,
+        })()
+        self.notifier.publish_notification(
+            discard_target, "discarded",
+            message="Event discarded (under minimum duration)",
+            tag_override=f"frigate_{event.event_id}"
+        )
+
     def process_event_end(self, event: EventState):
         """Background processing when event ends. For consolidated events, defers clip export to CE close."""
         try:
+            min_sec = self.config.get('MINIMUM_EVENT_SECONDS', 5)
+            end_ts = event.end_time or event.created_at
+            duration = end_ts - event.created_at
+            if duration < min_sec:
+                self._discard_short_event(event)
+                return
+
             if event.has_snapshot:
                 event.snapshot_downloaded = self.download_service.download_snapshot(
                     event.event_id, event.folder_path
