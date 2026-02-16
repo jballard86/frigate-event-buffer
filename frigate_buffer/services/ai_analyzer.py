@@ -24,17 +24,46 @@ logger = logging.getLogger('frigate-buffer')
 
 
 def _log_proxy_failure(proxy_url: str, attempt: int, exc: Exception) -> None:
-    """Log proxy request failure with URL and a hint for connection errors."""
+    """Log proxy request failure with URL, optional response body, and a hint for connection errors."""
     err_name = type(exc).__name__
     err_msg = str(exc)
     hint = ""
     if "refused" in err_msg.lower() or "Connection refused" in err_msg:
         hint = f" Ensure the AI proxy is running at {proxy_url}."
-    logger.error(
-        "Proxy request failed on attempt %s/2: %s: %s. url=%s.%s",
-        attempt, err_name, err_msg, proxy_url, hint,
-    )
+    # When raise_for_status() raised (requests.exceptions.HTTPError), include response body for debugging
+    response_body = ""
+    resp = getattr(exc, "response", None)
+    if resp is not None:
+        try:
+            data = resp.json()
+            # Prefer structured error message (OpenAI/Gemini style)
+            err_obj = data.get("error") if isinstance(data, dict) else None
+            if isinstance(err_obj, dict) and err_obj.get("message"):
+                response_body = json.dumps({"error": {"message": err_obj.get("message"), "type": err_obj.get("type", "unknown")}})
+            else:
+                response_body = json.dumps(data) if data is not None else ""
+        except (ValueError, TypeError, AttributeError):
+            try:
+                text = getattr(resp, "text", None) or (resp.content.decode("utf-8", errors="replace") if getattr(resp, "content", None) else "")
+                response_body = (text or "")[:LOG_MAX_RESPONSE_BODY]
+            except Exception:
+                response_body = repr(getattr(resp, "content", None))[:LOG_MAX_RESPONSE_BODY]
+        if len(response_body) > LOG_MAX_RESPONSE_BODY:
+            response_body = response_body[:LOG_MAX_RESPONSE_BODY] + "..."
+    if response_body:
+        logger.error(
+            "Proxy request failed [%s]. URL: %s. Body: %s. attempt=%s/2.%s",
+            getattr(resp, "status_code", "?"), proxy_url, response_body, attempt, hint,
+        )
+    else:
+        logger.error(
+            "Proxy request failed on attempt %s/2: %s: %s. url=%s.%s",
+            attempt, err_name, err_msg, proxy_url, hint,
+        )
 
+
+# Max chars to log for proxy response body
+LOG_MAX_RESPONSE_BODY = 2000
 
 # Default max frames to send to proxy (cap token/image cost)
 DEFAULT_MAX_FRAMES = 20
