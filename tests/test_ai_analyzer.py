@@ -8,6 +8,7 @@ from unittest.mock import MagicMock, patch
 
 import cv2
 import numpy as np
+import requests
 
 from frigate_buffer.models import FrameMetadata
 from frigate_buffer.services.ai_analyzer import GeminiAnalysisService
@@ -72,6 +73,62 @@ class TestGeminiAnalysisServicePayload(unittest.TestCase):
         self.assertIn("image_url", image_parts[0])
         url = image_parts[0]["image_url"].get("url", "")
         self.assertTrue(url.startswith("data:image/jpeg;base64,"), f"Expected data URL, got: {url[:80]}")
+
+
+class TestGeminiAnalysisServiceSendTextPrompt(unittest.TestCase):
+    """Test send_text_prompt: text-only POST, no images; returns raw content string or None."""
+
+    @patch("frigate_buffer.services.ai_analyzer.requests.post")
+    def test_send_text_prompt_returns_content_on_success(self, mock_post):
+        mock_post.return_value.status_code = 200
+        mock_post.return_value.json.return_value = {
+            "choices": [{"message": {"content": "# Report\nDone."}}]
+        }
+        config = {"GEMINI": {"enabled": True, "proxy_url": "http://proxy", "api_key": "key", "model": "m"}}
+        service = GeminiAnalysisService(config)
+        result = service.send_text_prompt("System", "User text")
+        self.assertEqual(result, "# Report\nDone.")
+        self.assertEqual(mock_post.call_count, 1)
+        args, kwargs = mock_post.call_args
+        self.assertIn("json", kwargs)
+        body = kwargs["json"]
+        messages = body["messages"]
+        self.assertEqual(len(messages), 2)
+        self.assertEqual(messages[0]["role"], "system")
+        self.assertEqual(messages[0]["content"], "System")
+        self.assertEqual(messages[1]["role"], "user")
+        self.assertEqual(messages[1]["content"], "User text")
+        self.assertNotIn("image_url", str(messages))
+
+    @patch("frigate_buffer.services.ai_analyzer.requests.post")
+    def test_send_text_prompt_returns_none_when_empty_content(self, mock_post):
+        mock_post.return_value.status_code = 200
+        mock_post.return_value.json.return_value = {"choices": [{"message": {"content": ""}}]}
+        config = {"GEMINI": {"enabled": True, "proxy_url": "http://proxy", "api_key": "key"}}
+        service = GeminiAnalysisService(config)
+        result = service.send_text_prompt("Sys", "User")
+        self.assertIsNone(result)
+
+    @patch("frigate_buffer.services.ai_analyzer.requests.post")
+    def test_send_text_prompt_returns_none_on_5xx(self, mock_post):
+        def raise_http_error(*args, **kwargs):
+            raise requests.exceptions.HTTPError("500 Server Error")
+
+        mock_post.side_effect = raise_http_error
+        config = {"GEMINI": {"enabled": True, "proxy_url": "http://proxy", "api_key": "key"}}
+        service = GeminiAnalysisService(config)
+        result = service.send_text_prompt("Sys", "User")
+        self.assertIsNone(result)
+
+    def test_send_text_prompt_returns_none_when_proxy_not_configured(self):
+        config = {"GEMINI": {"enabled": True, "proxy_url": "", "api_key": "key"}}
+        service = GeminiAnalysisService(config)
+        result = service.send_text_prompt("Sys", "User")
+        self.assertIsNone(result)
+        config2 = {"GEMINI": {"enabled": True, "proxy_url": "http://p", "api_key": ""}}
+        service2 = GeminiAnalysisService(config2)
+        result2 = service2.send_text_prompt("Sys", "User")
+        self.assertIsNone(result2)
 
 
 class TestGeminiAnalysisServiceProxyFailure(unittest.TestCase):

@@ -29,6 +29,7 @@ from frigate_buffer.services.timeline import TimelineLogger
 from frigate_buffer.services.mqtt_client import MqttClientWrapper
 from frigate_buffer.services.lifecycle import EventLifecycleService
 from frigate_buffer.services.ai_analyzer import GeminiAnalysisService
+from frigate_buffer.services.daily_reporter import DailyReporterService
 
 logger = logging.getLogger('frigate-buffer')
 
@@ -132,6 +133,14 @@ class StateAwareOrchestrator:
             config['FRIGATE_URL'],
             config.get('DAILY_REVIEW_RETENTION_DAYS', 90)
         )
+
+        # Daily reporter (AI report from analysis_result.json) - only when AI analyzer enabled
+        if self.ai_analyzer:
+            self.daily_reporter = DailyReporterService(
+                config, config['STORAGE_PATH'], self.ai_analyzer
+            )
+        else:
+            self.daily_reporter = None
 
         # Flask app (lazy import to avoid circular deps)
         from frigate_buffer.web.server import create_app
@@ -592,6 +601,9 @@ class StateAwareOrchestrator:
         review_hour = self.config.get('DAILY_REVIEW_SCHEDULE_HOUR', 1)
         schedule.every().day.at(f"{review_hour:02d}:00").do(self._daily_review_job)
         logger.info(f"Scheduled daily review at {review_hour:02d}:00")
+        report_hour = self.config.get('DAILY_REPORT_SCHEDULE_HOUR', 1)
+        schedule.every().day.at(f"{report_hour:02d}:00").do(self._daily_report_job)
+        logger.info(f"Scheduled daily report at {report_hour:02d}:00")
         logger.info(f"Scheduled cleanup every {cleanup_hours} hour(s)")
 
         while not self._shutdown:
@@ -627,6 +639,18 @@ class StateAwareOrchestrator:
         deleted = self.daily_review_manager.cleanup_old()
         if deleted > 0:
             logger.info(f"Cleaned up {deleted} old daily reviews")
+
+    def _daily_report_job(self):
+        """Generate yesterday's AI daily report from analysis_result.json. Runs at configured hour (default 1am)."""
+        yesterday = date.today() - timedelta(days=1)
+        if self.daily_reporter is None:
+            logger.debug("Daily reporter disabled (AI analyzer not enabled), skipping")
+            return
+        logger.info(f"Running daily report job for {yesterday}")
+        if self.daily_reporter.generate_report(yesterday):
+            logger.info("Daily report generated successfully")
+        else:
+            logger.warning("Daily report generation failed or no response from proxy")
 
     def _hourly_cleanup(self):
         """Hourly cleanup task. Delegates to lifecycle service."""

@@ -368,6 +368,48 @@ class GeminiAnalysisService:
             logger.exception("Failed to parse proxy JSON: %s", e)
             return None
 
+    def send_text_prompt(self, system_prompt: str, user_prompt: str) -> Optional[str]:
+        """
+        POST text-only messages to Gemini proxy (OpenAI-compatible). No images.
+        Uses same GEMINI_PROXY_URL and GEMINI_API_KEY as send_to_proxy.
+        Returns raw response content (e.g. Markdown) or None on failure.
+        """
+        if not self._proxy_url or not self._api_key:
+            logger.warning("Gemini proxy_url or api_key not configured")
+            return None
+        url = f"{self._proxy_url}/v1/chat/completions"
+        payload = {
+            "model": self._model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            "temperature": self._temperature,
+            "top_p": self._top_p,
+            "frequency_penalty": self._frequency_penalty,
+            "presence_penalty": self._presence_penalty,
+        }
+        try:
+            resp = requests.post(
+                url,
+                json=payload,
+                headers={
+                    "Authorization": f"Bearer {self._api_key}",
+                    "Content-Type": "application/json",
+                },
+                timeout=60,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            content = (data.get("choices") or [{}])[0].get("message", {}).get("content")
+            if not content or not str(content).strip():
+                logger.warning("Empty response content from proxy (text prompt)")
+                return None
+            return str(content).strip()
+        except requests.exceptions.RequestException as e:
+            logger.exception("Proxy request failed (text prompt): %s", e)
+            return None
+
     def _save_analysis_result(self, event_id: str, clip_path: str, result: Dict[str, Any]) -> None:
         """
         Save the analysis result as analysis_result.json in the same directory as the clip.

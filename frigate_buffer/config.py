@@ -42,6 +42,8 @@ CONFIG_SCHEMA = Schema({
         Optional('stats_refresh_seconds'): int,
         Optional('daily_review_retention_days'): int,
         Optional('daily_review_schedule_hour'): int,
+        Optional('daily_report_schedule_hour'): int,
+        Optional('report_prompt_file'): str,
         Optional('event_gap_seconds'): int,
         Optional('export_buffer_before'): int,
         Optional('export_buffer_after'): int,
@@ -113,6 +115,8 @@ def load_config() -> dict:
         'STATS_REFRESH_SECONDS': 60,
         'DAILY_REVIEW_RETENTION_DAYS': 90,
         'DAILY_REVIEW_SCHEDULE_HOUR': 1,
+        'DAILY_REPORT_SCHEDULE_HOUR': 1,
+        'REPORT_PROMPT_FILE': '',
         'EVENT_GAP_SECONDS': 120,
         'EXPORT_BUFFER_BEFORE': 5,
         'EXPORT_BUFFER_AFTER': 30,
@@ -204,6 +208,8 @@ def load_config() -> dict:
                     config['STATS_REFRESH_SECONDS'] = settings.get('stats_refresh_seconds', config['STATS_REFRESH_SECONDS'])
                     config['DAILY_REVIEW_RETENTION_DAYS'] = settings.get('daily_review_retention_days', config['DAILY_REVIEW_RETENTION_DAYS'])
                     config['DAILY_REVIEW_SCHEDULE_HOUR'] = settings.get('daily_review_schedule_hour', config['DAILY_REVIEW_SCHEDULE_HOUR'])
+                    config['DAILY_REPORT_SCHEDULE_HOUR'] = settings.get('daily_report_schedule_hour', config['DAILY_REPORT_SCHEDULE_HOUR'])
+                    config['REPORT_PROMPT_FILE'] = (settings.get('report_prompt_file') or config['REPORT_PROMPT_FILE']) or ''
                     config['EVENT_GAP_SECONDS'] = settings.get('event_gap_seconds', config['EVENT_GAP_SECONDS'])
                     config['EXPORT_BUFFER_BEFORE'] = settings.get('export_buffer_before', config['EXPORT_BUFFER_BEFORE'])
                     config['EXPORT_BUFFER_AFTER'] = settings.get('export_buffer_after', config['EXPORT_BUFFER_AFTER'])
@@ -285,6 +291,7 @@ def load_config() -> dict:
     config['STATS_REFRESH_SECONDS'] = int(os.getenv('STATS_REFRESH_SECONDS', str(config['STATS_REFRESH_SECONDS'])))
     config['DAILY_REVIEW_RETENTION_DAYS'] = int(os.getenv('DAILY_REVIEW_RETENTION_DAYS', str(config['DAILY_REVIEW_RETENTION_DAYS'])))
     config['DAILY_REVIEW_SCHEDULE_HOUR'] = int(os.getenv('DAILY_REVIEW_SCHEDULE_HOUR', str(config['DAILY_REVIEW_SCHEDULE_HOUR'])))
+    config['DAILY_REPORT_SCHEDULE_HOUR'] = int(os.getenv('DAILY_REPORT_SCHEDULE_HOUR', str(config['DAILY_REPORT_SCHEDULE_HOUR'])))
     config['EVENT_GAP_SECONDS'] = int(os.getenv('EVENT_GAP_SECONDS', str(config['EVENT_GAP_SECONDS'])))
     config['EXPORT_BUFFER_BEFORE'] = int(os.getenv('EXPORT_BUFFER_BEFORE', str(config['EXPORT_BUFFER_BEFORE'])))
     config['EXPORT_BUFFER_AFTER'] = int(os.getenv('EXPORT_BUFFER_AFTER', str(config['EXPORT_BUFFER_AFTER'])))
