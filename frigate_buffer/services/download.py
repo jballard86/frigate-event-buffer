@@ -279,3 +279,22 @@ class DownloadService:
         except Exception as e:
             logger.exception(f"Failed to fetch review summary: {e}")
             return None
+
+    def post_event_description(self, event_id: str, description: str) -> bool:
+        """POST event description to Frigate API so it is stored in Frigate's database."""
+        url = f"{self.frigate_url}/api/events/{event_id}/description"
+        try:
+            response = requests.post(
+                url,
+                json={"description": description},
+                headers={"Content-Type": "application/json"},
+                timeout=15,
+            )
+            if response.ok:
+                logger.info(f"Posted description to Frigate for event {event_id}")
+                return True
+            logger.warning(f"Frigate description API returned {response.status_code} for {event_id}")
+            return False
+        except requests.exceptions.RequestException as e:
+            logger.warning(f"Failed to post description to Frigate for {event_id}: {e}")
+            return False

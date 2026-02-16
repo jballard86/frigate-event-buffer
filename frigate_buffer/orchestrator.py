@@ -28,6 +28,7 @@ from frigate_buffer.services.notifier import NotificationPublisher
 from frigate_buffer.services.timeline import TimelineLogger
 from frigate_buffer.services.mqtt_client import MqttClientWrapper
 from frigate_buffer.services.lifecycle import EventLifecycleService
+from frigate_buffer.services.ai_analyzer import GeminiAnalysisService
 
 logger = logging.getLogger('frigate-buffer')
 
@@ -80,6 +81,25 @@ class StateAwareOrchestrator:
 
         self.zone_filter = SmartZoneFilter(config)
 
+        # AI analyzer (Gemini proxy) - only when enabled; returns result to orchestrator (no MQTT publish)
+        gemini = config.get('GEMINI') or {}
+        if gemini.get('enabled') and gemini.get('proxy_url') and gemini.get('api_key'):
+            self.ai_analyzer = GeminiAnalysisService(config)
+        else:
+            self.ai_analyzer = None
+
+        on_clip_ready = None
+        if self.ai_analyzer:
+            def _on_clip_ready_for_analysis(event_id: str, clip_path: str):
+                def _run():
+                    if not self.ai_analyzer:
+                        return
+                    result = self.ai_analyzer.analyze_clip(event_id, clip_path)
+                    if result:
+                        self._handle_analysis_result(event_id, result)
+                threading.Thread(target=_run, daemon=True).start()
+            on_clip_ready = _on_clip_ready_for_analysis
+
         self.lifecycle_service = EventLifecycleService(
             config,
             self.state_manager,
@@ -88,7 +108,8 @@ class StateAwareOrchestrator:
             self.video_service,
             self.download_service,
             self.notifier,
-            self.timeline_logger
+            self.timeline_logger,
+            on_clip_ready_for_analysis=on_clip_ready
         )
 
         # Update callback after lifecycle service creation
@@ -271,6 +292,65 @@ class StateAwareOrchestrator:
     def _process_event_end(self, event: EventState):
         """Background processing when event ends. Delegates to lifecycle service."""
         self.lifecycle_service.process_event_end(event)
+
+    def _handle_analysis_result(self, event_id: str, result: dict):
+        """Handle returned analysis from GeminiAnalysisService: update state, write files, POST to Frigate, notify HA."""
+        title = result.get("title") or ""
+        description = result.get("shortSummary") or result.get("description") or ""
+        scene = result.get("scene") or ""
+        threat_level = int(result.get("potential_threat_level", 0))
+        severity = "detection"
+        if not title and not description:
+            logger.debug(f"Analysis result for {event_id} has no title/description, skipping finalization")
+            return
+        if not self.state_manager.set_genai_metadata(
+            event_id, title, description, severity, threat_level, scene=scene
+        ):
+            logger.warning(f"Cannot set GenAI metadata for {event_id} (event not in state?)")
+            # Still try to POST to Frigate so the result is not lost
+            desc_for_frigate = description or scene or title
+            if desc_for_frigate:
+                self.download_service.post_event_description(event_id, desc_for_frigate)
+            return
+        event = self.state_manager.get_event(event_id)
+        if event:
+            self.consolidated_manager.update_best(
+                event_id, title=title, description=description, threat_level=threat_level
+            )
+            if event.folder_path:
+                event.summary_written = self.file_manager.write_summary(event.folder_path, event)
+                self.file_manager.write_metadata_json(event.folder_path, event)
+            desc_for_frigate = description or scene or title
+            if desc_for_frigate:
+                self.download_service.post_event_description(event_id, desc_for_frigate)
+            ce = self.consolidated_manager.get_by_frigate_event(event_id)
+            if ce and ce.finalized_sent:
+                logger.debug(f"Suppressing finalized for {event_id} (CE {ce.consolidated_id} already sent)")
+            else:
+                if ce:
+                    ce.finalized_sent = True
+                    primary = self.state_manager.get_event(ce.primary_event_id)
+                    media_folder = os.path.join(ce.folder_path, self.file_manager.sanitize_camera_name(ce.primary_camera or "")) if ce.primary_camera else ce.folder_path
+                    if primary:
+                        ce.snapshot_downloaded = primary.snapshot_downloaded
+                        ce.clip_downloaded = primary.clip_downloaded
+                    notify_target = type('NotifyTarget', (), {
+                        'event_id': ce.consolidated_id, 'camera': ce.camera, 'label': ce.label,
+                        'folder_path': primary.folder_path if primary else media_folder,
+                        'created_at': ce.start_time, 'end_time': ce.end_time, 'phase': ce.phase,
+                        'genai_title': ce.best_title, 'genai_description': ce.best_description,
+                        'ai_description': None, 'review_summary': None,
+                        'threat_level': ce.best_threat_level, 'severity': ce.severity,
+                        'snapshot_downloaded': ce.snapshot_downloaded,
+                        'clip_downloaded': ce.clip_downloaded,
+                    })()
+                else:
+                    notify_target = event
+                self.notifier.publish_notification(
+                    notify_target, "finalized",
+                    tag_override=f"frigate_{ce.consolidated_id}" if ce else None
+                )
+        logger.info(f"Analysis result applied for {event_id}: title={title or 'N/A'}, threat_level={threat_level}")
 
     def _handle_tracked_update(self, payload: dict, topic: str):
         """Handle AI description update (Phase 2)."""

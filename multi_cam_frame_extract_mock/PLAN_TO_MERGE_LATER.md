@@ -1,6 +1,8 @@
 # Plan to merge multi-cam frame extractor into main project
 
-This folder holds a **standalone mock** of the multi-cam frame extractor. Nothing here is merged into the main frigate-event-buffer app yet. When ready, use this plan to integrate.
+This folder holds a **standalone mock** of the multi-cam frame extractor. It is kept as **reference/sandbox only**; the mock files here are **not** modified by the main app.
+
+**In-process AI analyzer:** The main project now includes an in-process analyzer in **`frigate_buffer/services/ai_analyzer.py`** (`GeminiAnalysisService`). It implements frame extraction from clips, Gemini proxy communication (OpenAI-compatible), and returns result to orchestrator; orchestrator persists via Frigate API and notifies HA (buffer does not publish to `frigate/reviews`). The orchestrator triggers it when a clip is ready (no MQTT bridge). The following items are **[x] Completed** via that service: **Frame Extraction**, **Proxy Communication**, **Service Integration**.
 
 ---
 
@@ -8,7 +10,7 @@ This folder holds a **standalone mock** of the multi-cam frame extractor. Nothin
 
 - **Location:** `multi_cam_frame_extract_mock/`
 - **Contents:** `multi_cam_frame_extracter.py` (mock), `daily_report_to_proxy.py` (mock), `multi_cam_system_prompt.txt`, `report_prompt.txt`, `multi_cam_frame_extractor_input_output.md` (payload spec), this plan, and README.
-- **Main project:** Unchanged; no references to this mock.
+- **Main project:** Uses `frigate_buffer/services/ai_analyzer.py` for clip analysis; this mock folder is reference only.
 
 ---
 
@@ -48,16 +50,14 @@ This folder holds a **standalone mock** of the multi-cam frame extractor. Nothin
 - Clips from Frigate export often include 5–10 seconds of pre-capture buffer before the event start. The script currently uses the first metadata timestamp as vid_start; that can make seeking wrong (e.g. seek to 0:00 is actually 10s before event).
 - **Fix when merging:** Use clip start from the export request (same export_buffer_before logic as the main app: see frigate_buffer/services/download.py and lifecycle.py) or derive from folder name / export response. Otherwise crops may miss the action.
 
-### 6. Gemini proxy call and analysis_result.json (bridge to Reporter)
+### 6. Gemini proxy call and analysis_result.json (bridge to Reporter) — [x] Completed
 
-- Implement the actual HTTP POST in **send_to_proxy** (called from `process_multi_cam_event`), not in the MQTT loop.
-- Build request from config (URL, api_key, model, temperature, etc.), system prompt, and base64-encoded frames (cap count e.g. via final_review_image_count). Auth per proxy (e.g. Bearer token from config/env).
-- **Critical:** Save the proxy response as **analysis_result.json** in the same folder as the frames (e.g. `multi_cam_frames/analysis_result.json`). Include: title, scene, shortSummary, confidence, potential_threat_level (from response) plus event_id, camera, start_time (for the Reporter). The Reporter (daily_report_to_proxy.py) scans event folders for this file to populate get_previous_day_recaps().
+- **Done in `frigate_buffer/services/ai_analyzer.py`:** HTTP POST in **send_to_proxy** (OpenAI-compatible), system prompt + base64 frames, Bearer auth. Response parsed and published to `frigate/reviews` (Main App and HA consume it). Optional: save **analysis_result.json** for Reporter (daily_report_to_proxy.py) if that script is merged later.
 - Payload shapes: see **multi_cam_frame_extractor_input_output.md** in this folder (can be moved to `docs/` or kept next to the service).
 
-### 7. Orchestrator integration (optional)
+### 7. Orchestrator integration (optional) — [x] Completed
 
-- If the multi-cam flow should be triggered by the main app instead of a separate process: from the orchestrator (or lifecycle), on overlap or CE close, call into the multi-cam service (e.g. pass event ids, config, and storage path). The service would then use the same MQTT-derived EventMetadataStore or receive event/clip metadata from the orchestrator.
+- **Done:** The main app triggers analysis from the orchestrator/lifecycle when a clip is ready. `GeminiAnalysisService.analyze_clip(event_id, clip_path)` is called in a background thread; no separate process or MQTT bridge.
 
 ### 8. Daily report script (daily_report_to_proxy.py)
 
