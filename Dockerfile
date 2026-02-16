@@ -22,7 +22,7 @@
 #     -v /mnt/user/appdata/frigate_buffer/config.yaml:/app/config.yaml:ro \
 #     frigate-buffer
 
-FROM python:3.9-slim
+FROM python:3.10-slim
 
 # Install ffmpeg for video transcoding
 RUN apt-get update && \
