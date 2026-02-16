@@ -553,7 +553,14 @@
 
     const ev = events[currentIndex];
     const ts = ev.timestamp ? new Date(parseInt(ev.timestamp) * 1000) : null;
-    const timeStr = ts ? ts.toLocaleString() : 'Unknown';
+    const endTs = ev.end_timestamp != null ? new Date(Math.round(parseFloat(ev.end_timestamp) * 1000)) : null;
+    const dateStr = ts ? ts.toLocaleDateString() : 'Unknown';
+    const startTimeStr = ts ? ts.toLocaleTimeString() : '—';
+    const endTimeStr = endTs ? endTs.toLocaleTimeString() : 'Ongoing';
+    const durationSec = (ts && endTs && ev.end_timestamp != null)
+      ? (parseFloat(ev.end_timestamp) - parseFloat(ev.timestamp))
+      : null;
+    const durationStr = formatDuration(durationSec);
     const title = ev.title || (ev.label || 'Event').replace(/\b\w/g, c => c.toUpperCase()) + ' Detected';
     const description = ev.description || ev.summary || 'No description available.';
     const scene = ev.scene || '';
@@ -602,6 +609,14 @@
       <div class="info-card">
         <h2>Event Details</h2>
         <div class="meta-grid">
+          <span class="meta-label">Date</span>
+          <span class="meta-value">${escapeHtml(dateStr)}</span>
+          <span class="meta-label">Start</span>
+          <span class="meta-value">${escapeHtml(startTimeStr)}</span>
+          <span class="meta-label">End</span>
+          <span class="meta-value">${escapeHtml(endTimeStr)}</span>
+          <span class="meta-label">Event length</span>
+          <span class="meta-value">${escapeHtml(durationStr)}</span>
           <span class="meta-label">Cameras & Zones</span>
           <span class="meta-value cameras-zones">${((ev.cameras_with_zones && ev.cameras_with_zones.length) ? ev.cameras_with_zones : [{camera: ev.camera, zones: []}])
             .map(c => {
@@ -612,8 +627,6 @@
             .join('<br>')}</span>
           <span class="meta-label">Label</span>
           <span class="meta-value">${escapeHtml(labelDisplay)}</span>
-          <span class="meta-label">Time</span>
-          <span class="meta-value">${escapeHtml(timeStr)}</span>
           ${ev.severity ? `<span class="meta-label">Severity</span><span class="meta-value">${escapeHtml(ev.severity)}</span>` : ''}
           ${threatLevel > 0 ? `<span class="meta-label">Threat Level</span><span class="meta-value"><span class="threat-badge threat-${threatLevel}">${threatLabels[threatLevel]}</span></span>` : ''}
           <span class="meta-label">Event ID</span>
@@ -681,6 +694,18 @@
     const div = document.createElement('div');
     div.textContent = str;
     return div.innerHTML;
+  }
+
+  /** Format seconds as human-readable duration (e.g. "2m 30s", "1h 5m 0s"). Returns "—" if invalid. */
+  function formatDuration(sec) {
+    if (sec == null || typeof sec !== 'number' || sec < 0) return '—';
+    const m = Math.floor(sec / 60);
+    const s = Math.floor(sec % 60);
+    const h = Math.floor(m / 60);
+    const min = m % 60;
+    if (h > 0) return `${h}h ${min}m ${s}s`;
+    if (min > 0) return `${min}m ${s}s`;
+    return `${s}s`;
   }
 
   // --- Auto-refresh ---
