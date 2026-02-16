@@ -59,7 +59,23 @@ CONFIG_SCHEMA = Schema({
         Optional('api_key'): str,
         Optional('model'): str,
         Optional('enabled'): bool,
-    }
+    },
+    Optional('multi_cam'): {
+        Optional('max_multi_cam_frames_min'): int,
+        Optional('max_multi_cam_frames_sec'): int,
+        Optional('motion_threshold_px'): int,
+        Optional('crop_width'): int,
+        Optional('crop_height'): int,
+        Optional('multi_cam_system_prompt_file'): str,
+    },
+    Optional('gemini_proxy'): {
+        Optional('url'): str,
+        Optional('model'): str,
+        Optional('temperature'): Any(int, float),
+        Optional('top_p'): Any(int, float),
+        Optional('frequency_penalty'): Any(int, float),
+        Optional('presence_penalty'): Any(int, float),
+    },
 }, extra=ALLOW_EXTRA)
 
 
@@ -116,6 +132,22 @@ def load_config() -> dict:
 
         # Gemini proxy (AI analysis) - optional
         'GEMINI': None,
+
+        # Multi-cam frame extractor (optional). No Google fallback: proxy URL default "".
+        'MAX_MULTI_CAM_FRAMES_MIN': 45,
+        'MAX_MULTI_CAM_FRAMES_SEC': 2,
+        'MOTION_THRESHOLD_PX': 50,
+        'CROP_WIDTH': 1280,
+        'CROP_HEIGHT': 720,
+        'MULTI_CAM_SYSTEM_PROMPT_FILE': '',
+
+        # Gemini proxy (extended): Single API Key (GEMINI_API_KEY only). Default URL "" (no Google fallback).
+        'GEMINI_PROXY_URL': '',
+        'GEMINI_PROXY_MODEL': 'gemini-2.5-flash-lite',
+        'GEMINI_PROXY_TEMPERATURE': 0.3,
+        'GEMINI_PROXY_TOP_P': 1,
+        'GEMINI_PROXY_FREQUENCY_PENALTY': 0,
+        'GEMINI_PROXY_PRESENCE_PENALTY': 0,
     }
 
     # Load from config.yaml if exists
@@ -202,6 +234,28 @@ def load_config() -> dict:
                         'enabled': bool(gemini_cfg.get('enabled', False)),
                     }
 
+                if 'multi_cam' in yaml_config:
+                    mc = yaml_config['multi_cam']
+                    config['MAX_MULTI_CAM_FRAMES_MIN'] = mc.get('max_multi_cam_frames_min', config['MAX_MULTI_CAM_FRAMES_MIN'])
+                    config['MAX_MULTI_CAM_FRAMES_SEC'] = mc.get('max_multi_cam_frames_sec', config['MAX_MULTI_CAM_FRAMES_SEC'])
+                    config['MOTION_THRESHOLD_PX'] = mc.get('motion_threshold_px', config['MOTION_THRESHOLD_PX'])
+                    config['CROP_WIDTH'] = mc.get('crop_width', config['CROP_WIDTH'])
+                    config['CROP_HEIGHT'] = mc.get('crop_height', config['CROP_HEIGHT'])
+                    config['MULTI_CAM_SYSTEM_PROMPT_FILE'] = mc.get('multi_cam_system_prompt_file', config['MULTI_CAM_SYSTEM_PROMPT_FILE']) or ''
+
+                if 'gemini_proxy' in yaml_config:
+                    gp = yaml_config['gemini_proxy']
+                    config['GEMINI_PROXY_URL'] = gp.get('url', config['GEMINI_PROXY_URL']) or ''
+                    config['GEMINI_PROXY_MODEL'] = gp.get('model', config['GEMINI_PROXY_MODEL']) or 'gemini-2.5-flash-lite'
+                    config['GEMINI_PROXY_TEMPERATURE'] = float(gp.get('temperature', config['GEMINI_PROXY_TEMPERATURE']))
+                    config['GEMINI_PROXY_TOP_P'] = float(gp.get('top_p', config['GEMINI_PROXY_TOP_P']))
+                    config['GEMINI_PROXY_FREQUENCY_PENALTY'] = float(gp.get('frequency_penalty', config['GEMINI_PROXY_FREQUENCY_PENALTY']))
+                    config['GEMINI_PROXY_PRESENCE_PENALTY'] = float(gp.get('presence_penalty', config['GEMINI_PROXY_PRESENCE_PENALTY']))
+                elif 'gemini' in yaml_config and config.get('GEMINI'):
+                    # Backward compat: derive proxy URL and model from gemini when gemini_proxy not set
+                    config['GEMINI_PROXY_URL'] = (config['GEMINI'].get('proxy_url') or '') or config['GEMINI_PROXY_URL']
+                    config['GEMINI_PROXY_MODEL'] = (config['GEMINI'].get('model') or 'gemini-2.5-flash-lite') or config['GEMINI_PROXY_MODEL']
+
                 config_loaded = True
                 break
 
@@ -234,13 +288,16 @@ def load_config() -> dict:
     config['HA_URL'] = os.getenv('HA_URL') or config['HA_URL']
     config['HA_TOKEN'] = os.getenv('HA_TOKEN') or config['HA_TOKEN']
 
-    # Gemini env overrides (api_key for secrets)
+    # Gemini env overrides (api_key for secrets). Single API Key: GEMINI_API_KEY only.
     config['GEMINI'] = dict(config.get('GEMINI') or {})
     config['GEMINI'].setdefault('proxy_url', '')
     config['GEMINI'].setdefault('api_key', '')
     config['GEMINI'].setdefault('model', 'gemini-2.5-flash-lite')
     config['GEMINI'].setdefault('enabled', False)
     config['GEMINI']['api_key'] = os.getenv('GEMINI_API_KEY') or config['GEMINI'].get('api_key') or ''
+
+    # Gemini proxy URL override (no Google fallback; default remains "")
+    config['GEMINI_PROXY_URL'] = (os.getenv('GEMINI_PROXY_URL') or config.get('GEMINI_PROXY_URL') or '').strip() or ''
 
     # Validate required settings
     missing = []

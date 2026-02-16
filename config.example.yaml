@@ -95,12 +95,32 @@ network:
   storage_path: "/app/storage"
 
 # Optional: Gemini proxy (AI analysis) - for clip GenAI summaries
-# Set GEMINI_API_KEY in environment for production
+# Single API Key: set GEMINI_API_KEY in environment for production (no separate proxy key).
+# No Google Fallback: default proxy URL is ""; set in config or GEMINI_PROXY_URL env.
 # gemini:
 #   proxy_url: "http://YOUR_PROXY_IP:5050"
 #   api_key: ""
 #   model: "gemini-2.5-flash-lite"
 #   enabled: true
+
+# Optional: Multi-cam frame extractor (for future multi-cam recap feature)
+# multi_cam:
+#   max_multi_cam_frames_min: 45
+#   max_multi_cam_frames_sec: 2    # target capture interval (seconds)
+#   motion_threshold_px: 50       # min pixels movement for high-rate capture
+#   crop_width: 1280
+#   crop_height: 720
+#   multi_cam_system_prompt_file: ""   # path to prompt file; empty = use built-in
+
+# Optional: Gemini proxy (extended) - model params for proxy calls (e.g. multi-cam)
+# API key: GEMINI_API_KEY only. Proxy URL: set here or GEMINI_PROXY_URL env (default "").
+# gemini_proxy:
+#   url: ""                       # no Google fallback; set explicitly
+#   model: "gemini-2.5-flash-lite"
+#   temperature: 0.3
+#   top_p: 1
+#   frequency_penalty: 0
+#   presence_penalty: 0
 
 # Optional: Home Assistant REST API (for stats page API Usage display)
 # Uncomment and set to show Gemini cost/token usage on the stats page

@@ -76,7 +76,7 @@ The application is organized as a Python package `frigate_buffer/`:
 | File / Directory | Description |
 |------------------|-------------|
 | `main.py` | Entry point. Loads config, sets up logging and signal handlers, starts the orchestrator. Run with `python -m frigate_buffer.main`. |
-| `config.py` | Configuration loading and validation. When a config file exists, validates with a voluptuous schema (required `cameras`, optional `network`/`settings`/`ha`; invalid config exits with code 1). Merges YAML, env vars, and defaults. Searches config paths in order. |
+| `config.py` | Configuration loading and validation. When a config file exists, validates with a voluptuous schema (required `cameras`, optional `network`/`settings`/`ha`/`multi_cam`/`gemini_proxy`; invalid config exits with code 1). Merges YAML, env vars, and defaults. No Google fallback; single API key (`GEMINI_API_KEY`). Searches config paths in order. |
 | `logging_utils.py` | Error buffer and logging. `ErrorBuffer` stores recent errors for the stats dashboard; `setup_logging()` configures log level and handlers. |
 | `models.py` | Data models: `EventPhase`, `EventState`, `ConsolidatedEvent`, plus helpers for consolidated IDs and "no concerns" detection. |
 | `orchestrator.py` | `StateAwareOrchestrator` — Central coordinator: MQTT message routing (`_on_mqtt_message`), event handlers (frigate/events, tracked_object_update, reviews), CE close and event-end processing. Delegates to MqttClientWrapper, SmartZoneFilter, TimelineLogger, and managers. |
@@ -227,7 +227,7 @@ When a **config file is found** (at any of the searched paths), the buffer valid
 
 - **When validation runs**: Only when `config.yaml` (or equivalent) exists and is loaded. If no config file is found, the app uses defaults and environment variables only and does not run schema validation.
 - **Required**: The root key `cameras` is **required** and must be a list. Each camera entry must have at least `name` (string). This ensures every config file declares which cameras to process.
-- **Optional sections**: `network`, `settings`, and `ha` are optional. Within them, fields have enforced types (e.g. `mqtt_port` must be an int, `log_level` must be one of `DEBUG`, `INFO`, `WARNING`, `ERROR`).
+- **Optional sections**: `network`, `settings`, `ha`, `multi_cam`, and `gemini_proxy` are optional. Within them, fields have enforced types (e.g. `mqtt_port` must be an int, `log_level` must be one of `DEBUG`, `INFO`, `WARNING`, `ERROR`).
 - **Schema rules**: `cameras[].event_filters` may contain `tracked_zones` (list of strings) and `exceptions` (list of strings). Extra keys at the root are allowed (`ALLOW_EXTRA`), so you can add custom keys without validation errors.
 - **On failure**: If validation fails, the app logs the error (e.g. `Invalid configuration in /app/config.yaml: required key not provided @ data['cameras']`) and exits with code 1. Fix the config file and restart.
 - **Dependency**: Validation requires the `voluptuous` package (listed in `requirements.txt`).
@@ -255,9 +255,10 @@ Environment variables override config.yaml values:
 | `EXPORT_BUFFER_AFTER` | `30` | Seconds after event end for clip export time range |
 | `HA_URL` | *(optional)* | Home Assistant API base URL, e.g. `http://YOUR_HA_IP:8123/api` (for stats page API Usage display) |
 | `HA_TOKEN` | *(optional)* | Home Assistant long-lived access token (for stats page API Usage display) |
-| `GEMINI_API_KEY` | *(optional)* | API key for the Gemini proxy when `gemini.enabled` is true (overrides `gemini.api_key` in config). |
+| `GEMINI_API_KEY` | *(optional)* | API key for the Gemini proxy (single key for all proxy usage; overrides `gemini.api_key` in config). |
+| `GEMINI_PROXY_URL` | *(optional)* | Overrides proxy URL for Gemini (e.g. multi-cam). No default fallback; set explicitly in config or env. |
 
-Optional **gemini** config section (in `config.yaml`): `proxy_url`, `api_key`, `model`, `enabled`. When `enabled` is true and proxy is configured, the buffer runs in-process clip analysis via the proxy, then updates state, writes files, POSTs the description to Frigate, and notifies HA. See [Configuration](#configuration).
+Optional **gemini** config section (in `config.yaml`): `proxy_url`, `api_key`, `model`, `enabled`. When `enabled` is true and proxy is configured, the buffer runs in-process clip analysis via the proxy, then updates state, writes files, POSTs the description to Frigate, and notifies HA. **Optional multi_cam and gemini_proxy** sections (see `config.example.yaml`) provide defaults for the multi-cam frame extractor (frame limits, crop size, proxy model params). Default proxy URL is `""` (no Google fallback); use `GEMINI_PROXY_URL` or config for the proxy. See [Configuration](#configuration).
 
 ## Daily Review
 
@@ -932,7 +933,7 @@ python -m unittest discover -s tests -p "test_*.py" -v
 
 | Test module | What it tests |
 |-------------|----------------|
-| `test_config_schema.py` | Config validation: valid config loads; missing `cameras` or wrong types (e.g. cameras not a list, mqtt_port not int) cause `SystemExit(1)`; extra root keys are allowed. |
+| `test_config_schema.py` | Config validation: valid config loads; missing `cameras` or wrong types (e.g. cameras not a list, mqtt_port not int) cause `SystemExit(1)`; extra root keys allowed; multi_cam/gemini_proxy flatten to flat keys, defaults when omitted, backward compat from gemini, `GEMINI_PROXY_URL` env override, invalid multi_cam type fails. |
 | `test_consolidation.py` | ConsolidatedEventManager closing state: `mark_closing` returns True once then False; unknown CE returns False; `schedule_close_timer` does nothing when CE is closing or closed; `get_or_create` does not add events to a closing or closed CE (creates new CE instead). |
 | `test_file_manager_enhancement.py` | FileManager download/export: HTTP 400 retries (up to 3), HTTP 404 no retry, export `success: false` logs warning. |
 | `test_file_manager_path_validation.py` | FileManager path safety: `sanitize_camera_name` valid names and stripping of path characters; `create_event_folder` and `create_consolidated_event_folder` raise `ValueError` on path-traversal inputs; valid folder creation succeeds under storage root. |
