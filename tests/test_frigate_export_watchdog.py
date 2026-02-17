@@ -204,7 +204,7 @@ class TestFrigateExportWatchdog(unittest.TestCase):
 
     @patch('frigate_buffer.services.frigate_export_watchdog.requests.delete')
     @patch('frigate_buffer.services.frigate_export_watchdog.requests.head')
-    def test_delete_404_logs_already_removed_at_info(self, mock_head, mock_delete):
+    def test_delete_404_logs_already_removed_at_debug_summary_at_info(self, mock_head, mock_delete):
         mock_delete.return_value = MagicMock(
             status_code=404,
             headers={"content-type": "application/json"},
@@ -222,11 +222,16 @@ class TestFrigateExportWatchdog(unittest.TestCase):
                 f.write(b"x")
             run_once({"STORAGE_PATH": storage, "FRIGATE_URL": "http://f:5000", "BUFFER_IP": "x", "FLASK_PORT": "5055"})
         self.assertEqual(mock_delete.call_count, 1)
-        found_info = any(
-            record.levelno == logging.INFO and "already removed" in record.getMessage() and "exp-404" in record.getMessage()
+        found_debug = any(
+            record.levelno == logging.DEBUG and "already removed" in record.getMessage() and "exp-404" in record.getMessage()
             for record in self.log_capture
         )
-        self.assertTrue(found_info, "Should log already removed at INFO for 404")
+        self.assertTrue(found_debug, "Should log already removed at DEBUG for 404")
+        summary_logs = [
+            r for r in self.log_capture
+            if r.levelno == logging.INFO and "Export watchdog complete" in r.getMessage() and "already removed" in r.getMessage()
+        ]
+        self.assertEqual(len(summary_logs), 1, "Run summary at INFO should mention already removed")
         found_no_warning = not any(
             record.levelno == logging.WARNING and "exp-404" in record.getMessage()
             for record in self.log_capture
