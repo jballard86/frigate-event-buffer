@@ -121,6 +121,7 @@ class TestEventLifecycleService(unittest.TestCase):
         self.notifier.publish_notification.assert_called_once()
         call_args = self.notifier.publish_notification.call_args
         self.assertEqual(call_args[0][1], "discarded")
+        self.notifier.mark_last_event_ended.assert_called_once()
         self.download_service.download_snapshot.assert_not_called()
         self.consolidated_manager.update_activity.assert_not_called()
         self.consolidated_manager.schedule_close_timer.assert_not_called()
@@ -172,6 +173,7 @@ class TestEventLifecycleService(unittest.TestCase):
         self.consolidated_manager.mark_closing.assert_called_with(ce_id)
         self.download_service.export_and_transcode_clip.assert_called()
         self.consolidated_manager.remove.assert_called_with(ce_id)
+        self.notifier.mark_last_event_ended.assert_called_once()
 
 if __name__ == '__main__':
     unittest.main()
