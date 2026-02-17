@@ -79,7 +79,7 @@ flowchart LR
 | `src/frigate_buffer/managers/file.py` | FileManager: storage paths, clip/snapshot download (via DownloadService), export/transcode coordination, cleanup, path validation (realpath/commonpath). Helpers: `write_stitched_frame`, `write_ai_frame_analysis_single_cam`, `create_ai_analysis_zip`; `compute_storage_stats` for legacy + consolidated + daily_reports/daily_reviews. |
 | `src/frigate_buffer/services/query.py` | EventQueryService: reads event data from filesystem with TTL and per-folder caching; list events (legacy + consolidated), event_by_id, timeline merge (`read_timeline_merged`). Event dicts include `timestamp` (start); optional `end_timestamp` when available (from timeline or metadata) for player end time and duration. Used by Flask for event lists and stats. |
 | `src/frigate_buffer/config.py` | Load and validate config: voluptuous CONFIG_SCHEMA (cameras, network, settings, ha, gemini, multi_cam, gemini_proxy); merge YAML + env + defaults; flat keys for app (e.g. MQTT_BROKER, GEMINI_PROXY_URL). Invalid config exits with code 1. |
-| `scripts/multi_cam_recap.py` | Standalone entrypoint: own MQTT loop and EventMetadataStore; on linked-event message runs `process_multi_cam_event` (frame extract, optional Gemini, write stitched/zip). Uses crop_utils and FileManager helpers. Not started by main orchestrator. |
+| `scripts/multi_cam_recap.py` | Standalone entrypoint: uses same config as main app (`frigate_buffer.config.load_config`); same config.yaml and env, including `multi_cam` and `gemini_proxy`. Own MQTT loop and EventMetadataStore; on linked-event message runs `process_multi_cam_event` (frame extract, optional Gemini, write stitched/zip). Uses crop_utils and FileManager helpers. Not started by main orchestrator. |
 
 ---
 

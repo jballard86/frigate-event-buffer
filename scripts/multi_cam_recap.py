@@ -4,8 +4,8 @@
 # Usage: python scripts/multi_cam_recap.py   OR   python -m scripts.multi_cam_recap
 #
 # TODO / ARCHITECTURE NOTES:
-# 1. TEMPLATE STATUS: This script is currently a standalone microservice template.
-#    It needs to be integrated with the actual Frigate volume paths and ENV vars.
+# 1. Config: Uses the same config as the main app (frigate_buffer.config.load_config).
+#    Same config.yaml and env; multi_cam and gemini_proxy sections apply here too.
 #
 # 2. DATA FORMATTING: Before sending to Gemini, we must:
 #    - Define the System Prompt (Context + Instructions).
@@ -24,7 +24,6 @@
 import os
 import json
 import time
-import yaml
 import logging
 import threading
 import cv2
@@ -34,6 +33,7 @@ import paho.mqtt.client as mqtt
 from datetime import datetime
 from collections import defaultdict
 
+from frigate_buffer.config import load_config as load_app_config
 from frigate_buffer.services import crop_utils
 from frigate_buffer.managers.file import write_stitched_frame, create_ai_analysis_zip
 
@@ -45,45 +45,32 @@ logging.basicConfig(
 )
 logger = logging.getLogger("MultiCamService")
 
-# Load Config from Env or Defaults
-MQTT_BROKER = os.getenv("MQTT_BROKER", "localhost")
-MQTT_PORT = int(os.getenv("MQTT_PORT", 1883))
-STORAGE_PATH = os.getenv("STORAGE_PATH", "/media/frigate")
-CONFIG_FILE = os.getenv("CONFIG_FILE", "config.yaml")
+# Use main package config (same config.yaml and env as the main app).
+# Required keys (MQTT_BROKER, FRIGATE_URL, BUFFER_IP) must be set in config or env.
+_cfg = load_app_config()
+MQTT_BROKER = _cfg["MQTT_BROKER"]
+MQTT_PORT = int(_cfg["MQTT_PORT"])
+STORAGE_PATH = _cfg["STORAGE_PATH"]
 
-# Default limits
-DEFAULT_CONFIG = {
-    "max_multi_cam_frames_min": 45,
-    "max_multi_cam_frames_sec": 2,
-    "motion_threshold_px": 50,
-    "crop_width": 1280,
-    "crop_height": 720,
-    "motion_crop_min_area_fraction": 0.001,
-    "motion_crop_min_px": 500,
-    "gemini_proxy_url": "192.168.21.189:5050",
-    "gemini_proxy_api_key": "YOUR_GEMINI_PROXY_API_KEY",
-    "gemini_proxy_model": "gemini-2.5-flash-lite",
-    "gemini_proxy_temperature": 0.3,
-    "gemini_proxy_top_p": 1,
-    "gemini_proxy_frequency_penalty": 0,
-    "gemini_proxy_presence_penalty": 0,
-    "save_ai_frames": True,
-    "create_ai_analysis_zip": True,
+# Map flat config keys to names this script uses so rest of script is unchanged.
+CONF = {
+    "max_multi_cam_frames_min": _cfg["MAX_MULTI_CAM_FRAMES_MIN"],
+    "max_multi_cam_frames_sec": _cfg["MAX_MULTI_CAM_FRAMES_SEC"],
+    "motion_threshold_px": _cfg["MOTION_THRESHOLD_PX"],
+    "crop_width": _cfg["CROP_WIDTH"],
+    "crop_height": _cfg["CROP_HEIGHT"],
+    "motion_crop_min_area_fraction": float(_cfg.get("MOTION_CROP_MIN_AREA_FRACTION", 0.001)),
+    "motion_crop_min_px": int(_cfg.get("MOTION_CROP_MIN_PX", 500)),
+    "gemini_proxy_url": (_cfg.get("GEMINI_PROXY_URL") or "").strip(),
+    "gemini_proxy_api_key": (_cfg.get("GEMINI") or {}).get("api_key") or os.getenv("GEMINI_API_KEY") or "",
+    "gemini_proxy_model": _cfg.get("GEMINI_PROXY_MODEL", "gemini-2.5-flash-lite"),
+    "gemini_proxy_temperature": float(_cfg.get("GEMINI_PROXY_TEMPERATURE", 0.3)),
+    "gemini_proxy_top_p": float(_cfg.get("GEMINI_PROXY_TOP_P", 1)),
+    "gemini_proxy_frequency_penalty": float(_cfg.get("GEMINI_PROXY_FREQUENCY_PENALTY", 0)),
+    "gemini_proxy_presence_penalty": float(_cfg.get("GEMINI_PROXY_PRESENCE_PENALTY", 0)),
+    "save_ai_frames": bool(_cfg.get("SAVE_AI_FRAMES", True)),
+    "create_ai_analysis_zip": bool(_cfg.get("CREATE_AI_ANALYSIS_ZIP", True)),
 }
-
-def load_config():
-    config = DEFAULT_CONFIG.copy()
-    if os.path.exists(CONFIG_FILE):
-        try:
-            with open(CONFIG_FILE, 'r') as f:
-                user_config = yaml.safe_load(f)
-                if user_config:
-                    config.update(user_config)
-        except Exception as e:
-            logger.error(f"Failed to load config.yaml: {e}")
-    return config
-
-CONF = load_config()
 
 # --- State Management ---
 class EventMetadataStore:

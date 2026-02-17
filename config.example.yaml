@@ -114,14 +114,18 @@ network:
 #   model: "gemini-2.5-flash-lite"
 #   enabled: true
 
-# Optional: Multi-cam frame extractor (for future multi-cam recap feature)
+# Optional: Multi-cam frame extractor (main app AI analyzer + standalone multi_cam_recap.py)
+# All frame-limit and crop options below are configurable; same config is used by both.
 # multi_cam:
-#   max_multi_cam_frames_min: 45
+#   max_multi_cam_frames_min: 45   # max frames per clip (cap)
 #   max_multi_cam_frames_sec: 2    # target capture interval (seconds)
-#   motion_threshold_px: 50       # min pixels movement for high-rate capture
+#   motion_threshold_px: 50        # min pixels movement for high-rate capture
 #   crop_width: 1280
 #   crop_height: 720
 #   multi_cam_system_prompt_file: ""   # path to prompt file; empty = use built-in
+#   smart_crop_padding: 0.15       # padding fraction around motion crop
+#   motion_crop_min_area_fraction: 0.001
+#   motion_crop_min_px: 500
 
 # Optional: Gemini proxy (extended) - model params for proxy calls (e.g. multi-cam)
 # API key: GEMINI_API_KEY only. Proxy URL: set here or GEMINI_PROXY_URL env (default "").
