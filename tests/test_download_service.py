@@ -317,23 +317,22 @@ class TestDownloadService(unittest.TestCase):
         mock_post.return_value.json.return_value = {"export_id": "exp1"}
         mock_post.return_value.ok = True
         mock_post.return_value.raise_for_status = MagicMock()
-        # First get: exports list with in_progress False (completed)
+        # First get: exports list with in_progress False (completed); second get: sync export_id from list; third: download
         list_resp = MagicMock()
         list_resp.raise_for_status = MagicMock()
         list_resp.json.return_value = [
             {"id": "exp1", "export_id": "exp1", "in_progress": False, "export": "export_file.mp4"}
         ]
-        # Second get: download file
         dl_resp = MagicMock()
         dl_resp.raise_for_status = MagicMock()
         dl_resp.iter_content = lambda chunk_size: (b"x" for _ in range(1))
-        mock_get.side_effect = [list_resp, dl_resp]
+        mock_get.side_effect = [list_resp, list_resp, dl_resp]
         self.download_service.export_and_transcode_clip(
             event_id="evt1", folder_path="/tmp", camera="cam1",
             start_time=1000, end_time=1010, export_buffer_before=0, export_buffer_after=0
         )
-        self.assertEqual(mock_get.call_count, 2, "First call exports list, second call download")
-        self.assertIn("/exports/", mock_get.call_args_list[1][0][0], "Second get should be download URL")
+        self.assertEqual(mock_get.call_count, 3, "First two GETs exports list (poll + sync), third download")
+        self.assertIn("/exports/", mock_get.call_args_list[2][0][0], "Third get should be download URL")
         self.download_service.video_service.transcode_clip_to_h264.assert_called_once()
 
     @patch('frigate_buffer.services.download.requests.get')
@@ -352,12 +351,12 @@ class TestDownloadService(unittest.TestCase):
         dl_resp = MagicMock()
         dl_resp.raise_for_status = MagicMock()
         dl_resp.iter_content = lambda chunk_size: (b"x" for _ in range(1))
-        mock_get.side_effect = [list_resp, dl_resp]
+        mock_get.side_effect = [list_resp, list_resp, dl_resp]
         self.download_service.export_and_transcode_clip(
             event_id="evt1", folder_path="/tmp", camera="cam1",
             start_time=1000, end_time=1010, export_buffer_before=0, export_buffer_after=0
         )
-        self.assertEqual(mock_get.call_count, 2)
+        self.assertEqual(mock_get.call_count, 3)
         self.download_service.video_service.transcode_clip_to_h264.assert_called_once()
 
 if __name__ == "__main__":

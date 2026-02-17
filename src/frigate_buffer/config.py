@@ -12,80 +12,92 @@ logger = logging.getLogger('frigate-buffer')
 
 # Configuration Schema
 CONFIG_SCHEMA = Schema({
+    # List of cameras to process; only events from these cameras are ingested.
     Required('cameras'): [{
+        # Frigate camera name; must match the camera key in Frigate config.
         Required('name'): str,
+        # If set, only events with these object labels (e.g. person, car) are processed; empty or omit = allow all.
         Optional('labels'): [str],
+        # Smart zone filter: event creation is gated by zone and exceptions (omit for legacy: all events start immediately).
         Optional('event_filters'): {
+            # Only create an event when the object enters one of these Frigate zone names.
             Optional('tracked_zones'): [str],
+            # Labels or sub_labels that start an event regardless of zone (e.g. person, UPS).
             Optional('exceptions'): [str],
         }
     }],
+    # Network and storage; MQTT broker, Frigate URL, and buffer IP are required at runtime (config or env).
     Optional('network'): {
-        Optional('mqtt_broker'): str,
-        Optional('mqtt_port'): int,
-        Optional('mqtt_user'): str,
-        Optional('mqtt_password'): str,
-        Optional('frigate_url'): str,
-        Optional('buffer_ip'): str,
-        Optional('flask_port'): int,
-        Optional('storage_path'): str,
-        Optional('ha_ip'): str,  # Legacy fallback
+        Optional('mqtt_broker'): str,      # MQTT broker hostname or IP for Frigate events.
+        Optional('mqtt_port'): int,        # MQTT broker port (default 1883).
+        Optional('mqtt_user'): str,        # Optional MQTT username.
+        Optional('mqtt_password'): str,    # Optional MQTT password.
+        Optional('frigate_url'): str,      # Base URL of Frigate (e.g. http://host:5000) for API and snapshots.
+        Optional('buffer_ip'): str,        # IP/hostname where this buffer is reachable (used in notification URLs).
+        Optional('flask_port'): int,       # Port for the Flask web server (player, stats, API).
+        Optional('storage_path'): str,     # Root path for event clips, snapshots, and exported files.
+        Optional('ha_ip'): str,            # Legacy fallback for buffer_ip when building notification URLs.
     },
+    # Application behavior: retention, cleanup, export, logging, review/report, and AI analysis options.
     Optional('settings'): {
-        Optional('retention_days'): int,
-        Optional('cleanup_interval_hours'): int,
-        Optional('export_watchdog_interval_minutes'): int,
-        Optional('ffmpeg_timeout_seconds'): int,
-        Optional('notification_delay_seconds'): int,
-        Optional('log_level'): Any('DEBUG', 'INFO', 'WARNING', 'ERROR'),
-        Optional('summary_padding_before'): int,
-        Optional('summary_padding_after'): int,
-        Optional('stats_refresh_seconds'): int,
-        Optional('daily_review_retention_days'): int,
-        Optional('daily_review_schedule_hour'): int,
-        Optional('daily_report_schedule_hour'): int,
-        Optional('report_prompt_file'): str,
-        Optional('report_known_person_name'): str,
-        Optional('event_gap_seconds'): int,
-        Optional('minimum_event_seconds'): int,
-        Optional('export_buffer_before'): int,
-        Optional('export_buffer_after'): int,
-        Optional('final_review_image_count'): int,
-        Optional('gemini_max_concurrent_analyses'): int,
-        Optional('save_ai_frames'): bool,
-        Optional('create_ai_analysis_zip'): bool,
+        Optional('retention_days'): int,                         # Days to keep event data before cleanup.
+        Optional('cleanup_interval_hours'): int,                 # How often to run retention cleanup (hours).
+        Optional('export_watchdog_interval_minutes'): int,      # How often to check/remove completed exports in Frigate (minutes).
+        Optional('ffmpeg_timeout_seconds'): int,                # Timeout for FFmpeg transcode; kills hung processes.
+        Optional('notification_delay_seconds'): int,            # Delay before fetching snapshot after notification (lets Frigate pick a better frame).
+        Optional('log_level'): Any('DEBUG', 'INFO', 'WARNING', 'ERROR'),  # Logging verbosity.
+        Optional('summary_padding_before'): int,                # Seconds before event start for Frigate review summary window.
+        Optional('summary_padding_after'): int,                 # Seconds after event end for Frigate review summary window.
+        Optional('stats_refresh_seconds'): int,                 # Stats page auto-refresh interval (seconds).
+        Optional('daily_review_retention_days'): int,           # How long to keep saved daily reviews (days).
+        Optional('daily_review_schedule_hour'): int,            # Hour (0-23) to run daily review fetch for previous day.
+        Optional('daily_report_schedule_hour'): int,             # Hour (0-23) to generate AI daily report from analysis results.
+        Optional('report_prompt_file'): str,                    # Path to prompt file for daily report; empty = use default.
+        Optional('report_known_person_name'): str,              # Placeholder value for {known_person_name} in report prompt.
+        Optional('event_gap_seconds'): int,                     # Seconds of inactivity before next event starts a new consolidated group.
+        Optional('minimum_event_seconds'): int,                 # Events shorter than this are discarded (data deleted, state/CE updated, discarded MQTT notification sent).
+        Optional('export_buffer_before'): int,                  # Seconds to include before event start in exported clip.
+        Optional('export_buffer_after'): int,                    # Seconds to include after event end in exported clip.
+        Optional('final_review_image_count'): int,              # Max number of images to send to Frigate final review summary.
+        Optional('gemini_max_concurrent_analyses'): int,        # Max concurrent Gemini clip analyses (throttling).
+        Optional('save_ai_frames'): bool,                        # Whether to save extracted AI analysis frames to disk.
+        Optional('create_ai_analysis_zip'): bool,               # Whether to create a zip of AI analysis assets (e.g. for multi-cam).
     },
+    # Home Assistant REST API; used for stats page to display Gemini cost/token entities.
     Optional('ha'): {
-        Optional('base_url'): str,
-        Optional('url'): str,
-        Optional('token'): str,
-        Optional('gemini_cost_entity'): str,
-        Optional('gemini_tokens_entity'): str,
+        Optional('base_url'): str,           # HA API base URL (e.g. http://host:8123/api); preferred over url.
+        Optional('url'): str,                # Alternative to base_url for HA API endpoint.
+        Optional('token'): str,              # Long-lived access token for HA API.
+        Optional('gemini_cost_entity'): str, # HA entity ID for Gemini cost (e.g. input_number.gemini_daily_cost).
+        Optional('gemini_tokens_entity'): str,  # HA entity ID for Gemini token count (e.g. input_number.gemini_total_tokens).
     },
+    # Gemini proxy for main-app clip AI analysis; optional; API key often via env (GEMINI_API_KEY).
     Optional('gemini'): {
-        Optional('proxy_url'): str,
-        Optional('api_key'): str,
-        Optional('model'): str,
-        Optional('enabled'): bool,
+        Optional('proxy_url'): str,   # URL of OpenAI-compatible proxy (e.g. for Gemini); no Google fallback if unset.
+        Optional('api_key'): str,    # API key for the proxy (can override via GEMINI_API_KEY env).
+        Optional('model'): str,      # Model name sent to the proxy (e.g. gemini-2.5-flash-lite).
+        Optional('enabled'): bool,   # Whether clip analysis via Gemini is enabled.
     },
+    # Multi-cam frame extraction (main app AI analyzer + standalone multi_cam_recap); frame limits and crop options.
     Optional('multi_cam'): {
-        Optional('max_multi_cam_frames_min'): int,
-        Optional('max_multi_cam_frames_sec'): int,
-        Optional('motion_threshold_px'): int,
-        Optional('crop_width'): int,
-        Optional('crop_height'): int,
-        Optional('multi_cam_system_prompt_file'): str,
-        Optional('smart_crop_padding'): Any(int, float),
-        Optional('motion_crop_min_area_fraction'): Any(int, float),
-        Optional('motion_crop_min_px'): int,
+        Optional('max_multi_cam_frames_min'): int,              # Maximum frames to extract per clip (cap).
+        Optional('max_multi_cam_frames_sec'): int,              # Target interval in seconds between captured frames.
+        Optional('motion_threshold_px'): int,                   # Minimum pixel change to trigger high-rate capture.
+        Optional('crop_width'): int,                            # Width of output crop for stitched/multi-cam frames.
+        Optional('crop_height'): int,                            # Height of output crop for stitched/multi-cam frames.
+        Optional('multi_cam_system_prompt_file'): str,          # Path to system prompt file for multi-cam Gemini; empty = built-in.
+        Optional('smart_crop_padding'): Any(int, float),        # Padding fraction around motion-based crop (e.g. 0.15).
+        Optional('motion_crop_min_area_fraction'): Any(int, float),  # Minimum motion region area as fraction of frame to consider for crop.
+        Optional('motion_crop_min_px'): int,                    # Minimum motion region area in pixels for crop.
     },
+    # Extended Gemini proxy options (e.g. for multi_cam); model params; single API key via GEMINI_API_KEY, URL here or env.
     Optional('gemini_proxy'): {
-        Optional('url'): str,
-        Optional('model'): str,
-        Optional('temperature'): Any(int, float),
-        Optional('top_p'): Any(int, float),
-        Optional('frequency_penalty'): Any(int, float),
-        Optional('presence_penalty'): Any(int, float),
+        Optional('url'): str,                    # Proxy URL (no Google fallback; set explicitly or via GEMINI_PROXY_URL env).
+        Optional('model'): str,                  # Model name for proxy requests.
+        Optional('temperature'): Any(int, float),   # Sampling temperature (0–2 typical).
+        Optional('top_p'): Any(int, float),         # Nucleus sampling parameter.
+        Optional('frequency_penalty'): Any(int, float),  # Penalty for repeated tokens.
+        Optional('presence_penalty'): Any(int, float),   # Penalty for token presence.
     },
 }, extra=ALLOW_EXTRA)
 
