@@ -215,6 +215,37 @@ class DownloadService:
                     "fallback": "events_api",
                 }
 
+            # Ensure we have the export id from GET /exports for the watchdog (DELETE expects list id).
+            # If we got export_filename from POST we may have skipped the poll loop and never set it.
+            if isinstance(frigate_response, dict):
+                try:
+                    list_resp = requests.get(exports_list_url, timeout=15)
+                    list_resp.raise_for_status()
+                    exports = list_resp.json() if list_resp.content else []
+                    if isinstance(exports, list) and exports:
+                        list_id = frigate_response.get("export_id") or frigate_response.get("id")
+                        matched = None
+                        for e in exports:
+                            e_path = (
+                                e.get("video_path")
+                                or e.get("export")
+                                or e.get("filename")
+                                or e.get("name")
+                                or e.get("path")
+                            )
+                            if e_path:
+                                tail = export_filename.lstrip("/").split("/")[-1]
+                                if export_filename in e_path or e_path.endswith(tail) or tail in e_path:
+                                    matched = e
+                                    break
+                            if list_id and (e.get("id") == list_id or e.get("export_id") == list_id):
+                                matched = e
+                                break
+                        if matched:
+                            frigate_response["export_id"] = matched.get("id") or matched.get("export_id") or frigate_response.get("export_id")
+                except Exception as e:
+                    logger.debug("Could not sync export_id from exports list: %s", e)
+
             # 4. Download from Frigate exports (web server path, not /api/)
             # Handle path that may include camera prefix (e.g. "Doorbell/xxx.mp4" or "Doorbell_xxx.mp4")
             download_path = export_filename.lstrip("/").split("/")[-1] if "/" in export_filename else export_filename
