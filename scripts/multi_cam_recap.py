@@ -263,7 +263,7 @@ def process_multi_cam_event(main_event_id, linked_event_ids):
     manifest_entries = []
     for seq, (ts, camera_name, frame) in enumerate(collected, start=1):
         time_str = datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S")
-        crop_utils.draw_timestamp_overlay(frame, time_str, camera_name, seq, total)
+        frame = crop_utils.draw_timestamp_overlay(frame, time_str, camera_name, seq, total)
         time_part = datetime.fromtimestamp(ts).strftime("%H-%M-%S")
         fname = f"frame_{seq:03d}_{time_part}_{camera_name}.jpg"
         out_path = os.path.join(frames_dir, fname)

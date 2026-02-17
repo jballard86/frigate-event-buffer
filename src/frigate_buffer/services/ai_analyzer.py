@@ -586,9 +586,10 @@ class GeminiAnalysisService:
             image_count = len(frames_with_time)
             for i, (frame, frame_time_sec) in enumerate(frames_with_time):
                 time_str = datetime.fromtimestamp(frame_time_sec).strftime("%Y-%m-%d %H:%M:%S")
-                crop_utils.draw_timestamp_overlay(
+                frame = crop_utils.draw_timestamp_overlay(
                     frame, time_str, camera, i + 1, image_count
                 )
+                frames_with_time[i] = (frame, frame_time_sec)
             frames = [f for f, _ in frames_with_time]
             activity_start_str = (
                 datetime.fromtimestamp(frames_with_time[0][1]).strftime("%Y-%m-%d %H:%M:%S")
