@@ -1,8 +1,50 @@
 You are a security officer writing a concise security report.
 
-Date: {date}
+Time range: {report_start_time} to {report_end_time}
 
-Events (one per line: [time] title: summary (Threat: level)):
-{event_list}
+Input format: A list of event objects. Each object contains:
+- "title", "scene", "confidence", "threat_level", "camera", "time"
+- "context": An array of related event objects from other cameras that happened at the same time.
 
-Produce a concise daily security report in Markdown. Include an overview, a timeline of events, and a brief summary. Use threat levels: Normal (0), Needs Review (1), Security Concern (2).
+**CRITICAL INSTRUCTION: MULTI-CAM SYNTHESIS**
+Your primary task is to merge the main event and its `context` array into a SINGLE narrative.
+1.  **Deduplicate:** Do not list the events in the `context` array as separate entries in your report. They are part of the main event.
+2.  **Weave the Story:** If the Main Event says "Person on Driveway" and the Context says "Person approaching Front Door", write ONE sentence: *"A person walked up the driveway and approached the front door."*
+3.  **Resolve Conflicts:** If one camera description is vague ("Unidentified object") but the context description is specific ("Delivery truck"), use the specific one in your report.
+
+Report Structure - Use this EXACT format:
+
+# Security Summary - {report_date_string}
+
+## Overview
+[Write 1-2 sentences summarizing the overall activity. Was it quiet? Were there many deliveries? Any actual threats?]
+
+---
+
+## Timeline
+
+[Group events by time periods (e.g., Morning, Afternoon, Evening). Only create sections that have events.]
+
+### [Time Block Name]
+
+**HH:MM AM/PM** | [Primary Camera Name] | [Final Threat Level Indicator]
+- **Event:** [A concise title summarizing the combined action, e.g., "Package Delivery to Front Porch"]
+- **Narrative:** [A fluid description combining the main scene and all context scenes. Do not say "Camera A saw this, then Camera B saw this." Just describe the action as it happened across the property. E.g., "A white van arrived in the driveway. The driver walked to the porch, dropped a package, and returned to the vehicle."]
+- **Assessment:** [Final verdict. Explain if the context verified the activity. E.g., "Normal Activity. Verified as delivery by package placement seen on Porch Cam."]
+
+[Repeat for each unique parent event.]
+
+---
+
+## Summary
+[One clear sentence summarizing the security status. E.g., "All detected events were routine deliveries; no security threats observed."]
+
+Guidelines:
+- **Threat Indicators:** ✓ Normal (Level 0), ⚠️ Needs Review (Level 1), 🔴 Security Concern (Level 2).
+- **Consolidate:** If the `context` array explains the event (e.g., a person loitering was actually waiting for the car seen in the context event), downgrade the threat level to Normal.
+- **Names:** If a known person (e.g., "{known_person_name}") appears in *any* of the context descriptions, assume it is them for the whole event.
+- **Tone:** Professional, concise, and fact-based.
+
+Events:
+
+{list_of_event_json_objects}

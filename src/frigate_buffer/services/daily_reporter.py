@@ -43,7 +43,8 @@ class DailyReporterService:
             except OSError as e:
                 logger.warning("Could not read report prompt file %s: %s", self._report_prompt_file, e)
         self._prompt_template = (
-            "You are a security report writer. Date: {date}. Events:\n{event_list}\n\n"
+            "You are a security report writer. Time range: {report_start_time} to {report_end_time}. "
+            "Date: {report_date_string}. Known person: {known_person_name}. Events:\n{list_of_event_json_objects}\n\n"
             "Produce a concise daily security report in Markdown."
         )
         return self._prompt_template
@@ -138,18 +139,8 @@ class DailyReporterService:
         Returns True if a report was written, False otherwise.
         Consumes _collect_events_for_date generator in one pass to limit peak memory.
         """
-        event_lines_with_ts: list[tuple[int, str]] = []
         event_objects: list[dict] = []
         for json_path, data, unix_ts in self._collect_events_for_date(target_date):
-            title = (data.get("title") or "").strip()
-            short_summary = (data.get("shortSummary") or data.get("description") or "").strip()
-            try:
-                level = int(data.get("potential_threat_level", 0))
-            except (TypeError, ValueError):
-                level = 0
-            time_str = datetime.fromtimestamp(unix_ts).strftime("%H:%M")
-            line = f"[{time_str}] {title}: {short_summary} (Threat: {level})"
-            event_lines_with_ts.append((unix_ts, line))
             event_dir = os.path.dirname(json_path)
             parent_basename = os.path.basename(os.path.dirname(event_dir))
             camera = os.path.basename(event_dir) if parent_basename == "events" else (os.path.basename(os.path.dirname(event_dir)) if os.path.dirname(event_dir) else "unknown")
@@ -166,10 +157,9 @@ class DailyReporterService:
                 "time": datetime.fromtimestamp(unix_ts).strftime("%Y-%m-%d %H:%M:%S"),
                 "context": data.get("context", []),
             })
-        event_lines_with_ts.sort(key=lambda x: (x[0], x[1]))
-        event_list_lines = [line for _ts, line in event_lines_with_ts]
-        event_list_str = "\n".join(event_list_lines) if event_list_lines else "(No events for this date.)"
+        # Same value for both {event_list} and {list_of_event_json_objects} (JSON array).
         list_of_event_json_objects = json.dumps(event_objects, indent=2, ensure_ascii=False) if event_objects else "[]"
+        event_list_str = list_of_event_json_objects
 
         date_str = target_date.isoformat()
         report_date_string = date_str
@@ -188,7 +178,7 @@ class DailyReporterService:
             .replace("{list_of_event_json_objects}", list_of_event_json_objects)
             .replace("{known_person_name}", self._known_person_name)
         )
-        user_prompt = event_list_str if event_list_lines else "No events recorded for this date."
+        user_prompt = list_of_event_json_objects if event_objects else "No events recorded for this date."
 
         report_md = self.ai_analyzer.send_text_prompt(system_prompt, user_prompt)
         if not report_md:
