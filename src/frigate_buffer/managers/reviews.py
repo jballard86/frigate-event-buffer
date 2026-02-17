@@ -4,7 +4,6 @@ import os
 import json
 import logging
 from datetime import date, datetime, timedelta
-from typing import List, Optional
 
 import requests
 
@@ -33,7 +32,7 @@ class DailyReviewManager:
     def _path_for_date(self, d: date) -> str:
         return os.path.join(self.reviews_dir, f"{self._date_str(d)}.json")
 
-    def fetch_from_frigate(self, start_ts: int, end_ts: int) -> Optional[dict]:
+    def fetch_from_frigate(self, start_ts: int, end_ts: int) -> dict | None:
         """Fetch review summary from Frigate API."""
         url = f"{self.frigate_url}/api/review/summarize/start/{start_ts}/end/{end_ts}"
         logger.info(f"Fetching daily review from Frigate: {url}")
@@ -55,7 +54,7 @@ class DailyReviewManager:
             logger.exception(f"Error fetching daily review: {e}")
             return None
 
-    def fetch_and_save(self, d: date, end_now: bool = False) -> Optional[dict]:
+    def fetch_and_save(self, d: date, end_now: bool = False) -> dict | None:
         """Fetch from Frigate and save to disk. Returns the response dict or None."""
         start_ts, end_ts = self._date_to_ts_range(d, end_now=end_now)
         data = self.fetch_from_frigate(start_ts, end_ts)
@@ -76,7 +75,7 @@ class DailyReviewManager:
                 logger.error(f"Failed to save daily review: {e}")
         return None
 
-    def get_cached(self, d: date, allow_partial: bool = False) -> Optional[dict]:
+    def get_cached(self, d: date, allow_partial: bool = False) -> dict | None:
         """Get cached review for date. allow_partial also checks _partial.json for today."""
         path = self._path_for_date(d)
         if os.path.exists(path):
@@ -95,7 +94,7 @@ class DailyReviewManager:
                     logger.error(f"Error reading partial review: {e}")
         return None
 
-    def get_or_fetch(self, d: date, force_refresh: bool = False, end_now: bool = False) -> Optional[dict]:
+    def get_or_fetch(self, d: date, force_refresh: bool = False, end_now: bool = False) -> dict | None:
         """Get cached review or fetch from Frigate. end_now only applies when force_refresh."""
         if not force_refresh:
             cached = self.get_cached(d, allow_partial=(d == date.today()))
@@ -103,7 +102,7 @@ class DailyReviewManager:
                 return cached
         return self.fetch_and_save(d, end_now=end_now)
 
-    def list_dates(self) -> List[str]:
+    def list_dates(self) -> list[str]:
         """Return sorted list of available date strings (YYYY-MM-DD), newest first."""
         dates = set()
         for f in os.listdir(self.reviews_dir):

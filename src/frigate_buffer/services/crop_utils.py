@@ -8,7 +8,7 @@ and timestamp overlay (time, camera name, photo sequence) with shadow/outline fo
 from __future__ import annotations
 
 import logging
-from typing import Any, Optional, Tuple
+from typing import Any
 
 import cv2
 import numpy as np
@@ -72,13 +72,13 @@ def _crop_around_center(
 
 def motion_crop(
     frame: Any,
-    prev_gray: Optional[Any],
+    prev_gray: Any | None,
     target_w: int,
     target_h: int,
     min_area_fraction: float = DEFAULT_MOTION_CROP_MIN_AREA_FRACTION,
     min_area_px: int = DEFAULT_MOTION_CROP_MIN_PX,
-    center_override: Optional[Tuple[int, int]] = None,
-) -> Tuple[Any, Any]:
+    center_override: tuple[int, int] | None = None,
+) -> tuple[Any, Any]:
     """
     Crop frame centered on the largest motion region (absdiff + contours).
     If prev_gray is None or motion is below threshold, return center crop.
@@ -136,7 +136,7 @@ def draw_timestamp_overlay(
     font_scale: float = 0.7,
     thickness_outline: int = 2,
     thickness_text: int = 1,
-    position: Tuple[int, int] = (10, 30),
+    position: tuple[int, int] = (10, 30),
 ) -> None:
     """
     Draw timestamp overlay on frame in-place (top-left by default).

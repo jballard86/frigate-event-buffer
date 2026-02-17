@@ -3,7 +3,6 @@
 import logging
 import time
 import threading
-from typing import List
 
 logger = logging.getLogger('frigate-buffer')
 
@@ -12,7 +11,7 @@ class ErrorBuffer:
     """Thread-safe rotating buffer of recent ERROR/WARNING log records (max 10)."""
 
     def __init__(self, max_size: int = 10):
-        self._entries: List[dict] = []
+        self._entries: list[dict] = []
         self._max_size = max_size
         self._lock = threading.Lock()
 
@@ -26,7 +25,7 @@ class ErrorBuffer:
             if len(self._entries) > self._max_size:
                 self._entries.pop(0)
 
-    def get_all(self) -> List[dict]:
+    def get_all(self) -> list[dict]:
         with self._lock:
             return list(reversed(self._entries))
 

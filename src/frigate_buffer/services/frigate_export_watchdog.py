@@ -7,7 +7,7 @@ import json
 import logging
 import os
 import re
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 import requests
 
@@ -29,12 +29,12 @@ def _sanitize_camera_name(camera: str) -> str:
 
 def _parse_export_response_entries(
     folder_path: str,
-) -> List[Tuple[str, Optional[str]]]:
+) -> list[tuple[str, str | None]]:
     """
     Read merged timeline (base + append JSONL) and return list of (export_id, camera_for_clip).
     camera_for_clip is None for single-camera event (clip at root); else camera name for consolidated (clip at camera/clip.mp4).
     """
-    result: List[Tuple[str, Optional[str]]] = []
+    result: list[tuple[str, str | None]] = []
     try:
         data = read_timeline_merged(folder_path)
     except (OSError, json.JSONDecodeError) as e:
@@ -54,7 +54,7 @@ def _parse_export_response_entries(
             continue
 
         # Consolidated: "Clip export response for {camera}"
-        camera_for_clip: Optional[str] = None
+        camera_for_clip: str | None = None
         if "Clip export response for " in label:
             camera_for_clip = label.replace("Clip export response for ", "").strip()
 
@@ -64,7 +64,7 @@ def _parse_export_response_entries(
 
 def _clip_path_for_entry(
     folder_path: str,
-    camera_for_clip: Optional[str],
+    camera_for_clip: str | None,
 ) -> str:
     """Path to clip.mp4 for this entry (single-cam or consolidated)."""
     if camera_for_clip is None:
@@ -73,7 +73,7 @@ def _clip_path_for_entry(
     return os.path.join(folder_path, sub, "clip.mp4")
 
 
-def _rel_path_from_storage(folder_path: str, storage_path: str) -> Optional[Tuple[str, str]]:
+def _rel_path_from_storage(folder_path: str, storage_path: str) -> tuple[str, str] | None:
     """Return (camera, subdir) relative to storage_path, or None if not under storage."""
     try:
         folder_real = os.path.realpath(folder_path)
@@ -91,9 +91,9 @@ def _rel_path_from_storage(folder_path: str, storage_path: str) -> Optional[Tupl
         return None
 
 
-def _event_files_list(folder_path: str) -> List[str]:
+def _event_files_list(folder_path: str) -> list[str]:
     """Build same file list as timeline page: root files + camera_subdir/clip.mp4 etc."""
-    files: List[str] = []
+    files: list[str] = []
     try:
         for name in os.listdir(folder_path):
             fp = os.path.join(folder_path, name)
@@ -149,7 +149,7 @@ def _delete_export_from_frigate(
         logger.warning(f"Frigate export delete request failed: export_id={export_id} error={e}")
 
 
-def run_once(config: Dict[str, Any]) -> None:
+def run_once(config: dict[str, Any]) -> None:
     """
     Run one pass of the export watchdog: discover exports from timeline data,
     verify clips are in event folders, delete from Frigate (with logging), verify download links.
@@ -168,7 +168,7 @@ def run_once(config: Dict[str, Any]) -> None:
         return
 
     seen_export_ids: set = set()
-    events_checked_for_links: List[Tuple[str, str, str]] = []  # (folder_path, camera, subdir)
+    events_checked_for_links: list[tuple[str, str, str]] = []  # (folder_path, camera, subdir)
 
     try:
         with os.scandir(storage_path) as it:

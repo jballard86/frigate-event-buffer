@@ -10,7 +10,7 @@ import json
 import logging
 import os
 from datetime import date, datetime, time as dt_time
-from typing import Iterator, List, Optional, Tuple
+from typing import Iterator
 
 from frigate_buffer.services.ai_analyzer import GeminiAnalysisService
 
@@ -24,7 +24,7 @@ class DailyReporterService:
         self.config = config
         self.storage_path = os.path.abspath(storage_path)
         self.ai_analyzer = ai_analyzer
-        self._prompt_template: Optional[str] = None
+        self._prompt_template: str | None = None
         self._report_prompt_file = (config.get("REPORT_PROMPT_FILE") or "").strip()
         if not self._report_prompt_file:
             self._report_prompt_file = os.path.join(
@@ -48,7 +48,7 @@ class DailyReporterService:
         )
         return self._prompt_template
 
-    def _folder_name_and_timestamp(self, json_path: str) -> Tuple[Optional[str], Optional[int]]:
+    def _folder_name_and_timestamp(self, json_path: str) -> tuple[str | None, int | None]:
         """Return (folder_name, unix_timestamp) for the event folder containing this analysis_result.json."""
         event_dir = os.path.dirname(os.path.abspath(json_path))
         parent_dir = os.path.dirname(event_dir)
@@ -65,7 +65,7 @@ class DailyReporterService:
         except (ValueError, IndexError):
             return None, None
 
-    def _collect_events_for_date(self, target_date: date) -> Iterator[Tuple[str, dict, int]]:
+    def _collect_events_for_date(self, target_date: date) -> Iterator[tuple[str, dict, int]]:
         """Scan storage for analysis_result.json; yield (json_path, data, unix_ts) for target_date (generator to limit peak memory)."""
         if not os.path.isdir(self.storage_path):
             return
@@ -90,7 +90,7 @@ class DailyReporterService:
                 continue
             yield (json_path, data, unix_ts)
 
-    def _aggregate_event_lines(self, events: List[Tuple[str, dict, int]]) -> List[str]:
+    def _aggregate_event_lines(self, events: list[tuple[str, dict, int]]) -> list[str]:
         """Build sorted list of lines: '[{time}] {title}: {shortSummary} (Threat: {level})'."""
         lines = []
         for _path, data, unix_ts in events:
@@ -106,7 +106,7 @@ class DailyReporterService:
         lines.sort(key=lambda x: (x[0], x[1]))
         return [line for _ts, line in lines]
 
-    def _build_event_json_objects(self, events: List[Tuple[str, dict, int]]) -> str:
+    def _build_event_json_objects(self, events: list[tuple[str, dict, int]]) -> str:
         """Build JSON array string for list_of_event_json_objects placeholder."""
         objects = []
         for json_path, data, unix_ts in events:
@@ -138,8 +138,8 @@ class DailyReporterService:
         Returns True if a report was written, False otherwise.
         Consumes _collect_events_for_date generator in one pass to limit peak memory.
         """
-        event_lines_with_ts: List[Tuple[int, str]] = []
-        event_objects: List[dict] = []
+        event_lines_with_ts: list[tuple[int, str]] = []
+        event_objects: list[dict] = []
         for json_path, data, unix_ts in self._collect_events_for_date(target_date):
             title = (data.get("title") or "").strip()
             short_summary = (data.get("shortSummary") or data.get("description") or "").strip()

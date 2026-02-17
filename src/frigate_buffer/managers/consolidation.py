@@ -3,7 +3,7 @@
 import logging
 import threading
 import time
-from typing import Dict, Optional, List, Tuple, TYPE_CHECKING
+from typing import TYPE_CHECKING
 
 from frigate_buffer.models import ConsolidatedEvent, _generate_consolidated_id
 
@@ -19,10 +19,10 @@ class ConsolidatedEventManager:
     def __init__(self, file_manager: 'FileManager', event_gap_seconds: int = 120,
                  on_close_callback=None):
         self._file_manager = file_manager
-        self._events: Dict[str, ConsolidatedEvent] = {}
-        self._frigate_to_ce: Dict[str, str] = {}  # frigate_event_id -> consolidated_id
-        self._active_ce_id: Optional[str] = None  # Currently active (receiving new sub-events)
-        self._close_timers: Dict[str, threading.Timer] = {}  # ce_id -> Timer
+        self._events: dict[str, ConsolidatedEvent] = {}
+        self._frigate_to_ce: dict[str, str] = {}  # frigate_event_id -> consolidated_id
+        self._active_ce_id: str | None = None  # Currently active (receiving new sub-events)
+        self._close_timers: dict[str, threading.Timer] = {}  # ce_id -> Timer
         self._lock = threading.RLock()
         self.event_gap_seconds = event_gap_seconds
         self._on_close_callback = on_close_callback  # (ce_id: str) -> None
@@ -88,12 +88,12 @@ class ConsolidatedEventManager:
             self._active_ce_id = full_id
             return ce, True, camera_folder
 
-    def get_by_frigate_event(self, event_id: str) -> Optional[ConsolidatedEvent]:
+    def get_by_frigate_event(self, event_id: str) -> ConsolidatedEvent | None:
         with self._lock:
             ce_id = self._frigate_to_ce.get(event_id)
             return self._events.get(ce_id) if ce_id else None
 
-    def remove_event_from_ce(self, event_id: str) -> Optional[str]:
+    def remove_event_from_ce(self, event_id: str) -> str | None:
         """Remove a single Frigate event from its consolidated event. Caller must hold state.
         Returns the CE folder path if the CE became empty and was removed (so caller can delete it), else None."""
         with self._lock:
@@ -117,8 +117,8 @@ class ConsolidatedEventManager:
                 return ce_folder_path
             return None
 
-    def update_activity(self, event_id: str, activity_time: Optional[float] = None,
-                       end_time: Optional[float] = None) -> None:
+    def update_activity(self, event_id: str, activity_time: float | None = None,
+                       end_time: float | None = None) -> None:
         with self._lock:
             ce_id = self._frigate_to_ce.get(event_id)
             if ce_id and ce_id in self._events:
@@ -175,8 +175,8 @@ class ConsolidatedEventManager:
             except Exception as e:
                 logger.exception(f"CE close callback error for {ce_id}: {e}")
 
-    def update_best(self, event_id: str, title: Optional[str] = None,
-                    description: Optional[str] = None, threat_level: Optional[int] = None) -> None:
+    def update_best(self, event_id: str, title: str | None = None,
+                    description: str | None = None, threat_level: int | None = None) -> None:
         with self._lock:
             ce = self.get_by_frigate_event(event_id)
             if ce:
@@ -192,7 +192,7 @@ class ConsolidatedEventManager:
             if self._active_ce_id == consolidated_id:
                 self._active_ce_id = None
 
-    def remove(self, consolidated_id: str) -> Optional[ConsolidatedEvent]:
+    def remove(self, consolidated_id: str) -> ConsolidatedEvent | None:
         with self._lock:
             ce = self._events.pop(consolidated_id, None)
             if ce:
@@ -202,15 +202,15 @@ class ConsolidatedEventManager:
                     self._active_ce_id = None
             return ce
 
-    def get_active_consolidated_ids(self) -> List[str]:
+    def get_active_consolidated_ids(self) -> list[str]:
         with self._lock:
             return list(self._events.keys())
 
-    def get_active_ce_folders(self) -> Tuple[str, ...]:
+    def get_active_ce_folders(self) -> tuple[str, ...]:
         """Return folder names of active consolidated events (for cleanup protection). Avoids building full CE list."""
         with self._lock:
             return tuple(ce.folder_name for ce in self._events.values())
 
-    def get_all(self) -> List[ConsolidatedEvent]:
+    def get_all(self) -> list[ConsolidatedEvent]:
         with self._lock:
             return list(self._events.values())

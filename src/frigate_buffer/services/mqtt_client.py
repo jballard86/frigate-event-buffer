@@ -1,7 +1,7 @@
 """MQTT client wrapper: connection lifecycle, subscriptions, and message callback registration."""
 
 import logging
-from typing import Any, Callable, List, Optional, Tuple
+from typing import Any, Callable
 
 import paho.mqtt.client as mqtt
 
@@ -11,7 +11,7 @@ logger = logging.getLogger('frigate-buffer')
 class MqttClientWrapper:
     """Wraps Paho MQTT client: setup, on_connect/on_disconnect, start/stop loop. Message routing is delegated via callback."""
 
-    DEFAULT_TOPICS: List[Tuple[str, int]] = [
+    DEFAULT_TOPICS: list[tuple[str, int]] = [
         ("frigate/events", 0),
         ("frigate/+/tracked_object_update", 0),
         ("frigate/reviews", 0),
@@ -22,10 +22,10 @@ class MqttClientWrapper:
         broker: str,
         port: int,
         client_id: str = "frigate-event-buffer",
-        topics: Optional[List[Tuple[str, int]]] = None,
-        on_message_callback: Optional[Callable[..., Any]] = None,
-        username: Optional[str] = None,
-        password: Optional[str] = None,
+        topics: list[tuple[str, int]] | None = None,
+        on_message_callback: Callable[..., Any] | None = None,
+        username: str | None = None,
+        password: str | None = None,
     ) -> None:
         self._broker = broker
         self._port = port

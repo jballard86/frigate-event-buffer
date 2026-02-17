@@ -7,12 +7,12 @@ import json
 import time
 import logging
 from collections import OrderedDict
-from typing import List, Dict, Optional, Tuple, Any
+from typing import Any
 
 logger = logging.getLogger('frigate-buffer')
 
 
-def read_timeline_merged(folder_path: str) -> Dict[str, Any]:
+def read_timeline_merged(folder_path: str) -> dict[str, Any]:
     """
     Read timeline from folder: merge notification_timeline.json (if present)
     with notification_timeline_append.jsonl (append-only log). Returns
@@ -62,7 +62,7 @@ class EventQueryService:
         self._event_cache: OrderedDict = OrderedDict()  # LRU cache keyed by folder path
         self._event_cache_max = event_cache_max
 
-    def _get_cached(self, key: str) -> Optional[Any]:
+    def _get_cached(self, key: str) -> Any | None:
         if key in self._cache:
             entry = self._cache[key]
             if time.monotonic() - entry['timestamp'] < self._cache_ttl:
@@ -75,7 +75,7 @@ class EventQueryService:
             'data': data
         }
 
-    def _get_event_cached(self, folder_path: str, mtime: float) -> Dict[str, Any]:
+    def _get_event_cached(self, folder_path: str, mtime: float) -> dict[str, Any]:
         """Get parsed event data from cache if valid, otherwise parse and cache (LRU eviction when over cap)."""
         if folder_path in self._event_cache:
             self._event_cache.move_to_end(folder_path)
@@ -93,7 +93,7 @@ class EventQueryService:
             self._event_cache.popitem(last=False)
         return data
 
-    def _parse_event_files(self, folder_path: str) -> Dict[str, Any]:
+    def _parse_event_files(self, folder_path: str) -> dict[str, Any]:
         """Read all event files in one go and return data dict."""
         data = {
             'summary_text': "Analysis pending...",
@@ -162,7 +162,7 @@ class EventQueryService:
         data['subdirs'] = subdirs_map
         return data
 
-    def _parse_summary(self, summary_text: str) -> Dict[str, str]:
+    def _parse_summary(self, summary_text: str) -> dict[str, str]:
         """Parse key-value pairs from summary.txt format."""
         parsed = {}
         for line in summary_text.split('\n'):
@@ -171,7 +171,7 @@ class EventQueryService:
                 parsed[key.strip()] = value.strip()
         return parsed
 
-    def _extract_genai_entries(self, timeline_data: Dict[str, Any]) -> List[Dict[str, Any]]:
+    def _extract_genai_entries(self, timeline_data: dict[str, Any]) -> list[dict[str, Any]]:
         """Extract GenAI metadata entries from notification_timeline.json.
         Identical descriptions (same title, shortSummary, scene) are deduplicated
         so the AI Analysis section shows each unique analysis once; the raw timeline
@@ -209,7 +209,7 @@ class EventQueryService:
             })
         return entries
 
-    def _event_ended_in_timeline(self, timeline_data: Dict[str, Any]) -> bool:
+    def _event_ended_in_timeline(self, timeline_data: dict[str, Any]) -> bool:
         """Check if event has ended based on timeline (Event end from Frigate, or end_time set)."""
         data = timeline_data
 
@@ -225,7 +225,7 @@ class EventQueryService:
                 return True
         return False
 
-    def _extract_end_timestamp_from_timeline(self, timeline_data: Dict[str, Any]) -> Optional[float]:
+    def _extract_end_timestamp_from_timeline(self, timeline_data: dict[str, Any]) -> float | None:
         """Return the first end_time from timeline entries (payload.after.end_time), or None.
         Used so the player can show event end time and duration when available."""
         for e in (timeline_data or {}).get('entries', []):
@@ -239,7 +239,7 @@ class EventQueryService:
                     continue
         return None
 
-    def _extract_cameras_zones_from_timeline(self, timeline_data: Dict[str, Any]) -> List[Dict[str, Any]]:
+    def _extract_cameras_zones_from_timeline(self, timeline_data: dict[str, Any]) -> list[dict[str, Any]]:
         """Extract cameras and zones from frigate_mqtt entries in notification_timeline.json."""
         data = timeline_data
 
@@ -261,7 +261,7 @@ class EventQueryService:
                     zones.add(z)
         return [{"camera": cam, "zones": sorted(zones)} for cam, zones in sorted(camera_zones.items())]
 
-    def _get_consolidated_events(self) -> List[Dict[str, Any]]:
+    def _get_consolidated_events(self) -> list[dict[str, Any]]:
         """Get consolidated events from events/{ce_id}/{camera}/ structure."""
         events_dir = os.path.join(self.storage_path, "events")
         events_list = []
@@ -366,7 +366,7 @@ class EventQueryService:
 
         return events_list
 
-    def _get_camera_events(self, camera_name: str) -> List[Dict[str, Any]]:
+    def _get_camera_events(self, camera_name: str) -> list[dict[str, Any]]:
         """Helper to get events for a specific camera."""
         camera_path = os.path.join(self.storage_path, camera_name)
         events = []
@@ -445,7 +445,7 @@ class EventQueryService:
 
         return events
 
-    def get_events(self, camera_name: str) -> List[Dict[str, Any]]:
+    def get_events(self, camera_name: str) -> list[dict[str, Any]]:
         """Get events for a specific camera or 'events' for consolidated events."""
         cache_key = f"events_{camera_name}"
         cached = self._get_cached(cache_key)
@@ -460,7 +460,7 @@ class EventQueryService:
         self._set_cache(cache_key, events)
         return events
 
-    def get_all_events(self) -> Tuple[List[Dict[str, Any]], List[str]]:
+    def get_all_events(self) -> tuple[list[dict[str, Any]], list[str]]:
         """Get all events across all cameras (global view)."""
         cache_key = "all_events"
         cached = self._get_cached(cache_key)
@@ -492,7 +492,7 @@ class EventQueryService:
         self._set_cache(cache_key, result)
         return result
 
-    def get_cameras(self) -> List[str]:
+    def get_cameras(self) -> list[str]:
         """List available cameras from storage."""
         cache_key = "cameras"
         cached = self._get_cached(cache_key)

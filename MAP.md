@@ -18,6 +18,7 @@ Outbound: Ring-style notifications to Home Assistant, clip export/transcode, rol
 
 ## 2. Architecture Overview
 
+- **Python**: Requires **Python 3.12+** (see `pyproject.toml`: `requires-python = ">=3.12"`).
 - **Src layout**: Installable package under `src/frigate_buffer/`. Run with `python -m frigate_buffer.main` after `pip install -e .` (see `pyproject.toml`: `where = ["src"]`).
 - **Separation**:
   - **Logic in `src/`**: Core package lives in `src/frigate_buffer/` (orchestrator, managers, services, config, models). Only `main.py` is the library entry point.

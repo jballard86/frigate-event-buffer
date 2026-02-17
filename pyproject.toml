@@ -7,7 +7,7 @@ name = "frigate-event-buffer"
 version = "0.1.0"
 description = "Frigate Event Buffer - state-aware orchestrator for MQTT events, notifications, and retention"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.12"
 dependencies = [
     "flask",
     "paho-mqtt>=2.0.0",

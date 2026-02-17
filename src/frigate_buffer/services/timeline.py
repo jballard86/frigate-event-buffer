@@ -1,7 +1,7 @@
 """Timeline logging service: writes event timeline entries (HA, MQTT, Frigate API) to event folders."""
 
 import logging
-from typing import Optional, Any, TYPE_CHECKING
+from typing import Any, TYPE_CHECKING, Optional
 
 if TYPE_CHECKING:
     from frigate_buffer.managers.file import FileManager
@@ -22,7 +22,7 @@ class TimelineLogger:
         self._file_manager = file_manager
         self._consolidated_manager = consolidated_manager
 
-    def folder_for_event(self, event: Optional['EventState']) -> Optional[str]:
+    def folder_for_event(self, event: Optional['EventState']) -> str | None:
         """Folder for timeline (CE root if consolidated, else event folder)."""
         if not event:
             return None

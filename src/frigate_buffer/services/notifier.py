@@ -5,7 +5,6 @@ import json
 import time
 import logging
 import threading
-from typing import List, Optional
 
 import paho.mqtt.client as mqtt
 
@@ -34,14 +33,14 @@ class NotificationPublisher:
         self.timeline_callback = None  # Optional: (event, status, payload) -> None
 
         # Rate limiting state
-        self._notification_times: List[float] = []
-        self._pending_queue: List[tuple] = []  # (event, status, message)
+        self._notification_times: list[float] = []
+        self._pending_queue: list[tuple] = []  # (event, status, message)
         self._lock = threading.Lock()
         self._overflow_sent = False
         self._queue_processor_running = False
 
         # Clear-previous-notification: same event only (use event end we already track)
-        self._last_notification_tag: Optional[str] = None
+        self._last_notification_tag: str | None = None
         self._next_send_is_new_event: bool = False
 
     def _clean_old_timestamps(self):
@@ -148,8 +147,8 @@ class NotificationPublisher:
             return len(self._pending_queue)
 
     def publish_notification(self, event: NotificationEvent, status: str,
-                            message: Optional[str] = None,
-                            tag_override: Optional[str] = None) -> bool:
+                            message: str | None = None,
+                            tag_override: str | None = None) -> bool:
         """Publish event notification with rate limiting and queue management.
         tag_override: use this tag instead of frigate_{event_id} (e.g. for CE: frigate_ce_{id})"""
         with self._lock:
@@ -175,8 +174,8 @@ class NotificationPublisher:
         return self._send_notification_internal(event, status, message, tag_override)
 
     def _send_notification_internal(self, event: NotificationEvent, status: str,
-                                    message: Optional[str] = None,
-                                    tag_override: Optional[str] = None) -> bool:
+                                    message: str | None = None,
+                                    tag_override: str | None = None) -> bool:
         """Internal method to actually send the notification to MQTT."""
         current_tag = tag_override or f"frigate_{event.event_id}"
         with self._lock:
@@ -321,29 +320,24 @@ class NotificationPublisher:
 
     def _build_message(self, event: NotificationEvent, status: str) -> str:
         """Build notification message combining status context with best available description."""
-        # Best available description at this moment
         best_desc = event.genai_description or event.ai_description
         fallback = self._get_default_title(event)
 
-        if status == "summarized" and event.review_summary:
-            review_summary = event.review_summary or ""
-            lines = [l.strip() for l in review_summary.split('\n')
-                     if l.strip() and not l.strip().startswith('#')]
-            excerpt = lines[0] if lines else "Review summary available"
-            return excerpt[:200] + ("..." if len(excerpt) > 200 else "")
-
-        if status == "clip_ready":
-            desc = best_desc or fallback
-            if event.clip_downloaded:
-                return f"Video available. {desc}"
-            else:
+        match status:
+            case "summarized" if event.review_summary:
+                review_summary = event.review_summary or ""
+                lines = [l.strip() for l in review_summary.split('\n')
+                         if l.strip() and not l.strip().startswith('#')]
+                excerpt = lines[0] if lines else "Review summary available"
+                return excerpt[:200] + ("..." if len(excerpt) > 200 else "")
+            case "clip_ready":
+                desc = best_desc or fallback
+                if event.clip_downloaded:
+                    return f"Video available. {desc}"
                 return f"Video unavailable. {desc}"
-
-        if status == "finalized":
-            return best_desc or f"Event complete: {fallback}"
-
-        if status == "described":
-            return event.ai_description or f"{fallback} (details updating)"
-
-        # new, snapshot_ready, or any other status
-        return best_desc or fallback
+            case "finalized":
+                return best_desc or f"Event complete: {fallback}"
+            case "described":
+                return event.ai_description or f"{fallback} (details updating)"
+            case _:
+                return best_desc or fallback
