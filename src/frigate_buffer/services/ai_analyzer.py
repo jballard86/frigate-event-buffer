@@ -242,11 +242,11 @@ class GeminiAnalysisService:
         event_end_ts: float = 0,
         frame_metadata: Sequence[FrameMetadata] | None = None,
     ) -> list[tuple]:
-        """Extract frames from video. With event_start_ts > 0, seeks past pre-capture buffer and limits to event segment.
-        Uses CV-based motion crop (crop_utils.motion_crop) when CROP_WIDTH/CROP_HEIGHT set; otherwise center crop.
-        Uses grayscale frame differencing for motion-aware selection when MOTION_THRESHOLD_PX > 0; first and last frame
-        are always kept. When frame_metadata is provided, prioritizes by score*area.
-        Returns list of (frame, frame_time_sec) for overlay in analyze_clip."""
+        """Extract frames from video via a single sequential read (ffmpegcv readers do not support set(CAP_PROP_POS_FRAMES)).
+        With event_start_ts > 0, skips pre-capture buffer and limits to event segment. Uses CV-based motion crop
+        (crop_utils.motion_crop) when CROP_WIDTH/CROP_HEIGHT set; otherwise center crop. Uses grayscale frame
+        differencing for motion-aware selection when MOTION_THRESHOLD_PX > 0; first and last frame are always kept.
+        When frame_metadata is provided, prioritizes by score*area. Returns list of (frame, frame_time_sec) for overlay."""
         result: list[tuple] = []
         cap = ffmpegcv.VideoCaptureNV(clip_path)
         if not cap.isOpened():
@@ -280,13 +280,20 @@ class GeminiAnalysisService:
                     sorted_meta = sorted(frame_metadata, key=lambda m: m.frame_time)
                     times = [m.frame_time for m in sorted_meta]
 
-                frame_idx = start_frame
-                while frame_idx <= end_frame:
-                    cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
+                current_index = 0
+                while True:
                     ret, frame = cap.read()
                     if not ret:
                         break
-                    frame_time_approx = event_start_ts + (frame_idx - start_frame) / fps if fps else event_start_ts
+                    if current_index < start_frame:
+                        current_index += 1
+                        continue
+                    if current_index > end_frame:
+                        break
+                    if (current_index - start_frame) % step != 0:
+                        current_index += 1
+                        continue
+                    frame_time_approx = event_start_ts + (current_index - start_frame) / fps if fps else event_start_ts
                     meta = None
                     if sorted_meta and times:
                         idx = bisect.bisect_left(times, frame_time_approx)
@@ -319,8 +326,8 @@ class GeminiAnalysisService:
                             prev_gray = gray
 
                     priority = (meta.score * meta.area) if meta else motion_score
-                    candidates.append((frame_idx, frame, frame_time_approx, motion_score, meta, priority))
-                    frame_idx += step
+                    candidates.append((current_index, frame, frame_time_approx, motion_score, meta, priority))
+                    current_index += 1
 
                 if not candidates:
                     return result
@@ -355,23 +362,23 @@ class GeminiAnalysisService:
                     idx += 1
                 return result
             step = max(1, int(fps * FRAME_SAMPLE_INTERVAL_SEC))
-            frame_idx = 0
-            while frame_idx < total_frames and len(result) < self._max_frames:
-                cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
+            current_index = 0
+            while current_index < total_frames and len(result) < self._max_frames:
                 ret, frame = cap.read()
                 if not ret:
                     break
-                if use_cv_crop:
-                    frame, _ = crop_utils.motion_crop(
-                        frame, None, self.crop_width, self.crop_height,
-                        min_area_fraction=self.motion_crop_min_area_fraction,
-                        min_area_px=self.motion_crop_min_px,
-                    )
-                elif self.crop_width > 0 and self.crop_height > 0:
-                    frame = self._center_crop(frame, self.crop_width, self.crop_height)
-                frame_time = (event_start_ts + frame_idx / fps) if (event_start_ts > 0 and fps) else (frame_idx / fps if fps else 0)
-                result.append((frame, frame_time))
-                frame_idx += step
+                if current_index % step == 0:
+                    if use_cv_crop:
+                        frame, _ = crop_utils.motion_crop(
+                            frame, None, self.crop_width, self.crop_height,
+                            min_area_fraction=self.motion_crop_min_area_fraction,
+                            min_area_px=self.motion_crop_min_px,
+                        )
+                    elif self.crop_width > 0 and self.crop_height > 0:
+                        frame = self._center_crop(frame, self.crop_width, self.crop_height)
+                    frame_time = (event_start_ts + current_index / fps) if (event_start_ts > 0 and fps) else (current_index / fps if fps else 0)
+                    result.append((frame, frame_time))
+                current_index += 1
         finally:
             cap.release()
         return result
