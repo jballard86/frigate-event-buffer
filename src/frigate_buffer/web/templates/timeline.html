@@ -135,7 +135,7 @@
 <div class="header">
   <h1>Notification Timeline</h1>
   <a href="/player?camera={{ camera }}&subdir={{ subdir }}" style="text-decoration:none;"><button>Back to Player</button></a>
-  <a href="/files/{{ camera }}/{{ subdir }}/notification_timeline.json" download="notification_timeline.json" style="text-decoration:none;"><button style="background:#1a4a1a;border-color:#2d7a2d;color:#7dde7d;padding:6px 12px;border-radius:6px;cursor:pointer;font-size:0.85rem;">Download Timeline</button></a>
+  <a href="/events/{{ camera }}/{{ subdir }}/timeline/download" download="notification_timeline.json" style="text-decoration:none;"><button style="background:#1a4a1a;border-color:#2d7a2d;color:#7dde7d;padding:6px 12px;border-radius:6px;cursor:pointer;font-size:0.85rem;">Download Timeline</button></a>
   {% if has_ai_analysis_zip and first_ai_analysis_zip_path %}
   <a href="/files/{{ camera }}/{{ subdir }}/{{ first_ai_analysis_zip_path }}" download="{{ first_ai_analysis_zip_path | replace('/', '_') }}" style="text-decoration:none;"><button style="background:#3a2a4a;border-color:#533483;color:#c8a8e8;padding:6px 12px;border-radius:6px;cursor:pointer;font-size:0.85rem;">Download AI analysis (zip)</button></a>
   {% endif %}

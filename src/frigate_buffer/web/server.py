@@ -328,6 +328,31 @@ def create_app(orchestrator):
             first_ai_analysis_zip_path=first_ai_analysis_zip_path
         )
 
+    @app.route('/events/<camera>/<subdir>/timeline/download')
+    def event_timeline_download(camera, subdir):
+        """Serve merged timeline as downloadable JSON (same data as timeline page)."""
+        base_dir = os.path.realpath(storage_path)
+        folder_path = os.path.realpath(os.path.join(base_dir, camera, subdir))
+
+        if not folder_path.startswith(base_dir) or folder_path == base_dir:
+            return "Invalid path", 400
+
+        if not os.path.isdir(folder_path):
+            return "Event not found", 404
+
+        try:
+            timeline_data = read_timeline_merged(folder_path)
+        except Exception as e:
+            logger.debug(f"Error reading timeline for download: {e}")
+            return "Error reading timeline", 500
+
+        body = json.dumps(timeline_data, indent=2)
+        return Response(
+            body,
+            mimetype='application/json',
+            headers={'Content-Disposition': 'attachment; filename="notification_timeline.json"'}
+        )
+
     @app.route('/files/<path:filename>')
     def serve_file(filename):
         """Serve stored files (clips are already transcoded to H.264)."""
