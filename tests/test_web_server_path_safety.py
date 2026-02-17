@@ -1,7 +1,9 @@
 """
 Tests for web server path safety: /files/<path> and /delete/<path> must not allow path traversal.
+Also tests timeline download route: /events/<camera>/<subdir>/timeline/download.
 """
 
+import json
 import os
 import shutil
 import tempfile
@@ -67,4 +69,59 @@ class TestWebServerPathSafety(unittest.TestCase):
         """POST /viewed with path traversal must be rejected (400 invalid path or 404 not found)."""
         self._skip_if_app_mocked()
         r = self.client.post("/viewed/cam/..%2f..%2fevil")
+        self.assertIn(r.status_code, (400, 404))
+
+    def test_timeline_download_returns_merged_json_when_only_append_exists(self):
+        """GET timeline/download returns 200 and merged timeline when only notification_timeline_append.jsonl exists."""
+        self._skip_if_app_mocked()
+        camera = "Doorbell"
+        subdir = "1771359165_3aa0dabd"
+        event_dir = os.path.join(self.storage, camera, subdir)
+        os.makedirs(event_dir, exist_ok=True)
+        append_path = os.path.join(event_dir, "notification_timeline_append.jsonl")
+        with open(append_path, "w") as f:
+            f.write('{"source": "frigate_mqtt", "label": "Event update", "ts": "2026-02-17T15:12:49"}\n')
+        r = self.client.get(f"/events/{camera}/{subdir}/timeline/download")
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.content_type, "application/json")
+        data = r.get_json()
+        self.assertIsInstance(data, dict)
+        self.assertIn("entries", data)
+        self.assertEqual(len(data["entries"]), 1)
+        self.assertEqual(data["entries"][0].get("label"), "Event update")
+        self.assertIn("Content-Disposition", r.headers)
+        self.assertIn("attachment", r.headers["Content-Disposition"])
+        self.assertIn("notification_timeline.json", r.headers["Content-Disposition"])
+
+    def test_timeline_download_returns_merged_json_when_both_files_exist(self):
+        """GET timeline/download returns merged base + append when both timeline files exist."""
+        self._skip_if_app_mocked()
+        camera = "front_door"
+        subdir = "123_evt1"
+        event_dir = os.path.join(self.storage, camera, subdir)
+        os.makedirs(event_dir, exist_ok=True)
+        base_path = os.path.join(event_dir, "notification_timeline.json")
+        with open(base_path, "w") as f:
+            json.dump({"event_id": "evt1", "entries": [{"label": "base"}]}, f)
+        append_path = os.path.join(event_dir, "notification_timeline_append.jsonl")
+        with open(append_path, "w") as f:
+            f.write('{"label": "append_entry"}\n')
+        r = self.client.get(f"/events/{camera}/{subdir}/timeline/download")
+        self.assertEqual(r.status_code, 200)
+        data = r.get_json()
+        self.assertEqual(data.get("event_id"), "evt1")
+        self.assertEqual(len(data["entries"]), 2)
+        self.assertEqual(data["entries"][0]["label"], "base")
+        self.assertEqual(data["entries"][1]["label"], "append_entry")
+
+    def test_timeline_download_404_when_event_folder_missing(self):
+        """GET timeline/download returns 404 when camera/subdir folder does not exist."""
+        self._skip_if_app_mocked()
+        r = self.client.get("/events/Doorbell/nonexistent_subdir/timeline/download")
+        self.assertEqual(r.status_code, 404)
+
+    def test_timeline_download_invalid_path_rejected(self):
+        """GET timeline/download with path traversal is rejected (400 or 404)."""
+        self._skip_if_app_mocked()
+        r = self.client.get("/events/cam/..%2f..%2fetc/timeline/download")
         self.assertIn(r.status_code, (400, 404))
