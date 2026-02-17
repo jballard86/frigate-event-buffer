@@ -44,6 +44,16 @@ services:
       - MQTT_PORT=1883
       - RETENTION_DAYS=3
       - LOG_LEVEL=INFO
+      # GPU: NVDEC/NVENC (requires NVIDIA Container Toolkit and deploy.reservations below)
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=all
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:5055/status"]
       interval: 60s

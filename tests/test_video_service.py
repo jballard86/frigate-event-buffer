@@ -16,14 +16,16 @@ class TestVideoService(unittest.TestCase):
     @patch('frigate_buffer.services.video.subprocess.Popen')
     @patch('frigate_buffer.services.video.os.remove')
     @patch('frigate_buffer.services.video.os.path.exists')
-    def test_transcode_success(self, mock_exists, mock_remove, mock_popen):
-        # Setup mock process
+    @patch('frigate_buffer.services.video.ffmpegcv.VideoCaptureNV')
+    def test_transcode_success(self, mock_video_capture_nv, mock_exists, mock_remove, mock_popen):
+        # GPU path fails (e.g. no GPU in CI), so fallback to libx264 is used
+        mock_video_capture_nv.side_effect = RuntimeError("No GPU")
         mock_process = MagicMock()
         mock_process.communicate.return_value = (b"", b"")
         mock_process.returncode = 0
         mock_popen.return_value = mock_process
 
-        mock_exists.return_value = False # Temp file removed
+        mock_exists.return_value = False
 
         result = self.video_service.transcode_clip_to_h264("evt1", "temp.mp4", "final.mp4")
 
@@ -34,19 +36,50 @@ class TestVideoService(unittest.TestCase):
     @patch('frigate_buffer.services.video.subprocess.Popen')
     @patch('frigate_buffer.services.video.os.rename')
     @patch('frigate_buffer.services.video.os.path.exists')
-    def test_transcode_failure(self, mock_exists, mock_rename, mock_popen):
-        # Setup mock process
+    @patch('frigate_buffer.services.video.ffmpegcv.VideoCaptureNV')
+    def test_transcode_failure(self, mock_video_capture_nv, mock_exists, mock_rename, mock_popen):
+        mock_video_capture_nv.side_effect = RuntimeError("No GPU")
         mock_process = MagicMock()
         mock_process.communicate.return_value = (b"", b"Error")
         mock_process.returncode = 1
         mock_popen.return_value = mock_process
 
-        mock_exists.return_value = True # Temp file exists
+        mock_exists.return_value = True
 
         result = self.video_service.transcode_clip_to_h264("evt1", "temp.mp4", "final.mp4")
 
-        self.assertTrue(result) # It returns True even on error in current impl (logs error and renames)
+        self.assertTrue(result)
         mock_rename.assert_called_with("temp.mp4", "final.mp4")
+
+    @patch('frigate_buffer.services.video.subprocess.run')
+    @patch('frigate_buffer.services.video.os.remove')
+    @patch('frigate_buffer.services.video.os.path.exists')
+    @patch('frigate_buffer.services.video.ffmpegcv.VideoWriterNV')
+    @patch('frigate_buffer.services.video.ffmpegcv.VideoCaptureNV')
+    def test_transcode_nvenc_success(self, mock_capture_nv, mock_writer_nv, mock_exists, mock_remove, mock_run):
+        """When GPU is available, transcode uses VideoCaptureNV and VideoWriterNV then muxes audio."""
+        mock_cap = MagicMock()
+        mock_cap.isOpened.return_value = True
+        mock_cap.fps = 30.0
+        import numpy as np
+        mock_cap.read.side_effect = [(True, np.zeros((480, 640, 3), dtype=np.uint8)), (False, None)]
+        mock_cap.release = MagicMock()
+        mock_capture_nv.return_value = mock_cap
+
+        mock_writer = MagicMock()
+        mock_writer_nv.return_value = mock_writer
+
+        mock_run.return_value = MagicMock(returncode=0)
+        mock_exists.side_effect = lambda p: True
+
+        result = self.video_service.transcode_clip_to_h264("evt1", "/tmp/temp.mp4", "/tmp/final.mp4")
+
+        self.assertTrue(result)
+        mock_capture_nv.assert_called_once()
+        mock_writer_nv.assert_called_once()
+        mock_writer.write.assert_called()
+        mock_run.assert_called_once()
+        mock_remove.assert_any_call("/tmp/temp.mp4")
 
     @patch('frigate_buffer.services.video.subprocess.run')
     @patch('frigate_buffer.services.video.os.path.exists')

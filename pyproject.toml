@@ -16,6 +16,7 @@ dependencies = [
     "pyyaml",
     "voluptuous",
     "opencv-python",
+    "ffmpegcv",
 ]
 
 [project.optional-dependencies]
