@@ -166,7 +166,7 @@ def _delete_export_from_frigate(
                 logger.debug("Frigate export delete response (200): %s", body_str)
             return "success"
         if resp.status_code in (404, 422):
-            logger.info(
+            logger.debug(
                 "Frigate export already removed: export_id=%s (status=%s)",
                 export_id,
                 resp.status_code,
