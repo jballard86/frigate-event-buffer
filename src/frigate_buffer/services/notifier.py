@@ -40,6 +40,10 @@ class NotificationPublisher:
         self._overflow_sent = False
         self._queue_processor_running = False
 
+        # Clear-previous-notification: same event only (use event end we already track)
+        self._last_notification_tag: Optional[str] = None
+        self._next_send_is_new_event: bool = False
+
     def _clean_old_timestamps(self):
         """Remove timestamps older than the rate window."""
         cutoff = time.time() - self.RATE_WINDOW_SECONDS
@@ -131,6 +135,12 @@ class NotificationPublisher:
         """Stop the background queue processor."""
         self._queue_processor_running = False
 
+    def mark_last_event_ended(self) -> None:
+        """Mark that the event we last sent a notification for has ended.
+        The next notification will be treated as a new global event (no clear_tag)."""
+        with self._lock:
+            self._next_send_is_new_event = True
+
     @property
     def queue_size(self) -> int:
         """Return current size of the notification queue."""
@@ -168,6 +178,17 @@ class NotificationPublisher:
                                     message: Optional[str] = None,
                                     tag_override: Optional[str] = None) -> bool:
         """Internal method to actually send the notification to MQTT."""
+        current_tag = tag_override or f"frigate_{event.event_id}"
+        with self._lock:
+            last_tag = self._last_notification_tag
+            next_is_new = self._next_send_is_new_event
+            add_clear_tag = (
+                last_tag is not None
+                and last_tag == current_tag
+                and not next_is_new
+            )
+            clear_flag_after_send = next_is_new
+
         # Construct URLs for Home Assistant - always use buffer base URL for Companion app reachability
         image_url = None
         video_url = None
@@ -241,11 +262,13 @@ class NotificationPublisher:
             "image_url": image_url,
             "video_url": video_url,
             "player_url": player_url,
-            "tag": tag_override or f"frigate_{event.event_id}",
+            "tag": current_tag,
             "timestamp": event.created_at,
             "threat_level": event.threat_level,
             "critical": event.threat_level >= 2
         }
+        if add_clear_tag and last_tag is not None:
+            payload["clear_tag"] = last_tag
 
         if self.timeline_callback and event.folder_path:
             try:
@@ -261,6 +284,10 @@ class NotificationPublisher:
             )
 
             if result.rc == mqtt.MQTT_ERR_SUCCESS:
+                with self._lock:
+                    self._last_notification_tag = current_tag
+                    if clear_flag_after_send:
+                        self._next_send_is_new_event = False
                 logger.info(f"Published notification for {event.event_id}: {status}")
                 logger.debug(f"Notification payload: {json.dumps(payload, indent=2)}")
                 return True

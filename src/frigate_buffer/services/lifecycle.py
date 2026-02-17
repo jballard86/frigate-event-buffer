@@ -116,6 +116,7 @@ class EventLifecycleService:
             message="Event discarded (under minimum duration)",
             tag_override=f"frigate_{event.event_id}"
         )
+        self.notifier.mark_last_event_ended()
 
     def process_event_end(self, event: EventState):
         """Background processing when event ends. For consolidated events, defers clip export to CE close."""
@@ -194,6 +195,7 @@ class EventLifecycleService:
                     ce.clip_ready_sent = True
             if should_send_clip:
                 self.notifier.publish_notification(event, "clip_ready")
+                self.notifier.mark_last_event_ended()
                 if self.on_clip_ready_for_analysis and self.config.get('GEMINI', {}).get('enabled'):
                     clip_path = os.path.join(event.folder_path, "clip.mp4")
                     if os.path.isfile(clip_path):
@@ -353,6 +355,7 @@ class EventLifecycleService:
         for fid in ce.frigate_event_ids:
             self.state_manager.remove_event(fid)
         self.consolidated_manager.remove(ce_id)
+        self.notifier.mark_last_event_ended()
         logger.info(f"Consolidated event {ce_id} closed and cleaned up")
 
     def run_cleanup(self):

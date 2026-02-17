@@ -28,6 +28,16 @@ actions:
               data:
                 tag: "{{ payload.tag }}"
     default:
+      # Clear previous notification for same event when buffer sends clear_tag
+      - if:
+          - condition: template
+            value_template: "{{ payload.clear_tag | default('') | length > 0 }}"
+        then:
+          - action: "notify.{{ target_phone }}"
+            data:
+              message: "clear_notification"
+              data:
+                tag: "{{ payload.clear_tag }}"
       - action: "notify.{{ target_phone }}"
         data:
           title: "{{ payload.title }}"

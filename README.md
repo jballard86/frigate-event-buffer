@@ -686,7 +686,7 @@ binary_sensor:
 
 ### Notification Automation
 
-This automation uses a dynamic phone target via a helper. Sound plays only on the initial detection; subsequent updates (clip, AI description) silently replace the notification. **Level 2 (critical) threats bypass phone volume/DND and keep all updates audible.**
+The buffer sends **clear_tag** (the previous notification's tag) in each payload when the current notification is an update for the same event, so the example automation can clear that previous notification before sending the new one; when the event has ended, the next notification is a new event and no clear_tag is sent. This automation uses a dynamic phone target via a helper. Sound plays only on the initial detection; subsequent updates (clip, AI description) silently replace the notification. **Level 2 (critical) threats bypass phone volume/DND and keep all updates audible.**
 
 ```yaml
 alias: "Frigate Orchestrator: Phone Notifications"
