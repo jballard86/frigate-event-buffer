@@ -23,7 +23,10 @@ class VideoService:
             if self._transcode_clip_nvenc(event_id, temp_path, final_path):
                 return True
         except Exception as e:
-            logger.warning(f"GPU transcode failed for {event_id}, falling back to CPU: {e}")
+            logger.warning(
+                "GPU unavailable for transcode (%s), falling back to libx264 (CPU). Reason: %s: %s",
+                event_id, type(e).__name__, e,
+            )
         return self._transcode_clip_libx264(event_id, temp_path, final_path)
 
     def _transcode_clip_nvenc(self, event_id: str, temp_path: str, final_path: str) -> bool:

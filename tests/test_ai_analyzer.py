@@ -335,17 +335,22 @@ class TestGeminiAnalysisServiceFirstLastFrames(unittest.TestCase):
         with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as f:
             clip_path = f.name
         self.addCleanup(lambda: os.path.exists(clip_path) and os.unlink(clip_path))
-        # Simulate 5 candidate frames; identify by pixel [0,0,0]. max_frames=3 -> keep first, 1 middle (highest motion), last.
+        # Sequential read: first 2 frames are pre-buffer (discarded), next 5 are segment. max_frames=3 -> first, 1 middle, last.
+        dummy = np.zeros((60, 80, 3), dtype=np.uint8)
         frames_data = [
-            np.full((60, 80, 3), 10, dtype=np.uint8),   # first
+            dummy.copy(),
+            dummy.copy(),
+            np.full((60, 80, 3), 10, dtype=np.uint8),   # first candidate
             np.full((60, 80, 3), 20, dtype=np.uint8),
             np.full((60, 80, 3), 30, dtype=np.uint8),
             np.full((60, 80, 3), 40, dtype=np.uint8),
-            np.full((60, 80, 3), 50, dtype=np.uint8),   # last
+            np.full((60, 80, 3), 50, dtype=np.uint8),   # last candidate
         ]
         def read_side_effect():
             for fr in frames_data:
                 yield (True, fr.copy())
+            while True:
+                yield (False, None)
         mock_cap = MagicMock()
         mock_cap.isOpened.return_value = True
         mock_cap.fps = 2.0
@@ -357,18 +362,112 @@ class TestGeminiAnalysisServiceFirstLastFrames(unittest.TestCase):
 
         config = {
             "GEMINI": {"enabled": True, "proxy_url": "http://p", "api_key": "k"},
-            "EXPORT_BUFFER_BEFORE": 0,
+            "EXPORT_BUFFER_BEFORE": 1,
             "MAX_MULTI_CAM_FRAMES_SEC": 2,
             "MAX_MULTI_CAM_FRAMES_MIN": 45,
             "FINAL_REVIEW_IMAGE_COUNT": 3,
         }
         service = GeminiAnalysisService(config)
-        # event_start_ts > 0 required to enter motion/first-last branch. Segment 1.0..3.0s -> 2s duration -> 5 frames at fps=2
+        # event_start_ts > 0 → event-segment branch. buffer_offset=1s → start_frame=2; segment 2s → frames 2..6 (5 candidates).
         result = service._extract_frames(clip_path, event_start_ts=1.0, event_end_ts=3.0)
         self.assertEqual(len(result), 3, "Should cap at max_frames=3 (first + one middle + last)")
         # result is list of (frame, frame_time_sec)
         self.assertEqual(int(result[0][0][0, 0, 0]), 10, "First frame should be segment start")
         self.assertEqual(int(result[-1][0][0, 0, 0]), 50, "Last frame should be segment end")
+
+
+class TestExtractFramesNoSeek(unittest.TestCase):
+    """_extract_frames must not call cap.set(); ffmpegcv readers (e.g. FFmpegReaderNV) do not support it."""
+
+    def test_extract_frames_event_segment_without_set(self):
+        """Reader without .set (like FFmpegReaderNV): event-segment branch completes via sequential read."""
+        with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as f:
+            clip_path = f.name
+        self.addCleanup(lambda: os.path.exists(clip_path) and os.unlink(clip_path))
+        frames = [np.full((60, 80, 3), i, dtype=np.uint8) for i in (0, 0, 10, 20, 30, 40, 50)]
+
+        class NoSetReader:
+            def __init__(self, _path):
+                self._idx = 0
+                self._frames = frames
+
+            def isOpened(self):
+                return True
+
+            def read(self):
+                if self._idx >= len(self._frames):
+                    return (False, None)
+                ret = (True, self._frames[self._idx].copy())
+                self._idx += 1
+                return ret
+
+            def release(self):
+                pass
+
+            @property
+            def fps(self):
+                return 2.0
+
+            def __len__(self):
+                return 10
+
+            def get(self, key):
+                return 2.0 if key == cv2.CAP_PROP_FPS else (10 if key == cv2.CAP_PROP_FRAME_COUNT else 0)
+
+        with patch("frigate_buffer.services.ai_analyzer.ffmpegcv.VideoCaptureNV", NoSetReader):
+            config = {
+                "GEMINI": {"enabled": True, "proxy_url": "http://p", "api_key": "k"},
+                "EXPORT_BUFFER_BEFORE": 1,
+                "MAX_MULTI_CAM_FRAMES_SEC": 2,
+                "FINAL_REVIEW_IMAGE_COUNT": 3,
+            }
+            service = GeminiAnalysisService(config)
+            result = service._extract_frames(clip_path, event_start_ts=1.0, event_end_ts=3.0)
+        self.assertEqual(len(result), 3)
+        self.assertEqual(int(result[0][0][0, 0, 0]), 10)
+        self.assertEqual(int(result[-1][0][0, 0, 0]), 50)
+
+    def test_extract_frames_uniform_sampling_without_set(self):
+        """Reader without .set: uniform-sampling branch (event_start_ts=0) completes via sequential read."""
+        with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as f:
+            clip_path = f.name
+        self.addCleanup(lambda: os.path.exists(clip_path) and os.unlink(clip_path))
+        frames = [np.zeros((60, 80, 3), dtype=np.uint8) for _ in range(5)]
+
+        class NoSetReader:
+            def __init__(self, _path):
+                self._idx = 0
+                self._frames = frames
+
+            def isOpened(self):
+                return True
+
+            def read(self):
+                if self._idx >= len(self._frames):
+                    return (False, None)
+                ret = (True, self._frames[self._idx].copy())
+                self._idx += 1
+                return ret
+
+            def release(self):
+                pass
+
+            @property
+            def fps(self):
+                return 1.0
+
+            def __len__(self):
+                return 5
+
+            def get(self, key):
+                return 1.0 if key == cv2.CAP_PROP_FPS else (5 if key == cv2.CAP_PROP_FRAME_COUNT else 0)
+
+        with patch("frigate_buffer.services.ai_analyzer.ffmpegcv.VideoCaptureNV", NoSetReader):
+            config = {"GEMINI": {"enabled": True, "proxy_url": "http://p", "api_key": "k"}, "FINAL_REVIEW_IMAGE_COUNT": 10}
+            service = GeminiAnalysisService(config)
+            result = service._extract_frames(clip_path, event_start_ts=0, event_end_ts=1.0)
+        self.assertGreater(len(result), 0)
+        self.assertLessEqual(len(result), 5)
 
 
 class TestGeminiAnalysisServiceCropAppliedDuringExtraction(unittest.TestCase):
