@@ -40,9 +40,12 @@ class TestEventQueryService(unittest.TestCase):
         self.ce_dir = os.path.join(self.events_dir, self.ce_id)
         os.makedirs(self.ce_dir)
 
-        # Camera subdir in CE
+        # Camera subdirs in CE (multi-cam: front_door and back_door)
         os.makedirs(os.path.join(self.ce_dir, "front_door"))
         with open(os.path.join(self.ce_dir, "front_door", "clip.mp4"), "w") as f:
+            f.write("dummy content")
+        os.makedirs(os.path.join(self.ce_dir, "back_door"))
+        with open(os.path.join(self.ce_dir, "back_door", "clip.mp4"), "w") as f:
             f.write("dummy content")
 
         with open(os.path.join(self.ce_dir, "summary.txt"), "w") as f:
@@ -75,6 +78,12 @@ class TestEventQueryService(unittest.TestCase):
         self.assertEqual(ev["title"], "Consolidated Event")
         self.assertTrue(ev["consolidated"])
         self.assertTrue(ev["has_clip"])
+        self.assertIn("hosted_clips", ev)
+        self.assertEqual(len(ev["hosted_clips"]), 2)  # front_door and back_door
+        cameras = [c["camera"] for c in ev["hosted_clips"]]
+        self.assertIn("front_door", cameras)
+        self.assertIn("back_door", cameras)
+        self.assertIn("clip.mp4", ev["hosted_clips"][0]["url"])
 
     def test_get_all_events(self):
         events, cameras = self.service.get_all_events()

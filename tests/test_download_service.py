@@ -359,5 +359,63 @@ class TestDownloadService(unittest.TestCase):
         self.assertEqual(mock_get.call_count, 3)
         self.download_service.video_service.transcode_clip_to_h264.assert_called_once()
 
+    def test_transcode_temp_to_final_calls_video_and_removes_temp(self):
+        """transcode_temp_to_final runs transcode then deletes temp file."""
+        import tempfile
+        with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as f:
+            temp_path = f.name
+        try:
+            self.mock_video_service.transcode_clip_to_h264.return_value = True
+            final_path = "/tmp/out/clip.mp4"
+            result = self.download_service.transcode_temp_to_final("evt1", temp_path, final_path)
+            self.assertTrue(result)
+            self.mock_video_service.transcode_clip_to_h264.assert_called_once_with(
+                "evt1", temp_path, final_path,
+                detection_sidecar_path=None, detection_model=None, detection_device=None,
+            )
+            self.assertFalse(os.path.exists(temp_path), "Temp file should be removed after transcode")
+        finally:
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+
+    @patch('frigate_buffer.services.download.requests.get')
+    def test_download_clip_to_temp_404_returns_failure(self, mock_get):
+        """download_clip_to_temp returns success False and temp_path None on 404."""
+        mock_resp = MagicMock()
+        mock_resp.status_code = 404
+        mock_resp.__enter__ = MagicMock(return_value=mock_resp)
+        mock_resp.__exit__ = MagicMock(return_value=None)
+        mock_resp.raise_for_status.side_effect = requests.exceptions.HTTPError("404", response=mock_resp)
+        mock_get.return_value = mock_resp
+        result = self.download_service.download_clip_to_temp("evt_missing", "/tmp")
+        self.assertFalse(result.get("success"))
+        self.assertIsNone(result.get("temp_path"))
+
+    @patch('frigate_buffer.services.download.requests.get')
+    @patch('frigate_buffer.services.download.requests.post')
+    @patch('time.sleep')
+    def test_export_and_download_clip_returns_temp_path_on_success(self, mock_sleep, mock_post, mock_get):
+        """export_and_download_clip returns success and temp_path when export and download succeed (no transcode)."""
+        mock_post.return_value = MagicMock(status_code=200, headers={"content-type": "application/json"}, text='{}')
+        mock_post.return_value.json.return_value = {"export_id": "exp1"}
+        mock_post.return_value.ok = True
+        mock_post.return_value.raise_for_status = MagicMock()
+        list_resp = MagicMock()
+        list_resp.raise_for_status = MagicMock()
+        list_resp.json.return_value = [
+            {"id": "exp1", "export_id": "exp1", "in_progress": False, "export": "export_file.mp4"}
+        ]
+        dl_resp = MagicMock()
+        dl_resp.raise_for_status = MagicMock()
+        dl_resp.iter_content = lambda chunk_size: (b"x" for _ in range(1))
+        mock_get.side_effect = [list_resp, list_resp, dl_resp]
+        result = self.download_service.export_and_download_clip(
+            event_id="evt1", folder_path="/tmp", camera="cam1",
+            start_time=1000, end_time=1010, export_buffer_before=0, export_buffer_after=0,
+        )
+        self.assertTrue(result.get("success"))
+        self.assertEqual(result.get("temp_path"), os.path.join("/tmp", "clip_original.mp4"))
+        self.mock_video_service.transcode_clip_to_h264.assert_not_called()
+
 if __name__ == "__main__":
     unittest.main()

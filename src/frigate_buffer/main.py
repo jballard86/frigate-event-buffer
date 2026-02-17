@@ -15,6 +15,7 @@ import sys
 from frigate_buffer.config import load_config
 from frigate_buffer.logging_utils import setup_logging
 from frigate_buffer.orchestrator import StateAwareOrchestrator
+from frigate_buffer.services.video import ensure_detection_model_ready
 
 # Early logging for config loading (reconfigured after config is loaded)
 logging.basicConfig(
@@ -44,6 +45,9 @@ def main():
 
     # Setup logging with configured level
     setup_logging(config.get('LOG_LEVEL', 'INFO'))
+
+    # Ensure multi-cam detection model is available (download if not cached)
+    ensure_detection_model_ready(config)
 
     # Setup signal handlers
     signal.signal(signal.SIGTERM, signal_handler)

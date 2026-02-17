@@ -6,6 +6,7 @@ import time
 import logging
 import threading
 import os
+from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Callable
 
 from frigate_buffer.models import EventState, ConsolidatedEvent, _is_no_concerns, EventPhase
@@ -18,7 +19,8 @@ class EventLifecycleService:
 
     def __init__(self, config, state_manager, file_manager, consolidated_manager,
                  video_service, download_service, notifier, timeline_logger,
-                 on_clip_ready_for_analysis: Callable[[str, str], None] | None = None):
+                 on_clip_ready_for_analysis: Callable[[str, str], None] | None = None,
+                 on_ce_ready_for_analysis: Callable[[str, str, float, dict], None] | None = None):
         self.config = config
         self.state_manager = state_manager
         self.file_manager = file_manager
@@ -28,6 +30,7 @@ class EventLifecycleService:
         self.notifier = notifier
         self.timeline_logger = timeline_logger
         self.on_clip_ready_for_analysis = on_clip_ready_for_analysis
+        self.on_ce_ready_for_analysis = on_ce_ready_for_analysis
 
         self.last_cleanup_time: float | None = None
         self.last_cleanup_deleted: int = 0
@@ -256,42 +259,83 @@ class EventLifecycleService:
             global_min_start = ce.start_time
             global_max_end = ce.end_time_max or ce.last_activity_time
 
-        for camera, events in camera_events.items():
-            camera_folder = self.file_manager.ensure_consolidated_camera_folder(ce.folder_path, camera)
+        def get_duration(e):
+            end = e.end_time if e.end_time else (e.created_at + export_after)
+            return end - e.created_at
 
-            def get_duration(e):
-                end = e.end_time if e.end_time else (e.created_at + export_after)
-                return end - e.created_at
+        start_ts = int(global_min_start - export_before)
+        end_ts = int(global_max_end + export_after)
 
-            representative_event = max(events, key=get_duration)
-            rep_id = representative_event.event_id
-
-            # For timeline logging
-            start_ts = int(global_min_start - export_before)
-            end_ts = int(global_max_end + export_after)
-
-            self.timeline_logger.log_frigate_api(
-                ce.folder_path, 'out',
-                f'Clip export for {camera} (CE close)',
-                {'url': f"{self.config.get('FRIGATE_URL', '')}/api/export/{camera}/start/{start_ts}/end/{end_ts}",
-                 'representative_id': rep_id}
-            )
-            result = self.download_service.export_and_transcode_clip(
-                rep_id, camera_folder, camera,
-                global_min_start, global_max_end,
-                export_before, export_after
-            )
-            ok = result.get("success", False)
-            timeline_data = {"success": ok, "frigate_response": result.get("frigate_response")}
-            if "fallback" in result:
-                timeline_data["fallback"] = result["fallback"]
-            self.timeline_logger.log_frigate_api(ce.folder_path, 'in', f'Clip export response for {camera}', timeline_data)
-            if ok and first_clip_path is None:
-                first_clip_path = os.path.join(camera_folder, 'clip.mp4')
-            if ok and self.on_clip_ready_for_analysis and self.config.get('GEMINI', {}).get('enabled'):
-                clip_path = os.path.join(camera_folder, 'clip.mp4')
-                if os.path.isfile(clip_path):
-                    self.on_clip_ready_for_analysis(rep_id, clip_path)
+        if len(camera_events) > 1:
+            # Pipeline: download each clip then submit transcode to a bounded pool; start next download while transcodes run (max 2 concurrent transcodes).
+            max_transcodes = max(1, int(self.config.get('MAX_CONCURRENT_TRANSCODES', 2)))
+            deferred: list[tuple[str, dict, Future | None, str, str]] = []
+            with ThreadPoolExecutor(max_workers=max_transcodes) as executor:
+                for camera, events in camera_events.items():
+                    camera_folder = self.file_manager.ensure_consolidated_camera_folder(ce.folder_path, camera)
+                    representative_event = max(events, key=get_duration)
+                    rep_id = representative_event.event_id
+                    self.timeline_logger.log_frigate_api(
+                        ce.folder_path, 'out',
+                        f'Clip export for {camera} (CE close)',
+                        {'url': f"{self.config.get('FRIGATE_URL', '')}/api/export/{camera}/start/{start_ts}/end/{end_ts}",
+                         'representative_id': rep_id}
+                    )
+                    result = self.download_service.export_and_download_clip(
+                        rep_id, camera_folder, camera,
+                        global_min_start, global_max_end,
+                        export_before, export_after,
+                    )
+                    future = None
+                    if result.get("success") and result.get("temp_path"):
+                        final_path = os.path.join(camera_folder, "clip.mp4")
+                        sidecar_path = os.path.join(camera_folder, "detection.json")
+                        det_model = self.config.get("DETECTION_MODEL") or None
+                        det_device = (self.config.get("DETECTION_DEVICE") or "").strip() or None
+                        future = executor.submit(
+                            self.download_service.transcode_temp_to_final,
+                            rep_id, result["temp_path"], final_path,
+                            detection_sidecar_path=sidecar_path,
+                            detection_model=det_model,
+                            detection_device=det_device,
+                        )
+                    deferred.append((camera, result, future, camera_folder, rep_id))
+                for camera, result, future, camera_folder, rep_id in deferred:
+                    ok = future.result() if future else False
+                    timeline_data = {"success": ok, "frigate_response": result.get("frigate_response")}
+                    if "fallback" in result:
+                        timeline_data["fallback"] = result["fallback"]
+                    self.timeline_logger.log_frigate_api(ce.folder_path, 'in', f'Clip export response for {camera}', timeline_data)
+                    if ok and first_clip_path is None:
+                        first_clip_path = os.path.join(camera_folder, 'clip.mp4')
+        else:
+            # Single-camera CE: sequential export_and_transcode (unchanged).
+            for camera, events in camera_events.items():
+                camera_folder = self.file_manager.ensure_consolidated_camera_folder(ce.folder_path, camera)
+                representative_event = max(events, key=get_duration)
+                rep_id = representative_event.event_id
+                self.timeline_logger.log_frigate_api(
+                    ce.folder_path, 'out',
+                    f'Clip export for {camera} (CE close)',
+                    {'url': f"{self.config.get('FRIGATE_URL', '')}/api/export/{camera}/start/{start_ts}/end/{end_ts}",
+                     'representative_id': rep_id}
+                )
+                result = self.download_service.export_and_transcode_clip(
+                    rep_id, camera_folder, camera,
+                    global_min_start, global_max_end,
+                    export_before, export_after
+                )
+                ok = result.get("success", False)
+                timeline_data = {"success": ok, "frigate_response": result.get("frigate_response")}
+                if "fallback" in result:
+                    timeline_data["fallback"] = result["fallback"]
+                self.timeline_logger.log_frigate_api(ce.folder_path, 'in', f'Clip export response for {camera}', timeline_data)
+                if ok and first_clip_path is None:
+                    first_clip_path = os.path.join(camera_folder, 'clip.mp4')
+                if ok and len(camera_events) == 1 and self.on_clip_ready_for_analysis and self.config.get('GEMINI', {}).get('enabled'):
+                    clip_path = os.path.join(camera_folder, 'clip.mp4')
+                    if os.path.isfile(clip_path):
+                        self.on_clip_ready_for_analysis(rep_id, clip_path)
         # Placeholder fallback: if all exports failed, try per-event clip for primary camera
         if first_clip_path is None and primary_cam and ce.primary_event_id:
             primary_folder = self.file_manager.ensure_consolidated_camera_folder(ce.folder_path, primary_cam)
@@ -299,8 +343,16 @@ class EventLifecycleService:
             if ok:
                 first_clip_path = os.path.join(primary_folder, 'clip.mp4')
                 self.timeline_logger.log_frigate_api(ce.folder_path, 'in', 'Placeholder clip (events API fallback)', {'success': True})
-                if self.on_clip_ready_for_analysis and self.config.get('GEMINI', {}).get('enabled') and os.path.isfile(first_clip_path):
+                if len(camera_events) == 1 and self.on_clip_ready_for_analysis and self.config.get('GEMINI', {}).get('enabled') and os.path.isfile(first_clip_path):
                     self.on_clip_ready_for_analysis(ce.primary_event_id, first_clip_path)
+
+        # Multi-camera CE: run target-centric analysis once (instead of per-camera)
+        if len(camera_events) > 1 and self.on_ce_ready_for_analysis and self.config.get('GEMINI', {}).get('enabled') and first_clip_path:
+            self.on_ce_ready_for_analysis(ce_id, ce.folder_path, ce.start_time, {
+                "camera": ce.camera, "label": ce.label, "end_time": ce.end_time,
+                "primary_camera": ce.primary_camera, "cameras": ce.cameras,
+                "_start_time": ce.start_time,
+            })
 
         if first_clip_path:
             gif_path = os.path.join(ce.folder_path, 'notification.gif')

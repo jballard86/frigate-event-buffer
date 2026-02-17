@@ -612,14 +612,24 @@
       ? ` <span class="threat-badge threat-${threatLevel}">${threatLabels[threatLevel]}</span>`
       : '';
 
+    const clips = ev.hosted_clips || (ev.hosted_clip ? [{ camera: ev.camera || 'Clip', url: ev.hosted_clip }] : []);
+    const primaryClipUrl = ev.hosted_clip || (clips[0] && clips[0].url) || '';
+
     mainContent.innerHTML = `
       <div class="video-container">
         ${ev.has_clip
           ? `<video id="videoPlayer" controls preload="metadata"
                poster="${ev.has_snapshot ? ev.hosted_snapshot : ''}"
-               src="${ev.hosted_clip}">
+               src="${escapeHtml(primaryClipUrl)}">
                Your browser does not support the video tag.
-             </video>`
+             </video>
+             ${clips.length > 1 ? `
+             <div class="clip-selector" style="margin-top:8px;">
+               <label for="clipSelect" style="margin-right:6px;font-size:0.9rem;">Camera:</label>
+               <select id="clipSelect">${clips.map((c, i) =>
+                 `<option value="${escapeHtml(c.url)}" ${i === 0 ? 'selected' : ''}>${escapeHtml((c.camera || 'Camera').replace(/_/g, ' ').replace(/\b\w/g, ch => ch.toUpperCase()))}</option>`
+               ).join('')}</select>
+             </div>` : ''}`
           : ev.has_snapshot
             ? `<img src="${ev.hosted_snapshot}" alt="Snapshot">`
             : `<div class="no-video">No media available</div>`
@@ -634,7 +644,7 @@
         <span class="event-counter">${currentIndex + 1} / ${events.length}${ev.viewed ? '<span class="viewed-badge">Reviewed</span>' : ''}${ev.ongoing ? '<span class="ongoing-badge">Event ongoing</span>' : ''}</span>
         <div class="nav-buttons">
           ${!ev.viewed ? `<button class="btn-success" id="btnMarkReviewed">Reviewed</button>` : ''}
-          ${ev.has_clip ? `<a href="${ev.hosted_clip}" download style="text-decoration:none;"><button class="btn-download">Download</button></a>` : ''}
+          ${ev.has_clip ? `<a id="btnDownloadLink" href="${escapeHtml(primaryClipUrl)}" download style="text-decoration:none;"><button class="btn-download">Download</button></a>` : ''}
           <a href="/events/${escapeHtml(ev.camera)}/${escapeHtml(subdir)}/timeline" style="text-decoration:none;"><button>View Timeline</button></a>
           <button class="btn-danger" id="btnDelete">Delete</button>
         </div>
@@ -690,6 +700,17 @@
       video.addEventListener('play', () => { videoPlaying = true; });
       video.addEventListener('pause', () => { videoPlaying = false; });
       video.addEventListener('ended', () => { videoPlaying = false; });
+    }
+
+    // Clip selector: switch video src and download link when user picks another camera
+    const clipSelect = document.getElementById('clipSelect');
+    if (clipSelect) {
+      clipSelect.addEventListener('change', () => {
+        const url = clipSelect.value;
+        if (video) video.src = url;
+        const dl = document.getElementById('btnDownloadLink');
+        if (dl) dl.href = url;
+      });
     }
 
     // Populate AI Analysis blocks and bind expand handlers

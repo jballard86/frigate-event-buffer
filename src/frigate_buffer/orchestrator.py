@@ -102,6 +102,7 @@ class StateAwareOrchestrator:
             self._gemini_analysis_semaphore = None
 
         on_clip_ready = None
+        on_ce_ready = None
         if self.ai_analyzer:
             def _on_clip_ready_for_analysis(event_id: str, clip_path: str):
                 def _run():
@@ -125,6 +126,22 @@ class StateAwareOrchestrator:
                 threading.Thread(target=_run, daemon=True).start()
             on_clip_ready = _on_clip_ready_for_analysis
 
+            def _on_ce_ready_for_analysis(ce_id: str, ce_folder_path: str, ce_start_time: float, ce_info: dict):
+                def _run():
+                    if not self.ai_analyzer or not self._gemini_analysis_semaphore:
+                        return
+                    self._gemini_analysis_semaphore.acquire()
+                    try:
+                        result = self.ai_analyzer.analyze_multi_clip_ce(
+                            ce_id, ce_folder_path, ce_start_time
+                        )
+                        if result:
+                            self._handle_ce_analysis_result(ce_id, ce_folder_path, result, ce_info)
+                    finally:
+                        self._gemini_analysis_semaphore.release()
+                threading.Thread(target=_run, daemon=True).start()
+            on_ce_ready = _on_ce_ready_for_analysis
+
         self.lifecycle_service = EventLifecycleService(
             config,
             self.state_manager,
@@ -134,7 +151,8 @@ class StateAwareOrchestrator:
             self.download_service,
             self.notifier,
             self.timeline_logger,
-            on_clip_ready_for_analysis=on_clip_ready
+            on_clip_ready_for_analysis=on_clip_ready,
+            on_ce_ready_for_analysis=on_ce_ready,
         )
 
         # Update callback after lifecycle service creation
@@ -394,6 +412,43 @@ class StateAwareOrchestrator:
                     tag_override=f"frigate_{ce.consolidated_id}" if ce else None
                 )
         logger.info(f"Analysis result applied for {event_id}: title={title or 'N/A'}, threat_level={threat_level}")
+
+    def _handle_ce_analysis_result(self, ce_id: str, ce_folder_path: str, result: dict, ce_info: dict):
+        """Handle multi-clip CE analysis result: write summary/metadata to CE root, notify."""
+        title = result.get("title") or ""
+        description = result.get("shortSummary") or result.get("description") or ""
+        scene = result.get("scene") or ""
+        threat_level = int(result.get("potential_threat_level", 0))
+        if not title and not description:
+            logger.debug("CE analysis result for %s has no title/description, skipping", ce_id)
+            return
+        label = ce_info.get("label", "unknown")
+        start_time = 0  # Passed separately; ce_info has end_time
+        self.file_manager.write_ce_summary(
+            ce_folder_path, ce_id, title, description, scene=scene,
+            threat_level=threat_level, label=label,
+            start_time=ce_info.get("_start_time", 0),
+        )
+        self.file_manager.write_ce_metadata_json(
+            ce_folder_path, ce_id, title, description, scene=scene,
+            threat_level=threat_level, label=label,
+            start_time=ce_info.get("_start_time", 0),
+            end_time=ce_info.get("end_time"),
+        )
+        media_folder = ce_folder_path
+        if ce_info.get("primary_camera"):
+            media_folder = os.path.join(ce_folder_path, self.file_manager.sanitize_camera_name(ce_info["primary_camera"]))
+        notify_target = type('NotifyTarget', (), {
+            'event_id': ce_id, 'camera': ce_info.get('camera', 'events'), 'label': label,
+            'folder_path': media_folder,
+            'created_at': ce_info.get('_start_time', 0), 'end_time': ce_info.get('end_time'),
+            'phase': 'finalized',
+            'genai_title': title, 'genai_description': description, 'ai_description': None,
+            'review_summary': None, 'threat_level': threat_level, 'severity': 'detection',
+            'snapshot_downloaded': True, 'clip_downloaded': True, 'image_url_override': None,
+        })()
+        self.notifier.publish_notification(notify_target, "finalized", tag_override=f"frigate_{ce_id}")
+        logger.info("CE analysis result applied for %s: title=%s, threat_level=%s", ce_id, title or "N/A", threat_level)
 
     def _handle_tracked_update(self, payload: dict, topic: str):
         """Handle tracked_object_update: AI description (Phase 2) or per-frame metadata (frame_time, box, area, score)."""
