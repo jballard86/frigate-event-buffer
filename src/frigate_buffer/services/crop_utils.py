@@ -137,13 +137,23 @@ def draw_timestamp_overlay(
     thickness_outline: int = 2,
     thickness_text: int = 1,
     position: tuple[int, int] = (10, 30),
-) -> None:
+) -> Any:
     """
-    Draw timestamp overlay on frame in-place (top-left by default).
-    Uses shadow/outline: black with thicker stroke first, then white with thinner stroke,
-    so text is readable on both bright (snow) and dark (night) backgrounds.
+    Draw timestamp overlay on frame (top-left by default).
+
+    OpenCV putText requires a writable buffer; if the frame is read-only (e.g. from
+    ffmpegcv or a crop view), a copy is made so drawing succeeds. Callers must use
+    the returned frame—the overlay is drawn on that array.
+
+    Uses shadow/outline: black with thicker stroke first, then white with thinner
+    stroke, so text is readable on both bright (snow) and dark (night) backgrounds.
     Format: time_str | camera_name | seq_index/seq_total (e.g. "12:34:56 | Doorbell | 3/24").
+
+    Returns:
+        The frame with overlay drawn (same object if already writable, else a copy).
     """
+    if not getattr(frame, "flags", None) or not frame.flags.writeable:
+        frame = np.array(frame, copy=True)
     label = f"{time_str} | {camera_name} | {seq_index}/{seq_total}"
     # Black outline (thicker) first
     cv2.putText(
@@ -167,3 +177,4 @@ def draw_timestamp_overlay(
         thickness_text,
         cv2.LINE_AA,
     )
+    return frame
