@@ -10,7 +10,10 @@ from unittest.mock import patch, MagicMock
 import sys
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from frigate_buffer.services.frigate_export_watchdog import run_once
+from frigate_buffer.services.frigate_export_watchdog import (
+    DELETE_EXPORT_TIMEOUT,
+    run_once,
+)
 
 
 class TestFrigateExportWatchdog(unittest.TestCase):
@@ -66,6 +69,11 @@ class TestFrigateExportWatchdog(unittest.TestCase):
             run_once(config)
             self.assertEqual(mock_delete.call_count, 1)
             self.assertIn("/api/export/exp-1", mock_delete.call_args[0][0])
+            self.assertEqual(
+                mock_delete.call_args[1].get("timeout"),
+                DELETE_EXPORT_TIMEOUT,
+                "DELETE should be called with timeout",
+            )
             found_success = any(
                 record.levelno == logging.INFO and "Frigate export removed" in record.getMessage() and "exp-1" in record.getMessage() and "success" in record.getMessage()
                 for record in self.log_capture
@@ -162,6 +170,92 @@ class TestFrigateExportWatchdog(unittest.TestCase):
             run_once(config)
             self.assertEqual(mock_delete.call_count, 1)
             self.assertIn("exp-doorbell", mock_delete.call_args[0][0])
+
+    @patch('frigate_buffer.services.frigate_export_watchdog.requests.delete')
+    @patch('frigate_buffer.services.frigate_export_watchdog.requests.head')
+    def test_delete_200_with_json_body_logs_success_and_debug_body(self, mock_head, mock_delete):
+        mock_delete.return_value = MagicMock(
+            status_code=200,
+            headers={"content-type": "application/json"},
+            json=MagicMock(return_value={"deleted": True}),
+            text='{"deleted": true}',
+        )
+        mock_head.return_value = MagicMock(status_code=200)
+        with tempfile.TemporaryDirectory() as tmp:
+            storage = os.path.join(tmp, "storage")
+            event_dir = os.path.join(storage, "cam", "123_evt1")
+            os.makedirs(event_dir, exist_ok=True)
+            with open(os.path.join(event_dir, "notification_timeline.json"), "w") as f:
+                json.dump(self._make_timeline_with_export_response(export_id="exp-body"), f, indent=2)
+            with open(os.path.join(event_dir, "clip.mp4"), "wb") as f:
+                f.write(b"x")
+            run_once({"STORAGE_PATH": storage, "FRIGATE_URL": "http://f:5000", "BUFFER_IP": "x", "FLASK_PORT": "5055"})
+        self.assertEqual(mock_delete.call_count, 1)
+        found_info = any(
+            record.levelno == logging.INFO and "Frigate export removed" in record.getMessage() and "exp-body" in record.getMessage()
+            for record in self.log_capture
+        )
+        self.assertTrue(found_info, "Should log success at INFO")
+        found_debug_body = any(
+            record.levelno == logging.DEBUG and "delete response" in record.getMessage() and "200" in record.getMessage()
+            for record in self.log_capture
+        )
+        self.assertTrue(found_debug_body, "Should log response body at DEBUG")
+
+    @patch('frigate_buffer.services.frigate_export_watchdog.requests.delete')
+    @patch('frigate_buffer.services.frigate_export_watchdog.requests.head')
+    def test_delete_404_logs_already_removed_at_info(self, mock_head, mock_delete):
+        mock_delete.return_value = MagicMock(
+            status_code=404,
+            headers={"content-type": "application/json"},
+            json=MagicMock(return_value={"message": "Export not found"}),
+            text='{"message": "Export not found"}',
+        )
+        mock_head.return_value = MagicMock(status_code=200)
+        with tempfile.TemporaryDirectory() as tmp:
+            storage = os.path.join(tmp, "storage")
+            event_dir = os.path.join(storage, "cam", "123_evt1")
+            os.makedirs(event_dir, exist_ok=True)
+            with open(os.path.join(event_dir, "notification_timeline.json"), "w") as f:
+                json.dump(self._make_timeline_with_export_response(export_id="exp-404"), f, indent=2)
+            with open(os.path.join(event_dir, "clip.mp4"), "wb") as f:
+                f.write(b"x")
+            run_once({"STORAGE_PATH": storage, "FRIGATE_URL": "http://f:5000", "BUFFER_IP": "x", "FLASK_PORT": "5055"})
+        self.assertEqual(mock_delete.call_count, 1)
+        found_info = any(
+            record.levelno == logging.INFO and "already removed" in record.getMessage() and "exp-404" in record.getMessage()
+            for record in self.log_capture
+        )
+        self.assertTrue(found_info, "Should log already removed at INFO for 404")
+        found_no_warning = not any(
+            record.levelno == logging.WARNING and "exp-404" in record.getMessage()
+            for record in self.log_capture
+        )
+        self.assertTrue(found_no_warning, "404 should not be logged as WARNING")
+
+    @patch('frigate_buffer.services.frigate_export_watchdog.requests.delete')
+    @patch('frigate_buffer.services.frigate_export_watchdog.requests.head')
+    def test_run_once_logs_summary_with_succeeded_failed_already_removed(self, mock_head, mock_delete):
+        mock_delete.return_value = MagicMock(status_code=200)
+        mock_head.return_value = MagicMock(status_code=200)
+        with tempfile.TemporaryDirectory() as tmp:
+            storage = os.path.join(tmp, "storage")
+            event_dir = os.path.join(storage, "cam", "123_evt1")
+            os.makedirs(event_dir, exist_ok=True)
+            with open(os.path.join(event_dir, "notification_timeline.json"), "w") as f:
+                json.dump(self._make_timeline_with_export_response(export_id="exp-summary"), f, indent=2)
+            with open(os.path.join(event_dir, "clip.mp4"), "wb") as f:
+                f.write(b"x")
+            run_once({"STORAGE_PATH": storage, "FRIGATE_URL": "http://f:5000", "BUFFER_IP": "x", "FLASK_PORT": "5055"})
+        summary_logs = [
+            r for r in self.log_capture
+            if r.levelno == logging.INFO and "Export watchdog complete" in r.getMessage()
+        ]
+        self.assertEqual(len(summary_logs), 1, "Should log exactly one run summary at INFO")
+        msg = summary_logs[0].getMessage()
+        self.assertIn("succeeded", msg)
+        self.assertIn("failed", msg)
+        self.assertIn("already removed", msg)
 
 
 if __name__ == "__main__":

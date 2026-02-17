@@ -7,7 +7,8 @@ import json
 import logging
 import os
 import re
-from typing import Any
+from typing import Any, Literal
+from urllib.parse import urlparse, urlunparse
 
 import requests
 
@@ -15,9 +16,15 @@ from frigate_buffer.services.query import read_timeline_merged
 
 logger = logging.getLogger("frigate-buffer")
 
+# Timeout for DELETE /api/export/{id} so the watchdog cannot hang on slow/stuck Frigate or network
+DELETE_EXPORT_TIMEOUT = 10
+
 # Cap link verification to avoid unbounded HEAD requests per run
 MAX_LINK_CHECK_FOLDERS = 20
 MAX_HEAD_REQUESTS = 120
+
+# Outcome of a single delete request for run summary
+DeleteOutcome = Literal["success", "already_gone", "failure"]
 
 
 def _sanitize_camera_name(camera: str) -> str:
@@ -111,23 +118,63 @@ def _event_files_list(folder_path: str) -> list[str]:
     return files
 
 
+def _redact_url(url: str) -> str:
+    """Return URL with password redacted for safe logging."""
+    try:
+        parsed = urlparse(url)
+        if parsed.password is not None:
+            safe_netloc = f"{parsed.username or ''}:***@{parsed.hostname or ''}"
+            if parsed.port is not None:
+                safe_netloc += f":{parsed.port}"
+            parsed = parsed._replace(netloc=safe_netloc)
+        return urlunparse(parsed)
+    except Exception:
+        return "(url parse error)"
+
+
+def _response_body_for_log(resp: requests.Response, max_len: int = 500) -> str:
+    """Return a safe, truncated representation of the response body for logging."""
+    if not resp.text:
+        return ""
+    try:
+        if resp.headers.get("content-type", "").startswith("application/json"):
+            obj = resp.json()
+            raw = json.dumps(obj) if isinstance(obj, dict) else str(obj)
+        else:
+            raw = resp.text
+        return (raw[:max_len] + "...") if len(raw) > max_len else raw
+    except Exception:
+        return (resp.text[:max_len] + "...") if len(resp.text) > max_len else resp.text
+
+
 def _delete_export_from_frigate(
     frigate_url: str,
     export_id: str,
-) -> None:
+) -> DeleteOutcome:
     """
-    Call Frigate DELETE /api/export/{export_id}. Log success or error (including reason from response).
+    Call Frigate DELETE /api/export/{export_id}. Log success, already-removed, or failure.
+    Returns outcome so run_once can aggregate counts for the run summary.
     """
     url = f"{frigate_url.rstrip('/')}/api/export/{export_id}"
+    logger.debug("Frigate export delete: url=%s export_id=%s", _redact_url(url), export_id)
     try:
-        resp = requests.delete(url, timeout=15)
+        resp = requests.delete(url, timeout=DELETE_EXPORT_TIMEOUT)
+        body_str = _response_body_for_log(resp)
         if resp.status_code == 200:
-            logger.info(f"Frigate export removed: export_id={export_id} success")
-            return
+            logger.info("Frigate export removed: export_id=%s success", export_id)
+            if body_str:
+                logger.debug("Frigate export delete response (200): %s", body_str)
+            return "success"
         if resp.status_code in (404, 422):
-            logger.debug(f"Frigate export delete: export_id={export_id} already gone or invalid (status={resp.status_code})")
-            return
-        # Error with possible reason in body
+            logger.info(
+                "Frigate export already removed: export_id=%s (status=%s)",
+                export_id,
+                resp.status_code,
+            )
+            if body_str:
+                logger.debug("Frigate export delete response (%s): %s", resp.status_code, body_str)
+            return "already_gone"
+        # Failure: extract reason and log warning
         reason = ""
         try:
             if resp.headers.get("content-type", "").startswith("application/json"):
@@ -142,17 +189,24 @@ def _delete_export_from_frigate(
         if not reason and resp.text:
             reason = resp.text[:200]
         logger.warning(
-            f"Frigate export delete error: export_id={export_id} status={resp.status_code}"
-            + (f" reason={reason}" if reason else "")
+            "Frigate export delete error: export_id=%s status=%s%s",
+            export_id,
+            resp.status_code,
+            f" reason={reason}" if reason else "",
         )
+        if body_str:
+            logger.debug("Frigate export delete response (%s): %s", resp.status_code, body_str)
+        return "failure"
     except requests.exceptions.RequestException as e:
-        logger.warning(f"Frigate export delete request failed: export_id={export_id} error={e}")
+        logger.warning("Frigate export delete request failed: export_id=%s error=%s", export_id, e)
+        return "failure"
 
 
 def run_once(config: dict[str, Any]) -> None:
     """
     Run one pass of the export watchdog: discover exports from timeline data,
     verify clips are in event folders, delete from Frigate (with logging), verify download links.
+    Logs a run summary (succeeded / failed / already removed) at info.
     """
     storage_path = config.get("STORAGE_PATH") or ""
     frigate_url = config.get("FRIGATE_URL") or ""
@@ -167,8 +221,15 @@ def run_once(config: dict[str, Any]) -> None:
         logger.debug("Export watchdog: FRIGATE_URL missing, skipping")
         return
 
-    seen_export_ids: set = set()
+    logger.debug("Export watchdog run started: frigate_url=%s", _redact_url(frigate_url))
+
+    seen_export_ids: set[str] = set()
     events_checked_for_links: list[tuple[str, str, str]] = []  # (folder_path, camera, subdir)
+    folders_with_timeline = 0
+    export_entries_found = 0
+    succeeded = 0
+    already_gone = 0
+    failed = 0
 
     try:
         with os.scandir(storage_path) as it:
@@ -194,7 +255,9 @@ def run_once(config: dict[str, Any]) -> None:
                             if not os.path.isfile(timeline_path):
                                 continue
 
+                            folders_with_timeline += 1
                             pairs = _parse_export_response_entries(event_path)
+                            export_entries_found += len(pairs)
                             for export_id, camera_for_clip in pairs:
                                 if export_id in seen_export_ids:
                                     continue
@@ -202,7 +265,13 @@ def run_once(config: dict[str, Any]) -> None:
                                 if not os.path.isfile(clip_path):
                                     continue
                                 seen_export_ids.add(export_id)
-                                _delete_export_from_frigate(frigate_url, export_id)
+                                outcome = _delete_export_from_frigate(frigate_url, export_id)
+                                if outcome == "success":
+                                    succeeded += 1
+                                elif outcome == "already_gone":
+                                    already_gone += 1
+                                else:
+                                    failed += 1
 
                             # Remember for link verification (any folder with timeline and at least one clip)
                             if pairs and any(
@@ -214,11 +283,28 @@ def run_once(config: dict[str, Any]) -> None:
                                     events_checked_for_links.append((event_path, rel[0], rel[1]))
 
                 except OSError as e:
-                    logger.debug(f"Export watchdog: scan {camera_path}: {e}")
+                    logger.debug("Export watchdog: scan %s: %s", camera_path, e)
 
     except OSError as e:
-        logger.warning(f"Export watchdog: scan storage: {e}")
+        logger.warning("Export watchdog: scan storage: %s", e)
         return
+
+    logger.debug(
+        "Export watchdog: folders_with_timeline=%s export_entries_found=%s deletes_attempted=%s",
+        folders_with_timeline,
+        export_entries_found,
+        succeeded + already_gone + failed,
+    )
+    total_deletes = succeeded + already_gone + failed
+    if total_deletes == 0:
+        logger.info("Export watchdog complete: no exports to delete")
+    else:
+        logger.info(
+            "Export watchdog complete: %s succeeded, %s failed, %s already removed",
+            succeeded,
+            failed,
+            already_gone,
+        )
 
     # Verify download links (capped to avoid unbounded HEAD requests)
     if base_url and events_checked_for_links:
