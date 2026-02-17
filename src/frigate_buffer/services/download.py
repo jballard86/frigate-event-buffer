@@ -185,6 +185,13 @@ class DownloadService:
                                     or matched.get("path")
                                 )
                                 if export_filename:
+                                    # Use the export id from GET /exports so the watchdog can DELETE with the correct id
+                                    if isinstance(frigate_response, dict):
+                                        frigate_response["export_id"] = (
+                                            matched.get("id")
+                                            or matched.get("export_id")
+                                            or frigate_response.get("export_id")
+                                        )
                                     break
                             else:
                                 logger.debug("Export still processing..., waiting for in_progress false")
@@ -192,6 +199,10 @@ class DownloadService:
                         e = exports
                         if not e.get("in_progress", False):
                             export_filename = e.get("video_path") or e.get("export") or e.get("filename") or e.get("name")
+                            if export_filename and isinstance(frigate_response, dict):
+                                frigate_response["export_id"] = (
+                                    e.get("id") or e.get("export_id") or frigate_response.get("export_id")
+                                )
                 except Exception as e:
                     logger.debug(f"Exports poll: {e}")
 
