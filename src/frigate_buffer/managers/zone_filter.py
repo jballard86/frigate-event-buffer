@@ -1,7 +1,7 @@
 """Smart Zone Filtering: per-camera rules for when to start an event (zones + exceptions)."""
 
 import logging
-from typing import Any, List, Optional
+from typing import Any
 
 logger = logging.getLogger('frigate-buffer')
 
@@ -13,7 +13,7 @@ class SmartZoneFilter:
         self._config = config
 
     @staticmethod
-    def normalize_sub_label(sub_label: Any) -> Optional[str]:
+    def normalize_sub_label(sub_label: Any) -> str | None:
         """Extract matchable string from Frigate sub_label (format varies by version).
         Handles: None, string, [name, score], empty values, unexpected types.
         """
@@ -34,7 +34,7 @@ class SmartZoneFilter:
         camera: str,
         label: str,
         sub_label: Any,
-        entered_zones: List[str],
+        entered_zones: list[str],
     ) -> bool:
         """Smart Zone Filtering: decide if we should create an event.
         Returns True to start, False to ignore (defer).

@@ -4,7 +4,7 @@ import time
 import uuid
 from enum import Enum, auto
 from dataclasses import dataclass, field
-from typing import Optional, List, Protocol, runtime_checkable, Tuple
+from typing import Protocol, runtime_checkable
 
 
 @dataclass(frozen=True)
@@ -13,7 +13,7 @@ class FrameMetadata:
     Box is always [ymin, xmin, ymax, xmax] normalized 0-1 (see state manager normalization).
     """
     frame_time: float
-    box: Tuple[float, float, float, float]  # ymin, xmin, ymax, xmax normalized 0-1
+    box: tuple[float, float, float, float]  # ymin, xmin, ymax, xmax normalized 0-1
     area: float
     score: float
 
@@ -52,12 +52,12 @@ class NotificationEvent(Protocol):
     snapshot_downloaded: bool
 
     # Optional fields
-    ai_description: Optional[str]
-    genai_title: Optional[str]
-    genai_description: Optional[str]
-    review_summary: Optional[str]
-    folder_path: Optional[str]
-    image_url_override: Optional[str]
+    ai_description: str | None
+    genai_title: str | None
+    genai_description: str | None
+    review_summary: str | None
+    folder_path: str | None
+    image_url_override: str | None
 
 
 @dataclass(slots=True)
@@ -70,32 +70,32 @@ class EventState:
     created_at: float = field(default_factory=time.time)
 
     # Phase 2 data (from tracked_object_update)
-    ai_description: Optional[str] = None
+    ai_description: str | None = None
 
     # Phase 3 data (from frigate/reviews)
-    genai_title: Optional[str] = None
-    genai_description: Optional[str] = None
-    genai_scene: Optional[str] = None  # Longer narrative from Frigate metadata.scene
-    severity: Optional[str] = None
+    genai_title: str | None = None
+    genai_description: str | None = None
+    genai_scene: str | None = None  # Longer narrative from Frigate metadata.scene
+    severity: str | None = None
     threat_level: int = 0  # 0=normal, 1=suspicious, 2=critical
 
     # Phase 4 data (from review summary API)
-    review_summary: Optional[str] = None
+    review_summary: str | None = None
 
     # File management
-    folder_path: Optional[str] = None
+    folder_path: str | None = None
     clip_downloaded: bool = False
     snapshot_downloaded: bool = False
     summary_written: bool = False
     review_summary_written: bool = False
 
     # Event end tracking
-    end_time: Optional[float] = None
+    end_time: float | None = None
     has_clip: bool = False
     has_snapshot: bool = False
 
     # Notification override
-    image_url_override: Optional[str] = None
+    image_url_override: str | None = None
 
 
 def _generate_consolidated_id(start_ts: float) -> tuple:
@@ -117,18 +117,18 @@ class ConsolidatedEvent:
     start_time: float
     last_activity_time: float
     end_time_max: float = 0  # Max end_time across sub-events (updated as events end)
-    cameras: List[str] = field(default_factory=list)
-    frigate_event_ids: List[str] = field(default_factory=list)
-    labels: List[str] = field(default_factory=list)
+    cameras: list[str] = field(default_factory=list)
+    frigate_event_ids: list[str] = field(default_factory=list)
+    labels: list[str] = field(default_factory=list)
 
     # Best-so-far (never regress)
-    best_title: Optional[str] = None
-    best_description: Optional[str] = None
+    best_title: str | None = None
+    best_description: str | None = None
     best_threat_level: int = 0
 
     # Primary (first) Frigate event for immediate clip/snapshot
-    primary_event_id: Optional[str] = None
-    primary_camera: Optional[str] = None
+    primary_event_id: str | None = None
+    primary_camera: str | None = None
     snapshot_downloaded: bool = False
     clip_downloaded: bool = False
 
@@ -166,11 +166,11 @@ class ConsolidatedEvent:
         return EventPhase.SUMMARIZED  # Simplified for notification
 
     @property
-    def genai_title(self) -> Optional[str]:
+    def genai_title(self) -> str | None:
         return self.best_title
 
     @property
-    def genai_description(self) -> Optional[str]:
+    def genai_description(self) -> str | None:
         return self.best_description
 
     @property
@@ -178,15 +178,15 @@ class ConsolidatedEvent:
         return self.best_threat_level
 
     @property
-    def severity(self) -> Optional[str]:
+    def severity(self) -> str | None:
         return "detection"
 
     @property
-    def review_summary(self) -> Optional[str]:
+    def review_summary(self) -> str | None:
         return None  # Set when we get full-event summary
 
     @property
-    def end_time(self) -> Optional[float]:
+    def end_time(self) -> float | None:
         return self.last_activity_time
 
     @property
@@ -198,9 +198,9 @@ class ConsolidatedEvent:
         return self.snapshot_downloaded
 
     @property
-    def image_url_override(self) -> Optional[str]:
+    def image_url_override(self) -> str | None:
         return None
 
     @property
-    def ai_description(self) -> Optional[str]:
+    def ai_description(self) -> str | None:
         return None

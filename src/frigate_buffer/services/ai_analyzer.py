@@ -12,7 +12,7 @@ import json
 import base64
 import logging
 from datetime import datetime
-from typing import Optional, List, Dict, Any, Sequence
+from typing import Any, Sequence
 
 from frigate_buffer.models import FrameMetadata
 from frigate_buffer.managers.file import write_ai_frame_analysis_single_cam
@@ -88,7 +88,7 @@ class GeminiAnalysisService:
         self._model = config.get('GEMINI_PROXY_MODEL') or gemini.get('model') or 'gemini-2.5-flash-lite'
         self._enabled = bool(gemini.get('enabled', False))
         self._max_frames = int(config.get('FINAL_REVIEW_IMAGE_COUNT', DEFAULT_MAX_FRAMES) or DEFAULT_MAX_FRAMES)
-        self._prompt_template: Optional[str] = None
+        self._prompt_template: str | None = None
         # Proxy tuning (flat keys)
         self._temperature = float(config.get('GEMINI_PROXY_TEMPERATURE', 0.3))
         self._top_p = float(config.get('GEMINI_PROXY_TOP_P', 1))
@@ -183,7 +183,7 @@ class GeminiAnalysisService:
         box: Sequence[float],
         target_w: int,
         target_h: int,
-        padding: Optional[float] = None,
+        padding: float | None = None,
     ) -> Any:
         """
         Crop frame centered on the bounding box with padding for visual context.
@@ -239,14 +239,14 @@ class GeminiAnalysisService:
         clip_path: str,
         event_start_ts: float = 0,
         event_end_ts: float = 0,
-        frame_metadata: Optional[Sequence[FrameMetadata]] = None,
-    ) -> List[tuple]:
+        frame_metadata: Sequence[FrameMetadata] | None = None,
+    ) -> list[tuple]:
         """Extract frames from video. With event_start_ts > 0, seeks past pre-capture buffer and limits to event segment.
         Uses CV-based motion crop (crop_utils.motion_crop) when CROP_WIDTH/CROP_HEIGHT set; otherwise center crop.
         Uses grayscale frame differencing for motion-aware selection when MOTION_THRESHOLD_PX > 0; first and last frame
         are always kept. When frame_metadata is provided, prioritizes by score*area.
         Returns list of (frame, frame_time_sec) for overlay in analyze_clip."""
-        result: List[tuple] = []
+        result: list[tuple] = []
         cap = cv2.VideoCapture(clip_path)
         if not cap.isOpened():
             logger.warning("Could not open video: %s", clip_path)
@@ -270,10 +270,10 @@ class GeminiAnalysisService:
                 step = max(1, int(fps / self.max_frames_sec)) if self.max_frames_sec > 0 else 1
 
                 use_motion = self.motion_threshold_px > 0
-                candidates: List[tuple] = []
+                candidates: list[tuple] = []
                 prev_gray = None
-                sorted_meta: List[Any] = []
-                times: List[float] = []
+                sorted_meta: list[Any] = []
+                times: list[float] = []
                 if use_meta and frame_metadata:
                     sorted_meta = sorted(frame_metadata, key=lambda m: m.frame_time)
                     times = [m.frame_time for m in sorted_meta]
@@ -387,8 +387,8 @@ class GeminiAnalysisService:
     def send_to_proxy(
         self,
         system_prompt: str,
-        image_buffers: List[Any],
-    ) -> Optional[Dict[str, Any]]:
+        image_buffers: list[Any],
+    ) -> dict[str, Any] | None:
         """
         POST system prompt and images to Gemini proxy (OpenAI-compatible).
         image_buffers: list of numpy arrays (BGR, from cv2).
@@ -465,7 +465,7 @@ class GeminiAnalysisService:
                 continue
         return None
 
-    def send_text_prompt(self, system_prompt: str, user_prompt: str) -> Optional[str]:
+    def send_text_prompt(self, system_prompt: str, user_prompt: str) -> str | None:
         """
         POST text-only messages to Gemini proxy (OpenAI-compatible). No images.
         Uses same GEMINI_PROXY_URL and GEMINI_API_KEY as send_to_proxy.
@@ -522,7 +522,7 @@ class GeminiAnalysisService:
                 continue
         return None
 
-    def _save_analysis_result(self, event_id: str, clip_path: str, result: Dict[str, Any]) -> None:
+    def _save_analysis_result(self, event_id: str, clip_path: str, result: dict[str, Any]) -> None:
         """
         Save the analysis result as analysis_result.json in the same directory as the clip.
         Required for Step 7 (Daily Reporter). Logs a warning if shortSummary, title, or
@@ -547,8 +547,8 @@ class GeminiAnalysisService:
         clip_path: str,
         event_start_ts: float = 0,
         event_end_ts: float = 0,
-        frame_metadata: Optional[Sequence[FrameMetadata]] = None,
-    ) -> Optional[Dict[str, Any]]:
+        frame_metadata: Sequence[FrameMetadata] | None = None,
+    ) -> dict[str, Any] | None:
         """
         Extract frames from clip_path, call proxy, return analysis metadata.
         When event_start_ts > 0, seeks past pre-capture buffer and limits to event segment.

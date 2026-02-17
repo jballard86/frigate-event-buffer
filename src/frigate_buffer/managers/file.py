@@ -8,7 +8,7 @@ import shutil
 import zipfile
 import logging
 from datetime import datetime
-from typing import List, Optional, Any, Tuple
+from typing import Any
 
 from frigate_buffer.models import EventState
 
@@ -42,7 +42,7 @@ def write_stitched_frame(frame_bgr: Any, filepath: str) -> bool:
 
 def write_ai_frame_analysis_single_cam(
     event_dir: str,
-    frames_with_time: List[Tuple[Any, float]],
+    frames_with_time: list[tuple[Any, float]],
     camera: str,
     write_manifest: bool = True,
     create_zip_flag: bool = True,
@@ -285,8 +285,8 @@ class FileManager:
             logger.warning(f"Failed to delete event folder {folder_path}: {e}")
             return False
 
-    def cleanup_old_events(self, active_event_ids: List[str],
-                          active_ce_folder_names: Optional[List[str]] = None) -> int:
+    def cleanup_old_events(self, active_event_ids: list[str],
+                          active_ce_folder_names: list[str] | None = None) -> int:
         """Delete folders older than retention period. Returns count deleted.
         active_ce_folder_names: folder names of active consolidated events (e.g. 1771003190_abc) to skip."""
         now = time.time()

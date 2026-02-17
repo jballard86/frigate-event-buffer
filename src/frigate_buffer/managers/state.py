@@ -3,7 +3,7 @@
 import logging
 import threading
 import time
-from typing import Dict, Optional, List, Tuple, Any
+from typing import Any
 
 from frigate_buffer.models import EventState, EventPhase, FrameMetadata
 
@@ -15,9 +15,9 @@ MAX_FRAME_METADATA_PER_EVENT = 500
 
 def _normalize_box(
     box: Any,
-    frame_width: Optional[int] = None,
-    frame_height: Optional[int] = None,
-) -> Optional[Tuple[float, float, float, float]]:
+    frame_width: int | None = None,
+    frame_height: int | None = None,
+) -> tuple[float, float, float, float] | None:
     """
     Normalize box to [ymin, xmin, ymax, xmax] in 0-1 range.
     Frigate may send [x1, y1, x2, y2] in pixels or normalized.
@@ -56,8 +56,8 @@ class EventStateManager:
     """Thread-safe manager for active event states across multiple cameras."""
 
     def __init__(self):
-        self._events: Dict[str, EventState] = {}
-        self._frame_metadata: Dict[str, List[FrameMetadata]] = {}
+        self._events: dict[str, EventState] = {}
+        self._frame_metadata: dict[str, list[FrameMetadata]] = {}
         self._lock = threading.RLock()
 
     def create_event(self, event_id: str, camera: str, label: str,
@@ -78,7 +78,7 @@ class EventStateManager:
             logger.info(f"Created event state: {event_id} ({label} on {camera})")
             return event
 
-    def get_event(self, event_id: str) -> Optional[EventState]:
+    def get_event(self, event_id: str) -> EventState | None:
         """Get event by ID (thread-safe read)."""
         with self._lock:
             return self._events.get(event_id)
@@ -101,10 +101,10 @@ class EventStateManager:
             logger.debug(f"Cannot set AI description: event {event_id} not found")
             return False
 
-    def set_genai_metadata(self, event_id: str, title: Optional[str],
-                           description: Optional[str], severity: str,
+    def set_genai_metadata(self, event_id: str, title: str | None,
+                           description: str | None, severity: str,
                            threat_level: int = 0,
-                           scene: Optional[str] = None) -> bool:
+                           scene: str | None = None) -> bool:
         """Set GenAI review metadata and advance to FINALIZED phase."""
         with self._lock:
             event = self._events.get(event_id)
@@ -135,7 +135,7 @@ class EventStateManager:
             return False
 
     def mark_event_ended(self, event_id: str, end_time: float,
-                         has_clip: bool, has_snapshot: bool) -> Optional[EventState]:
+                         has_clip: bool, has_snapshot: bool) -> EventState | None:
         """Mark event as ended, returning the event for processing."""
         with self._lock:
             event = self._events.get(event_id)
@@ -153,8 +153,8 @@ class EventStateManager:
         box: Any,
         area: float,
         score: float,
-        frame_width: Optional[int] = None,
-        frame_height: Optional[int] = None,
+        frame_width: int | None = None,
+        frame_height: int | None = None,
     ) -> bool:
         """Append per-frame metadata for an event. Box is normalized to [ymin, xmin, ymax, xmax] 0-1. Capped at MAX_FRAME_METADATA_PER_EVENT."""
         normalized = _normalize_box(box, frame_width, frame_height)
@@ -176,7 +176,7 @@ class EventStateManager:
             )
         return True
 
-    def get_frame_metadata(self, event_id: str) -> List[FrameMetadata]:
+    def get_frame_metadata(self, event_id: str) -> list[FrameMetadata]:
         """Return a copy of frame metadata list for the event (or empty list)."""
         with self._lock:
             return list(self._frame_metadata.get(event_id, []))
@@ -186,7 +186,7 @@ class EventStateManager:
         with self._lock:
             self._frame_metadata.pop(event_id, None)
 
-    def remove_event(self, event_id: str) -> Optional[EventState]:
+    def remove_event(self, event_id: str) -> EventState | None:
         """Remove event from active tracking and clear its frame metadata."""
         with self._lock:
             self._frame_metadata.pop(event_id, None)
@@ -195,7 +195,7 @@ class EventStateManager:
                 logger.info(f"Removed event from tracking: {event_id}")
             return removed
 
-    def get_active_event_ids(self) -> List[str]:
+    def get_active_event_ids(self) -> list[str]:
         """Get list of all active event IDs (for cleanup protection)."""
         with self._lock:
             return list(self._events.keys())

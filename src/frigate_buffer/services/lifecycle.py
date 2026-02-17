@@ -6,7 +6,7 @@ import time
 import logging
 import threading
 import os
-from typing import Optional, Callable
+from typing import Callable
 
 from frigate_buffer.models import EventState, ConsolidatedEvent, _is_no_concerns, EventPhase
 
@@ -18,7 +18,7 @@ class EventLifecycleService:
 
     def __init__(self, config, state_manager, file_manager, consolidated_manager,
                  video_service, download_service, notifier, timeline_logger,
-                 on_clip_ready_for_analysis: Optional[Callable[[str, str], None]] = None):
+                 on_clip_ready_for_analysis: Callable[[str, str], None] | None = None):
         self.config = config
         self.state_manager = state_manager
         self.file_manager = file_manager
@@ -29,11 +29,11 @@ class EventLifecycleService:
         self.timeline_logger = timeline_logger
         self.on_clip_ready_for_analysis = on_clip_ready_for_analysis
 
-        self.last_cleanup_time: Optional[float] = None
+        self.last_cleanup_time: float | None = None
         self.last_cleanup_deleted: int = 0
 
     def handle_event_new(self, event_id: str, camera: str, label: str,
-                         start_time: float, mqtt_payload: Optional[dict] = None):
+                         start_time: float, mqtt_payload: dict | None = None):
         """Handle new event detection (Phase 1). Uses events/{ce_id}/{camera}/ storage."""
         logger.info(f"New event: {event_id} - {label} on {camera}")
 
@@ -67,7 +67,7 @@ class EventLifecycleService:
         ).start()
 
     def _send_initial_notification(self, event: EventState, delay: float,
-                                   tag_override: Optional[str] = None):
+                                   tag_override: str | None = None):
         """Send notification immediately, then fetch snapshot and silently update."""
         try:
             self.notifier.publish_notification(event, "new", tag_override=tag_override)

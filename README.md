@@ -106,7 +106,7 @@ The application uses a **src layout**: the package lives in `src/frigate_buffer/
 | `web/templates/` | Jinja2 templates (player, stats, daily review, timeline). Used by Flask at runtime. |
 | `web/static/` | Static assets (marked.min.js, purify.min.js). |
 | `scripts/multi_cam_recap.py` | **Standalone entrypoint**: Optional multi-cam frame extraction and MQTT-driven processing. Run with the package installed (`pip install -e .` then `python scripts/multi_cam_recap.py`). Not invoked by the main orchestrator. |
-| `Dockerfile` | Builds from Python 3.10 slim; copies `src/` and `pyproject.toml`, runs `pip install -e .`, then `python -m frigate_buffer.main`. |
+| `Dockerfile` | Builds from Python 3.12 slim; copies `src/` and `pyproject.toml`, runs `pip install -e .`, then `python -m frigate_buffer.main`. |
 | `docker-compose.example.yaml` | Template for Docker Compose — local build or token pull from private GitHub. |
 | `config.example.yaml` | Example configuration for cameras, event_filters (Smart Zone Filtering), settings, network, optional HA integration. |
 | `tests/` | Unit tests (`test_*.py`). Run with `pytest tests/` (or `python -m pytest tests/`); `pyproject.toml` sets `pythonpath = ["src"]`. See [Tests](#tests). |
@@ -139,7 +139,7 @@ curl http://localhost:5055/status
 
 ### Running without Docker
 
-Requires **Python 3.10+**. From the project root, install dependencies (see `requirements.txt`; requires `paho-mqtt>=2.0.0` for MQTT), then run:
+Requires **Python 3.12+**. From the project root, install dependencies (see `requirements.txt`; requires `paho-mqtt>=2.0.0` for MQTT), then run:
 
 ```bash
 pip install -r requirements.txt

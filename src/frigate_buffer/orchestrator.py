@@ -10,7 +10,7 @@ import time
 import logging
 import threading
 from datetime import date, datetime, timedelta
-from typing import Optional, List, Any
+from typing import Any
 
 import requests
 import schedule
@@ -174,7 +174,7 @@ class StateAwareOrchestrator:
             'total': 0,
             'by_camera': {}
         }
-        self._cached_storage_stats_time: Optional[float] = None
+        self._cached_storage_stats_time: float | None = None
         self._storage_stats_max_age_seconds = 30 * 60  # 30 minutes
 
         # Last cleanup tracking delegated to lifecycle service via properties
@@ -257,20 +257,21 @@ class StateAwareOrchestrator:
                 logger.debug(f"Filtered out '{label}' on '{camera}' (allowed: {allowed_labels_for_camera})")
                 return
 
-        if event_type == "end":
-            self._handle_event_end(
-                event_id=event_id,
-                end_time=after_data.get("end_time", time.time()),
-                has_clip=after_data.get("has_clip", False),
-                has_snapshot=after_data.get("has_snapshot", False),
-                mqtt_payload=payload
-            )
-            return
-
-        # type: new or update - unified Smart Zone Filtering path
-        if event_type not in ("new", "update"):
-            logger.debug(f"Skipping frigate/events type: {event_type}")
-            return
+        match event_type:
+            case "end":
+                self._handle_event_end(
+                    event_id=event_id,
+                    end_time=after_data.get("end_time", time.time()),
+                    has_clip=after_data.get("has_clip", False),
+                    has_snapshot=after_data.get("has_snapshot", False),
+                    mqtt_payload=payload
+                )
+                return
+            case "new" | "update":
+                pass  # Fall through to Smart Zone Filtering path
+            case _:
+                logger.debug(f"Skipping frigate/events type: {event_type}")
+                return
 
         # Already tracked - log MQTT to timeline, then return (no new creation)
         event = self.state_manager.get_event(event_id)
@@ -294,13 +295,13 @@ class StateAwareOrchestrator:
         )
 
     def _handle_event_new(self, event_id: str, camera: str, label: str,
-                          start_time: float, mqtt_payload: Optional[dict] = None):
+                          start_time: float, mqtt_payload: dict | None = None):
         """Handle new event detection (Phase 1). Delegates to lifecycle service."""
         self.lifecycle_service.handle_event_new(event_id, camera, label, start_time, mqtt_payload)
 
     def _handle_event_end(self, event_id: str, end_time: float,
                           has_clip: bool, has_snapshot: bool,
-                          mqtt_payload: Optional[dict] = None):
+                          mqtt_payload: dict | None = None):
         """Handle event end - trigger downloads/transcoding."""
         # Skip duplicate "end" to avoid double clip export and double Gemini API call
         event = self.state_manager.get_event(event_id)
@@ -452,9 +453,12 @@ class StateAwareOrchestrator:
         """Handle review/genai update (Phase 3)."""
         event_type = payload.get("type")
 
-        if event_type not in ["update", "end", "genai"]:
-            logger.debug(f"Skipping review with type: {event_type}")
-            return
+        match event_type:
+            case "update" | "end" | "genai":
+                pass  # Process below
+            case _:
+                logger.debug(f"Skipping review with type: {event_type}")
+                return
 
         review_data = payload.get("after", {}) or payload.get("before", {})
         data = review_data.get("data", {})

@@ -5,7 +5,6 @@ Download Service - Handles network downloads and API interactions with Frigate.
 import os
 import time
 import logging
-from typing import Optional
 
 import requests
 
@@ -114,7 +113,7 @@ class DownloadService:
 
         temp_path = os.path.join(folder_path, "clip_original.mp4")
         final_path = os.path.join(folder_path, "clip.mp4")
-        frigate_response: Optional[dict] = None
+        frigate_response: dict | None = None
 
         # Body must always be a dict; Frigate 0.17+ requires it for validation (json={} minimum)
         body = {}
@@ -305,7 +304,7 @@ class DownloadService:
                     pass
 
     def fetch_review_summary(self, start_ts: float, end_ts: float,
-                             padding_before: float, padding_after: float) -> Optional[str]:
+                             padding_before: float, padding_after: float) -> str | None:
         """Fetch review summary from Frigate API with time padding."""
         padded_start = int(start_ts - padding_before)
         padded_end = int(end_ts + padding_after)

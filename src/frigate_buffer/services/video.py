@@ -1,7 +1,6 @@
 import os
 import subprocess
 import logging
-from typing import Optional
 
 logger = logging.getLogger('frigate-buffer')
 
