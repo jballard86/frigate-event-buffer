@@ -90,7 +90,7 @@ class TestDailyReporterServiceAggregate(unittest.TestCase):
 
 
 class TestDailyReporterServicePrompt(unittest.TestCase):
-    """Test that template placeholders {date}, {event_list}, {known_person_name} are replaced."""
+    """Test that template placeholders are replaced (date, event_list, known_person_name, report_*)."""
 
     def test_known_person_name_replaced_in_system_prompt(self):
         """REPORT_KNOWN_PERSON_NAME from config is used for {known_person_name} placeholder."""
@@ -125,6 +125,7 @@ class TestDailyReporterServicePrompt(unittest.TestCase):
         self.assertIn("Known: Unspecified", system_prompt)
 
     def test_load_prompt_replaces_date_and_event_list(self):
+        """With no events, {date} and {event_list} are replaced; {event_list} gets JSON []."""
         storage = tempfile.mkdtemp()
         self.addCleanup(lambda: shutil.rmtree(storage, ignore_errors=True))
         with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False, encoding="utf-8") as f:
@@ -141,7 +142,34 @@ class TestDailyReporterServicePrompt(unittest.TestCase):
         self.assertIsNotNone(call_args)
         system_prompt = call_args[0][0]
         self.assertIn("2025-01-15", system_prompt)
-        self.assertIn("(No events for this date.)", system_prompt)
+        self.assertIn("[]", system_prompt)
+        self.assertNotIn("{event_list}", system_prompt)
+
+    def test_new_placeholders_replaced_in_system_prompt(self):
+        """report_date_string, report_start_time, report_end_time, list_of_event_json_objects are replaced."""
+        storage = tempfile.mkdtemp()
+        self.addCleanup(lambda: shutil.rmtree(storage, ignore_errors=True))
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False, encoding="utf-8") as f:
+            f.write(
+                "Range: {report_start_time} to {report_end_time}. "
+                "Title: {report_date_string}. Events: {list_of_event_json_objects}."
+            )
+            prompt_path = f.name
+        self.addCleanup(lambda: os.path.exists(prompt_path) and os.unlink(prompt_path))
+        config = {"REPORT_PROMPT_FILE": prompt_path}
+        mock_analyzer = MagicMock()
+        mock_analyzer.send_text_prompt.return_value = "# Done"
+        service = DailyReporterService(config, storage, mock_analyzer)
+        service.generate_report(date(2025, 1, 15))
+        system_prompt = mock_analyzer.send_text_prompt.call_args[0][0]
+        self.assertIn("2025-01-15 00:00:00", system_prompt)
+        self.assertIn("2025-01-15 23:59:59", system_prompt)
+        self.assertIn("Title: 2025-01-15.", system_prompt)
+        self.assertIn("Events: [].", system_prompt)
+        self.assertNotIn("{report_start_time}", system_prompt)
+        self.assertNotIn("{report_end_time}", system_prompt)
+        self.assertNotIn("{report_date_string}", system_prompt)
+        self.assertNotIn("{list_of_event_json_objects}", system_prompt)
 
 
 class TestDailyReporterServiceSave(unittest.TestCase):
