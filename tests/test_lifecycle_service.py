@@ -175,5 +175,41 @@ class TestEventLifecycleService(unittest.TestCase):
         self.consolidated_manager.remove.assert_called_with(ce_id)
         self.notifier.mark_last_event_ended.assert_called_once()
 
+    def test_finalize_consolidated_event_multi_cam_uses_download_then_transcode_pool(self):
+        """With 2+ cameras, lifecycle uses export_and_download_clip and transcode_temp_to_final in a pool (not export_and_transcode_clip)."""
+        ce_id = "ce1"
+        ce = ConsolidatedEvent(ce_id, "folder", "path", 100.0, 110.0)
+        ce.frigate_event_ids = ["evt1", "evt2"]
+        ce.cameras = ["cam1", "cam2"]
+        ce.primary_camera = "cam1"
+        ce.end_time_max = 110.0
+        ce.last_activity_time = 110.0
+        self.consolidated_manager.mark_closing.return_value = True
+        self.consolidated_manager._events = {ce_id: ce}
+        self.consolidated_manager._lock = MagicMock()
+        evt1 = EventState("evt1", "cam1", "person", created_at=100.0)
+        evt1.end_time = 110.0
+        evt2 = EventState("evt2", "cam2", "person", created_at=100.0)
+        evt2.end_time = 110.0
+        self.state_manager.get_event.side_effect = lambda fid: evt1 if fid == "evt1" else evt2
+        self.file_manager.ensure_consolidated_camera_folder.side_effect = lambda base, cam: f"{base}/{cam}"
+        self.file_manager.sanitize_camera_name.side_effect = lambda n: n or ""
+        self.download_service.export_and_download_clip.return_value = {
+            "success": True, "temp_path": "/tmp/cam/clip_original.mp4", "frigate_response": {}
+        }
+        self.download_service.transcode_temp_to_final.return_value = True
+        self.download_service.fetch_review_summary.return_value = None
+        self.config["GEMINI"] = {"enabled": False}
+        self.config["MAX_CONCURRENT_TRANSCODES"] = 2
+
+        self.service.finalize_consolidated_event(ce_id)
+
+        self.download_service.export_and_download_clip.assert_called()
+        self.assertEqual(self.download_service.export_and_download_clip.call_count, 2)
+        self.download_service.transcode_temp_to_final.assert_called()
+        self.assertEqual(self.download_service.transcode_temp_to_final.call_count, 2)
+        self.download_service.export_and_transcode_clip.assert_not_called()
+        self.consolidated_manager.remove.assert_called_with(ce_id)
+
 if __name__ == '__main__':
     unittest.main()

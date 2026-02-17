@@ -286,6 +286,247 @@ class DownloadService:
                     pass
             return {"success": False, "frigate_response": frigate_response or {"error": str(e)}}
 
+    def transcode_temp_to_final(
+        self,
+        event_id: str,
+        temp_path: str,
+        final_path: str,
+        detection_sidecar_path: str | None = None,
+        detection_model: str | None = None,
+        detection_device: str | None = None,
+) -> bool:
+        """
+        Transcode from temp file to final H.264 clip and remove temp.
+        Used by the multi-cam pipeline so transcode can run in a bounded pool while the next clip downloads.
+        When detection_sidecar_path is set (multi-cam), transcode will run ultralytics per frame and write detection.json.
+        """
+        try:
+            ok = self.video_service.transcode_clip_to_h264(
+                event_id,
+                temp_path,
+                final_path,
+                detection_sidecar_path=detection_sidecar_path,
+                detection_model=detection_model,
+                detection_device=detection_device or None,
+            )
+            return ok
+        finally:
+            if os.path.exists(temp_path):
+                try:
+                    os.remove(temp_path)
+                except OSError:
+                    pass
+
+    def download_clip_to_temp(self, event_id: str, folder_path: str) -> dict:
+        """
+        Download clip from Frigate events API to temp file only (no transcode).
+        Returns dict with success (bool), temp_path (str | None). Caller must transcode and delete temp.
+        """
+        temp_path = os.path.join(folder_path, "clip_original.mp4")
+        url = f"{self.frigate_url}/api/events/{event_id}/clip.mp4"
+        try:
+            for attempt in range(1, 4):
+                logger.debug(f"Downloading clip from {url} (attempt {attempt}/3)")
+                try:
+                    with requests.get(url, timeout=self.events_clip_timeout, stream=True) as response:
+                        response.raise_for_status()
+                        bytes_downloaded = 0
+                        with open(temp_path, "wb") as f:
+                            for chunk in response.iter_content(chunk_size=8192):
+                                if chunk:
+                                    f.write(chunk)
+                                    bytes_downloaded += len(chunk)
+                        logger.debug(f"Downloaded clip for {event_id} ({bytes_downloaded} bytes)")
+                        return {"success": True, "temp_path": temp_path}
+                except requests.exceptions.HTTPError as e:
+                    if e.response is not None:
+                        if e.response.status_code == 404:
+                            logger.warning(f"No recording available for event {event_id}")
+                            return {"success": False, "temp_path": None}
+                        if e.response.status_code == 400 and attempt < 3:
+                            logger.warning(f"Clip not ready for {event_id} (HTTP 400), retrying in 5s ({attempt}/3)")
+                            time.sleep(5)
+                            continue
+                    raise
+            return {"success": False, "temp_path": None}
+        except requests.exceptions.Timeout:
+            logger.error(f"Timeout downloading clip for {event_id}")
+            return {"success": False, "temp_path": None}
+        except requests.exceptions.HTTPError as e:
+            logger.error(f"HTTP error downloading clip for {event_id}: {e}")
+            return {"success": False, "temp_path": None}
+        except Exception as e:
+            logger.exception(f"Failed to download clip for {event_id}: {e}")
+            if os.path.exists(temp_path):
+                try:
+                    os.remove(temp_path)
+                except OSError:
+                    pass
+            return {"success": False, "temp_path": None}
+
+    def export_and_download_clip(
+        self,
+        event_id: str,
+        folder_path: str,
+        camera: str,
+        start_time: float,
+        end_time: float,
+        export_buffer_before: int,
+        export_buffer_after: int,
+    ) -> dict:
+        """
+        Request clip export from Frigate, poll until ready, and download to temp file only.
+        Does not transcode; caller can run transcode_temp_to_final (e.g. in a thread pool).
+        Returns dict: success (bool), temp_path (str | None), frigate_response (dict), optionally fallback (str).
+        On fallback to events API, downloads to temp and returns temp_path so pipeline can transcode in pool.
+        """
+        start_ts = int(start_time - export_buffer_before)
+        end_ts = int(end_time + export_buffer_after)
+        export_url = f"{self.frigate_url}/api/export/{camera}/start/{start_ts}/end/{end_ts}"
+        exports_list_url = f"{self.frigate_url}/api/exports"
+        temp_path = os.path.join(folder_path, "clip_original.mp4")
+        frigate_response: dict | None = None
+        body = {}
+        body["name"] = f"export_{event_id}"[:256]
+        body["playback"] = "realtime"
+        body["source"] = "recordings"
+
+        try:
+            logger.info(f"Requesting clip export: {export_url}")
+            resp = self._request_export(export_url, body)
+            if resp.headers.get("content-type", "").startswith("application/json"):
+                try:
+                    frigate_response = resp.json()
+                except Exception:
+                    frigate_response = {"status_code": resp.status_code, "raw": (resp.text or "")[:500]}
+            else:
+                if resp.text or resp.status_code != 200:
+                    frigate_response = {"status_code": resp.status_code, "raw": (resp.text or "")[:500]}
+            if resp.ok and frigate_response and isinstance(frigate_response, dict) and frigate_response.get("success") is False:
+                logger.warning(f"Export failed for {event_id}. Status: {resp.status_code}. Response: {resp.text or '(empty)'}")
+            resp.raise_for_status()
+
+            export_filename = None
+            export_id = None
+            if frigate_response:
+                export_filename = frigate_response.get("export") or frigate_response.get("filename") or frigate_response.get("name")
+                export_id = frigate_response.get("export_id")
+            poll_count = 0
+            poll_max = 36
+            while not export_filename and poll_count < poll_max:
+                time.sleep(2.5)
+                poll_count += 1
+                try:
+                    list_resp = requests.get(exports_list_url, timeout=15)
+                    list_resp.raise_for_status()
+                    exports = list_resp.json() if list_resp.content else []
+                    if isinstance(exports, list) and exports:
+                        matched = None
+                        if export_id:
+                            for e in exports:
+                                if e.get("export_id") == export_id or e.get("id") == export_id:
+                                    matched = e
+                                    break
+                        if not matched:
+                            newest = max(
+                                exports,
+                                key=lambda e: e.get("created", 0) or e.get("start_time", 0) or e.get("modified", 0),
+                            )
+                            if not export_id or newest.get("export_id") == export_id or newest.get("id") == export_id:
+                                matched = newest
+                        if matched and not matched.get("in_progress", False):
+                            export_filename = (
+                                matched.get("video_path")
+                                or matched.get("export")
+                                or matched.get("filename")
+                                or matched.get("name")
+                                or matched.get("path")
+                            )
+                            if export_filename and isinstance(frigate_response, dict):
+                                frigate_response["export_id"] = matched.get("id") or matched.get("export_id") or frigate_response.get("export_id")
+                            if export_filename:
+                                break
+                        else:
+                            logger.debug("Export still processing..., waiting for in_progress false")
+                    elif isinstance(exports, dict):
+                        e = exports
+                        if not e.get("in_progress", False):
+                            export_filename = e.get("video_path") or e.get("export") or e.get("filename") or e.get("name")
+                            if export_filename and isinstance(frigate_response, dict):
+                                frigate_response["export_id"] = e.get("id") or e.get("export_id") or frigate_response.get("export_id")
+                except Exception as e:
+                    logger.debug(f"Exports poll: {e}")
+
+            if not export_filename:
+                logger.warning("Could not determine export filename, falling back to events API")
+                fallback_result = self.download_clip_to_temp(event_id, folder_path)
+                return {
+                    "success": fallback_result.get("success", False),
+                    "temp_path": fallback_result.get("temp_path"),
+                    "frigate_response": frigate_response,
+                    "fallback": "events_api",
+                }
+
+            if isinstance(frigate_response, dict):
+                try:
+                    list_resp = requests.get(exports_list_url, timeout=15)
+                    list_resp.raise_for_status()
+                    exports = list_resp.json() if list_resp.content else []
+                    if isinstance(exports, list) and exports:
+                        list_id = frigate_response.get("export_id") or frigate_response.get("id")
+                        matched = None
+                        for e in exports:
+                            e_path = (
+                                e.get("video_path") or e.get("export") or e.get("filename") or e.get("name") or e.get("path")
+                            )
+                            if e_path:
+                                tail = export_filename.lstrip("/").split("/")[-1]
+                                if export_filename in e_path or e_path.endswith(tail) or tail in e_path:
+                                    matched = e
+                                    break
+                            if list_id and (e.get("id") == list_id or e.get("export_id") == list_id):
+                                matched = e
+                                break
+                        if matched:
+                            frigate_response["export_id"] = matched.get("id") or matched.get("export_id") or frigate_response.get("export_id")
+                except Exception as e:
+                    logger.debug("Could not sync export_id from exports list: %s", e)
+
+            download_path = export_filename.lstrip("/").split("/")[-1] if "/" in export_filename else export_filename
+            download_url = f"{self.frigate_url.rstrip('/')}/exports/{download_path}"
+            logger.info(f"Downloading export clip from {download_url}")
+            dl_resp = requests.get(download_url, timeout=self.export_download_timeout, stream=True)
+            dl_resp.raise_for_status()
+            bytes_downloaded = 0
+            with open(temp_path, "wb") as f:
+                for chunk in dl_resp.iter_content(chunk_size=8192):
+                    if chunk:
+                        f.write(chunk)
+                        bytes_downloaded += len(chunk)
+            logger.info(f"Downloaded export clip for {event_id} ({bytes_downloaded} bytes)")
+            return {"success": True, "temp_path": temp_path, "frigate_response": frigate_response}
+
+        except requests.exceptions.RequestException as e:
+            if getattr(e, "response", None) is not None and e.response.text:
+                logger.warning(f"Export API request failed for {event_id}: response.text={e.response.text}")
+            else:
+                logger.warning(f"Export API failed for {event_id}: {e}, falling back to events API")
+            fallback_result = self.download_clip_to_temp(event_id, folder_path)
+            return {
+                "success": fallback_result.get("success", False),
+                "temp_path": fallback_result.get("temp_path"),
+                "frigate_response": frigate_response or {"error": str(e)},
+                "fallback": "events_api",
+            }
+        except Exception as e:
+            logger.exception(f"Export clip failed for {event_id}: {e}")
+            if os.path.exists(temp_path):
+                try:
+                    os.remove(temp_path)
+                except OSError:
+                    pass
+            return {"success": False, "temp_path": None, "frigate_response": frigate_response or {"error": str(e)}}
+
     def download_and_transcode_clip(self, event_id: str, folder_path: str) -> bool:
         """Download clip from Frigate events API and transcode to H.264 (fallback when Export API fails)."""
         temp_path = os.path.join(folder_path, "clip_original.mp4")

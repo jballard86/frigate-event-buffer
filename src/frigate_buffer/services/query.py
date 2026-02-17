@@ -308,11 +308,14 @@ class EventQueryService:
             genai_entries = self._extract_genai_entries(timeline)
 
             primary_clip = primary_snapshot = None
+            hosted_clips: list[dict[str, str]] = []
             for cam in cameras:
                 cam_data = subdirs.get(cam, {})
                 if cam_data.get('has_clip'):
-                    primary_clip = f"/files/events/{ce_id}/{cam}/clip.mp4"
-                    break
+                    url = f"/files/events/{ce_id}/{cam}/clip.mp4"
+                    if primary_clip is None:
+                        primary_clip = url
+                    hosted_clips.append({"camera": cam, "url": url})
             for cam in cameras:
                 cam_data = subdirs.get(cam, {})
                 if cam_data.get('has_snapshot'):
@@ -321,6 +324,10 @@ class EventQueryService:
 
             has_clip = any(subdirs.get(cam, {}).get('has_clip') for cam in cameras)
             has_snapshot = any(subdirs.get(cam, {}).get('has_snapshot') for cam in cameras)
+
+            # hosted_clip: only set when we have an actual clip; no fallback to non-existent file
+            hosted_clip_url = primary_clip if has_clip else None
+            hosted_snapshot_url = primary_snapshot if has_snapshot else (f"/files/events/{ce_id}/{cameras[0]}/snapshot.jpg" if cameras else None)
 
             # "Not ongoing": event ended in timeline, or has clip, or older than 90 min
             event_ended = self._event_ended_in_timeline(timeline)
@@ -352,8 +359,9 @@ class EventQueryService:
                 "has_clip": has_clip,
                 "has_snapshot": has_snapshot,
                 "viewed": viewed,
-                "hosted_clip": primary_clip or (f"/files/events/{ce_id}/{cameras[0]}/clip.mp4" if cameras else None),
-                "hosted_snapshot": primary_snapshot or (f"/files/events/{ce_id}/{cameras[0]}/snapshot.jpg" if cameras else None),
+                "hosted_clip": hosted_clip_url,
+                "hosted_snapshot": hosted_snapshot_url,
+                "hosted_clips": hosted_clips,
                 "cameras": cameras,
                 "cameras_with_zones": cameras_with_zones,
                 "consolidated": True,
@@ -417,6 +425,8 @@ class EventQueryService:
                 cameras_with_zones = [{"camera": camera_name, "zones": []}]
 
             end_ts = self._extract_end_timestamp_from_timeline(timeline) or metadata.get('end_time')
+            clip_url = f"/files/{camera_name}/{subdir}/clip.mp4" if has_clip else None
+            legacy_hosted_clips = [{"camera": camera_name, "url": clip_url}] if has_clip else []
             event_dict = {
                 "event_id": eid,
                 "camera": camera_name,
@@ -433,8 +443,9 @@ class EventQueryService:
                 "has_clip": has_clip,
                 "has_snapshot": has_snapshot,
                 "viewed": viewed,
-                "hosted_clip": f"/files/{camera_name}/{subdir}/clip.mp4",
-                "hosted_snapshot": f"/files/{camera_name}/{subdir}/snapshot.jpg",
+                "hosted_clip": clip_url,
+                "hosted_snapshot": f"/files/{camera_name}/{subdir}/snapshot.jpg" if has_snapshot else None,
+                "hosted_clips": legacy_hosted_clips,
                 "cameras_with_zones": cameras_with_zones,
                 "ongoing": ongoing,
                 "genai_entries": genai_entries

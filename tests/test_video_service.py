@@ -6,7 +6,7 @@ import sys
 # Add parent dir to path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from frigate_buffer.services.video import VideoService
+from frigate_buffer.services.video import VideoService, ensure_detection_model_ready
 
 class TestVideoService(unittest.TestCase):
 
@@ -100,6 +100,28 @@ class TestVideoService(unittest.TestCase):
 
         result = self.video_service.generate_gif_from_clip("clip.mp4", "out.gif")
         self.assertFalse(result)
+
+
+class TestEnsureDetectionModelReady(unittest.TestCase):
+    """Tests for startup detection model check."""
+
+    def test_ensure_detection_model_ready_skips_when_not_configured(self):
+        """When DETECTION_MODEL is empty or missing, returns False and skips load."""
+        self.assertFalse(ensure_detection_model_ready({}))
+        self.assertFalse(ensure_detection_model_ready({"DETECTION_MODEL": ""}))
+
+    @patch("ultralytics.YOLO")
+    @patch("frigate_buffer.services.video.os.path.isfile")
+    def test_ensure_detection_model_ready_loads_and_reports(self, mock_isfile, mock_yolo_cls):
+        """When DETECTION_MODEL is set, loads model (download if needed) and returns True."""
+        mock_isfile.return_value = False
+        mock_model = MagicMock()
+        mock_model.ckpt_path = "/path/to/yolov8n.pt"
+        mock_yolo_cls.return_value = mock_model
+        with patch("frigate_buffer.services.video.os.path.isfile", side_effect=lambda p: p == "/path/to/yolov8n.pt"):
+            result = ensure_detection_model_ready({"DETECTION_MODEL": "yolov8n.pt"})
+        self.assertTrue(result)
+        mock_yolo_cls.assert_called_once_with("yolov8n.pt")
 
 if __name__ == "__main__":
     unittest.main()

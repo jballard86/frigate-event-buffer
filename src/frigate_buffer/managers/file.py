@@ -81,6 +81,46 @@ def write_ai_frame_analysis_single_cam(
         create_ai_analysis_zip(event_dir)
 
 
+def write_ai_frame_analysis_multi_cam(
+    event_dir: str,
+    frames_with_time_and_camera: list[tuple[Any, float, str]],
+    write_manifest: bool = True,
+    create_zip_flag: bool = True,
+    save_frames: bool = True,
+) -> None:
+    """Write ai_frame_analysis/frames at CE root with multi-cam manifest.
+    Each entry is (frame_bgr, timestamp_sec, camera_name). Manifest includes camera per frame."""
+    if not save_frames or not frames_with_time_and_camera:
+        return
+    if not _CV2_AVAILABLE:
+        logger.warning("cv2/numpy not available, skipping AI frame analysis write")
+        return
+    frames_dir = os.path.join(event_dir, "ai_frame_analysis", "frames")
+    os.makedirs(frames_dir, exist_ok=True)
+    total = len(frames_with_time_and_camera)
+    manifest_entries = []
+    for seq, (frame, frame_time_sec, camera) in enumerate(frames_with_time_and_camera, start=1):
+        fname = f"frame_{seq:03d}_{camera.replace(' ', '_')}.jpg"
+        out_path = os.path.join(frames_dir, fname)
+        if write_stitched_frame(frame, out_path):
+            manifest_entries.append({
+                "filename": fname,
+                "timestamp_sec": frame_time_sec,
+                "camera": camera,
+                "seq": seq,
+                "total": total,
+            })
+    if write_manifest and manifest_entries:
+        manifest_path = os.path.join(event_dir, "ai_frame_analysis", "manifest.json")
+        try:
+            with open(manifest_path, "w", encoding="utf-8") as f:
+                json.dump(manifest_entries, f, indent=2)
+        except OSError as e:
+            logger.warning("Failed to write ai_frame_analysis manifest: %s", e)
+    if create_zip_flag:
+        create_ai_analysis_zip(event_dir)
+
+
 def create_ai_analysis_zip(event_dir: str) -> None:
     """Create event_dir/ai_analysis_debug.zip containing ai_frame_analysis/ and analysis_result.json."""
     zip_path = os.path.join(event_dir, "ai_analysis_debug.zip")
@@ -242,6 +282,66 @@ class FileManager:
                 f.write(json.dumps(entry) + '\n')
         except Exception as e:
             logger.debug(f"Failed to append timeline entry: {e}")
+
+    def write_ce_summary(self, folder_path: str, ce_id: str, title: str, description: str,
+                         scene: str = "", threat_level: int = 0, label: str = "unknown",
+                         start_time: float = 0) -> bool:
+        """Write summary.txt for a consolidated event at CE root."""
+        try:
+            summary_path = os.path.join(folder_path, "summary.txt")
+            timestamp_str = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(start_time)) if start_time else ""
+            lines = [
+                f"Event ID: {ce_id}",
+                "Camera: events (consolidated)",
+                f"Label: {label}",
+                f"Timestamp: {timestamp_str}",
+                "Phase: finalized",
+                "",
+            ]
+            if title:
+                lines.append(f"Title: {title}")
+            if description:
+                lines.append(f"Description: {description}")
+            if scene:
+                lines.append(f"Scene: {scene}")
+            if threat_level > 0:
+                level_names = {0: "Normal", 1: "Suspicious", 2: "Critical"}
+                lines.append(f"Threat Level: {threat_level} ({level_names.get(threat_level, 'Unknown')})")
+            lines.append("")
+            lines.append("Review Summary: See review_summary.md")
+            with open(summary_path, 'w') as f:
+                f.write('\n'.join(lines))
+            logger.debug("Written CE summary for %s", ce_id)
+            return True
+        except Exception as e:
+            logger.exception("Failed to write CE summary: %s", e)
+            return False
+
+    def write_ce_metadata_json(self, folder_path: str, ce_id: str, title: str, description: str,
+                               scene: str = "", threat_level: int = 0, label: str = "unknown",
+                               camera: str = "events", start_time: float = 0, end_time: float | None = None) -> bool:
+        """Write metadata.json for a consolidated event at CE root."""
+        try:
+            meta_path = os.path.join(folder_path, "metadata.json")
+            metadata = {
+                "event_id": ce_id,
+                "camera": camera,
+                "label": label,
+                "created_at": start_time,
+                "end_time": end_time,
+                "threat_level": threat_level,
+                "severity": "detection",
+                "genai_title": title,
+                "genai_description": description,
+                "genai_scene": scene,
+                "phase": "finalized",
+            }
+            with open(meta_path, 'w') as f:
+                json.dump(metadata, f, indent=2)
+            return True
+        except Exception as e:
+            logger.error("Failed to write CE metadata: %s", e)
+            return False
 
     def write_metadata_json(self, folder_path: str, event: EventState) -> bool:
         """Write machine-readable metadata.json for the event."""

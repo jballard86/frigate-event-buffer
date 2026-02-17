@@ -17,6 +17,7 @@ dependencies = [
     "voluptuous",
     "opencv-python",
     "ffmpegcv",
+    "ultralytics>=8.0.0",
 ]
 
 [project.optional-dependencies]

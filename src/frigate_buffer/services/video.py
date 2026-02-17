@@ -1,10 +1,80 @@
+import json
 import os
 import subprocess
 import logging
+from typing import Any
 
 import ffmpegcv
 
 logger = logging.getLogger('frigate-buffer')
+
+
+def ensure_detection_model_ready(config: dict) -> bool:
+    """
+    At startup: check if the multi-cam detection model is downloaded; download if not; log result.
+    Call after config is loaded. Returns True if model is ready, False if skipped or failed.
+    """
+    model_name = (config.get("DETECTION_MODEL") or "").strip()
+    if not model_name:
+        logger.info("Multi-cam detection model not configured (DETECTION_MODEL empty), skipping preload")
+        return False
+    try:
+        existed = os.path.isfile(model_name)
+        from ultralytics import YOLO
+        model = YOLO(model_name)
+        ckpt = getattr(model, "ckpt_path", None)
+        path_str = f" at {ckpt}" if (ckpt and isinstance(ckpt, str) and os.path.isfile(ckpt)) else ""
+        if existed or (ckpt and os.path.isfile(ckpt)):
+            logger.info("Multi-cam detection model ready: %s (already downloaded)%s", model_name, path_str)
+        else:
+            logger.info("Multi-cam detection model ready: %s (downloaded)%s", model_name, path_str)
+        return True
+    except Exception as e:
+        logger.warning("Multi-cam detection model preload failed for %s: %s", model_name, e)
+        return False
+
+
+# Lazy import so ultralytics is only loaded when writing detection sidecar
+def _run_detection_on_frame(
+    model: Any,
+    frame: Any,
+    device: str | None,
+    names: dict[int, str],
+) -> list[dict[str, Any]]:
+    """Run YOLO on one frame; return list of {label, area} for sidecar."""
+    detections: list[dict[str, Any]] = []
+    try:
+        results = model(frame, device=device, verbose=False)
+        if not results:
+            return detections
+        for r in results:
+            if r.boxes is None:
+                continue
+            xyxy = r.boxes.xyxy
+            cls_ids = r.boxes.cls
+            if xyxy is None:
+                continue
+            # Handle tensor/numpy: convert to list of floats
+            try:
+                xyxy = xyxy.cpu().numpy() if hasattr(xyxy, "cpu") else xyxy
+            except Exception:
+                pass
+            try:
+                cls_ids = cls_ids.cpu().numpy() if hasattr(cls_ids, "cpu") else cls_ids
+            except Exception:
+                pass
+            n = min(len(xyxy), len(cls_ids)) if cls_ids is not None else len(xyxy)
+            for i in range(n):
+                if len(xyxy[i]) < 4:
+                    continue
+                x1, y1, x2, y2 = float(xyxy[i][0]), float(xyxy[i][1]), float(xyxy[i][2]), float(xyxy[i][3])
+                area = int((x2 - x1) * (y2 - y1))
+                cls_id = int(cls_ids[i]) if cls_ids is not None else 0
+                label = names.get(cls_id, f"class_{cls_id}")
+                detections.append({"label": label, "area": area})
+    except Exception as e:
+        logger.debug("Detection on frame failed: %s", e)
+    return detections
 
 
 class VideoService:
@@ -16,11 +86,26 @@ class VideoService:
         self.ffmpeg_timeout = ffmpeg_timeout
         logger.debug(f"VideoService initialized with FFmpeg timeout: {ffmpeg_timeout}s")
 
-    def transcode_clip_to_h264(self, event_id: str, temp_path: str, final_path: str) -> bool:
+    def transcode_clip_to_h264(
+        self,
+        event_id: str,
+        temp_path: str,
+        final_path: str,
+        detection_sidecar_path: str | None = None,
+        detection_model: str | None = None,
+        detection_device: str | None = None,
+) -> bool:
         """Transcode clip_original.mp4 to H.264 clip.mp4 (NVDEC decode, NVENC encode when GPU available).
-        Removes temp on success. Falls back to libx264 if GPU path fails."""
+        Removes temp on success. Falls back to libx264 if GPU path fails.
+        When detection_sidecar_path is set (multi-cam), runs ultralytics on each frame in the NVENC
+        pass and writes detection.json; if we fall back to libx264 no sidecar is written."""
         try:
-            if self._transcode_clip_nvenc(event_id, temp_path, final_path):
+            if self._transcode_clip_nvenc(
+                event_id, temp_path, final_path,
+                detection_sidecar_path=detection_sidecar_path,
+                detection_model=detection_model,
+                detection_device=detection_device,
+            ):
                 return True
         except Exception as e:
             logger.warning(
@@ -29,8 +114,17 @@ class VideoService:
             )
         return self._transcode_clip_libx264(event_id, temp_path, final_path)
 
-    def _transcode_clip_nvenc(self, event_id: str, temp_path: str, final_path: str) -> bool:
-        """Decode with VideoCaptureNV (NVDEC), encode with VideoWriterNV (h264_nvenc), mux audio via ffmpeg."""
+    def _transcode_clip_nvenc(
+        self,
+        event_id: str,
+        temp_path: str,
+        final_path: str,
+        detection_sidecar_path: str | None = None,
+        detection_model: str | None = None,
+        detection_device: str | None = None,
+    ) -> bool:
+        """Decode with VideoCaptureNV (NVDEC), encode with VideoWriterNV (h264_nvenc), mux audio via ffmpeg.
+        Optionally run ultralytics on each frame and write detection sidecar (same decode pass)."""
         cap = ffmpegcv.VideoCaptureNV(temp_path)
         if not cap.isOpened():
             raise RuntimeError("VideoCaptureNV could not open input")
@@ -39,9 +133,23 @@ class VideoService:
             ret, first_frame = cap.read()
             if not ret or first_frame is None:
                 raise RuntimeError("No frames in input")
-            h, w = first_frame.shape[:2]
             dirname = os.path.dirname(final_path)
             video_only_path = os.path.join(dirname, "clip_nvenc_tmp.mp4")
+
+            yolo_model = None
+            yolo_names: dict[int, str] = {}
+            device = (detection_device or "").strip() or None
+            if detection_sidecar_path and detection_model:
+                try:
+                    from ultralytics import YOLO
+                    yolo_model = YOLO(detection_model)
+                    yolo_names = yolo_model.names or {}
+                except Exception as e:
+                    logger.warning("Could not load YOLO for detection sidecar: %s", e)
+
+            sidecar_entries: list[dict[str, Any]] = []
+            frame_idx = 0
+
             try:
                 vidout = ffmpegcv.VideoWriterNV(
                     video_only_path,
@@ -51,11 +159,19 @@ class VideoService:
                 )
                 try:
                     vidout.write(first_frame)
+                    if yolo_model is not None:
+                        det = _run_detection_on_frame(yolo_model, first_frame, device or "", yolo_names)
+                        sidecar_entries.append({"timestamp_sec": frame_idx / fps, "detections": det})
+                    frame_idx += 1
                     while True:
                         ret, frame = cap.read()
                         if not ret:
                             break
                         vidout.write(frame)
+                        if yolo_model is not None:
+                            det = _run_detection_on_frame(yolo_model, frame, device or "", yolo_names)
+                            sidecar_entries.append({"timestamp_sec": frame_idx / fps, "detections": det})
+                        frame_idx += 1
                 finally:
                     vidout.release()
             except Exception:
@@ -65,6 +181,14 @@ class VideoService:
                     except OSError:
                         pass
                 raise
+
+            if detection_sidecar_path and sidecar_entries:
+                try:
+                    with open(detection_sidecar_path, "w", encoding="utf-8") as f:
+                        json.dump(sidecar_entries, f, indent=None, separators=(",", ":"))
+                    logger.debug("Wrote detection sidecar %s (%d frames)", detection_sidecar_path, len(sidecar_entries))
+                except OSError as e:
+                    logger.warning("Failed to write detection sidecar %s: %s", detection_sidecar_path, e)
         finally:
             cap.release()
 

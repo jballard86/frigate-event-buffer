@@ -50,6 +50,10 @@ settings:
   # FFmpeg transcode timeout in seconds (kills hung processes)
   ffmpeg_timeout_seconds: 60
 
+  # Max concurrent transcodes for multi-camera consolidated events (overlap download + transcode)
+  # default: 2
+  # max_concurrent_transcodes: 2
+
   # Delay before fetching snapshot after initial notification (seconds)
   # Notification is sent instantly; this delay lets Frigate select a better frame
   # before the snapshot update. Set to 0 to fetch immediately.
@@ -119,6 +123,8 @@ network:
 # multi_cam:
 #   max_multi_cam_frames_min: 45   # max frames per clip (cap)
 #   max_multi_cam_frames_sec: 2    # target capture interval (seconds)
+#   detection_model: yolov8n.pt   # ultralytics model for transcode-time detection
+#   detection_device: ""           # e.g. cuda:0 or cpu; empty = auto
 #   motion_threshold_px: 50        # min pixels movement for high-rate capture
 #   crop_width: 1280
 #   crop_height: 720
