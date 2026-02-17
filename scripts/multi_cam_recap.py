@@ -28,6 +28,7 @@ import yaml
 import logging
 import threading
 import cv2
+import ffmpegcv
 import numpy as np
 import paho.mqtt.client as mqtt
 from datetime import datetime
@@ -199,7 +200,7 @@ def process_multi_cam_event(main_event_id, linked_event_ids):
         logger.error("Main event clip missing, cannot determine output folder.")
         return
 
-    caps = {eid: cv2.VideoCapture(path) for eid, path in video_paths.items()}
+    caps = {eid: ffmpegcv.VideoCaptureNV(path) for eid, path in video_paths.items()}
     current_time = start_time
     step = 1.0 / CONF['max_multi_cam_frames_sec']
     last_centers = {eid: (0, 0) for eid in video_paths}

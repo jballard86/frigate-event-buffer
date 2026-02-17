@@ -20,6 +20,7 @@ from frigate_buffer.managers.file import write_ai_frame_analysis_single_cam
 from frigate_buffer.services import crop_utils
 
 import cv2
+import ffmpegcv
 import requests
 import urllib3.exceptions
 
@@ -247,13 +248,14 @@ class GeminiAnalysisService:
         are always kept. When frame_metadata is provided, prioritizes by score*area.
         Returns list of (frame, frame_time_sec) for overlay in analyze_clip."""
         result: list[tuple] = []
-        cap = cv2.VideoCapture(clip_path)
+        cap = ffmpegcv.VideoCaptureNV(clip_path)
         if not cap.isOpened():
             logger.warning("Could not open video: %s", clip_path)
             return result
         try:
-            fps = cap.get(cv2.CAP_PROP_FPS) or 1.0
-            total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+            # ffmpegcv exposes .fps; fallback to OpenCV-style .get() for tests/mocks
+            fps = getattr(cap, "fps", None) or (cap.get(cv2.CAP_PROP_FPS) if hasattr(cap, "get") else None) or 1.0
+            total_frames = len(cap) if hasattr(cap, "__len__") else int((cap.get(cv2.CAP_PROP_FRAME_COUNT) if hasattr(cap, "get") else 0) or 0)
             use_meta = bool(frame_metadata)
             use_cv_crop = self.crop_width > 0 and self.crop_height > 0
 

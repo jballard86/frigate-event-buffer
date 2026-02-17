@@ -170,13 +170,15 @@ class TestGeminiAnalysisServiceReturnValue(unittest.TestCase):
     """Test that analyze_clip returns the parsed metadata dict (no MQTT publish)."""
 
     @patch("frigate_buffer.services.ai_analyzer.requests.post")
-    @patch("frigate_buffer.services.ai_analyzer.cv2.VideoCapture")
+    @patch("frigate_buffer.services.ai_analyzer.ffmpegcv.VideoCaptureNV")
     def test_analyze_clip_returns_result_on_success(self, mock_vc, mock_post):
         with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as f:
             clip_path = f.name
         self.addCleanup(lambda: os.path.exists(clip_path) and os.unlink(clip_path))
         mock_cap = MagicMock()
         mock_cap.isOpened.return_value = True
+        mock_cap.fps = 1.0
+        mock_cap.__len__ = MagicMock(return_value=1)
         mock_cap.get.side_effect = [1.0, 1]
         mock_cap.read.return_value = (True, np.zeros((100, 100, 3), dtype=np.uint8))
         mock_cap.release = MagicMock()
@@ -328,7 +330,7 @@ class TestGeminiAnalysisServiceCenterCrop(unittest.TestCase):
 class TestGeminiAnalysisServiceFirstLastFrames(unittest.TestCase):
     """Test that first and last frame of segment are always kept when over max_frames."""
 
-    @patch("frigate_buffer.services.ai_analyzer.cv2.VideoCapture")
+    @patch("frigate_buffer.services.ai_analyzer.ffmpegcv.VideoCaptureNV")
     def test_first_and_last_frame_kept_when_candidates_exceed_max(self, mock_vc):
         with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as f:
             clip_path = f.name
@@ -346,7 +348,8 @@ class TestGeminiAnalysisServiceFirstLastFrames(unittest.TestCase):
                 yield (True, fr.copy())
         mock_cap = MagicMock()
         mock_cap.isOpened.return_value = True
-        # Return FPS and FRAME_COUNT by key so order of get() calls does not matter
+        mock_cap.fps = 2.0
+        mock_cap.__len__ = MagicMock(return_value=10)
         mock_cap.get.side_effect = lambda key: 2.0 if key == cv2.CAP_PROP_FPS else (10 if key == cv2.CAP_PROP_FRAME_COUNT else 0)
         mock_cap.read.side_effect = read_side_effect()
         mock_cap.release = MagicMock()
@@ -371,13 +374,15 @@ class TestGeminiAnalysisServiceFirstLastFrames(unittest.TestCase):
 class TestGeminiAnalysisServiceCropAppliedDuringExtraction(unittest.TestCase):
     """Test that when CROP_WIDTH/CROP_HEIGHT are set, extracted frames are cropped."""
 
-    @patch("frigate_buffer.services.ai_analyzer.cv2.VideoCapture")
+    @patch("frigate_buffer.services.ai_analyzer.ffmpegcv.VideoCaptureNV")
     def test_extracted_frames_have_crop_dimensions(self, mock_vc):
         with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as f:
             clip_path = f.name
         self.addCleanup(lambda: os.path.exists(clip_path) and os.unlink(clip_path))
         mock_cap = MagicMock()
         mock_cap.isOpened.return_value = True
+        mock_cap.fps = 1.0
+        mock_cap.__len__ = MagicMock(return_value=5)
         mock_cap.get.side_effect = [1.0, 5]
         mock_cap.read.return_value = (True, np.zeros((480, 640, 3), dtype=np.uint8))
         mock_cap.release = MagicMock()
@@ -437,13 +442,15 @@ class TestGeminiAnalysisServiceFrameMetadata(unittest.TestCase):
         self.assertEqual(service.smart_crop_padding, 0.25)
 
     @patch("frigate_buffer.services.ai_analyzer.requests.post")
-    @patch("frigate_buffer.services.ai_analyzer.cv2.VideoCapture")
+    @patch("frigate_buffer.services.ai_analyzer.ffmpegcv.VideoCaptureNV")
     def test_analyze_clip_with_frame_metadata_empty_does_not_crash(self, mock_vc, mock_post):
         with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as f:
             clip_path = f.name
         self.addCleanup(lambda: os.path.exists(clip_path) and os.unlink(clip_path))
         mock_cap = MagicMock()
         mock_cap.isOpened.return_value = True
+        mock_cap.fps = 1.0
+        mock_cap.__len__ = MagicMock(return_value=5)
         mock_cap.get.side_effect = lambda key: 1.0 if key == cv2.CAP_PROP_FPS else (5 if key == cv2.CAP_PROP_FRAME_COUNT else 0)
         mock_cap.read.return_value = (True, np.zeros((100, 100, 3), dtype=np.uint8))
         mock_cap.release = MagicMock()

@@ -24,7 +24,7 @@ class TestIntegrationStep5Persistence(unittest.TestCase):
     """Verify analysis_result.json is created in the event folder with expected content."""
 
     @patch("frigate_buffer.services.ai_analyzer.requests.post")
-    @patch("frigate_buffer.services.ai_analyzer.cv2.VideoCapture")
+    @patch("frigate_buffer.services.ai_analyzer.ffmpegcv.VideoCaptureNV")
     def test_analysis_result_json_created_with_expected_fields(self, mock_vc, mock_post):
         event_dir = tempfile.mkdtemp()
         self.addCleanup(lambda: os.path.exists(event_dir) and shutil.rmtree(event_dir))
@@ -33,6 +33,8 @@ class TestIntegrationStep5Persistence(unittest.TestCase):
             f.write(b"fake mp4")
         mock_cap = MagicMock()
         mock_cap.isOpened.return_value = True
+        mock_cap.fps = 1.0
+        mock_cap.__len__ = MagicMock(return_value=3)
         mock_cap.get.side_effect = lambda k: 1.0 if k == 5 else (3 if k == 7 else 0)  # FPS, frame count
         mock_cap.read.return_value = (True, np.zeros((100, 100, 3), dtype=np.uint8))
         mock_cap.release = MagicMock()
@@ -71,7 +73,7 @@ class TestIntegrationStep5Persistence(unittest.TestCase):
         self.assertEqual(saved["potential_threat_level"], payload["potential_threat_level"])
 
     @patch("frigate_buffer.services.ai_analyzer.requests.post")
-    @patch("frigate_buffer.services.ai_analyzer.cv2.VideoCapture")
+    @patch("frigate_buffer.services.ai_analyzer.ffmpegcv.VideoCaptureNV")
     def test_analysis_result_saved_even_when_required_fields_missing(self, mock_vc, mock_post):
         """When proxy returns partial result (e.g. missing potential_threat_level), we still save the dict."""
         event_dir = tempfile.mkdtemp()
@@ -81,6 +83,8 @@ class TestIntegrationStep5Persistence(unittest.TestCase):
             f.write(b"fake mp4")
         mock_cap = MagicMock()
         mock_cap.isOpened.return_value = True
+        mock_cap.fps = 1.0
+        mock_cap.__len__ = MagicMock(return_value=2)
         mock_cap.get.side_effect = lambda k: 1.0 if k == 5 else (2 if k == 7 else 0)
         mock_cap.read.return_value = (True, np.zeros((100, 100, 3), dtype=np.uint8))
         mock_cap.release = MagicMock()
@@ -173,7 +177,7 @@ class TestIntegrationStep5ErrorHandling(unittest.TestCase):
     """Verify invalid JSON or 5xx does not create analysis_result.json or crash."""
 
     @patch("frigate_buffer.services.ai_analyzer.requests.post")
-    @patch("frigate_buffer.services.ai_analyzer.cv2.VideoCapture")
+    @patch("frigate_buffer.services.ai_analyzer.ffmpegcv.VideoCaptureNV")
     def test_invalid_json_does_not_create_analysis_result_file(self, mock_vc, mock_post):
         event_dir = tempfile.mkdtemp()
         self.addCleanup(lambda: os.path.exists(event_dir) and shutil.rmtree(event_dir))
@@ -182,6 +186,8 @@ class TestIntegrationStep5ErrorHandling(unittest.TestCase):
             f.write(b"fake")
         mock_cap = MagicMock()
         mock_cap.isOpened.return_value = True
+        mock_cap.fps = 1.0
+        mock_cap.__len__ = MagicMock(return_value=2)
         mock_cap.get.side_effect = lambda k: 1.0 if k == 5 else (2 if k == 7 else 0)
         mock_cap.read.return_value = (True, np.zeros((50, 50, 3), dtype=np.uint8))
         mock_cap.release = MagicMock()
@@ -213,7 +219,7 @@ class TestIntegrationStep5ErrorHandling(unittest.TestCase):
         self.assertIsNone(result)
 
     @patch("frigate_buffer.services.ai_analyzer.requests.post")
-    @patch("frigate_buffer.services.ai_analyzer.cv2.VideoCapture")
+    @patch("frigate_buffer.services.ai_analyzer.ffmpegcv.VideoCaptureNV")
     def test_proxy_500_analyze_clip_does_not_create_analysis_result(self, mock_vc, mock_post):
         import requests as req
         event_dir = tempfile.mkdtemp()
@@ -223,6 +229,8 @@ class TestIntegrationStep5ErrorHandling(unittest.TestCase):
             f.write(b"fake")
         mock_cap = MagicMock()
         mock_cap.isOpened.return_value = True
+        mock_cap.fps = 1.0
+        mock_cap.__len__ = MagicMock(return_value=2)
         mock_cap.get.side_effect = lambda k: 1.0 if k == 5 else (2 if k == 7 else 0)
         mock_cap.read.return_value = (True, np.zeros((50, 50, 3), dtype=np.uint8))
         mock_cap.release = MagicMock()
