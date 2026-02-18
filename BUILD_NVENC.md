@@ -41,15 +41,27 @@ chmod +x scripts/build-ffmpeg-nvenc.sh
 
 ## Step 2: Build the app image
 
-From the **repo root** (e.g. `/mnt/user/appdata/dockge/stacks/frigate-buffer`):
+**Option A — Build from the stack root** (recommended; context is the directory that contains `src/`):
 
 ```bash
+cd /mnt/user/appdata/dockge/stacks/frigate-buffer
 docker build -t frigate-buffer:latest -f src/Dockerfile .
 ```
 
-- **Context is `.`** (repo/stack root): the script wrote `ffmpeg-nvenc-artifacts/` into `src/`, so the Dockerfile copies from `src/` and the image gets NVENC. The Dockerfile is at `src/Dockerfile`.
-- If you see **“no such file or directory”** for `ffmpeg-nvenc-artifacts/`, run Step 1 first from the repo root.
-- **Alternative (context = repo root):** build with `docker build -t frigate-buffer:latest -f Dockerfile .` and run the script with `OUT_DIR="$REPO_ROOT/ffmpeg-nvenc-artifacts"` so artifacts are at repo root.
+- Context is `.` (stack root). The Dockerfile uses `SRC_PREFIX=src/` by default, so it copies `src/frigate_buffer/`, `src/ffmpeg-nvenc-artifacts/`, etc.
+- Ensure you are in the directory that **contains** the `src/` folder (e.g. after `cd src && git pull && cd ..` you are back at the stack root). If you see **`/src/frigate_buffer: not found`**, you are likely running the build from the wrong directory (e.g. from inside `src/`). Run the build from the parent of `src/` as above.
+
+**Option B — Build from inside the repo** (e.g. your current directory is `src/`):
+
+```bash
+cd /mnt/user/appdata/dockge/stacks/frigate-buffer/src
+docker build -t frigate-buffer:latest -f Dockerfile --build-arg SRC_PREFIX= .
+```
+
+- Context is `.` (the repo root, i.e. `src/`). The script should have written artifacts to `ffmpeg-nvenc-artifacts/` at repo root (run the script from the repo root so artifacts land there).
+- If you see **`/src/frigate_buffer: not found`** when using Option A, either ensure you are in the stack root (parent of `src/`) or switch to Option B and build from inside `src/` with `SRC_PREFIX=`.
+
+- If you see **“no such file or directory”** for `ffmpeg-nvenc-artifacts/`, run Step 1 first so artifacts exist in the build context.
 
 ## Dockge
 
@@ -70,6 +82,8 @@ FFMPEG_VERSION=7.0.2 ./src/scripts/build-ffmpeg-nvenc.sh
 ## Troubleshooting
 
 The script checks that the built FFmpeg lists `h264_nvenc` among encoders. If that check fails, FFmpeg’s configure didn’t enable NVENC. The script sets `PKG_CONFIG_PATH` so configure can find `ffnvcodec.pc` (from nv-codec-headers) and passes `-I/usr/local/include` and `-L/usr/local/lib`. If the full check fails, the script prints the last 60 lines of configure output and nvenc-related lines. Ensure the host has the NVIDIA driver and that `docker run --rm --gpus all nvidia/cuda:12.2.0-devel-ubuntu22.04 nvidia-smi` works.
+
+**`/src/frigate_buffer: not found`** — The build context does not contain `src/frigate_buffer`. Either (1) run the build from the **stack root** (the directory that contains the `src/` folder), e.g. `cd /path/to/frigate-buffer && docker build -t frigate-buffer:latest -f src/Dockerfile .`, or (2) if your clone is inside `src/` and you prefer to build from there, use `docker build -t frigate-buffer:latest -f Dockerfile --build-arg SRC_PREFIX= .` from inside `src/` (and ensure FFmpeg artifacts are at `src/ffmpeg-nvenc-artifacts/` when using context from stack root, or at `ffmpeg-nvenc-artifacts/` when using context from repo root).
 
 **Artifacts in `src/src/ffmpeg-nvenc-artifacts` instead of `src/ffmpeg-nvenc-artifacts`** — If the script reported output under `src/src/`, move them so the image build can find them: `mv src/src/ffmpeg-nvenc-artifacts src/ffmpeg-nvenc-artifacts` (from the stack directory), then `rmdir src/src` if empty. The script has been updated so future runs write to `src/ffmpeg-nvenc-artifacts/` when run as `./src/scripts/build-ffmpeg-nvenc.sh`.
 
