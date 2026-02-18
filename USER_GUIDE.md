@@ -22,6 +22,7 @@ To run this project on Unraid using Dockge, you will create a new stack that bui
 -   **Frigate NVR**: Running and accessible (you'll need its URL).
 -   **MQTT Broker**: Running and accessible (e.g., Mosquitto).
 
+
 ### Steps
 1.  Open your **Dockge** dashboard.
 2.  Click **+ Compose** to create a new stack.
