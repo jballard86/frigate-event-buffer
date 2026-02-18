@@ -4,11 +4,18 @@
 ARG FFMPEG_NVENC_IMAGE=jrottenberg/ffmpeg:7.0-nvidia2204
 FROM ${FFMPEG_NVENC_IMAGE} AS ffmpeg_nvenc
 
+# Gather all FFmpeg/CUDA/NPP libs from donor into one tree (libnppig etc. may live in lib64 or cuda/lib64).
+FROM ${FFMPEG_NVENC_IMAGE} AS ffmpeg_libs
+RUN mkdir -p /out/lib && \
+    cp -a /usr/local/lib/. /out/lib/ 2>/dev/null || true && \
+    (cp -an /usr/local/lib64/. /out/lib/ 2>/dev/null || true) && \
+    (cp -an /usr/local/cuda/lib64/. /out/lib/ 2>/dev/null || true)
+
 FROM ubuntu:24.04
-# Copy FFmpeg + ffprobe and shared libs from the NVENC-enabled image (jrottenberg 7.0-nvidia2204 uses /usr/local).
+# Copy FFmpeg + ffprobe and shared libs (including NPP/CUDA libs like libnppig.so.12) from the NVENC image.
 COPY --from=ffmpeg_nvenc /usr/local/bin/ffmpeg /usr/local/bin/ffmpeg
 COPY --from=ffmpeg_nvenc /usr/local/bin/ffprobe /usr/local/bin/ffprobe
-COPY --from=ffmpeg_nvenc /usr/local/lib/. /usr/local/lib/
+COPY --from=ffmpeg_libs /out/lib/. /usr/local/lib/
 RUN ldconfig /usr/local/lib 2>/dev/null || true
 
 ENV DEBIAN_FRONTEND=noninteractive
