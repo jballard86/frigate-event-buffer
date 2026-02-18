@@ -16,6 +16,7 @@ Outbound: Ring-style notifications to Home Assistant, clip export/transcode, rol
 
 ---
 
+
 ## 2. Architecture Overview
 
 - **Python**: Requires **Python 3.12+** (see `pyproject.toml`: `requires-python = ">=3.12"`).
