@@ -30,6 +30,7 @@ docker run --rm --gpus all \
       meson nasm ninja-build pkg-config texinfo wget yasm zlib1g-dev
     git clone --depth 1 https://github.com/FFmpeg/nv-codec-headers.git /tmp/nv-codec-headers
     cd /tmp/nv-codec-headers && make install && cd / && rm -rf /tmp/nv-codec-headers
+    export PKG_CONFIG_PATH="/usr/local/lib/pkgconfig:${PKG_CONFIG_PATH}"
     wget -q "https://ffmpeg.org/releases/ffmpeg-'"${FFMPEG_VERSION}"'.tar.xz" -O /tmp/ffmpeg.tar.xz
     tar xf /tmp/ffmpeg.tar.xz -C /tmp && rm /tmp/ffmpeg.tar.xz
     cd /tmp/ffmpeg-'"${FFMPEG_VERSION}"'
@@ -40,9 +41,18 @@ docker run --rm --gpus all \
       --enable-libmp3lame --enable-libvorbis \
       --disable-debug --disable-doc --disable-ffplay --enable-shared \
       --extra-cflags="-I/usr/local/include -I/usr/local/cuda/include" \
-      --extra-ldflags="-L/usr/local/lib -L/usr/local/cuda/lib64"
+      --extra-ldflags="-L/usr/local/lib -L/usr/local/cuda/lib64" \
+      2>&1 | tee /tmp/ffmpeg-config.log
+    [ "${PIPESTATUS[0]}" -eq 0 ] || exit 1
     make -j$(nproc) && make install
-    /opt/ffmpeg/bin/ffmpeg -encoders 2>&1 | grep -q h264_nvenc || { echo "NVENC not in build" >&2; exit 1; }
+    if ! /opt/ffmpeg/bin/ffmpeg -encoders 2>&1 | grep -q h264_nvenc; then
+      echo "NVENC not in build" >&2
+      echo "Configure summary (nvenc-related):" >&2
+      grep -i nvenc /tmp/ffmpeg-config.log || true
+      echo "Last 60 lines of configure output:" >&2
+      tail -60 /tmp/ffmpeg-config.log >&2
+      exit 1
+    fi
     mkdir -p /out/lib
     cp -a /opt/ffmpeg/bin/ffmpeg /opt/ffmpeg/bin/ffprobe /out/
     cp -a /opt/ffmpeg/lib/. /out/lib/
