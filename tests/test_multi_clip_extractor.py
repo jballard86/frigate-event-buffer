@@ -5,9 +5,12 @@ import unittest
 import os
 import tempfile
 import shutil
+import numpy as np
+from unittest.mock import MagicMock, patch
 
 from frigate_buffer.services.multi_clip_extractor import (
     extract_target_centric_frames,
+    _get_fps_and_duration,
     _person_area_from_detections,
     _person_area_at_time,
     _load_sidecar_for_camera,
@@ -45,12 +48,18 @@ class TestMultiClipExtractorHelpers(unittest.TestCase):
 
     def test_load_sidecar_missing_returns_none(self):
         """Missing file returns None."""
-        with tempfile.TemporaryDirectory() as d:
+        test_dir = os.path.dirname(os.path.abspath(__file__))
+        d = tempfile.mkdtemp(prefix="frigate_sidecar_", dir=test_dir)
+        try:
             self.assertIsNone(_load_sidecar_for_camera(d))
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
 
     def test_load_sidecar_valid_returns_list(self):
         """Valid detection.json returns list of entries."""
-        with tempfile.TemporaryDirectory() as d:
+        test_dir = os.path.dirname(os.path.abspath(__file__))
+        d = tempfile.mkdtemp(prefix="frigate_sidecar_", dir=test_dir)
+        try:
             path = os.path.join(d, DETECTION_SIDECAR_FILENAME)
             data = [{"timestamp_sec": 0.0, "detections": [{"label": "person", "area": 100}]}]
             with open(path, "w", encoding="utf-8") as f:
@@ -59,16 +68,21 @@ class TestMultiClipExtractorHelpers(unittest.TestCase):
             self.assertIsNotNone(result)
             self.assertEqual(len(result), 1)
             self.assertEqual(result[0]["timestamp_sec"], 0.0)
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
 
 
 class TestMultiClipExtractor(unittest.TestCase):
     """Tests for extract_target_centric_frames."""
 
     def setUp(self):
-        self.tmp = tempfile.mkdtemp()
+        # Use a temp dir under the project so sandbox/Windows can access it
+        self._test_dir = os.path.dirname(os.path.abspath(__file__))
+        self.tmp = tempfile.mkdtemp(prefix="frigate_extractor_test_", dir=self._test_dir)
 
     def tearDown(self):
-        shutil.rmtree(self.tmp)
+        if os.path.exists(self.tmp):
+            shutil.rmtree(self.tmp, ignore_errors=True)
 
     def test_empty_ce_folder_returns_empty(self):
         """When CE folder has no camera subdirs with clips, returns empty list."""
@@ -81,3 +95,77 @@ class TestMultiClipExtractor(unittest.TestCase):
         os.makedirs(os.path.join(self.tmp, "Camera2"))
         result = extract_target_centric_frames(self.tmp, max_frames_sec=1, max_frames_min=60)
         self.assertEqual(result, [])
+
+    def test_get_fps_and_duration_from_len_and_fps(self):
+        """_get_fps_and_duration returns (fps, duration, False) when cap has fps and __len__ (no consume)."""
+        cap = MagicMock()
+        cap.fps = 10.0
+        cap.__len__ = MagicMock(return_value=100)
+        # No .get so we use len
+        fps, duration, used = _get_fps_and_duration(cap, "/fake/path")
+        self.assertEqual(fps, 10.0)
+        self.assertEqual(duration, 10.0)
+        self.assertFalse(used)
+        cap.read.assert_not_called()
+
+    def test_get_fps_and_duration_read_to_eof_when_no_count(self):
+        """_get_fps_and_duration uses read-to-EOF when cap has no __len__ and no get; returns used_read_to_eof=True."""
+        cap = MagicMock()
+        cap.fps = 1.0
+        # Ensure no __len__ and no .get so we take the read-to-EOF path (MagicMock has .get by default)
+        del cap.get
+        frame = np.zeros((10, 10, 3), dtype=np.uint8)
+        cap.read.side_effect = iter([(True, frame), (True, frame), (False, None)])
+        fps, duration, used = _get_fps_and_duration(cap, "/fake/path")
+        self.assertEqual(fps, 1.0)
+        self.assertEqual(duration, 2.0)
+        self.assertTrue(used)
+        self.assertEqual(cap.read.call_count, 3)
+
+    @patch("frigate_buffer.services.multi_clip_extractor.ffmpegcv.VideoCapture")
+    @patch("frigate_buffer.services.multi_clip_extractor.ffmpegcv.VideoCaptureNV")
+    def test_extract_with_ffmpegcv_like_mock_sequential_read(self, mock_video_capture_nv, mock_video_capture):
+        """extract_target_centric_frames works with ffmpegcv-like readers (fps, read, no get/set)."""
+        os.makedirs(os.path.join(self.tmp, "cam1"))
+        os.makedirs(os.path.join(self.tmp, "cam2"))
+        clip1 = os.path.join(self.tmp, "cam1", "clip.mp4")
+        clip2 = os.path.join(self.tmp, "cam2", "clip.mp4")
+        with open(clip1, "wb"):
+            pass
+        with open(clip2, "wb"):
+            pass
+        # Sidecars so we pick by person area (no HOG on mock frame); gives area > 0 so we collect frames
+        for cam_name in ("cam1", "cam2"):
+            sidecar_path = os.path.join(self.tmp, cam_name, DETECTION_SIDECAR_FILENAME)
+            with open(sidecar_path, "w", encoding="utf-8") as f:
+                json.dump(
+                    [{"timestamp_sec": t, "detections": [{"label": "person", "area": 100}]} for t in range(11)],
+                    f,
+                )
+
+        frame = np.zeros((100, 100, 3), dtype=np.uint8)
+        # Each mock: fps=1, __len__=10 so duration=10, no .get/.set. read yields 10 frames then EOF.
+        def make_mock():
+            m = MagicMock()
+            m.fps = 1.0
+            m.__len__ = MagicMock(return_value=10)
+            m.isOpened.return_value = True
+            m.read.side_effect = [(True, frame)] * 10 + [(False, None)]
+            m.release = MagicMock()
+            return m
+
+        mock_video_capture_nv.side_effect = Exception("no nv")
+        mock_video_capture.side_effect = lambda path: make_mock()
+
+        result = extract_target_centric_frames(
+            self.tmp, max_frames_sec=1.0, max_frames_min=5
+        )
+
+        self.assertGreaterEqual(len(result), 1)
+        self.assertLessEqual(len(result), 5)
+        for item in result:
+            self.assertEqual(len(item), 3)
+            frame_out, t_sec, cam = item
+            self.assertIsNotNone(frame_out)
+            self.assertIn(cam, ("cam1", "cam2"))
+        mock_video_capture.assert_called()
