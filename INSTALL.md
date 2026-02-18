@@ -1,8 +1,8 @@
 # Frigate Event Buffer — Console install
 
-Install and run via the command line only (no Dockge). Clone the repo so the **repo root** is the directory that contains `Dockerfile`, `src/`, and `scripts/`. All commands below are run from that directory or use its path.
+Install and run via the command line only (no Dockge). Clone the repo so the **repo root** is the directory that contains `Dockerfile` and `src/`. All commands below are run from that directory or use its path.
 
-**Required layout:** This guide assumes the repo has **`src/`** (with `src/frigate_buffer/` inside) and **`scripts/`**. If your `ls` shows `frigate_buffer/` at root and no `scripts/` folder, you are on a branch with a different layout. Switch to **`main`** (or the branch that has `src/` and `scripts/`): run `git checkout main` then `git pull`, and confirm with `ls` that you have `src/` and `scripts/`.
+**Required layout:** This guide assumes the repo has **`src/`** (with `src/frigate_buffer/` inside). If your `ls` shows `frigate_buffer/` at root instead of `src/`, you may be on a branch with a different layout. Switch to **`main`** (or the branch that has `src/`): run `git checkout main` then `git pull`, and confirm with `ls` that you have `Dockerfile` and `src/`.
 
 ## Prerequisites
 
@@ -33,7 +33,7 @@ git clone https://github.com/jballard86/frigate-event-buffer.git frigate-buffer
 cd frigate-buffer
 ```
 
-You are now in the repo root. Your prompt should show that path (e.g. `root@Tower:/mnt/user/appdata/frigate-buffer#`). **Check layout:** run `ls` and ensure you see **`src/`** and **`scripts/`**. If you see `frigate_buffer/` at root and no `scripts/`, run `git checkout main` and `git pull`, then continue. If you cloned somewhere else, replace `/mnt/user/appdata/frigate-buffer` in the `cd` commands below with your repo root path.
+You are now in the repo root. Your prompt should show that path (e.g. `root@Tower:/mnt/user/appdata/frigate-buffer#`). **Check layout:** run `ls` and ensure you see **`Dockerfile`** and **`src/`**. If you see `frigate_buffer/` at root instead of `src/`, run `git checkout main` and `git pull`, then continue. If you cloned somewhere else, replace `/mnt/user/appdata/frigate-buffer` in the `cd` commands below with your repo root path.
 
 **If Git prompts for username/password or says "Password authentication is not supported":** GitHub no longer accepts account passwords for HTTPS. Use either:
 - **SSH** (if you have SSH keys added to GitHub): `git clone git@github.com:jballard86/frigate-event-buffer.git frigate-buffer`
@@ -60,7 +60,7 @@ git clone https://github.com/jballard86/frigate-event-buffer.git .
 - If it **already has a clone** (contains `.git`): `git pull` and continue from step 3.
 - If it's **not a git repo**: clone into a new folder instead (see first clone block above; use a different folder name if needed).
 
-You must have `Dockerfile`, `src/`, and `scripts/` in the current directory (repo root).
+You must have `Dockerfile` and `src/` in the current directory (repo root).
 
 ---
 
@@ -159,6 +159,8 @@ docker stop frigate_buffer
 docker rm frigate_buffer
 # Then run the same docker run command from step 5 again.
 ```
+
+If `git pull` reports that local changes would be overwritten by merge (e.g. to a file that was removed upstream), discard those changes then pull: run `git checkout -- <file>` for each file listed (or `git restore <file>`), then run `git pull` again and continue with the build and restart steps.
 
 ---
 

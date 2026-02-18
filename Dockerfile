@@ -1,6 +1,6 @@
 # Build from repo root: docker build -t frigate-buffer:latest .
 # FFmpeg with NVENC comes from multi-stage build; no script or artifact folder required. See BUILD_NVENC.md.
-ARG FFMPEG_NVENC_IMAGE=jrottenberg/ffmpeg:7.0-nvidia2204-edge
+ARG FFMPEG_NVENC_IMAGE=jrottenberg/ffmpeg:7.0-nvidia2204
 FROM ${FFMPEG_NVENC_IMAGE} AS ffmpeg_nvenc
 
 FROM python:3.12-slim
