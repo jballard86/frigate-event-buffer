@@ -89,7 +89,9 @@ def log_gpu_status() -> None:
             )
             stderr_raw = proc.stderr or b""
             stdout_raw = proc.stdout or b""
-            encoders = (stderr_raw or stdout_raw).decode("utf-8", errors="replace")
+            # Search both streams; some builds print encoder list to stdout.
+            encoders = (stderr_raw.decode("utf-8", errors="replace") + "\n" +
+                        stdout_raw.decode("utf-8", errors="replace"))
             has_nvenc = "h264_nvenc" in encoders or "hevc_nvenc" in encoders
             if not has_nvenc:
                 time.sleep(3)
@@ -100,7 +102,8 @@ def log_gpu_status() -> None:
                 )
                 stderr_raw = proc.stderr or b""
                 stdout_raw = proc.stdout or b""
-                encoders = (stderr_raw or stdout_raw).decode("utf-8", errors="replace")
+                encoders = (stderr_raw.decode("utf-8", errors="replace") + "\n" +
+                            stdout_raw.decode("utf-8", errors="replace"))
                 has_nvenc = "h264_nvenc" in encoders or "hevc_nvenc" in encoders
             if has_nvenc:
                 logger.info(
