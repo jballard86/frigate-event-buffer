@@ -1,10 +1,10 @@
 # Build from repo root: docker build -t frigate-buffer:latest .
 # FFmpeg with NVENC comes from multi-stage build; no script or artifact folder required. See BUILD_NVENC.md.
-# Final stage is Ubuntu 22.04 to match the FFmpeg donor (jrottenberg) and avoid distro/ABI mismatch with NVIDIA libs.
+# Final stage is Ubuntu 24.04 (Python 3.12 in default repos; no PPA). Ubuntu base matches FFmpeg donor and avoids distro/ABI mismatch with NVIDIA libs.
 ARG FFMPEG_NVENC_IMAGE=jrottenberg/ffmpeg:7.0-nvidia2204
 FROM ${FFMPEG_NVENC_IMAGE} AS ffmpeg_nvenc
 
-FROM ubuntu:22.04
+FROM ubuntu:24.04
 # Copy FFmpeg + ffprobe and shared libs from the NVENC-enabled image (jrottenberg 7.0-nvidia2204 uses /usr/local).
 COPY --from=ffmpeg_nvenc /usr/local/bin/ffmpeg /usr/local/bin/ffmpeg
 COPY --from=ffmpeg_nvenc /usr/local/bin/ffprobe /usr/local/bin/ffprobe
@@ -13,12 +13,8 @@ RUN ldconfig /usr/local/lib 2>/dev/null || true
 
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    software-properties-common \
     curl \
     ca-certificates \
-    && add-apt-repository -y ppa:deadsnakes/ppa \
-    && apt-get update \
-    && apt-get install -y --no-install-recommends \
     python3.12 \
     python3.12-venv \
     python3.12-dev \
