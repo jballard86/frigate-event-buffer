@@ -4,10 +4,10 @@ ARG FFMPEG_NVENC_IMAGE=jrottenberg/ffmpeg:7.0-nvidia2204
 FROM ${FFMPEG_NVENC_IMAGE} AS ffmpeg_nvenc
 
 FROM python:3.12-slim
-# Copy FFmpeg + ffprobe and shared libs from the NVENC-enabled image (jrottenberg uses PREFIX=/opt/ffmpeg; libs in lib64).
-COPY --from=ffmpeg_nvenc /opt/ffmpeg/bin/ffmpeg /usr/local/bin/ffmpeg
-COPY --from=ffmpeg_nvenc /opt/ffmpeg/bin/ffprobe /usr/local/bin/ffprobe
-COPY --from=ffmpeg_nvenc /opt/ffmpeg/lib64/. /usr/local/lib/
+# Copy FFmpeg + ffprobe and shared libs from the NVENC-enabled image (jrottenberg 7.0-nvidia2204 uses /usr/local).
+COPY --from=ffmpeg_nvenc /usr/local/bin/ffmpeg /usr/local/bin/ffmpeg
+COPY --from=ffmpeg_nvenc /usr/local/bin/ffprobe /usr/local/bin/ffprobe
+COPY --from=ffmpeg_nvenc /usr/local/lib/. /usr/local/lib/
 RUN ldconfig /usr/local/lib 2>/dev/null || true
 
 RUN apt-get update && \
