@@ -29,6 +29,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libsm6 \
     && curl -sS https://bootstrap.pypa.io/get-pip.py | python3.12 \
     && rm -rf /var/lib/apt/lists/*
+RUN ln -sf /usr/bin/python3.12 /usr/bin/python
 
 WORKDIR /app
 
