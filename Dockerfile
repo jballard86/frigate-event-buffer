@@ -24,11 +24,18 @@
 
 FROM python:3.12-slim
 
-# Install ffmpeg for video transcoding
+# FFmpeg with NVENC: BtbN static build (linux64-gpl includes NVENC). Replaces apt ffmpeg which lacks NVENC.
+ARG FFMPEG_BTBN_URL="https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-linux64-gpl.tar.xz"
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends ffmpeg curl && \
-    apt-get clean && \
-    rm -rf /var/lib/apt/lists/*
+    apt-get install -y --no-install-recommends curl xz-utils && \
+    curl -sL "${FFMPEG_BTBN_URL}" -o /tmp/ffmpeg.tar.xz && \
+    tar -xJf /tmp/ffmpeg.tar.xz -C /tmp && \
+    cp /tmp/ffmpeg-*/bin/ffmpeg /usr/local/bin/ && \
+    cp /tmp/ffmpeg-*/bin/ffprobe /usr/local/bin/ && \
+    rm -rf /tmp/ffmpeg.tar.xz /tmp/ffmpeg-* && \
+    apt-get remove -y xz-utils && apt-get autoremove -y && apt-get clean && \
+    rm -rf /var/lib/apt/lists/* && \
+    ffmpeg -encoders 2>&1 | grep -q h264_nvenc || (echo "NVENC not in ffmpeg; build failed" && exit 1)
 
 WORKDIR /app
 

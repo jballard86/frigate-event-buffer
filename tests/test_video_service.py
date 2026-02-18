@@ -8,6 +8,34 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from frigate_buffer.services.video import VideoService, ensure_detection_model_ready
 
+
+class TestProbeNvenc(unittest.TestCase):
+    """Tests for NVENC probe behavior and logging."""
+
+    def setUp(self):
+        self.video_service = VideoService(ffmpeg_timeout=1)
+        # Reset probe cache so each test gets a fresh probe
+        self.video_service._nvenc_available = None
+
+    @patch("frigate_buffer.services.video.subprocess.run")
+    @patch("frigate_buffer.services.video.logger")
+    def test_probe_nvenc_logs_warning_with_stderr_when_no_capable_devices(
+        self, mock_logger, mock_run
+    ):
+        """When probe fails with 'No capable devices found', WARNING is logged with stderr snippet."""
+        proc = MagicMock()
+        proc.returncode = 1
+        proc.stderr = b"[h264_nvenc] No capable devices found\nError opening encoder\n"
+        mock_run.return_value = proc
+
+        result = self.video_service._probe_nvenc()
+
+        self.assertFalse(result)
+        mock_logger.warning.assert_called()
+        call_args = mock_logger.warning.call_args[0]
+        self.assertIn("No capable devices found", str(call_args))
+
+
 class TestVideoService(unittest.TestCase):
 
     def setUp(self):

@@ -254,9 +254,12 @@ class GeminiAnalysisService:
             logger.warning("Could not open video: %s", clip_path)
             return result
         try:
-            # ffmpegcv exposes .fps; fallback to OpenCV-style .get() for tests/mocks
-            fps = getattr(cap, "fps", None) or (cap.get(cv2.CAP_PROP_FPS) if hasattr(cap, "get") else None) or 1.0
-            total_frames = len(cap) if hasattr(cap, "__len__") else int((cap.get(cv2.CAP_PROP_FRAME_COUNT) if hasattr(cap, "get") else 0) or 0)
+            # ffmpegcv exposes .fps and .count / __len__; do NOT use cap.get()—ffmpegcv readers have no OpenCV .get()
+            fps = getattr(cap, "fps", None) or 1.0
+            try:
+                total_frames = int(len(cap)) if hasattr(cap, "__len__") else int(getattr(cap, "count", 0) or 0)
+            except (TypeError, ValueError):
+                total_frames = int(getattr(cap, "count", 0) or 0)
             use_meta = bool(frame_metadata)
             use_cv_crop = self.crop_width > 0 and self.crop_height > 0
 

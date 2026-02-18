@@ -1,5 +1,6 @@
 import json
 import os
+import shutil
 import subprocess
 import logging
 from typing import Any
@@ -7,6 +8,95 @@ from typing import Any
 import ffmpegcv
 
 logger = logging.getLogger('frigate-buffer')
+
+STDERR_TRUNCATE = 800
+
+
+def log_gpu_status() -> None:
+    """
+    At startup: log GPU and NVENC diagnostic info to help debug transcode failures.
+
+    Runs nvidia-smi, checks libnvidia-encode.so presence, and ffmpeg encoder list.
+    When nvidia-smi works but NVENC still fails later, libnvidia-encode often indicates
+    a driver/library mismatch (not mounted in container).
+    """
+    # nvidia-smi
+    nvidia_smi = shutil.which("nvidia-smi")
+    if nvidia_smi:
+        try:
+            proc = subprocess.run(
+                [nvidia_smi, "--query-gpu=count", "--format=csv,noheader"],
+                capture_output=True,
+                timeout=5,
+            )
+            count_str = (proc.stdout or b"").decode("utf-8", errors="replace").strip()
+            gpu_count = count_str.split("\n")[0] if count_str else "?"
+            proc2 = subprocess.run(
+                [nvidia_smi, "--query-gpu=driver_version", "--format=csv,noheader"],
+                capture_output=True,
+                timeout=5,
+            )
+            driver = (proc2.stdout or b"").decode("utf-8", errors="replace").strip().split("\n")[0] or "?"
+            logger.info("GPU status: nvidia-smi OK, GPUs=%s, driver=%s", gpu_count, driver)
+        except (subprocess.TimeoutExpired, OSError) as e:
+            logger.warning("nvidia-smi found but failed: %s; container may not have GPU access.", e)
+    else:
+        logger.info("nvidia-smi not found or failed; container may not have GPU access.")
+
+    # libnvidia-encode.so check (driver/library mismatch when GPU visible but NVENC fails)
+    if nvidia_smi:
+        found = False
+        try:
+            proc = subprocess.run(
+                ["ldconfig", "-p"],
+                capture_output=True,
+                timeout=5,
+            )
+            out = (proc.stdout or b"").decode("utf-8", errors="replace")
+            if "libnvidia-encode" in out.lower():
+                found = True
+        except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+            pass
+        if not found:
+            try:
+                proc = subprocess.run(
+                    ["find", "/usr", "-name", "libnvidia-encode*"],
+                    capture_output=True,
+                    timeout=5,
+                    stderr=subprocess.DEVNULL,
+                )
+                if proc.returncode == 0 and proc.stdout:
+                    found = bool(proc.stdout.strip())
+            except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+                pass
+            if not found:
+                logger.warning(
+                    "libnvidia-encode.so not found in container; NVENC will fail despite GPU visibility. "
+                    "Ensure NVIDIA_DRIVER_CAPABILITIES=all and NVIDIA Container Toolkit is configured."
+                )
+
+    # ffmpeg encoders
+    ffmpeg_path = shutil.which("ffmpeg")
+    if ffmpeg_path:
+        try:
+            proc = subprocess.run(
+                [ffmpeg_path, "-encoders"],
+                capture_output=True,
+                timeout=10,
+            )
+            encoders = (proc.stderr or proc.stdout or b"").decode("utf-8", errors="replace")
+            has_nvenc = "h264_nvenc" in encoders or "hevc_nvenc" in encoders
+            if has_nvenc:
+                logger.info("FFmpeg reports NVENC encoders (h264_nvenc/hevc_nvenc) available")
+            else:
+                logger.warning(
+                    "FFmpeg does not report NVENC encoders; GPU transcode will be unavailable. "
+                    "Rebuild or use an ffmpeg build with NVENC (e.g. BtbN/FFmpeg-Builds)."
+                )
+        except (subprocess.TimeoutExpired, OSError) as e:
+            logger.warning("Could not check ffmpeg encoders: %s", e)
+    else:
+        logger.warning("ffmpeg not found in PATH")
 
 
 def ensure_detection_model_ready(config: dict) -> bool:
@@ -106,16 +196,21 @@ class VideoService:
             )
             stderr = (proc.stderr or b"").decode("utf-8", errors="replace")
             if proc.returncode != 0 or "No capable devices found" in stderr or "cannot load" in stderr.lower():
-                logger.debug("NVENC probe failed: returncode=%s stderr=%s", proc.returncode, stderr[:500])
                 self._nvenc_available = False
+                stderr_snippet = stderr[:STDERR_TRUNCATE] + ("..." if len(stderr) > STDERR_TRUNCATE else "")
+                logger.warning(
+                    "NVENC probe failed (returncode=%s). stderr: %s",
+                    proc.returncode,
+                    stderr_snippet,
+                )
                 logger.info("NVENC probe: unavailable, using libx264 for transcodes")
                 return False
             self._nvenc_available = True
             logger.info("NVENC probe: available, GPU transcode enabled")
             return True
         except Exception as e:
-            logger.debug("NVENC probe exception: %s", e)
             self._nvenc_available = False
+            logger.warning("NVENC probe exception: %s", e)
             logger.info("NVENC probe: unavailable, using libx264 for transcodes")
             return False
 
@@ -144,7 +239,9 @@ class VideoService:
                 return True
         except Exception as e:
             logger.warning(
-                "GPU unavailable for transcode (%s), falling back to libx264 (CPU). Reason: %s: %s",
+                "GPU transcode failed (%s). Reason: %s: %s. "
+                "Ensure: (1) ffmpeg built with NVENC, (2) NVIDIA Container Toolkit running, "
+                "(3) deploy.resources.reservations.devices includes GPU.",
                 event_id, type(e).__name__, e,
             )
         return self._transcode_clip_libx264(event_id, temp_path, final_path)

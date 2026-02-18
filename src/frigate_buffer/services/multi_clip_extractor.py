@@ -33,6 +33,20 @@ PREFERRED_LABELS = ("person", "people", "pedestrian")
 DETECTION_SIDECAR_FILENAME = "detection.json"
 
 
+def _is_gpu_not_configured(exc: BaseException) -> bool:
+    """
+    True if the exception indicates GPU was never configured (no GPU, ffmpeg without NVENC),
+    vs GPU decode was attempted but failed at runtime.
+    """
+    msg = str(exc).lower()
+    return (
+        "no nvidia gpu" in msg
+        or "no gpu found" in msg
+        or "not compiled with nvenc" in msg
+        or "not compiled with nvdec" in msg
+    )
+
+
 def _person_area_from_detections(detections: list[dict[str, Any]]) -> float:
     """Sum area of detections whose label is in PREFERRED_LABELS. Used for sidecar entries."""
     total = 0.0
@@ -93,23 +107,22 @@ def _get_fps_and_duration(cap: Any, path: str) -> tuple[float, float, bool]:
     """
     Get (fps, duration_sec, used_read_to_eof) from a video capture in an ffmpegcv-safe way.
 
-    Uses getattr(cap, "fps") and len(cap) or cap.get(CAP_PROP_*) when available.
-    If frame count is unknown (e.g. ffmpegcv has no __len__), reads until EOF
+    Uses only ffmpegcv-compatible APIs: getattr(cap, "fps"), getattr(cap, "count"),
+    and len(cap). Does NOT use cap.get()—ffmpegcv readers (FFmpegReaderNV, etc.) have
+    no OpenCV-style .get(CAP_PROP_*). If frame count is unknown, reads until EOF
     to count frames and returns duration = count/fps with used_read_to_eof=True;
     caller must reopen the clip after this.
     """
     del path  # unused; kept for API clarity
-    fps = getattr(cap, "fps", None) or (
-        cap.get(cv2.CAP_PROP_FPS) if hasattr(cap, "get") else None
-    ) or 1.0
+    fps = getattr(cap, "fps", None) or 1.0
     count: int = 0
     if hasattr(cap, "__len__"):
         try:
             count = int(len(cap))
         except (TypeError, ValueError):
             pass
-    if count <= 0 and hasattr(cap, "get"):
-        count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+    if count <= 0:
+        count = int(getattr(cap, "count", 0) or 0)
     if count > 0 and fps > 0:
         return (fps, count / fps, False)
     # Unknown count: read until EOF to get frame count (consumes stream; caller must reopen).
@@ -172,14 +185,29 @@ def extract_target_centric_frames(
             all_have_sidecar = False
 
     def open_caps() -> dict[str, Any]:
-        try:
-            return {cam: ffmpegcv.VideoCaptureNV(path) for cam, path in clip_paths}
-        except Exception:
+        caps_out: dict[str, Any] = {}
+        for cam, path in clip_paths:
             try:
-                return {cam: ffmpegcv.VideoCapture(path) for cam, path in clip_paths}
+                cap = ffmpegcv.VideoCaptureNV(path)
+                caps_out[cam] = cap
             except Exception as e:
-                logger.warning("Could not open clips: %s", e)
-                return {}
+                if _is_gpu_not_configured(e):
+                    logger.debug(
+                        "VideoCaptureNV skipped for %s (GPU not configured/available), using CPU decode.",
+                        path,
+                    )
+                else:
+                    logger.warning(
+                        "VideoCaptureNV failed for %s (GPU decode attempted, error: %s), falling back to CPU decode.",
+                        path,
+                        e,
+                    )
+                try:
+                    cap = ffmpegcv.VideoCapture(path)
+                    caps_out[cam] = cap
+                except Exception as e2:
+                    logger.warning("Could not open clip %s: %s", path, e2)
+        return caps_out
 
     caps = open_caps()
     if not caps:
@@ -201,9 +229,21 @@ def extract_target_centric_frames(
 
     # Reopen all caps (we released them above). For caps we consumed, we must reopen to read again.
     for cam, path in clip_paths:
+        cap = None
         try:
             cap = ffmpegcv.VideoCaptureNV(path)
-        except Exception:
+        except Exception as e:
+            if _is_gpu_not_configured(e):
+                logger.debug(
+                    "VideoCaptureNV skipped for %s (GPU not configured/available), using CPU decode.",
+                    path,
+                )
+            else:
+                logger.warning(
+                    "VideoCaptureNV failed for %s (GPU decode attempted, error: %s), falling back to CPU decode.",
+                    path,
+                    e,
+                )
             try:
                 cap = ffmpegcv.VideoCapture(path)
             except Exception:

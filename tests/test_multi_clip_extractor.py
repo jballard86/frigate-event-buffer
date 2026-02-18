@@ -101,26 +101,48 @@ class TestMultiClipExtractor(unittest.TestCase):
         cap = MagicMock()
         cap.fps = 10.0
         cap.__len__ = MagicMock(return_value=100)
-        # No .get so we use len
         fps, duration, used = _get_fps_and_duration(cap, "/fake/path")
         self.assertEqual(fps, 10.0)
         self.assertEqual(duration, 10.0)
         self.assertFalse(used)
         cap.read.assert_not_called()
 
+    def test_get_fps_and_duration_ffmpegcv_no_get(self):
+        """_get_fps_and_duration works with FFmpegReaderNV-like mock: .fps and __len__, no .get()."""
+        # FFmpegReaderNV has .fps, __len__ (via .count), but NO .get() - must never call cap.get()
+        class FFmpegReaderNVMock:
+            fps = 12.0
+            count = 120
+
+            def __len__(self):
+                return self.count
+
+            def read(self):
+                return False, None
+
+        cap = FFmpegReaderNVMock()
+        fps, duration, used = _get_fps_and_duration(cap, "/fake/path")
+        self.assertEqual(fps, 12.0)
+        self.assertEqual(duration, 10.0)
+        self.assertFalse(used)
+
     def test_get_fps_and_duration_read_to_eof_when_no_count(self):
-        """_get_fps_and_duration uses read-to-EOF when cap has no __len__ and no get; returns used_read_to_eof=True."""
-        cap = MagicMock()
-        cap.fps = 1.0
-        # Ensure no __len__ and no .get so we take the read-to-EOF path (MagicMock has .get by default)
-        del cap.get
+        """_get_fps_and_duration uses read-to-EOF when cap has no __len__/count; returns used_read_to_eof=True."""
+        # Use simple object: fps, read, no __len__, no count (ffmpegcv-style when metadata unknown)
         frame = np.zeros((10, 10, 3), dtype=np.uint8)
-        cap.read.side_effect = iter([(True, frame), (True, frame), (False, None)])
+        reads = iter([(True, frame), (True, frame), (False, None)])
+
+        class CapNoCount:
+            fps = 1.0
+
+            def read(self):
+                return next(reads)
+
+        cap = CapNoCount()
         fps, duration, used = _get_fps_and_duration(cap, "/fake/path")
         self.assertEqual(fps, 1.0)
         self.assertEqual(duration, 2.0)
         self.assertTrue(used)
-        self.assertEqual(cap.read.call_count, 3)
 
     @patch("frigate_buffer.services.multi_clip_extractor.ffmpegcv.VideoCapture")
     @patch("frigate_buffer.services.multi_clip_extractor.ffmpegcv.VideoCaptureNV")
