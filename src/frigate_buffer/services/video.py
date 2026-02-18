@@ -88,22 +88,22 @@ def log_gpu_status() -> None:
             has_nvenc = "h264_nvenc" in encoders or "hevc_nvenc" in encoders
             if has_nvenc:
                 logger.info(
-                    "FFmpeg reports NVENC encoders (h264_nvenc/hevc_nvenc) available; GPU transcode enabled. "
-                    "Image was built with scripts/build-ffmpeg-nvenc.sh."
+                    "FFmpeg NVENC: success — h264_nvenc/hevc_nvenc available; GPU transcode enabled."
                 )
             else:
                 logger.warning(
-                    "FFmpeg does not report NVENC encoders; GPU transcode will be unavailable."
+                    "FFmpeg NVENC: failure — FFmpeg does not report NVENC encoders; GPU transcode unavailable."
                 )
                 logger.warning(
-                    "To enable GPU transcode: on the host where you build the image, run "
-                    "scripts/build-ffmpeg-nvenc.sh (from repo root after git pull), then rebuild. "
-                    "See BUILD_NVENC.md. You do not need to run the script before every build."
+                    "To fix: rebuild the image from this repo (docker build -t frigate-buffer:latest .) and "
+                    "run the container with GPU access (--gpus all and NVIDIA_* env vars). See BUILD_NVENC.md."
                 )
         except (subprocess.TimeoutExpired, OSError) as e:
-            logger.warning("Could not check ffmpeg encoders: %s", e)
+            logger.warning(
+                "FFmpeg NVENC: could not check encoders — %s; assuming GPU transcode unavailable.", e
+            )
     else:
-        logger.warning("ffmpeg not found in PATH")
+        logger.warning("FFmpeg NVENC: ffmpeg not found in PATH; GPU transcode unavailable.")
 
 
 def ensure_detection_model_ready(config: dict) -> bool:
@@ -206,19 +206,21 @@ class VideoService:
                 self._nvenc_available = False
                 stderr_snippet = stderr[:STDERR_TRUNCATE] + ("..." if len(stderr) > STDERR_TRUNCATE else "")
                 logger.warning(
-                    "NVENC probe failed (returncode=%s). stderr: %s",
+                    "NVENC probe: failure — returncode=%s. stderr: %s",
                     proc.returncode,
                     stderr_snippet,
                 )
-                logger.info("NVENC probe: unavailable, using libx264 for transcodes")
+                logger.info(
+                    "NVENC probe: unavailable; transcodes will use CPU (libx264). "
+                    "Ensure container is run with --gpus all and NVIDIA_* env vars."
+                )
                 return False
             self._nvenc_available = True
-            logger.info("NVENC probe: available, GPU transcode enabled")
+            logger.info("NVENC probe: success — GPU transcode enabled for this run.")
             return True
         except Exception as e:
             self._nvenc_available = False
-            logger.warning("NVENC probe exception: %s", e)
-            logger.info("NVENC probe: unavailable, using libx264 for transcodes")
+            logger.warning("NVENC probe: exception — %s; transcodes will use CPU (libx264).", e)
             return False
 
     def transcode_clip_to_h264(
@@ -246,9 +248,9 @@ class VideoService:
                 return True
         except Exception as e:
             logger.warning(
-                "GPU transcode failed (%s). Reason: %s: %s. "
-                "Ensure: (1) ffmpeg built with NVENC, (2) NVIDIA Container Toolkit running, "
-                "(3) deploy.resources.reservations.devices includes GPU.",
+                "GPU transcode failed for event %s: %s: %s. "
+                "Falling back to CPU (libx264). Ensure image was built from this repo and container "
+                "is run with --gpus all and NVIDIA Container Toolkit.",
                 event_id, type(e).__name__, e,
             )
         return self._transcode_clip_libx264(event_id, temp_path, final_path)

@@ -1,11 +1,14 @@
 # Build from repo root: docker build -t frigate-buffer:latest .
-# FFmpeg NVENC: run scripts/build-ffmpeg-nvenc.sh first (writes to src/ffmpeg-nvenc-artifacts/). See BUILD_NVENC.md.
-FROM python:3.12-slim
+# FFmpeg with NVENC comes from multi-stage build; no script or artifact folder required. See BUILD_NVENC.md.
+ARG FFMPEG_NVENC_IMAGE=jrottenberg/ffmpeg:7.0-nvidia2204-edge
+FROM ${FFMPEG_NVENC_IMAGE} AS ffmpeg_nvenc
 
-COPY src/ffmpeg-nvenc-artifacts/ffmpeg /usr/local/bin/ffmpeg
-COPY src/ffmpeg-nvenc-artifacts/ffprobe /usr/local/bin/ffprobe
-COPY src/ffmpeg-nvenc-artifacts/lib /usr/local/lib
-RUN ldconfig /usr/local/lib
+FROM python:3.12-slim
+# Copy FFmpeg + ffprobe and shared libs from the NVENC-enabled image (jrottenberg uses PREFIX=/opt/ffmpeg).
+COPY --from=ffmpeg_nvenc /opt/ffmpeg/bin/ffmpeg /usr/local/bin/ffmpeg
+COPY --from=ffmpeg_nvenc /opt/ffmpeg/bin/ffprobe /usr/local/bin/ffprobe
+COPY --from=ffmpeg_nvenc /opt/ffmpeg/lib/. /usr/local/lib/
+RUN ldconfig /usr/local/lib 2>/dev/null || true
 
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
