@@ -33,27 +33,28 @@ chmod +x scripts/build-ffmpeg-nvenc.sh
 ./scripts/build-ffmpeg-nvenc.sh
 ```
 
-- The script writes artifacts into the directory that will be the **build context** (so `docker build -f src/Dockerfile src` finds them). That is either `src/ffmpeg-nvenc-artifacts/` (when repo root is the parent of `src/`) or `src/ffmpeg-nvenc-artifacts/` inside the clone (when the repo is in `src/`).
+- The script writes artifacts into the **build-context** directory so `docker build -f src/Dockerfile .` finds them: **`src/ffmpeg-nvenc-artifacts/`** (it detects layout from the script path).
+- **"NVENC was enabled at configure time; runtime -encoders did not list it (no GPU in build container). Treating as success."** — Normal. The build container has no GPU, so the runtime check is skipped; the artifacts are still valid and are copied out.
 - First run can take 15–30 minutes. You do **not** need to run it before every build—only when artifacts are missing or you want to refresh (e.g. new driver or FFmpeg version).
 - **Script not found?** If you see "No such file or directory" for the script, you're likely in the stack directory with the repo inside `src/`. Use `src/scripts/build-ffmpeg-nvenc.sh` (or `cd src` then `./scripts/build-ffmpeg-nvenc.sh`).
-- If the script fails (e.g. “NVENC not in build”), ensure the host has the NVIDIA driver and that `docker run --gpus all` works.
+- If the script fails (e.g. “NVENC not in build”), ensure the host has the NVIDIA driver and that `docker run --gpus all` works. If the script fails with "NVENC not in build" and there is no configure-log fallback, run the diagnostic command in Troubleshooting below.
 
 ## Step 2: Build the app image
 
 From the **repo root** (e.g. `/mnt/user/appdata/dockge/stacks/frigate-buffer`):
 
 ```bash
-docker build -t frigate-buffer:latest -f src/Dockerfile src
+docker build -t frigate-buffer:latest -f src/Dockerfile .
 ```
 
-- **Context is `src`**: the script wrote `ffmpeg-nvenc-artifacts/` into `src/`, so the context includes it. The Dockerfile is at `src/Dockerfile`.
+- **Context is `.`** (repo/stack root): the script wrote `ffmpeg-nvenc-artifacts/` into `src/`, so the Dockerfile copies from `src/` and the image gets NVENC. The Dockerfile is at `src/Dockerfile`.
 - If you see **“no such file or directory”** for `ffmpeg-nvenc-artifacts/`, run Step 1 first from the repo root.
 - **Alternative (context = repo root):** build with `docker build -t frigate-buffer:latest -f Dockerfile .` and run the script with `OUT_DIR="$REPO_ROOT/ffmpeg-nvenc-artifacts"` so artifacts are at repo root.
 
 ## Dockge
 
 1. On Tower, from the stack directory (e.g. `/mnt/user/appdata/dockge/stacks/frigate-buffer`), run the script once so `src/ffmpeg-nvenc-artifacts/` exists.
-2. Build as usual with context `src` and Dockerfile `src/Dockerfile` (e.g. `docker build -t frigate-buffer:latest -f src/Dockerfile src`). Dockge may run this from the stack directory after `git pull`; ensure the script has been run so artifacts are present.
+2. Build as usual with context `.` and Dockerfile `src/Dockerfile` (e.g. `docker build -t frigate-buffer:latest -f src/Dockerfile .`). Dockge may run this from the stack directory after `git pull`; ensure the script has been run so artifacts are present.
 
 ## Optional: script env vars
 
@@ -66,9 +67,11 @@ Example (use the path that matches your layout—`scripts/` or `src/scripts/`):
 FFMPEG_VERSION=7.0.2 ./src/scripts/build-ffmpeg-nvenc.sh
 ```
 
-## Troubleshooting: "NVENC not in build"
+## Troubleshooting
 
-The script checks that the built FFmpeg lists `h264_nvenc` among encoders. If that check fails, FFmpeg’s configure didn’t enable NVENC. The script sets `PKG_CONFIG_PATH` so configure can find `ffnvcodec.pc` (from nv-codec-headers) and passes `-I/usr/local/include` and `-L/usr/local/lib`. If you still see "NVENC not in build" after pulling the latest script, the script will print the last 60 lines of configure output and any nvenc-related lines—use that to see why NVENC was disabled. Also ensure the host has the NVIDIA driver and that `docker run --rm --gpus all nvidia/cuda:12.2.0-devel-ubuntu22.04 nvidia-smi` works.
+The script checks that the built FFmpeg lists `h264_nvenc` among encoders. If that check fails, FFmpeg’s configure didn’t enable NVENC. The script sets `PKG_CONFIG_PATH` so configure can find `ffnvcodec.pc` (from nv-codec-headers) and passes `-I/usr/local/include` and `-L/usr/local/lib`. If the full check fails, the script prints the last 60 lines of configure output and nvenc-related lines. Ensure the host has the NVIDIA driver and that `docker run --rm --gpus all nvidia/cuda:12.2.0-devel-ubuntu22.04 nvidia-smi` works.
+
+**Artifacts in `src/src/ffmpeg-nvenc-artifacts` instead of `src/ffmpeg-nvenc-artifacts`** — If the script reported output under `src/src/`, move them so the image build can find them: `mv src/src/ffmpeg-nvenc-artifacts src/ffmpeg-nvenc-artifacts` (from the stack directory), then `rmdir src/src` if empty. The script has been updated so future runs write to `src/ffmpeg-nvenc-artifacts/` when run as `./src/scripts/build-ffmpeg-nvenc.sh`.
 
 ## When to re-run the script
 

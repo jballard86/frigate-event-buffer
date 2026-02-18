@@ -42,9 +42,10 @@ class TestDailyReporterServiceScan(unittest.TestCase):
         config = {}
         mock_analyzer = MagicMock()
         service = DailyReporterService(config, storage, mock_analyzer)
-        events = list(service._collect_events_for_date(target))
-        self.assertEqual(len(events), 1)
-        self.assertEqual(events[0][1].get("title"), "Person at door")
+        events_list, total_seen, total_matched = service._collect_events_for_date(target)
+        self.assertEqual(len(events_list), 1)
+        self.assertEqual(total_matched, 1)
+        self.assertEqual(events_list[0][1].get("title"), "Person at door")
 
     def test_consolidated_event_folder_date_parsed(self):
         # events/{ts}_{uuid}/camera/analysis_result.json -> folder name ts_uuid; 1234567890 -> 2009-02-13
@@ -64,9 +65,10 @@ class TestDailyReporterServiceScan(unittest.TestCase):
         config = {}
         mock_analyzer = MagicMock()
         service = DailyReporterService(config, storage, mock_analyzer)
-        events = list(service._collect_events_for_date(target))
-        self.assertEqual(len(events), 1)
-        self.assertEqual(events[0][1].get("title"), "CE event")
+        events_list, total_seen, total_matched = service._collect_events_for_date(target)
+        self.assertEqual(len(events_list), 1)
+        self.assertEqual(total_matched, 1)
+        self.assertEqual(events_list[0][1].get("title"), "CE event")
 
 
 class TestDailyReporterServiceAggregate(unittest.TestCase):
@@ -170,6 +172,112 @@ class TestDailyReporterServicePrompt(unittest.TestCase):
         self.assertNotIn("{report_end_time}", system_prompt)
         self.assertNotIn("{report_date_string}", system_prompt)
         self.assertNotIn("{list_of_event_json_objects}", system_prompt)
+
+    def test_missing_prompt_file_returns_false_and_does_not_call_proxy(self):
+        """When report prompt file is missing, generate_report returns False and send_text_prompt is not called."""
+        storage = tempfile.mkdtemp()
+        self.addCleanup(lambda: shutil.rmtree(storage, ignore_errors=True))
+        nonexistent = os.path.join(storage, "nonexistent_report_prompt.txt")
+        self.assertFalse(os.path.isfile(nonexistent))
+        config = {"REPORT_PROMPT_FILE": nonexistent}
+        mock_analyzer = MagicMock()
+        service = DailyReporterService(config, storage, mock_analyzer)
+        result = service.generate_report(date(2025, 1, 15))
+        self.assertFalse(result)
+        mock_analyzer.send_text_prompt.assert_not_called()
+
+    def test_multiple_events_appear_in_list_of_event_json_objects(self):
+        """Two event folders for same date produce two event objects in the prompt."""
+        storage = tempfile.mkdtemp()
+        self.addCleanup(lambda: shutil.rmtree(storage, ignore_errors=True))
+        for i, (cam, evt_id) in enumerate([("cam1", "1739617200_evt1"), ("cam2", "1739617300_evt2")]):
+            event_dir = os.path.join(storage, cam, evt_id)
+            os.makedirs(event_dir, exist_ok=True)
+            with open(os.path.join(event_dir, "analysis_result.json"), "w", encoding="utf-8") as f:
+                json.dump({
+                    "title": f"Event {i+1}",
+                    "shortSummary": f"Summary {i+1}.",
+                    "potential_threat_level": 0,
+                }, f)
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False, encoding="utf-8") as f:
+            f.write("Events: {list_of_event_json_objects}")
+            prompt_path = f.name
+        self.addCleanup(lambda: os.path.exists(prompt_path) and os.unlink(prompt_path))
+        config = {"REPORT_PROMPT_FILE": prompt_path}
+        mock_analyzer = MagicMock()
+        mock_analyzer.send_text_prompt.return_value = "# Done"
+        service = DailyReporterService(config, storage, mock_analyzer)
+        service.generate_report(date(2025, 2, 15))
+        system_prompt = mock_analyzer.send_text_prompt.call_args[0][0]
+        self.assertIn("Event 1", system_prompt)
+        self.assertIn("Event 2", system_prompt)
+        start = system_prompt.index("Events: ") + len("Events: ")
+        parsed = json.loads(system_prompt[start:].strip())
+        self.assertEqual(len(parsed), 2)
+        titles = {o.get("title") for o in parsed}
+        self.assertEqual(titles, {"Event 1", "Event 2"})
+
+
+class TestDailyReporterServiceAggregateFile(unittest.TestCase):
+    """Test aggregate file: read when present, fallback to scan, delete on success."""
+
+    def test_report_uses_aggregate_file_when_present(self):
+        storage = tempfile.mkdtemp()
+        self.addCleanup(lambda: shutil.rmtree(storage, ignore_errors=True))
+        os.makedirs(os.path.join(storage, "daily_reports"), exist_ok=True)
+        aggregate_path = os.path.join(storage, "daily_reports", "aggregate_2025-02-15.jsonl")
+        with open(aggregate_path, "w", encoding="utf-8") as f:
+            f.write(json.dumps({"title": "From aggregate", "camera": "cam1", "time": "2025-02-15 10:00:00", "threat_level": 0, "scene": "", "confidence": 0, "context": []}) + "\n")
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False, encoding="utf-8") as f:
+            f.write("Events: {list_of_event_json_objects}")
+            prompt_path = f.name
+        self.addCleanup(lambda: os.path.exists(prompt_path) and os.unlink(prompt_path))
+        config = {"REPORT_PROMPT_FILE": prompt_path}
+        mock_analyzer = MagicMock()
+        mock_analyzer.send_text_prompt.return_value = "# Done"
+        service = DailyReporterService(config, storage, mock_analyzer)
+        service.generate_report(date(2025, 2, 15))
+        system_prompt = mock_analyzer.send_text_prompt.call_args[0][0]
+        self.assertIn("From aggregate", system_prompt)
+
+    def test_report_falls_back_to_scan_when_aggregate_missing(self):
+        storage = tempfile.mkdtemp()
+        self.addCleanup(lambda: shutil.rmtree(storage, ignore_errors=True))
+        event_dir = os.path.join(storage, "cam", "1739617200_evt1")
+        os.makedirs(event_dir, exist_ok=True)
+        with open(os.path.join(event_dir, "analysis_result.json"), "w", encoding="utf-8") as f:
+            json.dump({"title": "From scan", "potential_threat_level": 0}, f)
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False, encoding="utf-8") as f:
+            f.write("Events: {list_of_event_json_objects}")
+            prompt_path = f.name
+        self.addCleanup(lambda: os.path.exists(prompt_path) and os.unlink(prompt_path))
+        config = {"REPORT_PROMPT_FILE": prompt_path}
+        mock_analyzer = MagicMock()
+        mock_analyzer.send_text_prompt.return_value = "# Done"
+        service = DailyReporterService(config, storage, mock_analyzer)
+        service.generate_report(date(2025, 2, 15))
+        system_prompt = mock_analyzer.send_text_prompt.call_args[0][0]
+        self.assertIn("From scan", system_prompt)
+
+    def test_successful_report_deletes_aggregate_file(self):
+        storage = tempfile.mkdtemp()
+        self.addCleanup(lambda: shutil.rmtree(storage, ignore_errors=True))
+        os.makedirs(os.path.join(storage, "daily_reports"), exist_ok=True)
+        aggregate_path = os.path.join(storage, "daily_reports", "aggregate_2025-02-15.jsonl")
+        with open(aggregate_path, "w", encoding="utf-8") as f:
+            f.write(json.dumps({"title": "One", "camera": "c", "time": "2025-02-15 10:00:00", "threat_level": 0, "scene": "", "confidence": 0, "context": []}) + "\n")
+        self.assertTrue(os.path.isfile(aggregate_path))
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False, encoding="utf-8") as f:
+            f.write("Report")
+            prompt_path = f.name
+        self.addCleanup(lambda: os.path.exists(prompt_path) and os.unlink(prompt_path))
+        config = {"REPORT_PROMPT_FILE": prompt_path}
+        mock_analyzer = MagicMock()
+        mock_analyzer.send_text_prompt.return_value = "# Report"
+        service = DailyReporterService(config, storage, mock_analyzer)
+        result = service.generate_report(date(2025, 2, 15))
+        self.assertTrue(result)
+        self.assertFalse(os.path.isfile(aggregate_path))
 
 
 class TestDailyReporterServiceSave(unittest.TestCase):
