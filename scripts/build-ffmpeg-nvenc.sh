@@ -39,8 +39,8 @@ docker run --rm --gpus all \
       --enable-libass --enable-libfreetype --enable-openssl \
       --enable-libmp3lame --enable-libvorbis \
       --disable-debug --disable-doc --disable-ffplay --enable-shared \
-      --extra-cflags="-I/usr/local/cuda/include" \
-      --extra-ldflags="-L/usr/local/cuda/lib64"
+      --extra-cflags="-I/usr/local/include -I/usr/local/cuda/include" \
+      --extra-ldflags="-L/usr/local/lib -L/usr/local/cuda/lib64"
     make -j$(nproc) && make install
     /opt/ffmpeg/bin/ffmpeg -encoders 2>&1 | grep -q h264_nvenc || { echo "NVENC not in build" >&2; exit 1; }
     mkdir -p /out/lib
