@@ -66,6 +66,10 @@ Example (use the path that matches your layout—`scripts/` or `src/scripts/`):
 FFMPEG_VERSION=7.0.2 ./src/scripts/build-ffmpeg-nvenc.sh
 ```
 
+## Troubleshooting: "NVENC not in build"
+
+The script checks that the built FFmpeg lists `h264_nvenc` among encoders. If that check fails, FFmpeg’s configure step didn’t enable NVENC—usually because it couldn’t find the nv-codec-headers (installed under `/usr/local`). The script now passes `-I/usr/local/include` and `-L/usr/local/lib` so configure can find them. If you still see "NVENC not in build" after pulling the latest script, ensure the host has the NVIDIA driver and that `docker run --rm --gpus all nvidia/cuda:12.2.0-devel-ubuntu22.04 nvidia-smi` works.
+
 ## When to re-run the script
 
 - After updating the **NVIDIA driver** on the host (different ABI).
