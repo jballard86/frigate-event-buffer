@@ -3,6 +3,7 @@ import os
 import shutil
 import subprocess
 import logging
+import time
 from typing import Any
 
 import ffmpegcv
@@ -77,7 +78,7 @@ def log_gpu_status() -> None:
                     "Ensure NVIDIA_DRIVER_CAPABILITIES=compute,video,utility and NVIDIA Container Toolkit is configured."
                 )
 
-    # ffmpeg encoders
+    # ffmpeg encoders (retry once after delay if first run misses NVENC — startup race on some hosts)
     ffmpeg_path = shutil.which("ffmpeg")
     if ffmpeg_path:
         try:
@@ -90,6 +91,17 @@ def log_gpu_status() -> None:
             stdout_raw = proc.stdout or b""
             encoders = (stderr_raw or stdout_raw).decode("utf-8", errors="replace")
             has_nvenc = "h264_nvenc" in encoders or "hevc_nvenc" in encoders
+            if not has_nvenc:
+                time.sleep(3)
+                proc = subprocess.run(
+                    [ffmpeg_path, "-encoders"],
+                    capture_output=True,
+                    timeout=10,
+                )
+                stderr_raw = proc.stderr or b""
+                stdout_raw = proc.stdout or b""
+                encoders = (stderr_raw or stdout_raw).decode("utf-8", errors="replace")
+                has_nvenc = "h264_nvenc" in encoders or "hevc_nvenc" in encoders
             if has_nvenc:
                 logger.info(
                     "FFmpeg NVENC: success — h264_nvenc/hevc_nvenc available; GPU transcode enabled."
