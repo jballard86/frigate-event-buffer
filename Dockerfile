@@ -47,15 +47,17 @@ RUN apt-get update && \
 
     WORKDIR /app
 
-    # 1. Copy the metadata files first (including README)
+    # 1. Install dependencies only (cached unless requirements.txt changes)
+    COPY requirements.txt .
+    RUN pip install --no-cache-dir -r requirements.txt
+
+    # 2. Copy project and source (code-only changes only invalidate from here)
     COPY pyproject.toml README.md* ./
-    
-    # 2. Copy the source code (Necessary for 'src-layout' builds)
     COPY src/ ./src/
-    
-    # 3. Install the project and its dependencies
-    RUN pip install --no-cache-dir .
-    
+
+    # 3. Install the app only, no deps (fast when only code changed)
+    RUN pip install --no-cache-dir --no-deps .
+
     # 4. Copy the rest of your files
     COPY config.example.yaml .
     RUN mkdir -p /app/storage
