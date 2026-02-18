@@ -43,13 +43,6 @@ RUN apt-get update && \
     
     # 2. Copy the source code (Necessary for 'src-layout' builds)
     COPY src/ ./src/
-
-    RUN apt-get update && apt-get install -y \
-    libxcb1 \
-    libqt5gui5 \
-    libgl1-mesa-glx \
-    libglib2.0-0 \
-    && rm -rf /var/lib/apt/lists/*
     
     # 3. Install the project and its dependencies
     RUN pip install --no-cache-dir .
