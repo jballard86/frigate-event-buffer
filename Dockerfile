@@ -36,6 +36,11 @@ RUN apt-get update && \
     apt-get remove -y xz-utils && apt-get autoremove -y && apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
+# OpenCV headless runtime deps (libxcb.so.1, libGL, etc.)
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends libxcb1 libgl1 && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
+
     WORKDIR /app
 
     # 1. Copy the metadata files first (including README)
