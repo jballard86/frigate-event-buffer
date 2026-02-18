@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "frigate-event-buffer"
+version = "0.1.0"
+description = "Frigate Event Buffer - state-aware orchestrator for MQTT events, notifications, and retention"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "flask",
+    "paho-mqtt>=2.0.0",
+    "requests",
+    "schedule",
+    "pyyaml",
+    "voluptuous",
+    "opencv-python-headless",
+    "ffmpegcv",
+    "ultralytics>=8.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+"frigate_buffer" = ["web/templates/*", "web/static/*", "version.txt"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+addopts = "-v"

@@ -87,12 +87,18 @@ def log_gpu_status() -> None:
             encoders = (proc.stderr or proc.stdout or b"").decode("utf-8", errors="replace")
             has_nvenc = "h264_nvenc" in encoders or "hevc_nvenc" in encoders
             if has_nvenc:
-                logger.info("FFmpeg reports NVENC encoders (h264_nvenc/hevc_nvenc) available")
+                logger.info(
+                    "FFmpeg reports NVENC encoders (h264_nvenc/hevc_nvenc) available; GPU transcode enabled. "
+                    "Image was built with scripts/build-ffmpeg-nvenc.sh."
+                )
             else:
                 logger.warning(
-                    "FFmpeg does not report NVENC encoders; GPU transcode will be unavailable. "
-                    "BtbN GPL/LGPL builds do not include NVENC. Build FFmpeg with --enable-nvenc "
-                    "or use an image/FFmpeg that does (see this repo's Dockerfile)."
+                    "FFmpeg does not report NVENC encoders; GPU transcode will be unavailable."
+                )
+                logger.warning(
+                    "To enable GPU transcode: on the host where you build the image, run "
+                    "scripts/build-ffmpeg-nvenc.sh (from repo root after git pull), then rebuild. "
+                    "See BUILD_NVENC.md. You do not need to run the script before every build."
                 )
         except (subprocess.TimeoutExpired, OSError) as e:
             logger.warning("Could not check ffmpeg encoders: %s", e)
