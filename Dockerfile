@@ -1,42 +1,13 @@
-# Frigate Event Buffer - State-Aware Orchestrator
-# ================================================
-#
-# Environment Variables (override config.yaml):
-#   MQTT_BROKER     - MQTT broker IP (required)
-#   MQTT_PORT       - MQTT broker port (default: 1883)
-#   BUFFER_IP       - Buffer container's reachable IP (required, used in notification URLs)
-#   FRIGATE_URL     - Frigate API base URL (required)
-#   STORAGE_PATH    - Storage directory (default: /app/storage)
-#   RETENTION_DAYS  - Days to retain events (default: 3)
-#   FLASK_PORT      - Flask server port (default: 5055)
-#   LOG_LEVEL       - Logging level: DEBUG, INFO, WARNING, ERROR (default: INFO)
-#
-# Volume Mounts:
-#   /app/storage     - Event storage (clips, snapshots, summaries)
-#   /app/config.yaml - Configuration file (optional, for camera/label filtering)
-#
-# Example Docker Run:
-#   docker run -d \
-#     -p 5055:5055 \
-#     -v /mnt/user/appdata/frigate_buffer:/app/storage \
-#     -v /mnt/user/appdata/frigate_buffer/config.yaml:/app/config.yaml:ro \
-#     frigate-buffer
-
-# -----------------------------------------------------------------------------
-# FFmpeg with NVENC is supplied by the build context (see BUILD_NVENC.md).
-# Run scripts/build-ffmpeg-nvenc.sh on a host with NVIDIA GPU first; it writes
-# ffmpeg-nvenc-artifacts/ at repo root. Then build with context .: -f Dockerfile .
-# -----------------------------------------------------------------------------
+# Same content as src/Dockerfile; keep in sync. Use with build context = repo/stack root (e.g. docker build -f src/Dockerfile . or compose build with context: .).
+# FFmpeg artifacts: run scripts/build-ffmpeg-nvenc.sh first (writes to src/ffmpeg-nvenc-artifacts/).
+# COPY paths use src/ so the build context must be the repo/stack root (.).
 FROM python:3.12-slim
 
-# FFmpeg (NVENC) from pre-built artifacts in context. If this COPY fails, run
-# scripts/build-ffmpeg-nvenc.sh from repo root, then build with context .
-COPY ffmpeg-nvenc-artifacts/ffmpeg /usr/local/bin/ffmpeg
-COPY ffmpeg-nvenc-artifacts/ffprobe /usr/local/bin/ffprobe
-COPY ffmpeg-nvenc-artifacts/lib /usr/local/lib
+COPY src/ffmpeg-nvenc-artifacts/ffmpeg /usr/local/bin/ffmpeg
+COPY src/ffmpeg-nvenc-artifacts/ffprobe /usr/local/bin/ffprobe
+COPY src/ffmpeg-nvenc-artifacts/lib /usr/local/lib
 RUN ldconfig /usr/local/lib
 
-# OpenCV headless runtime (libxcb, libGL, X11) so cv2 import works
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         libgl1 \
@@ -51,20 +22,15 @@ RUN apt-get update && \
 
 WORKDIR /app
 
-# Install dependencies only (cached unless requirements.txt changes)
-COPY requirements.txt .
+COPY src/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy project and source (code-only changes only invalidate from here)
-COPY pyproject.toml README.md* ./
-COPY src/ ./src/
-
-# Install the app only, no deps (fast when only code changed)
-RUN pip install --no-cache-dir --no-deps .
-
-# Copy the rest of your files
-COPY config.example.yaml .
+COPY src/pyproject.toml ./
+COPY src/frigate_buffer/ ./src/frigate_buffer/
+COPY src/config.example.yaml .
 RUN mkdir -p /app/storage
+
+RUN pip install --no-cache-dir --no-deps .
 
 EXPOSE 5055
 
