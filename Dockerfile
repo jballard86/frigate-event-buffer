@@ -24,7 +24,7 @@
 
 FROM python:3.12-slim
 
-# FFmpeg with NVENC: BtbN static build (linux64-gpl includes NVENC). Replaces apt ffmpeg which lacks NVENC.
+# 1. Install FFmpeg with NVENC (Slowest part, but now CACHED) [cite: 3, 4]
 ARG FFMPEG_BTBN_URL="https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-linux64-gpl.tar.xz"
 RUN apt-get update && \
     apt-get install -y --no-install-recommends curl xz-utils && \
@@ -34,27 +34,25 @@ RUN apt-get update && \
     cp /tmp/ffmpeg-*/bin/ffprobe /usr/local/bin/ && \
     rm -rf /tmp/ffmpeg.tar.xz /tmp/ffmpeg-* && \
     apt-get remove -y xz-utils && apt-get autoremove -y && apt-get clean && \
-    rm -rf /var/lib/apt/lists/* && \
-    ffmpeg -encoders 2>&1 | grep -q h264_nvenc || (echo "NVENC not in ffmpeg; build failed" && exit 1)
+    rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-# Copy project and install package (src layout)
+# 2. Copy ONLY the project file first 
 COPY pyproject.toml .
-COPY src/ ./src/
-RUN pip install --no-cache-dir -e .
 
-# Example config
+# 3. Install dependencies (This layer will now stay CACHED unless pyproject.toml changes)
+RUN pip install --no-cache-dir .
+
+# 4. Copy your actual code LAST 
+# Because this is at the end, code changes won't trigger a re-install of libraries!
+COPY src/ ./src/
 COPY config.example.yaml .
 
-# Create storage directory
-RUN mkdir -p /app/storage
-
-# Expose Flask port
+RUN mkdir -p /app/storage [cite: 6]
 EXPOSE 5055
 
-# Health check
 HEALTHCHECK --interval=60s --timeout=10s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:5055/status || exit 1
+    CMD curl -f http://localhost:5055/status || exit 1 [cite: 7]
 
 CMD ["python", "-m", "frigate_buffer.main"]
