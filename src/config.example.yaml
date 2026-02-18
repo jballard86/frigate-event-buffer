@@ -1,0 +1,63 @@
+# Frigate Event Buffer Configuration
+# ===================================
+#
+# Copy this file to config.yaml and update with your values:
+#   cp config.example.yaml config.yaml
+#
+# This file contains non-sensitive application settings.
+# Sensitive values can also be set via environment variables,
+# which always override values in this file.
+
+# Camera configuration with per-camera label filtering
+# Only events from listed cameras will be processed
+# Omit a camera entirely to filter it out
+cameras:
+  # Example: Doorbell - only person and package events
+  - name: "YOUR_CAMERA_1"
+    labels:
+      - "person"
+      - "package"
+
+  # Example: Driveway - only vehicle events, with Smart Zone Filtering
+  # Only create event when object enters a tracked zone (e.g. driveway); exceptions trigger anywhere
+  - name: "YOUR_CAMERA_2"
+    labels:
+      - "car"
+      - "truck"
+    event_filters:              # Optional - omit for legacy behavior (all events start immediately)
+      tracked_zones:            # Only create event when object enters one of these Frigate zones
+        - driveway
+      exceptions:               # Labels or sub_labels that create event regardless of zone
+        - person
+        - UPS
+        - FedEx
+
+  # Example: Backyard - allow ALL labels (empty list), no zone filtering
+  # - name: "YOUR_CAMERA_3"
+  #   labels: []
+
+# Application settings
+settings:
+  retention_days: 3
+  cleanup_interval_hours: 1
+  export_watchdog_interval_minutes: 2
+  ffmpeg_timeout_seconds: 60
+  notification_delay_seconds: 1
+  log_level: "INFO"
+  summary_padding_before: 15
+  summary_padding_after: 15
+  stats_refresh_seconds: 60
+  daily_review_retention_days: 90
+  daily_review_schedule_hour: 1
+  event_gap_seconds: 120
+  export_buffer_before: 5
+  export_buffer_after: 30
+
+# Network configuration
+network:
+  mqtt_broker: "YOUR_MQTT_BROKER_IP"
+  mqtt_port: 1883
+  frigate_url: "http://YOUR_FRIGATE_IP:5000"
+  buffer_ip: "YOUR_BUFFER_IP"
+  flask_port: 5055
+  storage_path: "/app/storage"
