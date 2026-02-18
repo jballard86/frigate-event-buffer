@@ -29,6 +29,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3.12-dev \
     libgl1 \
     libglib2.0-0 \
+    libgomp1 \
     libxcb1 \
     libxcb-shm0 \
     libxext6 \
