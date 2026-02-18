@@ -43,10 +43,6 @@ storage/
 # Docker
 *.tar
 
-# FFmpeg NVENC build artifacts (produced by scripts/build-ffmpeg-nvenc.sh)
-ffmpeg-nvenc-artifacts/
-src/ffmpeg-nvenc-artifacts/
-
 # Temporary files
 *.tmp
 *.temp
