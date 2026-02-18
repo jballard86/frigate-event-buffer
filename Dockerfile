@@ -36,21 +36,22 @@ RUN apt-get update && \
     apt-get remove -y xz-utils && apt-get autoremove -y && apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
-WORKDIR /app
+    WORKDIR /app
 
-# 2. Copy ONLY the project file first 
-COPY pyproject.toml .
-
-# 3. Install dependencies (This layer will now stay CACHED unless pyproject.toml changes)
-RUN pip install --no-cache-dir .
-
-# 4. Copy your actual code LAST 
-# Because this is at the end, code changes won't trigger a re-install of libraries!
-COPY src/ ./src/
-COPY config.example.yaml .
-
-RUN mkdir -p /app/storage [cite: 6]
-EXPOSE 5055
+    # 1. Copy the metadata files first (including README)
+    COPY pyproject.toml README.md* ./
+    
+    # 2. Copy the source code (Necessary for 'src-layout' builds)
+    COPY src/ ./src/
+    
+    # 3. Install the project and its dependencies
+    RUN pip install --no-cache-dir .
+    
+    # 4. Copy the rest of your files
+    COPY config.example.yaml .
+    RUN mkdir -p /app/storage
+    
+    EXPOSE 5055
 
 HEALTHCHECK --interval=60s --timeout=10s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:5055/status || exit 1 [cite: 7]
