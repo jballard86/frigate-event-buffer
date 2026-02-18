@@ -40,8 +40,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     libass-dev \
     libfreetype6-dev \
-    libgnutls28-dev \
     libmp3lame-dev \
+    libssl-dev \
     libtool \
     libva-dev \
     libvdpau-dev \
@@ -77,7 +77,7 @@ RUN cd /tmp/ffmpeg-${FFMPEG_VERSION} && \
     --enable-libx264 \
     --enable-libass \
     --enable-libfreetype \
-    --enable-libgnutls \
+    --enable-openssl \
     --enable-libmp3lame \
     --enable-libvorbis \
     --disable-debug \
