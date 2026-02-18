@@ -1,10 +1,11 @@
-# Same as repo root Dockerfile; use when build context is "src" (e.g. docker build -f src/Dockerfile src).
-# FFmpeg artifacts must be in context: run scripts/build-ffmpeg-nvenc.sh first (writes to src/ffmpeg-nvenc-artifacts/).
+# Use with build context = repo/stack root (e.g. docker build -f src/Dockerfile . or compose build with context: .).
+# FFmpeg artifacts: run scripts/build-ffmpeg-nvenc.sh first (writes to src/ffmpeg-nvenc-artifacts/).
+# COPY paths use src/ so the build context must be the repo/stack root (.).
 FROM python:3.12-slim
 
-COPY ffmpeg-nvenc-artifacts/ffmpeg /usr/local/bin/ffmpeg
-COPY ffmpeg-nvenc-artifacts/ffprobe /usr/local/bin/ffprobe
-COPY ffmpeg-nvenc-artifacts/lib /usr/local/lib
+COPY src/ffmpeg-nvenc-artifacts/ffmpeg /usr/local/bin/ffmpeg
+COPY src/ffmpeg-nvenc-artifacts/ffprobe /usr/local/bin/ffprobe
+COPY src/ffmpeg-nvenc-artifacts/lib /usr/local/lib
 RUN ldconfig /usr/local/lib
 
 RUN apt-get update && \
@@ -21,12 +22,12 @@ RUN apt-get update && \
 
 WORKDIR /app
 
-COPY requirements.txt .
+COPY src/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY pyproject.toml README.md* ./
-COPY frigate_buffer/ ./src/frigate_buffer/
-COPY config.example.yaml .
+COPY src/pyproject.toml ./
+COPY src/frigate_buffer/ ./src/frigate_buffer/
+COPY src/config.example.yaml .
 RUN mkdir -p /app/storage
 
 RUN pip install --no-cache-dir --no-deps .

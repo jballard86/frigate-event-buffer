@@ -5,12 +5,14 @@
 set -e
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-# Artifacts must live inside the build context. When context is "src", that is either
-# REPO_ROOT/src (repo has scripts/ and src/ as siblings) or REPO_ROOT (repo is inside src/).
-if [ -f "$REPO_ROOT/src/Dockerfile" ]; then
-  OUT_DIR="$REPO_ROOT/src/ffmpeg-nvenc-artifacts"
-else
+# Artifacts must live at build-context root (so "docker build -f src/Dockerfile src" finds them).
+# When script is in src/scripts/, REPO_ROOT is the "src" dir (build context) -> OUT_DIR=REPO_ROOT/ffmpeg-nvenc-artifacts.
+# When script is in top-level scripts/, REPO_ROOT is parent of src -> OUT_DIR=REPO_ROOT/src/ffmpeg-nvenc-artifacts.
+SCRIPT_PARENT="$(dirname "$(cd "$(dirname "$0")" && pwd)")"
+if [ "$(basename "$SCRIPT_PARENT")" = "src" ]; then
   OUT_DIR="$REPO_ROOT/ffmpeg-nvenc-artifacts"
+else
+  OUT_DIR="$REPO_ROOT/src/ffmpeg-nvenc-artifacts"
 fi
 FFMPEG_VERSION="${FFMPEG_VERSION:-7.0.2}"
 CUDA_IMAGE="${CUDA_IMAGE:-nvidia/cuda:12.2.0-devel-ubuntu22.04}"

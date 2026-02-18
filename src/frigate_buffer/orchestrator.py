@@ -412,6 +412,22 @@ class StateAwareOrchestrator:
                     tag_override=f"frigate_{ce.consolidated_id}" if ce else None
                 )
         logger.info(f"Analysis result applied for {event_id}: title={title or 'N/A'}, threat_level={threat_level}")
+        if self.daily_reporter and event and event.folder_path:
+            try:
+                unix_ts = event.created_at or 0
+                event_date = date.fromtimestamp(unix_ts)
+                camera = os.path.basename(os.path.dirname(event.folder_path))
+                self.daily_reporter.append_event_to_daily_aggregate(event_date, {
+                    "title": title,
+                    "scene": scene,
+                    "confidence": result.get("confidence", 0),
+                    "threat_level": threat_level,
+                    "camera": camera,
+                    "time": datetime.fromtimestamp(unix_ts).strftime("%Y-%m-%d %H:%M:%S"),
+                    "context": result.get("context", []),
+                })
+            except (ValueError, OSError) as e:
+                logger.debug("Could not append to daily aggregate for %s: %s", event_id, e)
 
     def _handle_ce_analysis_result(self, ce_id: str, ce_folder_path: str, result: dict, ce_info: dict):
         """Handle multi-clip CE analysis result: write summary/metadata to CE root, notify."""
@@ -449,6 +465,22 @@ class StateAwareOrchestrator:
         })()
         self.notifier.publish_notification(notify_target, "finalized", tag_override=f"frigate_{ce_id}")
         logger.info("CE analysis result applied for %s: title=%s, threat_level=%s", ce_id, title or "N/A", threat_level)
+        if self.daily_reporter:
+            try:
+                unix_ts = ce_info.get("_start_time", 0) or 0
+                event_date = date.fromtimestamp(unix_ts)
+                camera = ce_info.get("primary_camera") or os.path.basename(ce_folder_path)
+                self.daily_reporter.append_event_to_daily_aggregate(event_date, {
+                    "title": title,
+                    "scene": scene,
+                    "confidence": result.get("confidence", 0),
+                    "threat_level": threat_level,
+                    "camera": camera,
+                    "time": datetime.fromtimestamp(unix_ts).strftime("%Y-%m-%d %H:%M:%S"),
+                    "context": result.get("context", []),
+                })
+            except (ValueError, OSError) as e:
+                logger.debug("Could not append CE to daily aggregate for %s: %s", ce_id, e)
 
     def _handle_tracked_update(self, payload: dict, topic: str):
         """Handle tracked_object_update: AI description (Phase 2) or per-frame metadata (frame_time, box, area, score)."""

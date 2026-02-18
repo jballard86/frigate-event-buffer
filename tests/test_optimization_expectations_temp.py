@@ -206,16 +206,21 @@ class TestOpt8DataclassSlots(unittest.TestCase):
             self.assertIsInstance(ConsolidatedEvent.__slots__, (tuple, list))
 
 
-class TestOpt9DailyReporterGenerator(unittest.TestCase):
-    """Expectation: _collect_events_for_date is a generator; one-pass aggregation in generate_report."""
+class TestOpt9DailyReporterCollect(unittest.TestCase):
+    """Expectation: _collect_events_for_date returns (events_list, total_seen, total_matched)."""
 
-    def test_collect_events_for_date_is_generator(self):
+    def test_collect_events_for_date_returns_tuple_of_list_and_counts(self):
         config = {}
         mock_analyzer = MagicMock()
         svc = DailyReporterService(config, tempfile.gettempdir(), mock_analyzer)
-        gen = svc._collect_events_for_date(__import__("datetime").date.today())
-        self.assertTrue(hasattr(gen, "__iter__"))
-        self.assertTrue(hasattr(gen, "__next__") or callable(getattr(gen, "__next__", None)))
+        result = svc._collect_events_for_date(__import__("datetime").date.today())
+        self.assertIsInstance(result, tuple)
+        self.assertEqual(len(result), 3)
+        events_list, total_seen, total_matched = result
+        self.assertIsInstance(events_list, list)
+        self.assertIsInstance(total_seen, int)
+        self.assertIsInstance(total_matched, int)
+        self.assertEqual(total_matched, len(events_list))
 
 
 class TestOpt10ExportWatchdogHeadCap(unittest.TestCase):
