@@ -13,18 +13,29 @@ The script lives in the repo (`scripts/build-ffmpeg-nvenc.sh`). So: **pull** to 
 
 ## Step 1: Build FFmpeg with NVENC (once per host / driver or FFmpeg version)
 
-From the **repo root** (e.g. `/mnt/user/appdata/dockge/stacks/frigate-buffer`). Pull first so you have the script, then run it:
+Pull first, then run the script. **Where the script is** depends on where the repo is cloned:
+
+- **If the repo is inside `src/`** (e.g. Dockge: stack dir is `frigate-buffer`, you run `cd src && git pull`): the script is at **`src/scripts/build-ffmpeg-nvenc.sh`**. From the stack directory:
 
 ```bash
 cd /mnt/user/appdata/dockge/stacks/frigate-buffer
 cd src && git pull && cd ..
+chmod +x src/scripts/build-ffmpeg-nvenc.sh
+./src/scripts/build-ffmpeg-nvenc.sh
+```
+
+- **If the repo root is the stack directory** (you have `scripts/` and `src/` as siblings): the script is at **`scripts/build-ffmpeg-nvenc.sh`**:
+
+```bash
+cd /mnt/user/appdata/dockge/stacks/frigate-buffer
+git pull
 chmod +x scripts/build-ffmpeg-nvenc.sh
 ./scripts/build-ffmpeg-nvenc.sh
 ```
 
-- The script is in the repo; after `git pull` you have `scripts/build-ffmpeg-nvenc.sh`.
-- It runs a container with `--gpus all`, builds FFmpeg with NVENC and libx264, and writes artifacts into **`src/ffmpeg-nvenc-artifacts/`** so `docker build -f src/Dockerfile src` finds them.
+- The script writes artifacts into the directory that will be the **build context** (so `docker build -f src/Dockerfile src` finds them). That is either `src/ffmpeg-nvenc-artifacts/` (when repo root is the parent of `src/`) or `src/ffmpeg-nvenc-artifacts/` inside the clone (when the repo is in `src/`).
 - First run can take 15–30 minutes. You do **not** need to run it before every build—only when artifacts are missing or you want to refresh (e.g. new driver or FFmpeg version).
+- **Script not found?** If you see "No such file or directory" for the script, you're likely in the stack directory with the repo inside `src/`. Use `src/scripts/build-ffmpeg-nvenc.sh` (or `cd src` then `./scripts/build-ffmpeg-nvenc.sh`).
 - If the script fails (e.g. “NVENC not in build”), ensure the host has the NVIDIA driver and that `docker run --gpus all` works.
 
 ## Step 2: Build the app image
@@ -49,10 +60,10 @@ docker build -t frigate-buffer:latest -f src/Dockerfile src
 - `FFMPEG_VERSION` – FFmpeg version to build (default: `7.0.2`).
 - `CUDA_IMAGE` – Base image for the build container (default: `nvidia/cuda:12.2.0-devel-ubuntu22.04`).
 
-Example:
+Example (use the path that matches your layout—`scripts/` or `src/scripts/`):
 
 ```bash
-FFMPEG_VERSION=7.0.2 ./scripts/build-ffmpeg-nvenc.sh
+FFMPEG_VERSION=7.0.2 ./src/scripts/build-ffmpeg-nvenc.sh
 ```
 
 ## When to re-run the script
