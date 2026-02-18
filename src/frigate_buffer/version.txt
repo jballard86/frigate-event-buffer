@@ -1,1 +1,1 @@
-1.0.4 Multicam with AI Test Branch
+1.0.5 Multicam with AI Test Branch
