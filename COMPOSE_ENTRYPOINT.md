@@ -2,11 +2,11 @@
 
 If the container fails with `libgthread-2.0.so.0` (or similar) and you don't want to rebuild the image, use the entrypoint script to install the missing libs at startup.
 
-1. Ensure `entrypoint.sh` is in the repo (e.g. at repo root). On the server, after `git pull` it will be at `./src/entrypoint.sh` if the repo is in `./src`.
+1. Ensure `entrypoint.sh` is at the repo root. After `git pull` it is at `./entrypoint.sh` (stack root = repo root).
 
 2. Make it executable on the server:
    ```bash
-   chmod +x /mnt/user/appdata/dockge/stacks/frigate-buffer/src/entrypoint.sh
+   chmod +x /mnt/user/appdata/dockge/stacks/frigate-buffer/entrypoint.sh
    ```
 
 3. In your `docker-compose` file, add the volume and override entrypoint/command:
@@ -20,7 +20,7 @@ If the container fails with `libgthread-2.0.so.0` (or similar) and you don't wan
          - /mnt/user/appdata/frigate_buffer:/app/storage
          - /mnt/user/appdata/frigate_buffer/config.yaml:/app/config.yaml:ro
          - /etc/localtime:/etc/localtime:ro
-         - ./src/entrypoint.sh:/entrypoint.sh:ro   # add this
+         - ./entrypoint.sh:/entrypoint.sh:ro   # add this
        entrypoint: ["/entrypoint.sh"]               # add this
        command: ["python", "-m", "frigate_buffer.main"]   # add this
    ```
