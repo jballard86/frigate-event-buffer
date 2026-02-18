@@ -1,4 +1,4 @@
-# Use with build context = repo/stack root (e.g. docker build -f src/Dockerfile . or compose build with context: .).
+# Same content as repo root Dockerfile; keep in sync. Use with build context = repo/stack root (e.g. docker build -f src/Dockerfile . or compose build with context: .).
 # FFmpeg artifacts: run scripts/build-ffmpeg-nvenc.sh first (writes to src/ffmpeg-nvenc-artifacts/).
 # COPY paths use src/ so the build context must be the repo/stack root (.).
 FROM python:3.12-slim
