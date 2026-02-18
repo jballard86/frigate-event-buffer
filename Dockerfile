@@ -27,12 +27,16 @@
 # Must be built on a host with the NVIDIA driver installed; the build mounts
 # the host's driver libs (libnvidia-encode) so FFmpeg links with NVENC.
 # Use: docker build (BuildKit default in Docker 23+), or DOCKER_BUILDKIT=1.
-# If NVENC check fails, try: --build-arg HOST_LIBS=/usr/lib (e.g. on Unraid).
+# If mount fails (path not found): pass host lib path, e.g.
+#   Debian/Ubuntu: --build-arg HOST_LIBS=/usr/lib/x86_64-linux-gnu
+#   Unraid/Slackware: --build-arg HOST_LIBS=/usr/lib  (default)
 # -----------------------------------------------------------------------------
 ARG FFMPEG_VERSION=7.0.2
 FROM nvidia/cuda:12.2.0-runtime-ubuntu22.04 AS ffmpeg-builder
 ARG FFMPEG_VERSION
 ARG DEBIAN_FRONTEND=noninteractive
+# Where host NVIDIA driver libs (e.g. libnvidia-encode.so) live. Default works on Unraid/Slackware.
+ARG HOST_LIBS=/usr/lib
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     autoconf \
@@ -72,7 +76,6 @@ RUN wget -q https://ffmpeg.org/releases/ffmpeg-${FFMPEG_VERSION}.tar.xz -O /tmp/
 
 # Build FFmpeg with NVENC. Requires BuildKit and build on a host with NVIDIA driver.
 # Mount host driver libs (libnvidia-encode) so the linker can link the NVENC encoder.
-ARG HOST_LIBS=/usr/lib/x86_64-linux-gnu
 RUN --mount=type=bind,source=${HOST_LIBS},target=/host-libs,readonly \
     cd /tmp/ffmpeg-${FFMPEG_VERSION} && \
     ./configure \
