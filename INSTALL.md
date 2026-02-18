@@ -7,7 +7,7 @@ Install and run via the command line only (no Dockge). Clone the repo so the **r
 ## Prerequisites
 
 - Docker (no compose required; we use `docker build` and `docker run` only).
-- For GPU/NVENC: The image includes FFmpeg with NVENC and is based on Ubuntu 22.04 to match the FFmpeg donor for reliable GPU encoding. At runtime you need an NVIDIA GPU, driver, and [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html) (so `docker run --gpus all` works). See [BUILD_NVENC.md](BUILD_NVENC.md).
+- For GPU/NVENC: The image includes FFmpeg with NVENC and is based on Ubuntu 24.04 to match the FFmpeg donor for reliable GPU encoding. At runtime you need an NVIDIA GPU, driver, and [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html) (so `docker run --gpus all` works). See [BUILD_NVENC.md](BUILD_NVENC.md).
 
 ---
 
@@ -166,7 +166,7 @@ If `git pull` reports that local changes would be overwritten by merge (e.g. to 
 
 ## Troubleshooting
 
-- **FFmpeg does not report NVENC encoders** — Rebuild the image from this repo (`docker build -t frigate-buffer:latest .`) and run the container with GPU access (`--gpus all` and NVIDIA env vars). The image is Ubuntu 22.04–based to match the FFmpeg donor; if NVENC still does not appear, check Unraid/NVIDIA Container Toolkit settings (e.g. driver capabilities). See [BUILD_NVENC.md](BUILD_NVENC.md).
+- **FFmpeg does not report NVENC encoders** — Rebuild the image from this repo (`docker build -t frigate-buffer:latest .`) and run the container with GPU access (`--gpus all` and NVIDIA env vars). The image is Ubuntu 24.04–based to match the FFmpeg donor; if NVENC still does not appear, check Unraid/NVIDIA Container Toolkit settings (e.g. driver capabilities). See [BUILD_NVENC.md](BUILD_NVENC.md).
 - **Build fails with "frigate_buffer" or "config.example" not found** — You are not in the repo root. `cd` to the directory that contains `Dockerfile` and `src/frigate_buffer/`.
 - **`exec: "/entrypoint.sh": permission denied`** — The mounted entrypoint script must be executable on the host. From repo root run: `chmod +x entrypoint.sh`, then start the container again (remove it first: `docker rm frigate_buffer`).
 - **Entrypoint or OpenCV errors at runtime** — Ensure `entrypoint.sh` exists in repo root and is executable: `chmod +x entrypoint.sh`. See [COMPOSE_ENTRYPOINT.md](COMPOSE_ENTRYPOINT.md) if you need the optional entrypoint for fixing libs without rebuilding.
