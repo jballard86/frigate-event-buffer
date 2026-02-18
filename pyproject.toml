@@ -15,7 +15,7 @@ dependencies = [
     "schedule",
     "pyyaml",
     "voluptuous",
-    "opencv-python",
+    "opencv-python-headless",
     "ffmpegcv",
     "ultralytics>=8.0.0",
 ]
