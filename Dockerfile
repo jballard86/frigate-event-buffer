@@ -23,9 +23,11 @@
 #     frigate-buffer
 
 # -----------------------------------------------------------------------------
-# Stage 1: Build FFmpeg with NVENC (and libx264 fallback)
-# Uses nvidia/cuda runtime for libnvidia-encode at link time; at container run
-# time the same lib is provided by NVIDIA Container Toolkit.
+# Stage 1: Build FFmpeg with NVENC (and libx264 fallback).
+# Must be built on a host with the NVIDIA driver installed; the build mounts
+# the host's driver libs (libnvidia-encode) so FFmpeg links with NVENC.
+# Use: docker build (BuildKit default in Docker 23+), or DOCKER_BUILDKIT=1.
+# If NVENC check fails, try: --build-arg HOST_LIBS=/usr/lib (e.g. on Unraid).
 # -----------------------------------------------------------------------------
 ARG FFMPEG_VERSION=7.0.2
 FROM nvidia/cuda:12.2.0-runtime-ubuntu22.04 AS ffmpeg-builder
@@ -60,15 +62,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     zlib1g-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# nv-codec-headers: required for --enable-nvenc (headers only; libnvidia-encode comes from CUDA runtime)
+# nv-codec-headers: required for --enable-nvenc (headers only)
 RUN git clone --depth 1 https://github.com/FFmpeg/nv-codec-headers.git /tmp/nv-codec-headers \
     && cd /tmp/nv-codec-headers && make install && cd / && rm -rf /tmp/nv-codec-headers
 
-# Download and build FFmpeg with NVENC + libx264 (fallback used when GPU path unavailable)
+# Download FFmpeg source
 RUN wget -q https://ffmpeg.org/releases/ffmpeg-${FFMPEG_VERSION}.tar.xz -O /tmp/ffmpeg.tar.xz \
     && tar xf /tmp/ffmpeg.tar.xz -C /tmp && rm /tmp/ffmpeg.tar.xz
 
-RUN cd /tmp/ffmpeg-${FFMPEG_VERSION} && \
+# Build FFmpeg with NVENC. Requires BuildKit and build on a host with NVIDIA driver.
+# Mount host driver libs (libnvidia-encode) so the linker can link the NVENC encoder.
+ARG HOST_LIBS=/usr/lib/x86_64-linux-gnu
+RUN --mount=type=bind,source=${HOST_LIBS},target=/host-libs,readonly \
+    cd /tmp/ffmpeg-${FFMPEG_VERSION} && \
     ./configure \
     --prefix=/opt/ffmpeg \
     --enable-gpl \
@@ -85,8 +91,10 @@ RUN cd /tmp/ffmpeg-${FFMPEG_VERSION} && \
     --disable-ffplay \
     --enable-shared \
     --extra-cflags="-I/usr/local/cuda/include" \
-    --extra-ldflags="-L/usr/local/cuda/lib64" \
-    && make -j$(nproc) && make install && rm -rf /tmp/ffmpeg-${FFMPEG_VERSION}
+    --extra-ldflags="-L/usr/local/cuda/lib64 -L/host-libs" \
+    && LD_LIBRARY_PATH=/host-libs make -j$(nproc) && make install && \
+    LD_LIBRARY_PATH=/host-libs /opt/ffmpeg/bin/ffmpeg -encoders 2>&1 | grep -q h264_nvenc || (echo "NVENC not in build; ensure build runs on host with NVIDIA driver and HOST_LIBS points to driver libs" && exit 1) && \
+    rm -rf /tmp/ffmpeg-${FFMPEG_VERSION}
 
 # -----------------------------------------------------------------------------
 # Stage 2: Runtime image with Python app and FFmpeg (NVENC) from builder
