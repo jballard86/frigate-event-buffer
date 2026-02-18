@@ -13,12 +13,14 @@ class TestVideoService(unittest.TestCase):
     def setUp(self):
         self.video_service = VideoService(ffmpeg_timeout=1)
 
+    @patch('frigate_buffer.services.video.VideoService._probe_nvenc')
     @patch('frigate_buffer.services.video.subprocess.Popen')
     @patch('frigate_buffer.services.video.os.remove')
     @patch('frigate_buffer.services.video.os.path.exists')
     @patch('frigate_buffer.services.video.ffmpegcv.VideoCaptureNV')
-    def test_transcode_success(self, mock_video_capture_nv, mock_exists, mock_remove, mock_popen):
-        # GPU path fails (e.g. no GPU in CI), so fallback to libx264 is used
+    def test_transcode_success(self, mock_video_capture_nv, mock_exists, mock_remove, mock_popen, mock_probe):
+        # Probe says NVENC unavailable, so libx264 is used
+        mock_probe.return_value = False
         mock_video_capture_nv.side_effect = RuntimeError("No GPU")
         mock_process = MagicMock()
         mock_process.communicate.return_value = (b"", b"")
@@ -32,12 +34,30 @@ class TestVideoService(unittest.TestCase):
         self.assertTrue(result)
         mock_remove.assert_called_with("temp.mp4")
         mock_popen.assert_called_once()
+        mock_probe.assert_called_once()
 
+    @patch('frigate_buffer.services.video.VideoService._transcode_clip_nvenc')
+    @patch('frigate_buffer.services.video.VideoService._transcode_clip_libx264')
+    @patch('frigate_buffer.services.video.VideoService._probe_nvenc')
+    def test_transcode_skips_nvenc_when_probe_unavailable(self, mock_probe, mock_libx264, mock_nvenc):
+        """When NVENC probe returns False, transcode uses libx264 only and never calls _transcode_clip_nvenc."""
+        mock_probe.return_value = False
+        mock_libx264.return_value = True
+
+        result = self.video_service.transcode_clip_to_h264("evt1", "temp.mp4", "final.mp4")
+
+        self.assertTrue(result)
+        mock_probe.assert_called_once()
+        mock_libx264.assert_called_once_with("evt1", "temp.mp4", "final.mp4")
+        mock_nvenc.assert_not_called()
+
+    @patch('frigate_buffer.services.video.VideoService._probe_nvenc')
     @patch('frigate_buffer.services.video.subprocess.Popen')
     @patch('frigate_buffer.services.video.os.rename')
     @patch('frigate_buffer.services.video.os.path.exists')
     @patch('frigate_buffer.services.video.ffmpegcv.VideoCaptureNV')
-    def test_transcode_failure(self, mock_video_capture_nv, mock_exists, mock_rename, mock_popen):
+    def test_transcode_failure(self, mock_video_capture_nv, mock_exists, mock_rename, mock_popen, mock_probe):
+        mock_probe.return_value = False
         mock_video_capture_nv.side_effect = RuntimeError("No GPU")
         mock_process = MagicMock()
         mock_process.communicate.return_value = (b"", b"Error")
@@ -51,13 +71,15 @@ class TestVideoService(unittest.TestCase):
         self.assertTrue(result)
         mock_rename.assert_called_with("temp.mp4", "final.mp4")
 
+    @patch('frigate_buffer.services.video.VideoService._probe_nvenc')
     @patch('frigate_buffer.services.video.subprocess.run')
     @patch('frigate_buffer.services.video.os.remove')
     @patch('frigate_buffer.services.video.os.path.exists')
     @patch('frigate_buffer.services.video.ffmpegcv.VideoWriterNV')
     @patch('frigate_buffer.services.video.ffmpegcv.VideoCaptureNV')
-    def test_transcode_nvenc_success(self, mock_capture_nv, mock_writer_nv, mock_exists, mock_remove, mock_run):
+    def test_transcode_nvenc_success(self, mock_capture_nv, mock_writer_nv, mock_exists, mock_remove, mock_run, mock_probe):
         """When GPU is available, transcode uses VideoCaptureNV and VideoWriterNV then muxes audio."""
+        mock_probe.return_value = True
         mock_cap = MagicMock()
         mock_cap.isOpened.return_value = True
         mock_cap.fps = 30.0

@@ -4,6 +4,9 @@ Target-centric multi-clip frame extraction for consolidated events.
 When detection sidecars (detection.json per camera) exist from transcode, reads them
 and picks the camera with largest person area per time step without running a detector.
 Otherwise falls back to OpenCV HOG person detection on each frame. No Frigate metadata.
+
+Uses ffmpegcv for decode and a sequential-read, time-sampled strategy (no seek),
+since ffmpegcv readers do not support frame-index seek.
 """
 
 from __future__ import annotations
@@ -86,6 +89,40 @@ def _detect_person_area(frame: Any) -> float:
         return 0.0
 
 
+def _get_fps_and_duration(cap: Any, path: str) -> tuple[float, float, bool]:
+    """
+    Get (fps, duration_sec, used_read_to_eof) from a video capture in an ffmpegcv-safe way.
+
+    Uses getattr(cap, "fps") and len(cap) or cap.get(CAP_PROP_*) when available.
+    If frame count is unknown (e.g. ffmpegcv has no __len__), reads until EOF
+    to count frames and returns duration = count/fps with used_read_to_eof=True;
+    caller must reopen the clip after this.
+    """
+    del path  # unused; kept for API clarity
+    fps = getattr(cap, "fps", None) or (
+        cap.get(cv2.CAP_PROP_FPS) if hasattr(cap, "get") else None
+    ) or 1.0
+    count: int = 0
+    if hasattr(cap, "__len__"):
+        try:
+            count = int(len(cap))
+        except (TypeError, ValueError):
+            pass
+    if count <= 0 and hasattr(cap, "get"):
+        count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+    if count > 0 and fps > 0:
+        return (fps, count / fps, False)
+    # Unknown count: read until EOF to get frame count (consumes stream; caller must reopen).
+    frame_idx = 0
+    while True:
+        ret, _ = cap.read()
+        if not ret:
+            break
+        frame_idx += 1
+    duration = (frame_idx / fps) if fps > 0 and frame_idx > 0 else 0.0
+    return (fps, duration, True)
+
+
 def extract_target_centric_frames(
     ce_folder_path: str,
     max_frames_sec: float,
@@ -94,9 +131,10 @@ def extract_target_centric_frames(
     """
     Extract time-ordered, target-centric frames from all clips under a CE folder.
 
-    Uses full clip per camera, steps at max_frames_sec intervals, runs object detection
-    on each extracted frame, picks the camera with largest person area per time step.
-    Returns list of (frame_bgr, timestamp_sec, camera_name). Caps at max_frames_min.
+    Uses full clip per camera with a sequential-read, time-sampled strategy (no seek).
+    Steps at max_frames_sec intervals; at each sample time picks the camera with
+    largest person area (from sidecar or HOG). Returns list of (frame_bgr, timestamp_sec, camera_name).
+    Caps at max_frames_min.
     """
     if not _CV2_AVAILABLE:
         logger.warning("cv2/ffmpegcv not available, skipping multi-clip extraction")
@@ -133,75 +171,141 @@ def extract_target_centric_frames(
         else:
             all_have_sidecar = False
 
-    try:
-        caps = {cam: ffmpegcv.VideoCaptureNV(path) for cam, path in clip_paths}
-    except Exception:
+    def open_caps() -> dict[str, Any]:
         try:
-            caps = {cam: ffmpegcv.VideoCapture(path) for cam, path in clip_paths}
-        except Exception as e:
-            logger.warning("Could not open clips: %s", e)
-            return []
+            return {cam: ffmpegcv.VideoCaptureNV(path) for cam, path in clip_paths}
+        except Exception:
+            try:
+                return {cam: ffmpegcv.VideoCapture(path) for cam, path in clip_paths}
+            except Exception as e:
+                logger.warning("Could not open clips: %s", e)
+                return {}
 
+    caps = open_caps()
+    if not caps:
+        return []
+
+    # Get fps and duration per camera (ffmpegcv-safe; may consume stream if count unknown).
     durations: dict[str, float] = {}
+    fps_per_cam: dict[str, float] = {}
+    caps_to_reopen: list[str] = []
     for cam, path in clip_paths:
         cap = caps[cam]
-        fps = cap.get(cv2.CAP_PROP_FPS) or 1
-        count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
-        duration = count / fps if fps > 0 and count > 0 else 0
+        fps, duration, used_read_to_eof = _get_fps_and_duration(cap, path)
         durations[cam] = duration
+        fps_per_cam[cam] = fps
+        if used_read_to_eof:
+            caps_to_reopen.append(cam)
+        cap.release()
+    caps.clear()
 
-    global_start = 0.0
+    # Reopen all caps (we released them above). For caps we consumed, we must reopen to read again.
+    for cam, path in clip_paths:
+        try:
+            cap = ffmpegcv.VideoCaptureNV(path)
+        except Exception:
+            try:
+                cap = ffmpegcv.VideoCapture(path)
+            except Exception:
+                cap = None
+        if cap is not None and getattr(cap, "isOpened", lambda: True)():
+            caps[cam] = cap
+        else:
+            if cap is not None:
+                cap.release()
+            durations[cam] = 0.0
+
     global_end = max(durations.values()) if durations else 0.0
-
-    if global_end <= 0:
+    if global_end <= 0 or not caps:
         for cap in caps.values():
-            cap.release()
+            if cap is not None:
+                cap.release()
         return []
 
     use_sidecar = all_have_sidecar and len(sidecars) == len(clip_paths)
     if use_sidecar:
         logger.debug("Using detection sidecars for multi-clip selection (no on-frame detector)")
+    else:
+        missing_cameras = [cam for cam, _ in clip_paths if cam not in sidecars]
+        logger.warning(
+            "HOG fallback in use for multi-clip selection: not all cameras have detection sidecars (expected when transcode used libx264). CE folder=%s cameras_missing_sidecar=%s. Fix by ensuring NVENC transcode runs so detection.json is written per camera.",
+            ce_folder_path,
+            missing_cameras,
+        )
 
-    current_time = global_start
-    while current_time <= global_end and len(collected) < max_frames_min:
+    # Sequential-read, time-sampled: per-camera state (prev_frame, prev_t, curr_frame, curr_t).
+    # We advance all readers in lockstep; at each sample time T we use the frame at T for each camera.
+    State = tuple[Any, float, Any, float]  # prev_frame, prev_t, curr_frame, curr_t
+    state: dict[str, State] = {}
+    for cam in caps:
+        if caps[cam] is None:
+            continue
+        ret, frame = caps[cam].read()
+        if not ret or frame is None:
+            state[cam] = (None, -1.0, None, -1.0)
+            continue
+        fps = fps_per_cam.get(cam, 1.0)
+        state[cam] = (None, -1.0, frame, 0.0)
+    # frame_index per camera: next frame to read will be at index 1 (first frame was index 0, t=0).
+    frame_index: dict[str, int] = {cam: 1 for cam in caps if caps[cam] is not None}
+
+    next_sample_time = 0.0
+    while next_sample_time <= global_end and len(collected) < max_frames_min:
+        T = next_sample_time
         best_camera: str | None = None
         best_frame: Any = None
         best_area = 0.0
 
-        if use_sidecar and sidecars:
-            for camera in caps:
-                if current_time >= durations.get(camera, 0):
-                    continue
-                area = _person_area_at_time(sidecars[camera], current_time)
-                if area > best_area:
-                    best_area = area
-                    best_camera = camera
-            if best_camera is not None:
-                cap = caps[best_camera]
-                cap.set(cv2.CAP_PROP_POS_MSEC, current_time * 1000)
-                ret, frame = cap.read()
-                if ret and frame is not None:
-                    best_frame = frame.copy()
-        else:
-            for camera, cap in caps.items():
-                if current_time >= durations.get(camera, 0):
-                    continue
-                cap.set(cv2.CAP_PROP_POS_MSEC, current_time * 1000)
+        # Advance any camera whose curr_t < T until we have curr_t >= T (or EOF).
+        for cam in list(state.keys()):
+            prev_f, prev_t, curr_f, curr_t = state[cam]
+            while curr_t < T:
+                cap = caps.get(cam)
+                if cap is None:
+                    break
                 ret, frame = cap.read()
                 if not ret or frame is None:
-                    continue
-                area = _detect_person_area(frame)
-                if area > best_area:
-                    best_area = area
-                    best_camera = camera
-                    best_frame = frame.copy()
+                    # EOF: use last frame as final state
+                    if curr_f is not None:
+                        state[cam] = (curr_f, curr_t, curr_f, curr_t)
+                    break
+                fps = fps_per_cam.get(cam, 1.0)
+                idx = frame_index.get(cam, 0)
+                new_t = idx / fps if fps > 0 else curr_t
+                frame_index[cam] = idx + 1
+                state[cam] = (curr_f, curr_t, frame, new_t)
+                prev_f, prev_t, curr_f, curr_t = state[cam]
+
+        # For each camera, the frame at T is the one with timestamp <= T closest to T.
+        for cam in state:
+            prev_f, prev_t, curr_f, curr_t = state[cam]
+            if T >= durations.get(cam, 0):
+                continue
+            # Frame to use at T: prev_f if prev_t <= T < curr_t, else curr_f if curr_t <= T.
+            if prev_t <= T < curr_t and prev_f is not None:
+                candidate = prev_f
+            elif curr_t <= T and curr_f is not None:
+                candidate = curr_f
+            elif prev_f is not None:
+                candidate = prev_f
+            else:
+                candidate = curr_f
+            if candidate is None:
+                continue
+            if use_sidecar and sidecars:
+                area = _person_area_at_time(sidecars[cam], T)
+            else:
+                area = _detect_person_area(candidate)
+            if area > best_area:
+                best_area = area
+                best_camera = cam
+                best_frame = candidate.copy() if hasattr(candidate, "copy") else candidate
 
         if best_camera is not None and best_frame is not None:
-            collected.append((best_frame, current_time, best_camera))
-
-        current_time += step_sec
+            collected.append((best_frame, T, best_camera))
+        next_sample_time += step_sec
 
     for cap in caps.values():
-        cap.release()
-
+        if cap is not None:
+            cap.release()
     return collected

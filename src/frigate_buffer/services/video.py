@@ -84,7 +84,40 @@ class VideoService:
 
     def __init__(self, ffmpeg_timeout: int = DEFAULT_FFMPEG_TIMEOUT):
         self.ffmpeg_timeout = ffmpeg_timeout
+        self._nvenc_available: bool | None = None  # None = not yet probed
         logger.debug(f"VideoService initialized with FFmpeg timeout: {ffmpeg_timeout}s")
+
+    def _probe_nvenc(self) -> bool:
+        """
+        Run a minimal NVENC encode to detect if GPU encoding is available.
+        Logs exactly once (INFO) with the result. Returns True if NVENC is usable.
+        """
+        if self._nvenc_available is not None:
+            return self._nvenc_available
+        try:
+            cmd = [
+                "ffmpeg", "-y", "-f", "lavfi", "-i", "nullsrc=s=64x64:d=0.1",
+                "-c:v", "h264_nvenc", "-frames:v", "1", "-f", "null", "-",
+            ]
+            proc = subprocess.run(
+                cmd,
+                capture_output=True,
+                timeout=15,
+            )
+            stderr = (proc.stderr or b"").decode("utf-8", errors="replace")
+            if proc.returncode != 0 or "No capable devices found" in stderr or "cannot load" in stderr.lower():
+                logger.debug("NVENC probe failed: returncode=%s stderr=%s", proc.returncode, stderr[:500])
+                self._nvenc_available = False
+                logger.info("NVENC probe: unavailable, using libx264 for transcodes")
+                return False
+            self._nvenc_available = True
+            logger.info("NVENC probe: available, GPU transcode enabled")
+            return True
+        except Exception as e:
+            logger.debug("NVENC probe exception: %s", e)
+            self._nvenc_available = False
+            logger.info("NVENC probe: unavailable, using libx264 for transcodes")
+            return False
 
     def transcode_clip_to_h264(
         self,
@@ -99,6 +132,8 @@ class VideoService:
         Removes temp on success. Falls back to libx264 if GPU path fails.
         When detection_sidecar_path is set (multi-cam), runs ultralytics on each frame in the NVENC
         pass and writes detection.json; if we fall back to libx264 no sidecar is written."""
+        if not self._probe_nvenc():
+            return self._transcode_clip_libx264(event_id, temp_path, final_path)
         try:
             if self._transcode_clip_nvenc(
                 event_id, temp_path, final_path,
@@ -124,7 +159,8 @@ class VideoService:
         detection_device: str | None = None,
     ) -> bool:
         """Decode with VideoCaptureNV (NVDEC), encode with VideoWriterNV (h264_nvenc), mux audio via ffmpeg.
-        Optionally run ultralytics on each frame and write detection sidecar (same decode pass)."""
+        Optionally run ultralytics on each frame and write detection sidecar (same decode pass).
+        May raise BrokenPipeError if the encoder subprocess exits early (e.g. NVENC session limit or GPU busy)."""
         cap = ffmpegcv.VideoCaptureNV(temp_path)
         if not cap.isOpened():
             raise RuntimeError("VideoCaptureNV could not open input")
