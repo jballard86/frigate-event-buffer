@@ -18,11 +18,9 @@ CUDA_IMAGE="${CUDA_IMAGE:-nvidia/cuda:12.2.0-devel-ubuntu22.04}"
 echo "Building FFmpeg ${FFMPEG_VERSION} with NVENC (output: ${OUT_DIR})"
 mkdir -p "$OUT_DIR"
 
-docker run --rm --gpus all \
-  -e DEBIAN_FRONTEND=noninteractive \
-  -v "$OUT_DIR:/out" \
-  "$CUDA_IMAGE" \
-  bash -ec '
+BUILD_SCRIPT=$(mktemp)
+trap 'rm -f "$BUILD_SCRIPT"' EXIT
+sed "s/__FFMPEG_VERSION__/${FFMPEG_VERSION}/g" << 'INNER_EOF' > "$BUILD_SCRIPT"
     apt-get update -qq && apt-get install -y --no-install-recommends \
       autoconf automake build-essential ca-certificates git libass-dev \
       libfreetype6-dev libmp3lame-dev libssl-dev libtool libva-dev libvdpau-dev \
@@ -31,9 +29,9 @@ docker run --rm --gpus all \
     git clone --depth 1 https://github.com/FFmpeg/nv-codec-headers.git /tmp/nv-codec-headers
     cd /tmp/nv-codec-headers && make install && cd / && rm -rf /tmp/nv-codec-headers
     export PKG_CONFIG_PATH="/usr/local/lib/pkgconfig:${PKG_CONFIG_PATH}"
-    wget -q "https://ffmpeg.org/releases/ffmpeg-'"${FFMPEG_VERSION}"'.tar.xz" -O /tmp/ffmpeg.tar.xz
+    wget -q "https://ffmpeg.org/releases/ffmpeg-__FFMPEG_VERSION__.tar.xz" -O /tmp/ffmpeg.tar.xz
     tar xf /tmp/ffmpeg.tar.xz -C /tmp && rm /tmp/ffmpeg.tar.xz
-    cd /tmp/ffmpeg-'"${FFMPEG_VERSION}"'
+    cd /tmp/ffmpeg-__FFMPEG_VERSION__
     ./configure \
       --prefix=/opt/ffmpeg \
       --enable-gpl --enable-nonfree --enable-nvenc --enable-libx264 \
@@ -60,7 +58,14 @@ docker run --rm --gpus all \
     mkdir -p /out/lib
     cp -a /opt/ffmpeg/bin/ffmpeg /opt/ffmpeg/bin/ffprobe /out/
     cp -a /opt/ffmpeg/lib/. /out/lib/
-    rm -rf /tmp/ffmpeg-'"${FFMPEG_VERSION}"
-  '
+    rm -rf /tmp/ffmpeg-__FFMPEG_VERSION__
+INNER_EOF
+
+docker run --rm --gpus all \
+  -e DEBIAN_FRONTEND=noninteractive \
+  -v "$OUT_DIR:/out" \
+  -v "$BUILD_SCRIPT:/build.sh:ro" \
+  "$CUDA_IMAGE" \
+  bash -ec 'bash /build.sh'
 
 echo "Done. Artifacts in ${OUT_DIR}. Build with: docker build -t frigate-buffer:latest -f src/Dockerfile src"
