@@ -12,6 +12,8 @@ COPY --from=ffmpeg_nvenc /usr/local/lib/. /usr/local/lib/
 RUN ldconfig /usr/local/lib 2>/dev/null || true
 
 ENV DEBIAN_FRONTEND=noninteractive
+# Ubuntu 24.04 marks Python as externally managed (PEP 668); allow pip system install in this container.
+ENV PIP_BREAK_SYSTEM_PACKAGES=1
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     ca-certificates \
