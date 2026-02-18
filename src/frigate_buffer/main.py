@@ -11,6 +11,7 @@ Run with: python -m frigate_buffer.main
 import logging
 import signal
 import sys
+from pathlib import Path
 
 from frigate_buffer.config import load_config
 from frigate_buffer.logging_utils import setup_logging
@@ -29,6 +30,18 @@ logger = logging.getLogger('frigate-buffer')
 orchestrator = None
 
 
+def _load_version() -> str:
+    """Load version from version.txt at project root (relative to this package)."""
+    try:
+        root = Path(__file__).resolve().parent.parent.parent
+        path = root / "version.txt"
+        if path.exists():
+            return path.read_text().strip()
+    except OSError:
+        pass
+    return "unknown"
+
+
 def signal_handler(sig, frame):
     """Handle shutdown signals."""
     global orchestrator
@@ -45,6 +58,9 @@ def main():
 
     # Setup logging with configured level
     setup_logging(config.get('LOG_LEVEL', 'INFO'))
+
+    VERSION = _load_version()
+    logger.info("VERSION = %s", VERSION)
 
     # GPU/NVENC diagnostics (helps debug transcode failures)
     log_gpu_status()
