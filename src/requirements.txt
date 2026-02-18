@@ -1,9 +1,0 @@
-flask
-paho-mqtt>=2.0.0
-requests
-schedule
-pyyaml
-voluptuous
-opencv-python-headless
-ffmpegcv
-ultralytics>=8.0.0
