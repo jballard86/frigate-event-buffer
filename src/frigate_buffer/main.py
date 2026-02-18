@@ -31,12 +31,19 @@ orchestrator = None
 
 
 def _load_version() -> str:
-    """Load version from version.txt at project root (relative to this package)."""
+    """Load version from version.txt.
+
+    Looks in two places so it works in both dev and Docker:
+    1. Next to this module (package dir) — used when installed via pip; version.txt
+       is included as package data and copied into the image at build time.
+    2. Project root (three levels up from this file) — used when running from
+       source (e.g. pip install -e . or pytest from repo root).
+    """
     try:
-        root = Path(__file__).resolve().parent.parent.parent
-        path = root / "version.txt"
-        if path.exists():
-            return path.read_text().strip()
+        pkg_dir = Path(__file__).resolve().parent
+        for candidate in (pkg_dir / "version.txt", pkg_dir.parent.parent / "version.txt"):
+            if candidate.exists():
+                return candidate.read_text().strip()
     except OSError:
         pass
     return "unknown"

@@ -91,7 +91,8 @@ def log_gpu_status() -> None:
             else:
                 logger.warning(
                     "FFmpeg does not report NVENC encoders; GPU transcode will be unavailable. "
-                    "Rebuild or use an ffmpeg build with NVENC (e.g. BtbN/FFmpeg-Builds)."
+                    "BtbN GPL/LGPL builds do not include NVENC. Build FFmpeg with --enable-nvenc "
+                    "or use an image/FFmpeg that does (see this repo's Dockerfile)."
                 )
         except (subprocess.TimeoutExpired, OSError) as e:
             logger.warning("Could not check ffmpeg encoders: %s", e)
