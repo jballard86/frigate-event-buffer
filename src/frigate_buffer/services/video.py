@@ -10,6 +10,8 @@ import ffmpegcv
 logger = logging.getLogger('frigate-buffer')
 
 STDERR_TRUNCATE = 800
+# Truncation length for ffmpeg -encoders output in NVENC-failure warning (stderr snippet).
+FFMPEG_ENCODERS_SNIPPET_LEN = 500
 
 
 def log_gpu_status() -> None:
@@ -72,7 +74,7 @@ def log_gpu_status() -> None:
             if not found:
                 logger.warning(
                     "libnvidia-encode.so not found in container; NVENC will fail despite GPU visibility. "
-                    "Ensure NVIDIA_DRIVER_CAPABILITIES=all and NVIDIA Container Toolkit is configured."
+                    "Ensure NVIDIA_DRIVER_CAPABILITIES=compute,video,utility and NVIDIA Container Toolkit is configured."
                 )
 
     # ffmpeg encoders
@@ -84,7 +86,9 @@ def log_gpu_status() -> None:
                 capture_output=True,
                 timeout=10,
             )
-            encoders = (proc.stderr or proc.stdout or b"").decode("utf-8", errors="replace")
+            stderr_raw = proc.stderr or b""
+            stdout_raw = proc.stdout or b""
+            encoders = (stderr_raw or stdout_raw).decode("utf-8", errors="replace")
             has_nvenc = "h264_nvenc" in encoders or "hevc_nvenc" in encoders
             if has_nvenc:
                 logger.info(
@@ -97,6 +101,28 @@ def log_gpu_status() -> None:
                 logger.warning(
                     "To fix: rebuild the image from this repo (docker build -t frigate-buffer:latest .) and "
                     "run the container with GPU access (--gpus all and NVIDIA_* env vars). See BUILD_NVENC.md."
+                )
+                # Truncated stderr often contains the real reason (e.g. "Cannot load libnvidia-encode.so.1").
+                stderr_str = stderr_raw.decode("utf-8", errors="replace")
+                if stderr_str:
+                    snippet = (
+                        stderr_str[-FFMPEG_ENCODERS_SNIPPET_LEN:]
+                        if len(stderr_str) > FFMPEG_ENCODERS_SNIPPET_LEN
+                        else stderr_str
+                    )
+                    logger.warning(
+                        "FFmpeg -encoders stderr snippet (last %s chars): %s",
+                        len(snippet),
+                        snippet.strip() or "(empty)",
+                    )
+                # Full output at DEBUG for support without re-running.
+                logger.debug(
+                    "ffmpeg -encoders full output (stderr): %s",
+                    stderr_str.strip() if stderr_str else "(none)",
+                )
+                logger.debug(
+                    "ffmpeg -encoders full output (stdout): %s",
+                    stdout_raw.decode("utf-8", errors="replace").strip() if stdout_raw else "(none)",
                 )
         except (subprocess.TimeoutExpired, OSError) as e:
             logger.warning(
