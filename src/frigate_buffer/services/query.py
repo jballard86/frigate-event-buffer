@@ -3,6 +3,7 @@ Event Query Service - Handles reading and parsing event data from the filesystem
 """
 
 import os
+import re
 import json
 import time
 import logging
@@ -277,11 +278,24 @@ class EventQueryService:
 
         for entry in entries:
             ce_id = entry.name
+            if re.match(r"^test\d+$", ce_id):
+                continue
             if '.' in ce_id and not ce_id.split('_')[0].isdigit():
                 continue
 
-            # Get cached data
-            data = self._get_event_cached(entry.path, entry.stat().st_mtime)
+            # Cache key uses content mtime so adding clip.mp4 in any camera subdir invalidates cache
+            content_mtime = entry.stat().st_mtime
+            try:
+                with os.scandir(entry.path) as it:
+                    for child in it:
+                        if child.is_dir() and not child.name.startswith('.'):
+                            try:
+                                content_mtime = max(content_mtime, child.stat().st_mtime)
+                            except OSError:
+                                pass
+            except OSError:
+                pass
+            data = self._get_event_cached(entry.path, content_mtime)
 
             parts = ce_id.split('_', 1)
             ts = parts[0] if len(parts) > 0 else "0"
