@@ -11,14 +11,18 @@ import ffmpegcv
 
 logger = logging.getLogger('frigate-buffer')
 
-STDERR_TRUNCATE = 800
+# Truncation length for NVENC probe stderr in failure logs (general case).
+STDERR_TRUNCATE = 1600
 # Truncation length for ffmpeg -encoders output in NVENC-failure warning (stderr snippet).
 FFMPEG_ENCODERS_SNIPPET_LEN = 500
-# Extended stderr length when returncode is 234 for buffer/surface/AVERROR diagnosis.
-STDERR_TRUNCATE_234 = 2000
+# Extended stderr length when returncode is 234 (or other probe failures) for buffer/surface/AVERROR diagnosis.
+STDERR_TRUNCATE_234 = 4000
 
 # Module-level cache set by run_nvenc_preflight_probe() on main thread; workers skip subprocess when set.
 _nvenc_preflight_result: bool | None = None
+# Probe resolution used by _nvenc_probe_cmd(); set by run_nvenc_preflight_probe(config) or defaults.
+_nvenc_probe_width: int = 1280
+_nvenc_probe_height: int = 720
 
 # Common errno (Linux) for mapping exit codes that may be -errno & 0xFF.
 _ERRNO_NAMES: dict[int, str] = {
@@ -72,9 +76,14 @@ def decode_nvenc_returncode(returncode: int) -> list[str]:
 
 
 def _nvenc_probe_cmd() -> list[str]:
-    """Return the exact ffmpeg command used for NVENC probe (shared by preflight and in-process probe)."""
+    """Return the exact ffmpeg command used for NVENC probe (shared by preflight and in-process probe).
+
+    Uses module-level _nvenc_probe_width and _nvenc_probe_height (set by run_nvenc_preflight_probe
+    from config, or 1280x720 default) so the probe matches transcode crop size and is safe for NVENC.
+    """
+    size = f"{_nvenc_probe_width}x{_nvenc_probe_height}"
     return [
-        "ffmpeg", "-y", "-f", "lavfi", "-i", "nullsrc=s=64x64:d=0.1",
+        "ffmpeg", "-y", "-f", "lavfi", "-i", f"nullsrc=s={size}:d=0.1",
         "-c:v", "h264_nvenc", "-frames:v", "1", "-f", "null", "-",
     ]
 
@@ -107,7 +116,7 @@ def _log_probe_failure_verbose(returncode: int, stderr: str, cmd: list[str]) -> 
         logger.info("NVENC returncode interpretation: %s", interp)
 
 
-def run_nvenc_preflight_probe() -> None:
+def run_nvenc_preflight_probe(config: dict | None = None) -> None:
     """
     Run NVENC probe on the main thread at startup and cache the result.
 
@@ -115,10 +124,16 @@ def run_nvenc_preflight_probe() -> None:
     run, avoiding returncode 234 when the first GPU use would otherwise happen
     in a ThreadPoolExecutor worker. Workers then read the module-level cache
     and skip the subprocess entirely.
+
+    If config is provided, NVENC_PROBE_WIDTH and NVENC_PROBE_HEIGHT are used
+    for the probe resolution (default 1280x720); otherwise module defaults apply.
     """
-    global _nvenc_preflight_result
+    global _nvenc_preflight_result, _nvenc_probe_width, _nvenc_probe_height
     if _nvenc_preflight_result is not None:
         return
+    if config is not None:
+        _nvenc_probe_width = int(config.get("NVENC_PROBE_WIDTH", 1280))
+        _nvenc_probe_height = int(config.get("NVENC_PROBE_HEIGHT", 720))
     _log_nvenc_env_and_warn()
     cmd = _nvenc_probe_cmd()
     try:

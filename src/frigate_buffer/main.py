@@ -77,7 +77,7 @@ def main():
     log_gpu_status()
 
     # Pre-flight NVENC probe on main thread so first GPU use is not from a worker (avoids returncode 234)
-    run_nvenc_preflight_probe()
+    run_nvenc_preflight_probe(config)
 
     # Ensure multi-cam detection model is available (download if not cached)
     ensure_detection_model_ready(config)
