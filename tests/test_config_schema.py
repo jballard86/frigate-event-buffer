@@ -213,6 +213,7 @@ class TestConfigSchema(unittest.TestCase):
                 'crop_width': 1920,
                 'crop_height': 1080,
                 'multi_cam_system_prompt_file': '/path/to/prompt.txt',
+                'person_area_debug': True,
             },
             'gemini_proxy': {
                 'url': 'http://proxy:5050',
@@ -233,6 +234,7 @@ class TestConfigSchema(unittest.TestCase):
         self.assertEqual(config['CROP_WIDTH'], 1920)
         self.assertEqual(config['CROP_HEIGHT'], 1080)
         self.assertEqual(config['MULTI_CAM_SYSTEM_PROMPT_FILE'], '/path/to/prompt.txt')
+        self.assertTrue(config['PERSON_AREA_DEBUG'])
         self.assertEqual(config['GEMINI_PROXY_URL'], 'http://proxy:5050')
         self.assertEqual(config['GEMINI_PROXY_MODEL'], 'gemini-2.0-flash')
         self.assertEqual(config['GEMINI_PROXY_TEMPERATURE'], 0.5)
@@ -264,6 +266,7 @@ class TestConfigSchema(unittest.TestCase):
         self.assertEqual(config['CROP_WIDTH'], 1280)
         self.assertEqual(config['CROP_HEIGHT'], 720)
         self.assertEqual(config['MULTI_CAM_SYSTEM_PROMPT_FILE'], '')
+        self.assertFalse(config['PERSON_AREA_DEBUG'])
         self.assertEqual(config['DECODE_SECOND_CAMERA_CPU_ONLY'], True)
         self.assertEqual(config['GEMINI_PROXY_URL'], '')
         self.assertEqual(config['GEMINI_PROXY_MODEL'], 'gemini-2.5-flash-lite')

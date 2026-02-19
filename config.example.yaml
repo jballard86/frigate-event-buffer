@@ -144,7 +144,8 @@ network:
 #   first_camera_bias_cap_seconds: 0       # cap bias to 0 after this many seconds; 0 = no cap
 #   person_area_switch_threshold: 200      # allow switch when current camera person area below this (px²); 0 = disable
 #   camera_switch_ratio: 1.2               # new camera must have this ratio of current to switch (e.g. 1.2 = 1.2×)
-#   decode_second_camera_cpu_only: true    # default: use CPU decode for 2nd+ cameras to avoid NVDEC contention. Set false to try GPU decode for all cameras.
+#   person_area_debug: false               # draw person area (px²) on frame bottom-right when true (multi-cam only)
+
 
 # Optional: Gemini proxy (extended) - model params for proxy calls (e.g. multi-cam)
 # API key: GEMINI_API_KEY only. Proxy URL: set here or GEMINI_PROXY_URL env (default "").

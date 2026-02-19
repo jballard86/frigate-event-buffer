@@ -266,6 +266,9 @@ class TestMultiClipExtractor(unittest.TestCase):
             self.assertIsInstance(item, ExtractedFrame)
             self.assertIsNotNone(item.frame)
             self.assertIn(item.camera, ("cam1", "cam2"))
+            self.assertIn("person_area", item.metadata, "ExtractedFrame should have person_area in metadata")
+            self.assertIsInstance(item.metadata["person_area"], int)
+            self.assertEqual(item.metadata["person_area"], 100, "Sidecar has area 100 per entry")
         mock_video_capture.assert_called()
 
     @patch("frigate_buffer.services.multi_clip_extractor.ffmpegcv.VideoCapture")
