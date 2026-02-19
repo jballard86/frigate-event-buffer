@@ -83,6 +83,11 @@ settings:
   # report_prompt_file: ""
   # report_known_person_name: ""   # Placeholder {known_person_name} in report prompt; default "Unspecified"
 
+  # Single-clip / multi-camera: max images sent to Gemini per request (default 20)
+  final_review_image_count: 20
+  # Rolling cap: max frames sent to Gemini API per hour; 0 = disabled. Logs rate/blocked each call.
+  gemini_frames_per_hour_cap: 200
+
   # Consolidated event series
   # Time since last event before the next one starts a NEW consolidated group.
   # If no events for 120s, the next event is new. If an event occurs within

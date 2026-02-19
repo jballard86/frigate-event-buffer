@@ -90,3 +90,4 @@ Each line represents a detection state, not necessarily unique individuals. Pare
 - Values must be plain strings, floats, or integers — no nested objects, no extra commentary.
 - Only describe Main Actors from the "Objects in Scene" list above. Do not hallucinate additional people or vehicles.
 - When describing people or vehicles, use the exact names provided.
+- Be extremely concise. Do not perform long internal reasoning. Evaluate the threat level immediately based on visual evidence.

@@ -62,6 +62,7 @@ CONFIG_SCHEMA = Schema({
         Optional('gemini_max_concurrent_analyses'): int,        # Max concurrent Gemini clip analyses (throttling).
         Optional('save_ai_frames'): bool,                        # Whether to save extracted AI analysis frames to disk.
         Optional('create_ai_analysis_zip'): bool,               # Whether to create a zip of AI analysis assets (e.g. for multi-cam).
+        Optional('gemini_frames_per_hour_cap'): int,             # Rolling cap: max frames sent to proxy per hour; 0 = disabled.
     },
     # Home Assistant REST API; used for stats page to display Gemini cost/token entities.
     Optional('ha'): {
@@ -157,6 +158,7 @@ def load_config() -> dict:
         'GEMINI_MAX_CONCURRENT_ANALYSES': 3,
         'SAVE_AI_FRAMES': True,
         'CREATE_AI_ANALYSIS_ZIP': True,
+        'GEMINI_FRAMES_PER_HOUR_CAP': 200,
 
         # Optional HA REST API (for stats page token/cost display)
         'HA_URL': None,
@@ -268,6 +270,7 @@ def load_config() -> dict:
                     config['GEMINI_MAX_CONCURRENT_ANALYSES'] = settings.get('gemini_max_concurrent_analyses', config.get('GEMINI_MAX_CONCURRENT_ANALYSES', 3))
                     config['SAVE_AI_FRAMES'] = settings.get('save_ai_frames', config.get('SAVE_AI_FRAMES', True))
                     config['CREATE_AI_ANALYSIS_ZIP'] = settings.get('create_ai_analysis_zip', config.get('CREATE_AI_ANALYSIS_ZIP', True))
+                    config['GEMINI_FRAMES_PER_HOUR_CAP'] = settings.get('gemini_frames_per_hour_cap', config.get('GEMINI_FRAMES_PER_HOUR_CAP', 200))
 
                 if 'network' in yaml_config:
                     network = yaml_config['network']
@@ -370,6 +373,12 @@ def load_config() -> dict:
     _create_zip = os.getenv('CREATE_AI_ANALYSIS_ZIP')
     if _create_zip is not None:
         config['CREATE_AI_ANALYSIS_ZIP'] = str(_create_zip).lower() in ('true', '1', 'yes')
+    _cap = os.getenv('GEMINI_FRAMES_PER_HOUR_CAP')
+    if _cap is not None:
+        try:
+            config['GEMINI_FRAMES_PER_HOUR_CAP'] = int(_cap)
+        except ValueError:
+            pass
 
     # Gemini env overrides (api_key for secrets). Single API Key: GEMINI_API_KEY only.
     config['GEMINI'] = dict(config.get('GEMINI') or {})
