@@ -125,6 +125,21 @@ docker run -d --name frigate_buffer --restart unless-stopped \
 
 ---
 
+## Switching branches
+
+To use a different branch (e.g. a feature branch or `main`):
+
+```bash
+cd /mnt/user/appdata/frigate-buffer   # or your repo root
+git fetch origin
+git checkout <branch-name>
+git pull
+```
+
+Replace `<branch-name>` with the branch you want (e.g. `main`, `Multi_Cam_Review`). If you have uncommitted changes, either commit or stash them first, or Git may refuse to switch. After switching, rebuild the image (step 4) and rerun the container (step 5) if the code changed.
+
+---
+
 ## 6. Update (after code changes)
 
 From repo root:

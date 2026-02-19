@@ -120,6 +120,7 @@ frigate-event-buffer/
 ├── MAP.md                          (101)  This file — architecture and context for AI.
 ├── README.md                       (1005) Project overview, features, usage.
 ├── INSTALL.md                      (148)  Canonical install: clone, config, build, docker run.
+├── INSTALL_READABLE.md             (~180) Human-readable install guide: flow overview, tables, callouts.
 ├── USER_GUIDE.md                   (191)  End-user usage and options.
 ├── BUILD_NVENC.md                  (31)   NVENC Docker build and runtime (GPU, caps).
 ├── COMPOSE_ENTRYPOINT.md           (30)   Compose/entrypoint behavior.
