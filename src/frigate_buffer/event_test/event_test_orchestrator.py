@@ -172,22 +172,30 @@ def run_test_pipeline(
     for cam in camera_subdirs:
         camera_folder = os.path.join(test_folder_path, cam)
         sidecar_path = os.path.join(camera_folder, "detection.json")
+        if det_model:
+            yield _yield_log(f"Running AI detection (YOLO) for {cam}...")
         yield _yield_log(f"Transcoding {cam}...")
-        ok = download_service.transcode_existing_clip(
+        ok, backend = download_service.transcode_existing_clip(
             "test",
             camera_folder,
             detection_sidecar_path=sidecar_path,
             detection_model=det_model,
             detection_device=det_device,
         )
-        if ok:
-            yield _yield_log(f"Transcode OK: {cam}")
-        else:
-            yield _yield_log(f"Transcode failed or skipped: {cam}")
+        yield _yield_log(f"Transcode {cam}: {backend}.")
+        if not ok:
+            yield _yield_log(f"Transcode failed for {cam} (see server log for details).")
 
     # 7. Build payload (delegate to analyzer; writes frames and returns prompt + paths)
-    yield _yield_log("Extracting frames and building payload...")
-    result = ai_analyzer.build_multi_cam_payload_for_preview(test_folder_path, ce_start_time)
+    payload_logs: list[str] = []
+    result, payload_error = ai_analyzer.build_multi_cam_payload_for_preview(
+        test_folder_path, ce_start_time, log_messages=payload_logs
+    )
+    for msg in payload_logs:
+        yield _yield_log(msg)
+    if payload_error:
+        yield _yield_error(payload_error)
+        return
     if not result:
         yield _yield_error("Failed to build payload (no frames or analyzer error)")
         return

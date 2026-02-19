@@ -14,6 +14,9 @@ import logging
 from datetime import datetime
 from typing import Any, Sequence
 
+# Relative path under CE folder for detection sidecar (must match multi_clip_extractor)
+_DETECTION_SIDECAR_FILENAME = "detection.json"
+
 from frigate_buffer.models import FrameMetadata
 from frigate_buffer.managers.file import write_ai_frame_analysis_single_cam, write_ai_frame_analysis_multi_cam
 
@@ -725,7 +728,8 @@ class GeminiAnalysisService:
         self,
         ce_folder_path: str,
         ce_start_time: float = 0,
-    ) -> tuple[str, list[Any], list[str]] | None:
+        log_messages: list[str] | None = None,
+    ) -> tuple[tuple[str, list[Any], list[str]] | None, str | None]:
         """
         Build the same payload as analyze_multi_clip_ce (system prompt + user content with frames)
         and write frame files to ce_folder_path, but do not call send_to_proxy.
@@ -733,25 +737,52 @@ class GeminiAnalysisService:
         Used by the event_test orchestrator to produce system_prompt.txt and ai_request.html
         with download links to the written frame files.
 
-        Returns (system_prompt, user_content, frame_relative_paths) or None on failure.
-        user_content: list of dicts (text + image_url items) for the API payload.
-        frame_relative_paths: paths under ce_folder_path for each frame image file written
-            (e.g. ai_frame_analysis/frames/frame_001_Camera.jpg) for generating download links.
+        Returns (result, error_message). result is (system_prompt, user_content, frame_relative_paths)
+        or None; error_message is a short string when something failed (no frames, exception).
+        When log_messages is provided, appends human-readable progress strings for SSE.
         """
         if not os.path.isdir(ce_folder_path):
             logger.warning("CE folder not found: %s", ce_folder_path)
-            return None
+            return (None, "CE folder not found")
         try:
+            def _log(msg: str) -> None:
+                if log_messages is not None:
+                    log_messages.append(msg)
+
+            # Infer frame selection mode (detection sidecars vs HOG) for user-facing message
+            camera_subdirs: list[str] = []
+            try:
+                with os.scandir(ce_folder_path) as it:
+                    camera_subdirs = [e.name for e in it if e.is_dir() and not e.name.startswith(".")]
+            except OSError:
+                pass
+            all_have_sidecar = True
+            missing: list[str] = []
+            for cam in camera_subdirs:
+                sidecar_path = os.path.join(ce_folder_path, cam, _DETECTION_SIDECAR_FILENAME)
+                if not os.path.isfile(sidecar_path):
+                    all_have_sidecar = False
+                    missing.append(cam)
+            if all_have_sidecar and camera_subdirs:
+                _log("Frame selection: using detection sidecars (picks best camera per moment from pre-computed object detections).")
+            else:
+                part = f" (missing for: {', '.join(missing)})" if missing else ""
+                _log(f"Frame selection: HOG fallback (motion-based; no detection sidecars available).{part}")
+
             max_frames_sec = float(self.config.get("MAX_MULTI_CAM_FRAMES_SEC", 1))
             max_frames_min = int(self.config.get("MAX_MULTI_CAM_FRAMES_MIN", 60))
             frames_raw = extract_target_centric_frames(
                 ce_folder_path,
                 max_frames_sec=max_frames_sec,
                 max_frames_min=max_frames_min,
+                log_callback=_log if log_messages is not None else None,
             )
             if not frames_raw:
                 logger.warning("No frames extracted from CE folder %s", ce_folder_path)
-                return None
+                return (None, "No frames extracted (check clips and sidecars).")
+
+            _log(f"Extracted {len(frames_raw)} frames from clips.")
+            _log("Adding timestamps to frames.")
 
             image_count = len(frames_raw)
             frames_with_time: list[tuple[Any, float, str]] = []
@@ -764,6 +795,7 @@ class GeminiAnalysisService:
                 )
                 frames_with_time.append((frame_overlay, frame_time_sec, camera))
 
+            _log(f"Organizing timeline (saving {len(frames_with_time)} frames).")
             save_frames = bool(self.config.get("SAVE_AI_FRAMES", True))
             write_ai_frame_analysis_multi_cam(
                 ce_folder_path,
@@ -805,7 +837,7 @@ class GeminiAnalysisService:
                     if name.startswith("frame_") and name.endswith(".jpg"):
                         frame_relative_paths.append(os.path.join("ai_frame_analysis", "frames", name))
 
-            return (system_prompt, user_content, frame_relative_paths)
+            return ((system_prompt, user_content, frame_relative_paths), None)
         except Exception as e:
             logger.exception("build_multi_cam_payload_for_preview failed for %s: %s", ce_folder_path, e)
-            return None
+            return (None, str(e))

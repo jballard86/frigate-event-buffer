@@ -14,7 +14,7 @@ from __future__ import annotations
 import json
 import os
 import logging
-from typing import Any
+from typing import Any, Callable
 
 logger = logging.getLogger("frigate-buffer")
 
@@ -140,6 +140,8 @@ def extract_target_centric_frames(
     ce_folder_path: str,
     max_frames_sec: float,
     max_frames_min: int,
+    *,
+    log_callback: Callable[[str], None] | None = None,
 ) -> list[tuple[Any, float, str]]:
     """
     Extract time-ordered, target-centric frames from all clips under a CE folder.
@@ -229,10 +231,12 @@ def extract_target_centric_frames(
     caps.clear()
 
     # Reopen all caps (we released them above). For caps we consumed, we must reopen to read again.
+    decode_backends: dict[str, str] = {}
     for cam, path in clip_paths:
         cap = None
         try:
             cap = ffmpegcv.VideoCaptureNV(path)
+            decode_backends[cam] = "GPU"
         except Exception as e:
             if _is_gpu_not_configured(e):
                 logger.debug(
@@ -247,6 +251,7 @@ def extract_target_centric_frames(
                 )
             try:
                 cap = ffmpegcv.VideoCapture(path)
+                decode_backends[cam] = "CPU"
             except Exception:
                 cap = None
         if cap is not None and getattr(cap, "isOpened", lambda: True)():
@@ -255,6 +260,12 @@ def extract_target_centric_frames(
             if cap is not None:
                 cap.release()
             durations[cam] = 0.0
+
+    if log_callback and decode_backends:
+        if all(b == "GPU" for b in decode_backends.values()):
+            log_callback("Decoding clips: GPU (NVDEC).")
+        else:
+            log_callback("Decoding clips: CPU (GPU not configured or fallback).")
 
     global_end = max(durations.values()) if durations else 0.0
     if global_end <= 0 or not caps:

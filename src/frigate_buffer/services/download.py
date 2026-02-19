@@ -264,7 +264,7 @@ class DownloadService:
             logger.info(f"Downloaded export clip for {event_id} ({bytes_downloaded} bytes), transcoding...")
 
             # 4. Transcode
-            transcode_ok = self.video_service.transcode_clip_to_h264(event_id, temp_path, final_path)
+            transcode_ok, _ = self.video_service.transcode_clip_to_h264(event_id, temp_path, final_path)
             return {"success": transcode_ok, "frigate_response": frigate_response}
 
         except requests.exceptions.RequestException as e:
@@ -302,7 +302,7 @@ class DownloadService:
         When detection_sidecar_path is set (multi-cam), transcode will run ultralytics per frame and write detection.json.
         """
         try:
-            ok = self.video_service.transcode_clip_to_h264(
+            ok, _ = self.video_service.transcode_clip_to_h264(
                 event_id,
                 temp_path,
                 final_path,
@@ -325,20 +325,21 @@ class DownloadService:
         detection_sidecar_path: str | None = None,
         detection_model: str | None = None,
         detection_device: str | None = None,
-    ) -> bool:
+    ) -> tuple[bool, str]:
         """
         Transcode an existing clip.mp4 in place (copy to temp, transcode to clip.mp4, remove temp).
+        Returns (success, backend_string) for SSE logging (e.g. 'GPU' or 'CPU: NVENC unavailable').
         Used by the event_test orchestrator to run the post-download transcode step on copied event data.
         When detection_sidecar_path is set, transcode writes detection.json (e.g. for multi-cam frame extraction).
         """
         clip_path = os.path.join(camera_folder_path, "clip.mp4")
         if not os.path.isfile(clip_path):
             logger.warning("No clip.mp4 at %s", camera_folder_path)
-            return False
+            return (False, "no clip")
         temp_path = os.path.join(camera_folder_path, "clip_transcode_src.mp4")
         try:
             shutil.copy2(clip_path, temp_path)
-            ok = self.video_service.transcode_clip_to_h264(
+            ok, backend = self.video_service.transcode_clip_to_h264(
                 event_id,
                 temp_path,
                 clip_path,
@@ -346,7 +347,7 @@ class DownloadService:
                 detection_model=detection_model,
                 detection_device=detection_device or None,
             )
-            return ok
+            return (ok, backend)
         finally:
             if os.path.exists(temp_path):
                 try:
@@ -605,7 +606,8 @@ class DownloadService:
             if not download_success:
                 return False
 
-            return self.video_service.transcode_clip_to_h264(event_id, temp_path, final_path)
+            ok, _ = self.video_service.transcode_clip_to_h264(event_id, temp_path, final_path)
+            return ok
 
         except requests.exceptions.Timeout:
             logger.error(f"Timeout downloading clip for {event_id}")
