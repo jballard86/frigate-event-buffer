@@ -8,7 +8,7 @@ import requests
 # Add parent dir to path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from frigate_buffer.services.download import DownloadService
+from frigate_buffer.services.download import DownloadService, _dynamic_clip_basename
 
 class TestDownloadService(unittest.TestCase):
     def setUp(self):
@@ -28,6 +28,19 @@ class TestDownloadService(unittest.TestCase):
 
     def tearDown(self):
         self.logger.removeHandler(self.log_capture_handler)
+
+    def test_dynamic_clip_basename_format(self):
+        """_dynamic_clip_basename returns {camera}-{5_digits}.mp4."""
+        import re
+        name = _dynamic_clip_basename("Doorbell")
+        self.assertTrue(name.endswith(".mp4"))
+        self.assertIn("doorbell", name.lower())
+        self.assertTrue(re.match(r"^[a-z0-9_\-]+\-\d{5}\.mp4$", name.lower()), f"Expected pattern camera-12345.mp4, got {name}")
+
+    def test_dynamic_clip_basename_different_calls_can_differ(self):
+        """Two calls can produce different filenames (random suffix)."""
+        names = {_dynamic_clip_basename("cam1") for _ in range(20)}
+        self.assertGreater(len(names), 1, "Random 5-digit suffix should vary across calls")
 
     @patch('frigate_buffer.services.download.requests.post')
     @patch('frigate_buffer.services.download.requests.get')
@@ -311,8 +324,7 @@ class TestDownloadService(unittest.TestCase):
     @patch('frigate_buffer.services.download.requests.post')
     @patch('time.sleep')
     def test_export_in_progress_false_proceeds_to_download(self, mock_sleep, mock_post, mock_get):
-        """When GET /api/exports returns in_progress False, set export_filename and proceed to download."""
-        self.download_service.video_service.transcode_clip_to_h264.return_value = (True, "GPU")
+        """When GET /api/exports returns in_progress False, proceed to download (no transcode)."""
         mock_post.return_value = MagicMock(status_code=200, headers={"content-type": "application/json"}, text='{}')
         mock_post.return_value.json.return_value = {"export_id": "exp1"}
         mock_post.return_value.ok = True

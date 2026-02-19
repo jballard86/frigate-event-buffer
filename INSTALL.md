@@ -95,7 +95,7 @@ Run from repo root so `$(pwd)/entrypoint.sh` resolves correctly. **Use the same 
 
 If a container named `frigate_buffer` already exists, stop and remove it first: `docker stop frigate_buffer` then `docker rm frigate_buffer`. The commands below do that automatically.
 
-**With NVIDIA GPU:** Use `NVIDIA_DRIVER_CAPABILITIES=compute,video,utility` (the `video` capability is required for NVENC; some hosts e.g. Unraid need this explicit list).
+**With NVIDIA GPU:** Use `NVIDIA_DRIVER_CAPABILITIES=compute,video,utility` (the `video` capability is required for NVDEC decode; some hosts e.g. Unraid need this explicit list).
 
 ```bash
 cd /mnt/user/appdata/frigate-buffer
@@ -116,7 +116,6 @@ docker run -d --name frigate_buffer --restart unless-stopped \
   -e LOG_LEVEL=INFO \
   -e NVIDIA_VISIBLE_DEVICES=all \
   -e NVIDIA_DRIVER_CAPABILITIES=compute,video,utility \
-  -e ENABLE_NVENC=true \
   -e YOLO_CONFIG_DIR=/tmp/Ultralytics \
   --gpus all \
   --entrypoint /entrypoint.sh \
@@ -140,7 +139,7 @@ To use a different branch (e.g. a feature branch or `main`):
 ```bash
 cd /mnt/user/appdata/frigate-buffer   # or your repo root
 git fetch origin
-git checkout Nvenc-Removal
+git checkout main
 git pull
 ```
 
@@ -156,7 +155,7 @@ If `git pull` reports that local changes would be overwritten by merge (e.g. to 
 
 ## Troubleshooting
 
-- **FFmpeg does not report NVENC encoders** — Rebuild the image from this repo (`docker build -t frigate-buffer:latest .`) and run the container with GPU access (`--gpus all` and NVIDIA env vars). Set **`NVIDIA_DRIVER_CAPABILITIES=compute,video,utility`** (the `video` capability is required for NVENC). Check startup logs for the FFmpeg stderr snippet (e.g. "Cannot load libnvidia-encode.so.1") and inside the container run `find /usr -name 'libnvidia-encode*'` to confirm encode libs are mounted. See [BUILD_NVENC.md](BUILD_NVENC.md). If this does not fix it, next steps are (4) LD_LIBRARY_PATH and (5) trying Frigate's FFmpeg image as donor — see BUILD_NVENC.md.
+- **FFmpeg / NVDEC decode issues** — The image uses FFmpeg for decode only (no encoding). Rebuild from this repo (`docker build -t frigate-buffer:latest .`) and run with GPU access (`--gpus all` and NVIDIA env vars). Set **`NVIDIA_DRIVER_CAPABILITIES=compute,video,utility`** (the `video` capability is required for NVDEC). Check startup logs for decode-related errors; inside the container you can run `nvidia-smi` to confirm the GPU is visible.
 - **Build fails with "frigate_buffer" or "config.example" not found** — You are not in the repo root. `cd` to the directory that contains `Dockerfile` and `src/frigate_buffer/`.
 - **`exec: "/entrypoint.sh": permission denied`** — The mounted entrypoint script must be executable on the host. From repo root run: `chmod +x entrypoint.sh`, then start the container again (remove it first: `docker rm frigate_buffer`).
 - **Entrypoint or OpenCV errors at runtime** — Ensure `entrypoint.sh` exists in repo root and is executable: `chmod +x entrypoint.sh`. See [COMPOSE_ENTRYPOINT.md](COMPOSE_ENTRYPOINT.md) if you need the optional entrypoint for fixing libs without rebuilding.

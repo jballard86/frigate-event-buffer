@@ -308,7 +308,7 @@ class EventQueryService:
             if '.' in ce_id and not ce_id.split('_')[0].isdigit():
                 continue
 
-            # Cache key uses content mtime so adding clip.mp4 in any camera subdir invalidates cache
+            # Cache key uses content mtime so adding a clip (*.mp4) in any camera subdir invalidates cache
             content_mtime = entry.stat().st_mtime
             try:
                 with os.scandir(entry.path) as it:

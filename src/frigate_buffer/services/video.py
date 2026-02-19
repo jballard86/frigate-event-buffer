@@ -68,6 +68,71 @@ def ensure_detection_model_ready(config: dict) -> bool:
 _PERSON_CLASS_ID = 0
 
 
+def _get_native_resolution(clip_path: str) -> tuple[int, int] | None:
+    """
+    Return (width, height) of the video stream from the clip file using ffprobe.
+    Used so we can scale YOLO bbox from decoded (resized) frame coords back to native for the sidecar.
+    """
+    try:
+        out = subprocess.run(
+            [
+                "ffprobe", "-v", "error", "-select_streams", "v:0",
+                "-show_entries", "stream=width,height", "-of", "csv=p=0",
+                clip_path,
+            ],
+            capture_output=True,
+            timeout=10,
+            check=False,
+        )
+        if out.returncode != 0 or not out.stdout:
+            return None
+        line = out.stdout.decode("utf-8", errors="replace").strip().split("\n")[0]
+        parts = line.split(",")
+        if len(parts) >= 2:
+            return int(parts[0].strip()), int(parts[1].strip())
+    except (FileNotFoundError, subprocess.TimeoutExpired, ValueError, OSError) as e:
+        logger.debug("ffprobe native resolution failed for %s: %s", clip_path, e)
+    return None
+
+
+def _scale_detections_to_native(
+    detections: list[dict[str, Any]],
+    read_w: int,
+    read_h: int,
+    native_w: int,
+    native_h: int,
+) -> list[dict[str, Any]]:
+    """Scale bbox, centerpoint, and area from decoded (read) frame coordinates to native resolution."""
+    if read_w <= 0 or read_h <= 0 or native_w <= 0 or native_h <= 0:
+        return detections
+    scale_x = native_w / read_w
+    scale_y = native_h / read_h
+    area_scale = scale_x * scale_y
+    out: list[dict[str, Any]] = []
+    for d in detections:
+        bbox = d.get("bbox")
+        cp = d.get("centerpoint")
+        area = d.get("area", 0)
+        if isinstance(bbox, (list, tuple)) and len(bbox) >= 4:
+            x1, y1, x2, y2 = float(bbox[0]), float(bbox[1]), float(bbox[2]), float(bbox[3])
+            bbox = [
+                x1 * scale_x, y1 * scale_y, x2 * scale_x, y2 * scale_y,
+            ]
+        else:
+            bbox = d.get("bbox", [])
+        if isinstance(cp, (list, tuple)) and len(cp) >= 2:
+            cp = [float(cp[0]) * scale_x, float(cp[1]) * scale_y]
+        else:
+            cp = d.get("centerpoint", [])
+        out.append({
+            "label": d.get("label", "person"),
+            "bbox": bbox,
+            "centerpoint": cp,
+            "area": int(float(area) * area_scale) if area else 0,
+        })
+    return out
+
+
 def _run_detection_on_frame(
     model: Any,
     frame: Any,
@@ -124,25 +189,46 @@ class VideoService:
         config: dict,
     ) -> bool:
         """
-        Decode-only pass: read clip with ffmpegcv, run YOLO every N frames, write detection.json.
+        Decode-only pass: read clip with ffmpegcv (optionally resized for GPU efficiency), run YOLO every N frames, write detection.json.
 
-        Uses NVDEC (VideoCaptureNV) when available, else CPU (VideoCapture). Does not re-encode.
+        Uses NVDEC (VideoCaptureNV) when available, else CPU (VideoCapture). May resize during decode to crop target size (CROP_WIDTH x CROP_HEIGHT); all bbox/centerpoint/area in the sidecar are scaled to **native** resolution so Phase 3 crop logic is correct. Writes native_width and native_height in the sidecar. Does not re-encode.
         Returns True if sidecar was written (even if empty); False on open/read failure.
         """
         detection_model = (config.get("DETECTION_MODEL") or "").strip()
         detection_device = (config.get("DETECTION_DEVICE") or "").strip() or None
         detection_frame_interval = max(1, int(config.get("DETECTION_FRAME_INTERVAL", 5)))
+        crop_w = max(1, int(config.get("CROP_WIDTH", 1280)))
+        crop_h = max(1, int(config.get("CROP_HEIGHT", 720)))
+
+        native_res = _get_native_resolution(clip_path)
+        native_w = native_res[0] if native_res else 0
+        native_h = native_res[1] if native_res else 0
+        use_resize = native_w > 0 and native_h > 0 and (native_w != crop_w or native_h != crop_h)
 
         cap = None
         try:
             try:
-                cap = ffmpegcv.VideoCaptureNV(clip_path)
+                if use_resize:
+                    cap = ffmpegcv.VideoCaptureNV(
+                        clip_path, resize=(crop_w, crop_h), resize_keepratio=False
+                    )
+                else:
+                    cap = ffmpegcv.VideoCaptureNV(clip_path)
             except Exception:
-                cap = ffmpegcv.VideoCapture(clip_path)
+                try:
+                    if use_resize:
+                        cap = ffmpegcv.VideoCapture(
+                            clip_path, resize=(crop_w, crop_h), resize_keepratio=False
+                        )
+                    else:
+                        cap = ffmpegcv.VideoCapture(clip_path)
+                except Exception:
+                    cap = ffmpegcv.VideoCapture(clip_path)
             if not cap.isOpened():
                 logger.warning("Could not open clip for sidecar: %s", clip_path)
                 return False
 
+            read_h, read_w = 0, 0
             fps = getattr(cap, "fps", None) or 30.0
             yolo_model = None
             if detection_model:
@@ -161,8 +247,12 @@ class VideoService:
                 ret, frame = cap.read()
                 if not ret or frame is None:
                     break
+                if read_h == 0 and frame is not None:
+                    read_h, read_w = frame.shape[:2]
                 if yolo_model is not None and frame_idx % interval == 0:
                     det = _run_detection_on_frame(yolo_model, frame, detection_device)
+                    if use_resize and native_w > 0 and native_h > 0 and read_w > 0 and read_h > 0:
+                        det = _scale_detections_to_native(det, read_w, read_h, native_w, native_h)
                     sidecar_entries.append({
                         "frame_number": frame_idx,
                         "timestamp_sec": frame_idx / fps,
@@ -170,10 +260,16 @@ class VideoService:
                     })
                 frame_idx += 1
 
-            if sidecar_entries:
-                with open(sidecar_path, "w", encoding="utf-8") as f:
-                    json.dump(sidecar_entries, f, indent=None, separators=(",", ":"))
-                logger.debug("Wrote detection sidecar %s (%d frames)", sidecar_path, len(sidecar_entries))
+            if native_w <= 0 and read_w > 0:
+                native_w, native_h = read_w, read_h
+            payload: dict[str, Any] = {
+                "native_width": native_w or read_w,
+                "native_height": native_h or read_h,
+                "entries": sidecar_entries,
+            }
+            with open(sidecar_path, "w", encoding="utf-8") as f:
+                json.dump(payload, f, indent=None, separators=(",", ":"))
+            logger.debug("Wrote detection sidecar %s (%d frames)", sidecar_path, len(sidecar_entries))
             return True
         except Exception as e:
             logger.warning("Failed to generate detection sidecar for %s: %s", clip_path, e)

@@ -1,13 +1,13 @@
 """
 Download Service - Handles network downloads and API interactions with Frigate.
 
-Clips are saved with dynamic names: {camera}-{unix_timestamp}.mp4 (e.g. doorbell-1730123456.45678.mp4).
+Clips are saved with dynamic names: {camera}-{5_random_digits}.mp4 (e.g. doorbell-82749.mp4).
 No transcoding; raw H.264/H.265 from Frigate is used as-is.
 """
 
 import os
 import re
-import time
+import random
 import logging
 
 import requests
@@ -17,15 +17,11 @@ from frigate_buffer.services.video import VideoService
 logger = logging.getLogger('frigate-buffer')
 
 
-def _dynamic_clip_basename(camera_name: str, unix_time: float | None = None) -> str:
-    """Return clip filename: {camera}-{unix_timestamp}.mp4 for sortability and event-time relation."""
-    t = unix_time if unix_time is not None else time.time()
-    # Use full precision so retries get unique names; same-second writes still get different names
-    ts_str = f"{t:.5f}"
-    # Filesystem-safe camera: lowercase, replace spaces and problematic chars with underscore
+def _dynamic_clip_basename(camera_name: str) -> str:
+    """Return clip filename: {camera}-{5_random_digits}.mp4 (e.g. doorbell-82749.mp4)."""
     safe = re.sub(r"[^\w\-]", "_", (camera_name or "camera").strip().lower())
     safe = safe[:64] or "camera"
-    return f"{safe}-{ts_str}.mp4"
+    return f"{safe}-{random.randint(10000, 99999):05d}.mp4"
 
 
 def _remove_other_mp4_in_folder(folder_path: str, keep_path: str) -> None:
