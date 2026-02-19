@@ -200,6 +200,7 @@ def extract_target_centric_frames(
     first_camera_bias_cap_seconds: float = 0.0,
     person_area_switch_threshold: int = 0,
     camera_switch_ratio: float = 1.2,
+    decode_second_camera_cpu_only: bool = False,
     log_callback: Callable[[str], None] | None = None,
 ) -> list[tuple[Any, float, str]]:
     """
@@ -289,35 +290,110 @@ def extract_target_centric_frames(
         cap.release()
     caps.clear()
 
-    # Reopen all caps (we released them above). For caps we consumed, we must reopen to read again.
+    # Reopen all caps (we released them above). Fallback: NVDEC -> CPU; if CPU fails, retry GPU then CPU before skipping.
     decode_backends: dict[str, str] = {}
-    for cam, path in clip_paths:
+    for idx, (cam, path) in enumerate(clip_paths):
         cap = None
-        try:
-            cap = ffmpegcv.VideoCaptureNV(path)
-            decode_backends[cam] = "GPU"
-        except Exception as e:
-            if _is_gpu_not_configured(e):
-                logger.debug(
-                    "VideoCaptureNV skipped for %s (GPU not configured/available), using CPU decode.",
-                    path,
-                )
-            else:
-                logger.warning(
-                    "VideoCaptureNV failed for %s (GPU decode attempted, error: %s), falling back to CPU decode.",
-                    path,
-                    e,
-                )
+        use_cpu_only = decode_second_camera_cpu_only and idx >= 1
+
+        def _try_cpu() -> Any:
             try:
-                cap = ffmpegcv.VideoCapture(path)
+                return ffmpegcv.VideoCapture(path)
+            except Exception as e2:
+                logger.warning(
+                    "CPU decode failed for camera %s (%s): %s: %s. Retrying GPU (NVDEC) then CPU.",
+                    cam,
+                    path,
+                    type(e2).__name__,
+                    e2,
+                )
+                return None
+
+        def _try_nvdec() -> tuple[Any, str | None]:
+            try:
+                c = ffmpegcv.VideoCaptureNV(path)
+                return (c, "GPU")
+            except Exception as e:
+                if _is_gpu_not_configured(e):
+                    logger.debug(
+                        "VideoCaptureNV skipped for %s (GPU not configured/available), using CPU decode.",
+                        path,
+                    )
+                else:
+                    logger.warning(
+                        "VideoCaptureNV failed for camera %s (%s): %s: %s. Falling back to CPU decode.",
+                        cam,
+                        path,
+                        type(e).__name__,
+                        e,
+                    )
+                return (None, None)
+
+        if use_cpu_only:
+            cap = _try_cpu()
+            if cap is None:
+                cap, backend = _try_nvdec()
+                if cap is not None:
+                    decode_backends[cam] = backend or "GPU"
+                else:
+                    logger.warning(
+                        "GPU retry failed for camera %s (%s); trying CPU again.",
+                        cam,
+                        path,
+                    )
+                    try:
+                        cap = ffmpegcv.VideoCapture(path)
+                        decode_backends[cam] = "CPU"
+                    except Exception as e3:
+                        logger.error(
+                            "Camera %s (%s): GPU and CPU decode both failed (last error: %s: %s). Skipping camera for extraction.",
+                            cam,
+                            path,
+                            type(e3).__name__,
+                            e3,
+                        )
+                        cap = None
+            else:
                 decode_backends[cam] = "CPU"
-            except Exception:
-                cap = None
+        else:
+            cap, backend = _try_nvdec()
+            if cap is not None:
+                decode_backends[cam] = backend or "GPU"
+            else:
+                cap = _try_cpu()
+                if cap is not None:
+                    decode_backends[cam] = "CPU"
+                else:
+                    cap, _ = _try_nvdec()
+                    if cap is not None:
+                        decode_backends[cam] = "GPU"
+                    else:
+                        logger.warning(
+                            "GPU retry failed for camera %s (%s); trying CPU again.",
+                            cam,
+                            path,
+                        )
+                        try:
+                            cap = ffmpegcv.VideoCapture(path)
+                            decode_backends[cam] = "CPU"
+                        except Exception as e3:
+                            logger.error(
+                                "Camera %s (%s): GPU and CPU decode both failed (last error: %s: %s). Skipping camera for extraction.",
+                                cam,
+                                path,
+                                type(e3).__name__,
+                                e3,
+                            )
+                            cap = None
+
         if cap is not None and getattr(cap, "isOpened", lambda: True)():
             caps[cam] = cap
         else:
             if cap is not None:
-                cap.release()
+                try:
+                    cap.release()
+                except Exception:
+                    pass
             durations[cam] = 0.0
 
     for cam in list(caps.keys()):
@@ -410,7 +486,7 @@ def extract_target_centric_frames(
         except _READ_ERRORS as e:
             remaining = [c for c in caps if caps.get(c) is not None and c != cam]
             logger.warning(
-                "Reader process died for camera %s (%s); dropping camera for rest of extraction: %s (sample_time=initial_read remaining_cameras=%s)",
+                "Reader process died for camera %s (%s); dropping camera for rest of extraction: %s (sample_time=initial_read remaining_cameras=%s). Consider enabling multi_cam.decode_second_camera_cpu_only to avoid NVDEC contention.",
                 cam,
                 path_per_cam.get(cam, ""),
                 e,
@@ -450,7 +526,7 @@ def extract_target_centric_frames(
                 except _READ_ERRORS as e:
                     remaining = [c for c in caps if caps.get(c) is not None and c != cam]
                     logger.warning(
-                        "Reader process died for camera %s (%s); dropping camera for rest of extraction: %s (sample_time_sec=%.2f frame_index=%s remaining_cameras=%s)",
+                        "Reader process died for camera %s (%s); dropping camera for rest of extraction: %s (sample_time_sec=%.2f frame_index=%s remaining_cameras=%s). Consider enabling multi_cam.decode_second_camera_cpu_only to avoid NVDEC contention.",
                         cam,
                         path_per_cam.get(cam, ""),
                         e,
@@ -551,7 +627,14 @@ def extract_target_centric_frames(
                             )
                         else:
                             best_frame = _crop_utils.center_crop(best_frame, crop_width, crop_height)
-            collected.append((best_frame, T, best_camera))
+            # When using sidecars, skip output if chosen camera has zero person area at T (avoids no-person frames when other camera died).
+            skip_append = (
+                use_sidecar
+                and sidecars
+                and _person_area_at_time(sidecars.get(best_camera) or [], T) <= 0
+            )
+            if not skip_append:
+                collected.append((best_frame, T, best_camera))
             if best_camera == current_camera:
                 frames_on_current += 1
             else:

@@ -24,19 +24,15 @@ except ImportError:
 
 
 def write_stitched_frame(frame_bgr: Any, filepath: str) -> bool:
-    """Write a single image as color (top) + B/W (bottom) stitched vertically.
-    frame_bgr: BGR numpy array from cv2. Returns True on success."""
+    """Write a single color image (BGR) to filepath. No B/W or stacking."""
     if not _CV2_AVAILABLE:
-        logger.warning("cv2/numpy not available, cannot write stitched frame")
+        logger.warning("cv2/numpy not available, cannot write frame")
         return False
     try:
-        gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
-        bw_bgr = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
-        stitched = np.vstack([frame_bgr, bw_bgr])
         os.makedirs(os.path.dirname(filepath), exist_ok=True)
-        return cv2.imwrite(filepath, stitched)
+        return cv2.imwrite(filepath, frame_bgr)
     except Exception as e:
-        logger.warning("Failed to write stitched frame %s: %s", filepath, e)
+        logger.warning("Failed to write frame %s: %s", filepath, e)
         return False
 
 

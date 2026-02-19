@@ -100,6 +100,7 @@ CONFIG_SCHEMA = Schema({
         Optional('first_camera_bias_cap_seconds'): Any(int, float),     # Cap bias to 0 after this many seconds; 0 = no cap.
         Optional('person_area_switch_threshold'): int,                  # Allow switch when current camera area below this (px²); 0 = disable.
         Optional('camera_switch_ratio'): Any(int, float),               # New camera must have this ratio of current to switch; default 1.2.
+        Optional('decode_second_camera_cpu_only'): bool,                # Use CPU decode for second and subsequent cameras to avoid NVDEC contention.
     },
     # Extended Gemini proxy options (e.g. for multi_cam); model params; single API key via GEMINI_API_KEY, URL here or env.
     Optional('gemini_proxy'): {
@@ -196,6 +197,7 @@ def load_config() -> dict:
         'FIRST_CAMERA_BIAS_CAP_SECONDS': 0,
         'PERSON_AREA_SWITCH_THRESHOLD': 200,
         'CAMERA_SWITCH_RATIO': 1.2,
+        'DECODE_SECOND_CAMERA_CPU_ONLY': False,
 
         # Gemini proxy (extended): Single API Key (GEMINI_API_KEY only). Default URL "" (no Google fallback).
         'GEMINI_PROXY_URL': '',
@@ -320,6 +322,7 @@ def load_config() -> dict:
                     config['FIRST_CAMERA_BIAS_CAP_SECONDS'] = float(mc.get('first_camera_bias_cap_seconds', config['FIRST_CAMERA_BIAS_CAP_SECONDS']))
                     config['PERSON_AREA_SWITCH_THRESHOLD'] = int(mc.get('person_area_switch_threshold', config['PERSON_AREA_SWITCH_THRESHOLD']))
                     config['CAMERA_SWITCH_RATIO'] = float(mc.get('camera_switch_ratio', config['CAMERA_SWITCH_RATIO']))
+                    config['DECODE_SECOND_CAMERA_CPU_ONLY'] = bool(mc.get('decode_second_camera_cpu_only', config['DECODE_SECOND_CAMERA_CPU_ONLY']))
                 if 'gemini_proxy' in yaml_config:
                     gp = yaml_config['gemini_proxy']
                     config['GEMINI_PROXY_URL'] = gp.get('url', config['GEMINI_PROXY_URL']) or ''
