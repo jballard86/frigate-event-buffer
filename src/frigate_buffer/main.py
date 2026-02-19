@@ -19,7 +19,6 @@ from frigate_buffer.orchestrator import StateAwareOrchestrator
 from frigate_buffer.services.video import (
     ensure_detection_model_ready,
     log_gpu_status,
-    run_nvenc_preflight_probe,
 )
 
 # Early logging for config loading (reconfigured after config is loaded)
@@ -73,11 +72,8 @@ def main():
     VERSION = _load_version()
     logger.info("VERSION = %s", VERSION)
 
-    # GPU/NVENC diagnostics (helps debug transcode failures)
+    # GPU diagnostics (NVDEC used for decode)
     log_gpu_status()
-
-    # Pre-flight NVENC probe on main thread so first GPU use is not from a worker (avoids returncode 234)
-    run_nvenc_preflight_probe(config)
 
     # Ensure multi-cam detection model is available (download if not cached)
     ensure_detection_model_ready(config)

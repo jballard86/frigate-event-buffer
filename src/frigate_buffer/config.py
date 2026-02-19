@@ -60,7 +60,6 @@ CONFIG_SCHEMA = Schema({
         Optional('export_buffer_after'): int,                    # Seconds to include after event end in exported clip.
         Optional('final_review_image_count'): int,              # Max number of images to send to Frigate final review summary.
         Optional('gemini_max_concurrent_analyses'): int,        # Max concurrent Gemini clip analyses (throttling).
-        Optional('max_concurrent_transcodes'): int,     # Max concurrent clip transcodes for multi-cam CE (overlap download + transcode).
         Optional('save_ai_frames'): bool,                        # Whether to save extracted AI analysis frames to disk.
         Optional('create_ai_analysis_zip'): bool,               # Whether to create a zip of AI analysis assets (e.g. for multi-cam).
     },
@@ -86,13 +85,11 @@ CONFIG_SCHEMA = Schema({
         Optional('motion_threshold_px'): int,                   # Minimum pixel change to trigger high-rate capture.
         Optional('crop_width'): int,                            # Width of output crop for stitched/multi-cam frames.
         Optional('crop_height'): int,                            # Height of output crop for stitched/multi-cam frames.
-        Optional('nvenc_probe_width'): int,                      # Width for NVENC preflight probe (match crop for safety).
-        Optional('nvenc_probe_height'): int,                     # Height for NVENC preflight probe.
         Optional('multi_cam_system_prompt_file'): str,          # Path to system prompt file for multi-cam Gemini; empty = built-in.
         Optional('smart_crop_padding'): Any(int, float),        # Padding fraction around motion-based crop (e.g. 0.15).
         Optional('motion_crop_min_area_fraction'): Any(int, float),  # Minimum motion region area as fraction of frame to consider for crop.
         Optional('motion_crop_min_px'): int,                    # Minimum motion region area in pixels for crop.
-        Optional('detection_model'): str,                         # Ultralytics model for transcode-time detection (e.g. yolov8n.pt).
+        Optional('detection_model'): str,                         # Ultralytics model for detection sidecar (e.g. yolov8n.pt).
         Optional('detection_device'): str,                       # Device for detection (e.g. cuda:0, cpu).
         Optional('detection_frame_interval'): int,               # Run YOLO every N frames; default 5.
         Optional('first_camera_bias_decay_seconds'): Any(int, float),   # Time constant for exponential bias decay; default 1.0.
@@ -157,7 +154,6 @@ def load_config() -> dict:
         'EXPORT_BUFFER_AFTER': 30,
         'FINAL_REVIEW_IMAGE_COUNT': 20,
         'GEMINI_MAX_CONCURRENT_ANALYSES': 3,
-        'MAX_CONCURRENT_TRANSCODES': 2,
         'SAVE_AI_FRAMES': True,
         'CREATE_AI_ANALYSIS_ZIP': True,
 
@@ -183,8 +179,6 @@ def load_config() -> dict:
         'MOTION_THRESHOLD_PX': 50,
         'CROP_WIDTH': 1280,
         'CROP_HEIGHT': 720,
-        'NVENC_PROBE_WIDTH': 1280,
-        'NVENC_PROBE_HEIGHT': 720,
         'MULTI_CAM_SYSTEM_PROMPT_FILE': '',
         'SMART_CROP_PADDING': 0.15,
         'MOTION_CROP_MIN_AREA_FRACTION': 0.001,
@@ -270,7 +264,6 @@ def load_config() -> dict:
                     config['EXPORT_BUFFER_AFTER'] = settings.get('export_buffer_after', config['EXPORT_BUFFER_AFTER'])
                     config['FINAL_REVIEW_IMAGE_COUNT'] = settings.get('final_review_image_count', config.get('FINAL_REVIEW_IMAGE_COUNT', 20))
                     config['GEMINI_MAX_CONCURRENT_ANALYSES'] = settings.get('gemini_max_concurrent_analyses', config.get('GEMINI_MAX_CONCURRENT_ANALYSES', 3))
-                    config['MAX_CONCURRENT_TRANSCODES'] = settings.get('max_concurrent_transcodes', config.get('MAX_CONCURRENT_TRANSCODES', 2))
                     config['SAVE_AI_FRAMES'] = settings.get('save_ai_frames', config.get('SAVE_AI_FRAMES', True))
                     config['CREATE_AI_ANALYSIS_ZIP'] = settings.get('create_ai_analysis_zip', config.get('CREATE_AI_ANALYSIS_ZIP', True))
 
@@ -308,8 +301,6 @@ def load_config() -> dict:
                     config['MOTION_THRESHOLD_PX'] = mc.get('motion_threshold_px', config['MOTION_THRESHOLD_PX'])
                     config['CROP_WIDTH'] = mc.get('crop_width', config['CROP_WIDTH'])
                     config['CROP_HEIGHT'] = mc.get('crop_height', config['CROP_HEIGHT'])
-                    config['NVENC_PROBE_WIDTH'] = mc.get('nvenc_probe_width', config['NVENC_PROBE_WIDTH'])
-                    config['NVENC_PROBE_HEIGHT'] = mc.get('nvenc_probe_height', config['NVENC_PROBE_HEIGHT'])
                     config['MULTI_CAM_SYSTEM_PROMPT_FILE'] = mc.get('multi_cam_system_prompt_file', config['MULTI_CAM_SYSTEM_PROMPT_FILE']) or ''
                     config['SMART_CROP_PADDING'] = float(mc.get('smart_crop_padding', config.get('SMART_CROP_PADDING', 0.15)))
                     config['MOTION_CROP_MIN_AREA_FRACTION'] = float(mc.get('motion_crop_min_area_fraction', config.get('MOTION_CROP_MIN_AREA_FRACTION', 0.001)))

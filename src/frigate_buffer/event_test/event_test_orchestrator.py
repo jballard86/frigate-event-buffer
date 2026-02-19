@@ -59,6 +59,7 @@ def run_test_pipeline(
     storage_path: str,
     file_manager: Any,
     download_service: Any,
+    video_service: Any,
     ai_analyzer: Any,
     config: dict[str, Any],
 ) -> Iterator[dict[str, Any]]:
@@ -66,15 +67,16 @@ def run_test_pipeline(
     Run the post-download pipeline on a copy of the source event. Yields events for SSE:
     {"type": "log", "message": "..."} | {"type": "done", "test_run_id", "ai_request_url"} | {"type": "error", "message": "..."}.
 
-    Steps: validate source -> allocate testN -> copy source -> delete detection.json -> transcode ->
-    build payload (writes frames) -> write system_prompt.txt and ai_request.html.
+    Steps: validate source -> allocate testN -> copy source -> delete detection.json ->
+    generate detection sidecar per camera -> build payload (writes frames) -> write system_prompt.txt and ai_request.html.
     """
     events_dir = os.path.join(storage_path, "events")
     if not os.path.isdir(events_dir):
         yield _yield_error("Events directory not found")
         return
 
-    # 1. Validate source: need at least one camera subdir with clip.mp4
+    # 1. Validate source: need at least one camera subdir with a clip (*.mp4)
+    from frigate_buffer.services.query import resolve_clip_in_folder
     try:
         with os.scandir(source_folder_path) as it:
             all_subdirs = [e.name for e in it if e.is_dir() and not e.name.startswith(".")]
@@ -84,18 +86,18 @@ def run_test_pipeline(
 
     camera_subdirs = [
         cam for cam in all_subdirs
-        if os.path.isfile(os.path.join(source_folder_path, cam, "clip.mp4"))
+        if resolve_clip_in_folder(os.path.join(source_folder_path, cam))
     ]
     if not camera_subdirs:
         yield _yield_error(
-            "Need clip and data from at least one camera. No camera in this event has clip.mp4 yet."
+            "Need clip and data from at least one camera. No camera in this event has an .mp4 clip yet."
         )
         return
 
     if len(camera_subdirs) < len(all_subdirs):
         missing = [c for c in all_subdirs if c not in camera_subdirs]
         yield _yield_log(f"Skipping camera(s) without clip: {', '.join(missing)}")
-    yield _yield_log(f"Source validated: {len(camera_subdirs)} camera(s) with clip.mp4")
+    yield _yield_log(f"Source validated: {len(camera_subdirs)} camera(s) with clip")
 
     # 2. Allocate testN with lock
     with _alloc_lock:
@@ -160,7 +162,7 @@ def run_test_pipeline(
     else:
         yield _yield_log("ce_start_time: 0 (folder name has no timestamp)")
 
-    # 5. Delete existing detection.json in testN so transcode runs fresh
+    # 5. Delete existing detection.json in testN so sidecar generation runs fresh
     for cam in camera_subdirs:
         sidecar = os.path.join(test_folder_path, cam, "detection.json")
         if os.path.isfile(sidecar):
@@ -170,25 +172,18 @@ def run_test_pipeline(
             except OSError:
                 pass
 
-    # 6. Transcode each camera in testN
-    det_model = config.get("DETECTION_MODEL") or None
-    det_device = (config.get("DETECTION_DEVICE") or "").strip() or None
+    # 6. Generate detection sidecar for each camera in testN (decode-only, no transcode)
     for cam in camera_subdirs:
         camera_folder = os.path.join(test_folder_path, cam)
+        clip_basename = resolve_clip_in_folder(camera_folder)
+        if not clip_basename:
+            yield _yield_log(f"Skipping {cam}: no clip found")
+            continue
+        clip_path = os.path.join(camera_folder, clip_basename)
         sidecar_path = os.path.join(camera_folder, "detection.json")
-        if det_model:
-            yield _yield_log(f"Running AI detection (YOLO) for {cam}...")
-        yield _yield_log(f"Transcoding {cam}...")
-        ok, backend = download_service.transcode_existing_clip(
-            "test",
-            camera_folder,
-            detection_sidecar_path=sidecar_path,
-            detection_model=det_model,
-            detection_device=det_device,
-        )
-        yield _yield_log(f"Transcode {cam}: {backend}.")
-        if not ok:
-            yield _yield_log(f"Transcode failed for {cam} (see server log for details).")
+        yield _yield_log(f"Generating detection sidecar for {cam}...")
+        ok = video_service.generate_detection_sidecar(clip_path, sidecar_path, config)
+        yield _yield_log(f"Sidecar {cam}: {'OK' if ok else 'failed'}.")
 
     # 7. Build payload (delegate to analyzer; writes frames and returns prompt + paths)
     payload_logs: list[str] = []

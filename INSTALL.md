@@ -7,7 +7,7 @@ Install and run via the command line only (no Dockge). Clone the repo so the **r
 ## Prerequisites
 
 - Docker (no compose required; we use `docker build` and `docker run` only).
-- For GPU/NVENC: The image includes FFmpeg with NVENC and is based on Ubuntu 24.04 to match the FFmpeg donor for reliable GPU encoding. At runtime you need an NVIDIA GPU, driver, and [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html) (so `docker run --gpus all` works). See [BUILD_NVENC.md](BUILD_NVENC.md).
+- For GPU decode (NVDEC): The image includes FFmpeg with NVDEC support for hardware-accelerated frame reading. At runtime you need an NVIDIA GPU, driver, and [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html) (e.g. `docker run --gpus all`). Set `NVIDIA_DRIVER_CAPABILITIES=compute,video,utility` so the container can use the GPU for decoding.
 
 ---
 
@@ -140,7 +140,7 @@ To use a different branch (e.g. a feature branch or `main`):
 ```bash
 cd /mnt/user/appdata/frigate-buffer   # or your repo root
 git fetch origin
-git checkout main
+git checkout Nvenc-Removal
 git pull
 ```
 

@@ -217,7 +217,12 @@ class NotificationPublisher:
                 # Use buffer proxy to Frigate so image_url is always reachable
                 image_url = f"{buffer_base}/api/events/{event.event_id}/snapshot.jpg"
             if event.clip_downloaded:
-                video_url = f"{base_url}/clip.mp4"
+                from frigate_buffer.services.query import resolve_clip_in_folder
+                full_folder = event.folder_path
+                if self.storage_path and not os.path.isabs(full_folder):
+                    full_folder = os.path.join(self.storage_path, full_folder)
+                clip_basename = resolve_clip_in_folder(full_folder)
+                video_url = f"{base_url}/{clip_basename}" if clip_basename else None
         elif self.frigate_url:
             # Fallback: no folder yet, use buffer proxy
             image_url = f"{buffer_base}/api/events/{event.event_id}/snapshot.jpg"

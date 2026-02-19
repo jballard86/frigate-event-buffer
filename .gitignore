@@ -50,6 +50,12 @@ storage/
 *.tmp
 *.temp
 tests/tmp_*/
+tests/_query_test_fixture/
+tests/_download_test_out/
+tests/_extractor_fixture/
+tests/_sidecar_fixture/
+tests/tmp_event_test/
+tests/tmp_event_test_miss/
 
 # Testing / tooling
 .pytest_cache/
