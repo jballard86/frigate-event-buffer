@@ -7,7 +7,7 @@ The base image (e.g. `jrottenberg/ffmpeg:7.0-nvidia2204`) uses standard Linux pa
 - **Build** (from repo root): `docker build -t frigate-buffer:latest .`
 - **Runtime:** For GPU transcode you need an NVIDIA GPU, driver, and [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html). Run the container with the GPU reserved (e.g. `--gpus all` or compose `deploy.resources.reservations.devices`). Set **`NVIDIA_DRIVER_CAPABILITIES=compute,video,utility`** (as Frigate does); the `video` capability is required so the toolkit mounts encode libs (e.g. `libnvidia-encode.so.1`). See [INSTALL.md](INSTALL.md) for full install and run steps.
 
-At startup the app logs GPU and NVENC status (nvidia-smi, libnvidia-encode check, FFmpeg encoders). The app may retry the NVENC check once after a short delay to work around startup timing on some hosts. If FFmpeg does not report NVENC encoders, check the logged **FFmpeg -encoders stderr snippet**. A missing **libnvidia-encode** means the container needs `NVIDIA_DRIVER_CAPABILITIES=compute,video,utility` and the NVIDIA Container Toolkit. A missing **libnppig.so.12** (or similar NPP lib) means the image was built without the NPP gather step — rebuild from this repo so the Dockerfile copies libs from the donor’s lib, lib64, and cuda/lib64.
+At startup the app logs GPU and NVENC status (nvidia-smi, libnvidia-encode check, FFmpeg encoders). The NVENC check reads both stderr and stdout of `ffmpeg -encoders` and may retry once after a short delay to work around startup timing on some hosts. If FFmpeg does not report NVENC encoders, check the logged **FFmpeg -encoders stderr snippet**. A missing **libnvidia-encode** means the container needs `NVIDIA_DRIVER_CAPABILITIES=compute,video,utility` and the NVIDIA Container Toolkit. A missing **libnppig.so.12** (or similar NPP lib) means the image was built without the NPP gather step — rebuild from this repo so the Dockerfile copies libs from the donor’s lib, lib64, and cuda/lib64.
 
 ### If NVENC still unavailable
 
@@ -15,3 +15,7 @@ If you have set `NVIDIA_DRIVER_CAPABILITIES=compute,video,utility`, rebuilt the 
 
 - **(4) LD_LIBRARY_PATH** — Try running the container with `LD_LIBRARY_PATH` set so the loader can find the injected lib (e.g. `LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:${LD_LIBRARY_PATH}`). Use `find /usr -name 'libnvidia-encode*'` inside the container to see where the host mounted it.
 - **(5) Alternative FFmpeg donor** — Try building with Frigate's FFmpeg image as the multi-stage donor (e.g. `blakeblackshear/frigate-ffmpeg`) instead of jrottenberg; that image is built on an NVIDIA CUDA base for the Frigate ecosystem. See the plan or repo for Dockerfile build-arg and paths.
+
+### Probe fails with returncode 234 after startup
+
+If startup shows **NVENC success** (nvidia-smi OK, FFmpeg NVENC encoders available) but the **NVENC probe** later fails with returncode 234 (on first transcode), that is not a runtime GPU/capability failure. The app now serializes the probe (only one thread runs it), sends probe output to DEVNULL (no pipe), and retries once after a short delay. That should resolve 234 from concurrent probes or transient GPU contention. If 234 persists, consider GPU contention from other processes (e.g. Frigate, another container) or driver/session limits.

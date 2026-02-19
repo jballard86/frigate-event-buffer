@@ -2,6 +2,7 @@ import json
 import os
 import shutil
 import subprocess
+import threading
 import logging
 import time
 from typing import Any
@@ -220,6 +221,9 @@ class VideoService:
 
     DEFAULT_FFMPEG_TIMEOUT = 60
 
+    # Serializes NVENC probe so only one thread runs it (avoids concurrent probes and returncode 234).
+    _nvenc_probe_lock = threading.Lock()
+
     def __init__(self, ffmpeg_timeout: int = DEFAULT_FFMPEG_TIMEOUT):
         self.ffmpeg_timeout = ffmpeg_timeout
         self._nvenc_available: bool | None = None  # None = not yet probed
@@ -228,41 +232,67 @@ class VideoService:
     def _probe_nvenc(self) -> bool:
         """
         Run a minimal NVENC encode to detect if GPU encoding is available.
-        Logs exactly once (INFO) with the result. Returns True if NVENC is usable.
+        Serialized with a lock so only one thread runs the probe (avoids concurrent
+        probes and returncode 234 from GPU/NVENC contention). Logs exactly once
+        (INFO) with the result. Returns True if NVENC is usable.
         """
-        if self._nvenc_available is not None:
-            return self._nvenc_available
-        try:
-            cmd = [
-                "ffmpeg", "-y", "-f", "lavfi", "-i", "nullsrc=s=64x64:d=0.1",
-                "-c:v", "h264_nvenc", "-frames:v", "1", "-f", "null", "-",
-            ]
-            proc = subprocess.run(
-                cmd,
-                capture_output=True,
-                timeout=15,
-            )
-            stderr = (proc.stderr or b"").decode("utf-8", errors="replace")
-            if proc.returncode != 0 or "No capable devices found" in stderr or "cannot load" in stderr.lower():
+        with self._nvenc_probe_lock:
+            if self._nvenc_available is not None:
+                return self._nvenc_available
+            try:
+                cmd = [
+                    "ffmpeg", "-y", "-f", "lavfi", "-i", "nullsrc=s=64x64:d=0.1",
+                    "-c:v", "h264_nvenc", "-frames:v", "1", "-f", "null", "-",
+                ]
+                # Use DEVNULL for stdout so ffmpeg does not write to a pipe (avoids pipe-related failures).
+                proc = subprocess.run(
+                    cmd,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.PIPE,
+                    timeout=15,
+                )
+                stderr = (proc.stderr or b"").decode("utf-8", errors="replace")
+                failed = (
+                    proc.returncode != 0
+                    or "No capable devices found" in stderr
+                    or "cannot load" in stderr.lower()
+                )
+                if failed and proc.returncode != 0:
+                    # Retry once after delay (transient contention).
+                    time.sleep(2.5)
+                    proc = subprocess.run(
+                        cmd,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.PIPE,
+                        timeout=15,
+                    )
+                    stderr = (proc.stderr or b"").decode("utf-8", errors="replace")
+                    failed = (
+                        proc.returncode != 0
+                        or "No capable devices found" in stderr
+                        or "cannot load" in stderr.lower()
+                    )
+                if failed:
+                    self._nvenc_available = False
+                    stderr_snippet = stderr[:STDERR_TRUNCATE] + ("..." if len(stderr) > STDERR_TRUNCATE else "")
+                    logger.warning(
+                        "NVENC probe: failure — returncode=%s. stderr: %s",
+                        proc.returncode,
+                        stderr_snippet,
+                    )
+                    logger.info(
+                        "NVENC probe: unavailable; transcodes will use CPU (libx264). "
+                        "Returncode 234 can occur from concurrent probe or transient GPU use; "
+                        "if startup showed NVENC success and 234 persists, check GPU contention from other processes."
+                    )
+                    return False
+                self._nvenc_available = True
+                logger.info("NVENC probe: success — GPU transcode enabled for this run.")
+                return True
+            except Exception as e:
                 self._nvenc_available = False
-                stderr_snippet = stderr[:STDERR_TRUNCATE] + ("..." if len(stderr) > STDERR_TRUNCATE else "")
-                logger.warning(
-                    "NVENC probe: failure — returncode=%s. stderr: %s",
-                    proc.returncode,
-                    stderr_snippet,
-                )
-                logger.info(
-                    "NVENC probe: unavailable; transcodes will use CPU (libx264). "
-                    "Ensure container is run with --gpus all and NVIDIA_* env vars."
-                )
+                logger.warning("NVENC probe: exception — %s; transcodes will use CPU (libx264).", e)
                 return False
-            self._nvenc_available = True
-            logger.info("NVENC probe: success — GPU transcode enabled for this run.")
-            return True
-        except Exception as e:
-            self._nvenc_available = False
-            logger.warning("NVENC probe: exception — %s; transcodes will use CPU (libx264).", e)
-            return False
 
     def transcode_clip_to_h264(
         self,
@@ -278,7 +308,12 @@ class VideoService:
         When detection_sidecar_path is set (multi-cam), runs ultralytics on each frame in the NVENC
         pass and writes detection.json; if we fall back to libx264 no sidecar is written."""
         if not self._probe_nvenc():
-            return self._transcode_clip_libx264(event_id, temp_path, final_path)
+            return self._transcode_clip_libx264(
+                event_id, temp_path, final_path,
+                detection_sidecar_path=detection_sidecar_path,
+                detection_model=detection_model,
+                detection_device=detection_device,
+            )
         try:
             if self._transcode_clip_nvenc(
                 event_id, temp_path, final_path,
@@ -290,11 +325,15 @@ class VideoService:
         except Exception as e:
             logger.warning(
                 "GPU transcode failed for event %s: %s: %s. "
-                "Falling back to CPU (libx264). Ensure image was built from this repo and container "
-                "is run with --gpus all and NVIDIA Container Toolkit.",
+                "Falling back to CPU (libx264).",
                 event_id, type(e).__name__, e,
             )
-        return self._transcode_clip_libx264(event_id, temp_path, final_path)
+        return self._transcode_clip_libx264(
+            event_id, temp_path, final_path,
+            detection_sidecar_path=detection_sidecar_path,
+            detection_model=detection_model,
+            detection_device=detection_device,
+        )
 
     def _transcode_clip_nvenc(
         self,
@@ -412,8 +451,25 @@ class VideoService:
                     pass
             return False
 
-    def _transcode_clip_libx264(self, event_id: str, temp_path: str, final_path: str) -> bool:
-        """Transcode using ffmpeg libx264 (CPU). Used when GPU path is unavailable."""
+    def _transcode_clip_libx264(
+        self,
+        event_id: str,
+        temp_path: str,
+        final_path: str,
+        detection_sidecar_path: str | None = None,
+        detection_model: str | None = None,
+        detection_device: str | None = None,
+    ) -> bool:
+        """Transcode using ffmpeg libx264 (CPU). Used when GPU path is unavailable.
+        When detection_sidecar_path and detection_model are set, decodes with CPU,
+        runs YOLO per frame and writes detection.json, then runs ffmpeg (same as NVENC path sidecar)."""
+        if detection_sidecar_path and detection_model:
+            self._write_detection_sidecar_cpu(
+                temp_path,
+                detection_sidecar_path,
+                detection_model,
+                (detection_device or "").strip() or None,
+            )
         process = None
         try:
             command = [
@@ -447,6 +503,50 @@ class VideoService:
             if os.path.exists(temp_path):
                 os.rename(temp_path, final_path)
             return True
+
+    def _write_detection_sidecar_cpu(
+        self,
+        temp_path: str,
+        detection_sidecar_path: str,
+        detection_model: str,
+        device: str | None,
+    ) -> None:
+        """Decode temp_path with CPU (ffmpegcv.VideoCapture), run YOLO per frame, write detection.json.
+        Same sidecar format as _transcode_clip_nvenc so multi-clip extractor can use it."""
+        cap = None
+        try:
+            cap = ffmpegcv.VideoCapture(temp_path)
+            if not cap.isOpened():
+                return
+            fps = getattr(cap, "fps", None) or 30.0
+            yolo_model = None
+            yolo_names: dict[int, str] = {}
+            try:
+                from ultralytics import YOLO
+                yolo_model = YOLO(detection_model)
+                yolo_names = yolo_model.names or {}
+            except Exception as e:
+                logger.warning("Could not load YOLO for detection sidecar (CPU path): %s", e)
+                return
+            sidecar_entries: list[dict[str, Any]] = []
+            frame_idx = 0
+            while True:
+                ret, frame = cap.read()
+                if not ret or frame is None:
+                    break
+                det = _run_detection_on_frame(yolo_model, frame, device or "", yolo_names)
+                sidecar_entries.append({"timestamp_sec": frame_idx / fps, "detections": det})
+                frame_idx += 1
+            if sidecar_entries:
+                try:
+                    with open(detection_sidecar_path, "w", encoding="utf-8") as f:
+                        json.dump(sidecar_entries, f, indent=None, separators=(",", ":"))
+                    logger.debug("Wrote detection sidecar %s (%d frames)", detection_sidecar_path, len(sidecar_entries))
+                except OSError as e:
+                    logger.warning("Failed to write detection sidecar %s: %s", detection_sidecar_path, e)
+        finally:
+            if cap is not None:
+                cap.release()
 
     def generate_gif_from_clip(self, clip_path: str, output_path: str,
                                fps: int = 5, duration_sec: float = 5.0) -> bool:

@@ -17,10 +17,11 @@ class TestProbeNvenc(unittest.TestCase):
         # Reset probe cache so each test gets a fresh probe
         self.video_service._nvenc_available = None
 
+    @patch("frigate_buffer.services.video.time.sleep")
     @patch("frigate_buffer.services.video.subprocess.run")
     @patch("frigate_buffer.services.video.logger")
     def test_probe_nvenc_logs_warning_with_stderr_when_no_capable_devices(
-        self, mock_logger, mock_run
+        self, mock_logger, mock_run, mock_sleep
     ):
         """When probe fails with 'No capable devices found', WARNING is logged with stderr snippet."""
         proc = MagicMock()
@@ -76,8 +77,34 @@ class TestVideoService(unittest.TestCase):
 
         self.assertTrue(result)
         mock_probe.assert_called_once()
-        mock_libx264.assert_called_once_with("evt1", "temp.mp4", "final.mp4")
+        mock_libx264.assert_called_once_with(
+            "evt1", "temp.mp4", "final.mp4",
+            detection_sidecar_path=None, detection_model=None, detection_device=None,
+        )
         mock_nvenc.assert_not_called()
+
+    @patch('frigate_buffer.services.video.VideoService._transcode_clip_nvenc')
+    @patch('frigate_buffer.services.video.VideoService._transcode_clip_libx264')
+    @patch('frigate_buffer.services.video.VideoService._probe_nvenc')
+    def test_transcode_fallback_passes_sidecar_args_to_libx264(self, mock_probe, mock_libx264, mock_nvenc):
+        """When NVENC probe returns False, transcode passes detection_sidecar_path/model/device to libx264."""
+        mock_probe.return_value = False
+        mock_libx264.return_value = True
+
+        result = self.video_service.transcode_clip_to_h264(
+            "evt1", "temp.mp4", "final.mp4",
+            detection_sidecar_path="/ce/cam/detection.json",
+            detection_model="yolov8n.pt",
+            detection_device="0",
+        )
+
+        self.assertTrue(result)
+        mock_libx264.assert_called_once_with(
+            "evt1", "temp.mp4", "final.mp4",
+            detection_sidecar_path="/ce/cam/detection.json",
+            detection_model="yolov8n.pt",
+            detection_device="0",
+        )
 
     @patch('frigate_buffer.services.video.VideoService._probe_nvenc')
     @patch('frigate_buffer.services.video.subprocess.Popen')
@@ -130,6 +157,37 @@ class TestVideoService(unittest.TestCase):
         mock_writer.write.assert_called()
         mock_run.assert_called_once()
         mock_remove.assert_any_call("/tmp/temp.mp4")
+
+    @patch('frigate_buffer.services.video.os.remove')
+    @patch('frigate_buffer.services.video.VideoService._write_detection_sidecar_cpu')
+    @patch('frigate_buffer.services.video.subprocess.Popen')
+    def test_transcode_libx264_with_sidecar_writes_sidecar_then_runs_ffmpeg(
+        self, mock_popen, mock_write_sidecar, mock_remove
+    ):
+        """When _transcode_clip_libx264 is called with detection_sidecar_path and model, writes sidecar then runs ffmpeg."""
+        mock_process = MagicMock()
+        mock_process.communicate.return_value = (b"", b"")
+        mock_process.returncode = 0
+        mock_popen.return_value = mock_process
+
+        result = self.video_service._transcode_clip_libx264(
+            "evt1", "/tmp/temp.mp4", "/tmp/final.mp4",
+            detection_sidecar_path="/ce/cam/detection.json",
+            detection_model="yolov8n.pt",
+            detection_device=None,
+        )
+
+        self.assertTrue(result)
+        mock_write_sidecar.assert_called_once_with(
+            "/tmp/temp.mp4",
+            "/ce/cam/detection.json",
+            "yolov8n.pt",
+            None,
+        )
+        mock_popen.assert_called_once()
+        call_args = mock_popen.call_args[0][0]
+        self.assertIn("ffmpeg", call_args)
+        self.assertIn("libx264", call_args)
 
     @patch('frigate_buffer.services.video.subprocess.run')
     @patch('frigate_buffer.services.video.os.path.exists')
