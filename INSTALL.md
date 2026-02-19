@@ -132,6 +132,9 @@ docker build -t frigate-buffer:latest .
 # Then run the same docker run command from step 5 again.
 ```
 
+## restart docker
+docker restart frigate_buffer
+
 ## Switching branches
 
 To use a different branch (e.g. a feature branch or `main`):

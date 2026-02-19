@@ -11,6 +11,8 @@ import os
 import json
 import base64
 import logging
+import threading
+import time
 from datetime import datetime
 from typing import Any, Sequence
 
@@ -109,6 +111,10 @@ class GeminiAnalysisService:
         self.smart_crop_padding = float(config.get('SMART_CROP_PADDING', 0.15))
         self.motion_crop_min_area_fraction = float(config.get('MOTION_CROP_MIN_AREA_FRACTION', 0.001))
         self.motion_crop_min_px = int(config.get('MOTION_CROP_MIN_PX', 500))
+        # Rolling hourly frame cap for API cost control; 0 = disabled.
+        self._frame_cap_per_hour = int(config.get('GEMINI_FRAMES_PER_HOUR_CAP', 200) or 0)
+        self._frame_cap_records: list[tuple[float, int]] = []
+        self._frame_cap_lock = threading.Lock()
 
     def _load_system_prompt_template(self) -> str:
         if self._prompt_template is not None:
@@ -400,6 +406,45 @@ class GeminiAnalysisService:
         b64 = base64.b64encode(buf.tobytes()).decode('ascii')
         return f"data:image/jpeg;base64,{b64}"
 
+    def _frame_cap_stats_and_check(self, frame_count: int) -> tuple[bool, int, int]:
+        """
+        Compute rolling-window stats, log them, and check if this request would exceed the cap.
+        Returns (allowed, current_frames_in_window, requests_in_window).
+        Caller must hold _frame_cap_lock when mutating _frame_cap_records; this method acquires it.
+        """
+        if self._frame_cap_per_hour <= 0:
+            logger.info(
+                "Gemini API rate: cap=disabled frames_this_request=%d",
+                frame_count,
+            )
+            return True, 0, 0
+        now = time.time()
+        window_sec = 3600
+        with self._frame_cap_lock:
+            self._frame_cap_records = [(ts, n) for ts, n in self._frame_cap_records if now - ts <= window_sec]
+            current_frames = sum(n for _, n in self._frame_cap_records)
+            requests_in_window = len(self._frame_cap_records)
+            would_exceed = (current_frames + frame_count) > self._frame_cap_per_hour
+            status = "blocked" if would_exceed else "allowed"
+            logger.info(
+                "Gemini API rate: current_frames=%d cap=%d requests_in_window=%d "
+                "frames_this_request=%d status=%s blocked=%s",
+                current_frames,
+                self._frame_cap_per_hour,
+                requests_in_window,
+                frame_count,
+                status,
+                would_exceed,
+            )
+            return not would_exceed, current_frames, requests_in_window
+
+    def _record_frames_sent(self, frame_count: int) -> None:
+        """Record a successful send for the rolling cap. Call with _frame_cap_lock held only from send_to_proxy."""
+        if self._frame_cap_per_hour <= 0 or frame_count <= 0:
+            return
+        with self._frame_cap_lock:
+            self._frame_cap_records.append((time.time(), frame_count))
+
     def send_to_proxy(
         self,
         system_prompt: str,
@@ -412,6 +457,14 @@ class GeminiAnalysisService:
         """
         if not self._proxy_url or not self._api_key:
             logger.warning("Gemini proxy_url or api_key not configured")
+            return None
+        # Rolling cap check and stats log (current rate, status, blocked)
+        allowed, _, _ = self._frame_cap_stats_and_check(len(image_buffers))
+        if not allowed:
+            logger.warning(
+                "Gemini API call skipped: hourly frame cap reached (cap=%d). Not sending request.",
+                self._frame_cap_per_hour,
+            )
             return None
         url = f"{self._proxy_url}/v1/chat/completions"
         user_content = [{"type": "text", "text": "Analyze these security camera frames and respond with the requested JSON."}]
@@ -462,7 +515,9 @@ class GeminiAnalysisService:
                     if lines and lines[-1].strip() == "```":
                         lines = lines[:-1]
                     raw = "\n".join(lines)
-                return json.loads(raw)
+                result = json.loads(raw)
+                self._record_frames_sent(len(image_buffers))
+                return result
             except (requests.exceptions.ChunkedEncodingError, urllib3.exceptions.ProtocolError) as e:
                 logger.warning(
                     "Proxy attempt %s/2 failed with ChunkedEncodingError: %s. Retrying with 'Connection: close'...",
