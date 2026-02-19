@@ -191,3 +191,63 @@ class TestMultiClipExtractor(unittest.TestCase):
             self.assertIsNotNone(frame_out)
             self.assertIn(cam, ("cam1", "cam2"))
         mock_video_capture.assert_called()
+
+    @patch("frigate_buffer.services.multi_clip_extractor.ffmpegcv.VideoCapture")
+    @patch("frigate_buffer.services.multi_clip_extractor.ffmpegcv.VideoCaptureNV")
+    def test_extract_drops_camera_when_read_raises_closed_file(self, mock_video_capture_nv, mock_video_capture):
+        """When one camera's cap.read() raises ValueError (e.g. read of closed file), that camera is dropped and extraction continues with the other(s)."""
+        os.makedirs(os.path.join(self.tmp, "cam1"))
+        os.makedirs(os.path.join(self.tmp, "cam2"))
+        clip1 = os.path.join(self.tmp, "cam1", "clip.mp4")
+        clip2 = os.path.join(self.tmp, "cam2", "clip.mp4")
+        with open(clip1, "wb"):
+            pass
+        with open(clip2, "wb"):
+            pass
+        for cam_name in ("cam1", "cam2"):
+            sidecar_path = os.path.join(self.tmp, cam_name, DETECTION_SIDECAR_FILENAME)
+            with open(sidecar_path, "w", encoding="utf-8") as f:
+                json.dump(
+                    [{"timestamp_sec": t, "detections": [{"label": "person", "area": 100}]} for t in range(11)],
+                    f,
+                )
+
+        frame = np.zeros((100, 100, 3), dtype=np.uint8)
+
+        def make_good_mock():
+            m = MagicMock()
+            m.fps = 1.0
+            m.__len__ = MagicMock(return_value=10)
+            m.isOpened.return_value = True
+            m.read.side_effect = [(True, frame)] * 10 + [(False, None)]
+            m.release = MagicMock()
+            return m
+
+        def make_bad_mock():
+            m = MagicMock()
+            m.fps = 1.0
+            m.__len__ = MagicMock(return_value=10)
+            m.isOpened.return_value = True
+            m.read.side_effect = ValueError("read of closed file")
+            m.release = MagicMock()
+            return m
+
+        def open_cap(path):
+            if "cam2" in path:
+                return make_bad_mock()
+            return make_good_mock()
+
+        mock_video_capture_nv.side_effect = Exception("no nv")
+        mock_video_capture.side_effect = open_cap
+
+        result = extract_target_centric_frames(
+            self.tmp, max_frames_sec=1.0, max_frames_min=5
+        )
+
+        self.assertIsInstance(result, list)
+        # Only cam1 should contribute (cam2 is dropped on first read failure).
+        for item in result:
+            self.assertEqual(len(item), 3)
+            frame_out, t_sec, cam = item
+            self.assertIsNotNone(frame_out)
+            self.assertEqual(cam, "cam1", "Failed camera should be dropped; only cam1 should appear")

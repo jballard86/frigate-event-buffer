@@ -645,69 +645,78 @@ class GeminiAnalysisService:
         if not self._proxy_url or not self._api_key:
             logger.debug("Gemini proxy not configured, skipping CE %s", ce_id)
             return None
-        if not os.path.isdir(ce_folder_path):
-            logger.warning("CE folder not found: %s", ce_folder_path)
-            return None
+        try:
+            if not os.path.isdir(ce_folder_path):
+                logger.warning("CE folder not found: %s", ce_folder_path)
+                return None
 
-        max_frames_sec = float(self.config.get("MAX_MULTI_CAM_FRAMES_SEC", 1))
-        max_frames_min = int(self.config.get("MAX_MULTI_CAM_FRAMES_MIN", 60))
+            max_frames_sec = float(self.config.get("MAX_MULTI_CAM_FRAMES_SEC", 1))
+            max_frames_min = int(self.config.get("MAX_MULTI_CAM_FRAMES_MIN", 60))
 
-        frames_raw = extract_target_centric_frames(
-            ce_folder_path,
-            max_frames_sec=max_frames_sec,
-            max_frames_min=max_frames_min,
-        )
-        if not frames_raw:
-            logger.warning("No frames extracted from CE %s", ce_id)
-            return None
-
-        # Add timestamp overlay: frame_time_sec is relative (0..duration); show as offset or use ce_start_time
-        image_count = len(frames_raw)
-        frames_with_time: list[tuple[Any, float, str]] = []
-        cameras_str = ", ".join(sorted({c for _, _, c in frames_raw}))
-        for i, (frame, frame_time_sec, camera) in enumerate(frames_raw):
-            ts = ce_start_time + frame_time_sec if ce_start_time > 0 else frame_time_sec
-            time_str = datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S")
-            frame_overlay = crop_utils.draw_timestamp_overlay(
-                frame, time_str, camera, i + 1, image_count
+            frames_raw = extract_target_centric_frames(
+                ce_folder_path,
+                max_frames_sec=max_frames_sec,
+                max_frames_min=max_frames_min,
             )
-            frames_with_time.append((frame_overlay, frame_time_sec, camera))
+            if not frames_raw:
+                logger.warning("No frames extracted from CE %s", ce_id)
+                return None
 
-        # Write ai_frame_analysis at CE root
-        save_frames = bool(self.config.get("SAVE_AI_FRAMES", True))
-        create_zip = bool(self.config.get("CREATE_AI_ANALYSIS_ZIP", True))
-        write_ai_frame_analysis_multi_cam(
-            ce_folder_path,
-            frames_with_time,
-            write_manifest=True,
-            create_zip_flag=create_zip,
-            save_frames=save_frames,
-        )
+            # Add timestamp overlay: frame_time_sec is relative (0..duration); show as offset or use ce_start_time
+            image_count = len(frames_raw)
+            frames_with_time: list[tuple[Any, float, str]] = []
+            cameras_str = ", ".join(sorted({c for _, _, c in frames_raw}))
+            for i, (frame, frame_time_sec, camera) in enumerate(frames_raw):
+                ts = ce_start_time + frame_time_sec if ce_start_time > 0 else frame_time_sec
+                time_str = datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S")
+                frame_overlay = crop_utils.draw_timestamp_overlay(
+                    frame, time_str, camera, i + 1, image_count
+                )
+                frames_with_time.append((frame_overlay, frame_time_sec, camera))
 
-        # Send to Gemini proxy
-        frames = [f for f, _, _ in frames_with_time]
-        first_ts = frames_with_time[0][1] if frames_with_time else 0
-        activity_start_str = (
-            datetime.fromtimestamp(ce_start_time + first_ts).strftime("%Y-%m-%d %H:%M:%S")
-            if ce_start_time > 0 else datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        )
-        system_prompt = self._build_system_prompt(
-            image_count=image_count,
-            camera_list=cameras_str,
-            first_image_number=1,
-            last_image_number=image_count,
-            activity_start_str=activity_start_str,
-            duration_str="multi-camera event",
-            zones_str="none recorded",
-            labels_str="(none recorded)",
-        )
-        result = self.send_to_proxy(system_prompt, frames)
-        if result and isinstance(result, dict):
-            out_path = os.path.join(ce_folder_path, "analysis_result.json")
-            try:
-                with open(out_path, "w", encoding="utf-8") as f:
-                    json.dump(result, f, indent=2, ensure_ascii=False)
-                logger.debug("Saved analysis_result.json for CE %s to %s", ce_id, out_path)
-            except OSError as e:
-                logger.warning("Failed to write analysis_result.json for CE %s: %s", ce_id, e)
-        return result
+            # Write ai_frame_analysis at CE root
+            save_frames = bool(self.config.get("SAVE_AI_FRAMES", True))
+            create_zip = bool(self.config.get("CREATE_AI_ANALYSIS_ZIP", True))
+            write_ai_frame_analysis_multi_cam(
+                ce_folder_path,
+                frames_with_time,
+                write_manifest=True,
+                create_zip_flag=create_zip,
+                save_frames=save_frames,
+            )
+
+            # Send to Gemini proxy
+            frames = [f for f, _, _ in frames_with_time]
+            first_ts = frames_with_time[0][1] if frames_with_time else 0
+            activity_start_str = (
+                datetime.fromtimestamp(ce_start_time + first_ts).strftime("%Y-%m-%d %H:%M:%S")
+                if ce_start_time > 0 else datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            )
+            system_prompt = self._build_system_prompt(
+                image_count=image_count,
+                camera_list=cameras_str,
+                first_image_number=1,
+                last_image_number=image_count,
+                activity_start_str=activity_start_str,
+                duration_str="multi-camera event",
+                zones_str="none recorded",
+                labels_str="(none recorded)",
+            )
+            result = self.send_to_proxy(system_prompt, frames)
+            if result and isinstance(result, dict):
+                out_path = os.path.join(ce_folder_path, "analysis_result.json")
+                try:
+                    with open(out_path, "w", encoding="utf-8") as f:
+                        json.dump(result, f, indent=2, ensure_ascii=False)
+                    logger.debug("Saved analysis_result.json for CE %s to %s", ce_id, out_path)
+                except OSError as e:
+                    logger.warning("Failed to write analysis_result.json for CE %s: %s", ce_id, e)
+            return result
+        except Exception as e:
+            logger.exception(
+                "CE analysis failed for %s (%s): %s",
+                ce_id,
+                ce_folder_path,
+                e,
+            )
+            return None
