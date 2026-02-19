@@ -665,6 +665,11 @@ class GeminiAnalysisService:
                 crop_width=self.crop_width,
                 crop_height=self.crop_height,
                 first_camera_bias=primary_camera,
+                first_camera_bias_decay_seconds=float(self.config.get("FIRST_CAMERA_BIAS_DECAY_SECONDS", 1.0)),
+                first_camera_bias_initial=float(self.config.get("FIRST_CAMERA_BIAS_INITIAL", 1.5)),
+                first_camera_bias_cap_seconds=float(self.config.get("FIRST_CAMERA_BIAS_CAP_SECONDS", 0)),
+                person_area_switch_threshold=int(self.config.get("PERSON_AREA_SWITCH_THRESHOLD", 0)),
+                camera_switch_ratio=float(self.config.get("CAMERA_SWITCH_RATIO", 1.2)),
             )
             if not frames_raw:
                 logger.warning("No frames extracted from CE %s", ce_id)
@@ -787,6 +792,11 @@ class GeminiAnalysisService:
                 crop_width=self.crop_width,
                 crop_height=self.crop_height,
                 first_camera_bias=None,
+                first_camera_bias_decay_seconds=float(self.config.get("FIRST_CAMERA_BIAS_DECAY_SECONDS", 1.0)),
+                first_camera_bias_initial=float(self.config.get("FIRST_CAMERA_BIAS_INITIAL", 1.5)),
+                first_camera_bias_cap_seconds=float(self.config.get("FIRST_CAMERA_BIAS_CAP_SECONDS", 0)),
+                person_area_switch_threshold=int(self.config.get("PERSON_AREA_SWITCH_THRESHOLD", 0)),
+                camera_switch_ratio=float(self.config.get("CAMERA_SWITCH_RATIO", 1.2)),
                 log_callback=_log if log_messages is not None else None,
             )
             if not frames_raw:

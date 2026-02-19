@@ -12,8 +12,9 @@ since ffmpegcv readers do not support frame-index seek.
 from __future__ import annotations
 
 import json
-import os
 import logging
+import math
+import os
 from typing import Any, Callable
 
 logger = logging.getLogger("frigate-buffer")
@@ -100,6 +101,37 @@ def _person_area_at_time(sidecar_entries: list[dict[str, Any]], t_sec: float) ->
     return _person_area_from_detections(detections)
 
 
+def _detection_timestamps_with_person(
+    sidecars: dict[str, list[dict[str, Any]]],
+    global_end: float,
+) -> list[float]:
+    """Build sorted list of timestamps (from all cameras) where person area > 0.
+    Handles None or empty sidecar per camera safely."""
+    timestamps: set[float] = set()
+    for cam, entries in sidecars.items():
+        for entry in entries or []:
+            area = _person_area_from_detections(entry.get("detections") or [])
+            if area > 0:
+                t = float(entry.get("timestamp_sec") or 0)
+                if 0 <= t <= global_end:
+                    timestamps.add(t)
+    return sorted(timestamps)
+
+
+def _subsample_with_min_gap(timestamps: list[float], step_sec: float, max_count: int) -> list[float]:
+    """Select timestamps with at least step_sec between them, up to max_count.
+    Iterates in ascending order; selects when t >= last_selected + step_sec."""
+    if not timestamps or step_sec <= 0 or max_count <= 0:
+        return []
+    selected: list[float] = []
+    last = -step_sec if step_sec > 0 else -float("inf")
+    for t in timestamps:
+        if t >= last + step_sec and len(selected) < max_count:
+            selected.append(t)
+            last = t
+    return selected
+
+
 def _detect_person_area(frame: Any) -> float:
     """Run HOG person detector on frame. Returns total pixel area of detections (0 if none)."""
     if not _CV2_AVAILABLE:
@@ -163,6 +195,11 @@ def extract_target_centric_frames(
     crop_width: int = 0,
     crop_height: int = 0,
     first_camera_bias: str | None = None,
+    first_camera_bias_decay_seconds: float = 1.0,
+    first_camera_bias_initial: float = 1.5,
+    first_camera_bias_cap_seconds: float = 0.0,
+    person_area_switch_threshold: int = 0,
+    camera_switch_ratio: float = 1.2,
     log_callback: Callable[[str], None] | None = None,
 ) -> list[tuple[Any, float, str]]:
     """
@@ -283,6 +320,17 @@ def extract_target_centric_frames(
                 cap.release()
             durations[cam] = 0.0
 
+    for cam in list(caps.keys()):
+        if caps.get(cam) is not None and cam in decode_backends and cam in durations:
+            logger.info(
+                "Multi-clip open: camera=%s backend=%s path=%s duration_sec=%.2f fps=%.2f",
+                cam,
+                decode_backends[cam],
+                path_per_cam.get(cam, ""),
+                durations[cam],
+                fps_per_cam.get(cam, 0),
+            )
+
     if log_callback and decode_backends:
         cams = ", ".join(sorted(decode_backends.keys()))
         if all(b == "GPU" for b in decode_backends.values()):
@@ -313,17 +361,40 @@ def extract_target_centric_frames(
             missing_cameras,
         )
 
-    # First-camera bias decay: multiplier 1.5 at T=0 to 1.0 at T=global_end (avoid div by zero).
+    # First-camera bias: exponential decay to (effectively) 0. No seek; time-based only.
     def _bias_multiplier(cam: str, t_sec: float) -> float:
         if first_camera_bias is None or cam != first_camera_bias:
             return 1.0
-        if global_end > 0:
-            return 1.5 - 0.5 * (t_sec / global_end)
-        return 1.0
+        if first_camera_bias_cap_seconds > 0 and t_sec >= first_camera_bias_cap_seconds:
+            return 0.0
+        if first_camera_bias_decay_seconds <= 0:
+            return first_camera_bias_initial
+        return first_camera_bias_initial * math.exp(-t_sec / first_camera_bias_decay_seconds)
 
-    # Hysteresis: stay on camera for min 3 frames; escape hatch when current camera area is 0.
+    # Hysteresis: stay on camera for min 3 frames; escape when current area is 0 or below threshold.
     current_camera: str | None = None
     frames_on_current = 0
+
+    # Build list of sample times: detection-aligned (when sidecars have person detections) or fixed-step.
+    sample_times_list: list[float]
+    if use_sidecar and sidecars:
+        merged_t = _detection_timestamps_with_person(sidecars, global_end)
+        sample_times_list = _subsample_with_min_gap(merged_t, step_sec, max_frames_min)
+        if not sample_times_list:
+            sample_times_list = []
+            t = 0.0
+            while t <= global_end and len(sample_times_list) < max_frames_min:
+                sample_times_list.append(t)
+                t += step_sec
+            logger.debug("Detection-aligned sample list empty; using fixed-step grid (%d times)", len(sample_times_list))
+        else:
+            logger.debug("Using detection-aligned sample times (%d)", len(sample_times_list))
+    else:
+        sample_times_list = []
+        t = 0.0
+        while t <= global_end and len(sample_times_list) < max_frames_min:
+            sample_times_list.append(t)
+            t += step_sec
 
     # Sequential-read, time-sampled: per-camera state (prev_frame, prev_t, curr_frame, curr_t).
     # We advance all readers in lockstep; at each sample time T we use the frame at T for each camera.
@@ -337,11 +408,13 @@ def extract_target_centric_frames(
         try:
             ret, frame = caps[cam].read()
         except _READ_ERRORS as e:
+            remaining = [c for c in caps if caps.get(c) is not None and c != cam]
             logger.warning(
-                "Reader process died for camera %s (%s); dropping camera for rest of extraction: %s",
+                "Reader process died for camera %s (%s); dropping camera for rest of extraction: %s (sample_time=initial_read remaining_cameras=%s)",
                 cam,
                 path_per_cam.get(cam, ""),
                 e,
+                remaining,
             )
             try:
                 caps[cam].release()
@@ -358,9 +431,9 @@ def extract_target_centric_frames(
     # frame_index per camera: next frame to read will be at index 1 (first frame was index 0, t=0).
     frame_index: dict[str, int] = {cam: 1 for cam in caps if caps[cam] is not None}
 
-    next_sample_time = 0.0
-    while next_sample_time <= global_end and len(collected) < max_frames_min:
-        T = next_sample_time
+    for T in sample_times_list:
+        if len(collected) >= max_frames_min:
+            break
         best_camera: str | None = None
         best_frame: Any = None
         best_area = 0.0
@@ -375,11 +448,15 @@ def extract_target_centric_frames(
                 try:
                     ret, frame = cap.read()
                 except _READ_ERRORS as e:
+                    remaining = [c for c in caps if caps.get(c) is not None and c != cam]
                     logger.warning(
-                        "Reader process died for camera %s (%s); dropping camera for rest of extraction: %s",
+                        "Reader process died for camera %s (%s); dropping camera for rest of extraction: %s (sample_time_sec=%.2f frame_index=%s remaining_cameras=%s)",
                         cam,
                         path_per_cam.get(cam, ""),
                         e,
+                        T,
+                        frame_index.get(cam, 0),
+                        remaining,
                     )
                     try:
                         cap.release()
@@ -430,14 +507,15 @@ def extract_target_centric_frames(
             area *= _bias_multiplier(cam, T)
             cam_candidates[cam] = (candidate.copy() if hasattr(candidate, "copy") else candidate, area)
 
-        # Hysteresis: stay on current camera for min 3 frames unless its area is 0 (escape hatch).
+        # Hysteresis: stay on current camera for min 3 frames unless area is 0 or below threshold (escape).
         if current_camera is not None and frames_on_current < 3:
             curr_area = cam_candidates.get(current_camera, (None, 0.0))[1]
-            if curr_area > 0:
+            below_threshold = person_area_switch_threshold > 0 and curr_area < person_area_switch_threshold
+            if curr_area > 0 and not below_threshold:
                 best_camera = current_camera
                 best_frame, best_area = cam_candidates.get(current_camera, (None, 0.0))
             else:
-                # Escape hatch: person left frame; pick camera with largest area.
+                # Escape: person left or area below threshold; pick camera with largest area.
                 best_camera = max(cam_candidates, key=lambda c: cam_candidates[c][1]) if cam_candidates else None
                 best_frame, best_area = (cam_candidates.get(best_camera, (None, 0.0))) if best_camera else (None, 0.0)
         else:
@@ -445,7 +523,11 @@ def extract_target_centric_frames(
             best_frame, best_area = (cam_candidates.get(best_camera, (None, 0.0))) if best_camera else (None, 0.0)
             if best_camera and current_camera and best_camera != current_camera:
                 current_area = cam_candidates.get(current_camera, (None, 0.0))[1]
-                if best_area < 1.3 * current_area:
+                allow_switch = (
+                    (person_area_switch_threshold > 0 and current_area < person_area_switch_threshold and best_area > current_area)
+                    or (best_area >= camera_switch_ratio * current_area)
+                )
+                if not allow_switch:
                     best_camera = current_camera
                     best_frame, best_area = cam_candidates.get(current_camera, (None, 0.0))
 
@@ -475,7 +557,6 @@ def extract_target_centric_frames(
             else:
                 current_camera = best_camera
                 frames_on_current = 1
-        next_sample_time += step_sec
 
     for cap in caps.values():
         if cap is not None:
