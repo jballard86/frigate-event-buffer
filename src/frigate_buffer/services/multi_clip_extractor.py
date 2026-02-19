@@ -409,10 +409,14 @@ def extract_target_centric_frames(
 
     if log_callback and decode_backends:
         cams = ", ".join(sorted(decode_backends.keys()))
-        if all(b == "GPU" for b in decode_backends.values()):
+        backends_set = set(decode_backends.values())
+        if len(backends_set) == 1 and "GPU" in backends_set:
             log_callback(f"Decoding clips ({cams}): GPU (NVDEC).")
-        else:
+        elif len(backends_set) == 1 and "CPU" in backends_set:
             log_callback(f"Decoding clips ({cams}): CPU (GPU not configured or fallback).")
+        else:
+            parts = [f"{cam}: {decode_backends[cam]}" for cam in sorted(decode_backends.keys())]
+            log_callback(f"Decoding clips: {', '.join(parts)} (first camera GPU, 2nd+ CPU to avoid NVDEC contention).")
 
     global_end = max(durations.values()) if durations else 0.0
     if global_end <= 0 or not caps:

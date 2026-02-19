@@ -197,7 +197,7 @@ def load_config() -> dict:
         'FIRST_CAMERA_BIAS_CAP_SECONDS': 0,
         'PERSON_AREA_SWITCH_THRESHOLD': 200,
         'CAMERA_SWITCH_RATIO': 1.2,
-        'DECODE_SECOND_CAMERA_CPU_ONLY': False,
+        'DECODE_SECOND_CAMERA_CPU_ONLY': True,
 
         # Gemini proxy (extended): Single API Key (GEMINI_API_KEY only). Default URL "" (no Google fallback).
         'GEMINI_PROXY_URL': '',

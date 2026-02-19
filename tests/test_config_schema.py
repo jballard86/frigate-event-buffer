@@ -227,6 +227,7 @@ class TestConfigSchema(unittest.TestCase):
         self.assertEqual(config['NVENC_PROBE_WIDTH'], 1280)
         self.assertEqual(config['NVENC_PROBE_HEIGHT'], 720)
         self.assertEqual(config['MULTI_CAM_SYSTEM_PROMPT_FILE'], '')
+        self.assertEqual(config['DECODE_SECOND_CAMERA_CPU_ONLY'], True)
         self.assertEqual(config['GEMINI_PROXY_URL'], '')
         self.assertEqual(config['GEMINI_PROXY_MODEL'], 'gemini-2.5-flash-lite')
         self.assertEqual(config['GEMINI_PROXY_TEMPERATURE'], 0.3)
@@ -289,6 +290,47 @@ class TestConfigSchema(unittest.TestCase):
 
         config = load_config()
         self.assertEqual(config['GEMINI_PROXY_URL'], 'http://env-proxy:6060')
+
+    @patch('builtins.open', new_callable=mock_open)
+    @patch('os.path.exists')
+    @patch('frigate_buffer.config.yaml.safe_load')
+    def test_decode_second_camera_cpu_only_default_and_override(self, mock_yaml_load, mock_exists, mock_file):
+        """DECODE_SECOND_CAMERA_CPU_ONLY defaults to True; multi_cam.decode_second_camera_cpu_only: false overrides to False."""
+        yaml_default = {
+            'cameras': [{'name': 'cam1'}],
+            'network': {
+                'mqtt_broker': 'localhost',
+                'frigate_url': 'http://frigate',
+                'buffer_ip': 'localhost',
+                'storage_path': '/tmp',
+            },
+            'multi_cam': {
+                'max_multi_cam_frames_min': 60,
+            },
+        }
+        mock_exists.return_value = True
+        mock_yaml_load.return_value = yaml_default
+
+        config = load_config()
+        self.assertEqual(config['DECODE_SECOND_CAMERA_CPU_ONLY'], True)
+
+        yaml_override = {
+            'cameras': [{'name': 'cam1'}],
+            'network': {
+                'mqtt_broker': 'localhost',
+                'frigate_url': 'http://frigate',
+                'buffer_ip': 'localhost',
+                'storage_path': '/tmp',
+            },
+            'multi_cam': {
+                'max_multi_cam_frames_min': 60,
+                'decode_second_camera_cpu_only': False,
+            },
+        }
+        mock_yaml_load.return_value = yaml_override
+
+        config = load_config()
+        self.assertEqual(config['DECODE_SECOND_CAMERA_CPU_ONLY'], False)
 
     @patch('builtins.open', new_callable=mock_open)
     @patch('os.path.exists')
