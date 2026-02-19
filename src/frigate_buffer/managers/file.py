@@ -435,6 +435,17 @@ class FileManager:
                             event_dir = event_entry.name
                             event_path = event_entry.path
 
+                            # Test run folders (test1, test2, ...): age-only by mtime
+                            if camera_dir == "events" and re.match(r"^test\d+$", event_dir):
+                                try:
+                                    if os.path.getmtime(event_path) < cutoff:
+                                        shutil.rmtree(event_path)
+                                        logger.info(f"Cleaned up old test run: {camera_dir}/{event_dir}")
+                                        deleted_count += 1
+                                except OSError:
+                                    pass
+                                continue
+
                             try:
                                 parts = event_dir.split('_', 1)
                                 ts = float(parts[0])
