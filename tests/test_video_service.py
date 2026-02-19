@@ -10,6 +10,8 @@ from frigate_buffer.services.video import (
     VideoService,
     decode_nvenc_returncode,
     ensure_detection_model_ready,
+    _nvenc_probe_cmd,
+    run_nvenc_preflight_probe,
 )
 
 
@@ -45,6 +47,29 @@ class TestDecodeNvencReturncode(unittest.TestCase):
             any("SIGSEGV" in s or "128+11" in s for s in interp),
             "expected SIGSEGV/128+11 in %s" % interp,
         )
+
+
+class TestNvencProbeCmd(unittest.TestCase):
+    """Tests for NVENC probe command building (configurable resolution)."""
+
+    @patch("frigate_buffer.services.video._nvenc_probe_width", 1280)
+    @patch("frigate_buffer.services.video._nvenc_probe_height", 720)
+    def test_nvenc_probe_cmd_uses_default_1280x720(self, *_):
+        """Probe command uses width x height from module state (default 1280x720)."""
+        cmd = _nvenc_probe_cmd()
+        cmd_str = " ".join(cmd)
+        self.assertIn("1280x720", cmd_str, "probe command should use 1280x720 by default")
+
+    @patch("frigate_buffer.services.video._nvenc_preflight_result", None)
+    @patch("frigate_buffer.services.video.subprocess.run")
+    def test_run_nvenc_preflight_probe_sets_probe_dimensions_from_config(self, mock_run):
+        """run_nvenc_preflight_probe(config) sets probe size so _nvenc_probe_cmd uses it."""
+        mock_run.return_value = MagicMock(returncode=0, stderr=b"")
+        config = {"NVENC_PROBE_WIDTH": 1920, "NVENC_PROBE_HEIGHT": 1080}
+        run_nvenc_preflight_probe(config)
+        cmd = _nvenc_probe_cmd()
+        cmd_str = " ".join(cmd)
+        self.assertIn("1920x1080", cmd_str, "probe command should use config dimensions")
 
 
 class TestProbeNvenc(unittest.TestCase):

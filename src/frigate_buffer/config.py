@@ -86,6 +86,8 @@ CONFIG_SCHEMA = Schema({
         Optional('motion_threshold_px'): int,                   # Minimum pixel change to trigger high-rate capture.
         Optional('crop_width'): int,                            # Width of output crop for stitched/multi-cam frames.
         Optional('crop_height'): int,                            # Height of output crop for stitched/multi-cam frames.
+        Optional('nvenc_probe_width'): int,                      # Width for NVENC preflight probe (match crop for safety).
+        Optional('nvenc_probe_height'): int,                     # Height for NVENC preflight probe.
         Optional('multi_cam_system_prompt_file'): str,          # Path to system prompt file for multi-cam Gemini; empty = built-in.
         Optional('smart_crop_padding'): Any(int, float),        # Padding fraction around motion-based crop (e.g. 0.15).
         Optional('motion_crop_min_area_fraction'): Any(int, float),  # Minimum motion region area as fraction of frame to consider for crop.
@@ -174,6 +176,8 @@ def load_config() -> dict:
         'MOTION_THRESHOLD_PX': 50,
         'CROP_WIDTH': 1280,
         'CROP_HEIGHT': 720,
+        'NVENC_PROBE_WIDTH': 1280,
+        'NVENC_PROBE_HEIGHT': 720,
         'MULTI_CAM_SYSTEM_PROMPT_FILE': '',
         'SMART_CROP_PADDING': 0.15,
         'MOTION_CROP_MIN_AREA_FRACTION': 0.001,
@@ -290,6 +294,8 @@ def load_config() -> dict:
                     config['MOTION_THRESHOLD_PX'] = mc.get('motion_threshold_px', config['MOTION_THRESHOLD_PX'])
                     config['CROP_WIDTH'] = mc.get('crop_width', config['CROP_WIDTH'])
                     config['CROP_HEIGHT'] = mc.get('crop_height', config['CROP_HEIGHT'])
+                    config['NVENC_PROBE_WIDTH'] = mc.get('nvenc_probe_width', config['NVENC_PROBE_WIDTH'])
+                    config['NVENC_PROBE_HEIGHT'] = mc.get('nvenc_probe_height', config['NVENC_PROBE_HEIGHT'])
                     config['MULTI_CAM_SYSTEM_PROMPT_FILE'] = mc.get('multi_cam_system_prompt_file', config['MULTI_CAM_SYSTEM_PROMPT_FILE']) or ''
                     config['SMART_CROP_PADDING'] = float(mc.get('smart_crop_padding', config.get('SMART_CROP_PADDING', 0.15)))
                     config['MOTION_CROP_MIN_AREA_FRACTION'] = float(mc.get('motion_crop_min_area_fraction', config.get('MOTION_CROP_MIN_AREA_FRACTION', 0.001)))

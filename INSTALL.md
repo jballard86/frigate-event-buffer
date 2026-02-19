@@ -123,28 +123,6 @@ docker run -d --name frigate_buffer --restart unless-stopped \
   frigate-buffer:latest python -m frigate_buffer.main
 ```
 
-**Without GPU** (omit `--gpus all` and the NVIDIA env vars; transcoding will use CPU):
-
-```bash
-cd /mnt/user/appdata/frigate-buffer
-chmod +x entrypoint.sh
-docker stop frigate_buffer 2>/dev/null; docker rm frigate_buffer 2>/dev/null || true
-docker run -d --name frigate_buffer --restart unless-stopped \
-  --network bridge \
-  -p 5055:5055 \
-  -v "$(pwd)/entrypoint.sh:/entrypoint.sh:ro" \
-  -v /mnt/user/appdata/frigate_buffer:/app/storage \
-  -v /mnt/user/appdata/frigate_buffer/config.yaml:/app/config.yaml:ro \
-  -v /etc/localtime:/etc/localtime:ro \
-  -e FRIGATE_URL=http://192.168.21.189:5000 \
-  -e MQTT_BROKER=192.168.21.189 \
-  -e MQTT_PORT=1883 \
-  -e RETENTION_DAYS=3 \
-  -e LOG_LEVEL=INFO \
-  --entrypoint /entrypoint.sh \
-  frigate-buffer:latest python -m frigate_buffer.main
-```
-
 ---
 
 ## 6. Update (after code changes)

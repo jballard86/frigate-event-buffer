@@ -128,6 +128,8 @@ network:
 #   motion_threshold_px: 50        # min pixels movement for high-rate capture
 #   crop_width: 1280
 #   crop_height: 720
+#   nvenc_probe_width: 1280   # NVENC preflight probe resolution (match crop for safety)
+#   nvenc_probe_height: 720
 #   multi_cam_system_prompt_file: ""   # path to prompt file; empty = use built-in
 #   smart_crop_padding: 0.15       # padding fraction around motion crop
 #   motion_crop_min_area_fraction: 0.001
