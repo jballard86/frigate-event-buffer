@@ -178,6 +178,7 @@ def draw_timestamp_overlay(
     thickness_outline: int = 2,
     thickness_text: int = 1,
     position: tuple[int, int] = (10, 30),
+    person_area: int | None = None,
 ) -> Any:
     """
     Draw timestamp overlay on frame (top-left by default).
@@ -189,6 +190,9 @@ def draw_timestamp_overlay(
     Uses shadow/outline: black with thicker stroke first, then white with thinner
     stroke, so text is readable on both bright (snow) and dark (night) backgrounds.
     Format: time_str | camera_name | seq_index/seq_total (e.g. "12:34:56 | Doorbell | 3/24").
+
+    When person_area is not None, draws "person_area: {value}" at bottom-right in the
+    same style, for debugging camera-switch threshold tuning (multi-cam only).
 
     Returns:
         The frame with overlay drawn (same object if already writable, else a copy).
@@ -218,4 +222,33 @@ def draw_timestamp_overlay(
         thickness_text,
         cv2.LINE_AA,
     )
+    if person_area is not None:
+        br_label = f"person_area: {person_area}"
+        h_frame, w_frame = frame.shape[:2]
+        margin = 10
+        (tw, _), _ = cv2.getTextSize(
+            br_label, cv2.FONT_HERSHEY_SIMPLEX, font_scale, thickness_outline
+        )
+        br_x = w_frame - tw - margin
+        br_y = h_frame - margin
+        cv2.putText(
+            frame,
+            br_label,
+            (br_x, br_y),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            font_scale,
+            (0, 0, 0),
+            thickness_outline,
+            cv2.LINE_AA,
+        )
+        cv2.putText(
+            frame,
+            br_label,
+            (br_x, br_y),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            font_scale,
+            (255, 255, 255),
+            thickness_text,
+            cv2.LINE_AA,
+        )
     return frame

@@ -738,8 +738,9 @@ class GeminiAnalysisService:
             for i, ef in enumerate(frames_raw):
                 ts = ce_start_time + ef.timestamp_sec if ce_start_time > 0 else ef.timestamp_sec
                 time_str = datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S")
+                person_area = ef.metadata.get("person_area") if self.config.get("PERSON_AREA_DEBUG") else None
                 ef.frame = crop_utils.draw_timestamp_overlay(
-                    ef.frame, time_str, ef.camera, i + 1, image_count
+                    ef.frame, time_str, ef.camera, i + 1, image_count, person_area=person_area
                 )
 
             # Write ai_frame_analysis at CE root (pass ExtractedFrame list)
@@ -869,8 +870,9 @@ class GeminiAnalysisService:
             for i, ef in enumerate(frames_raw):
                 ts = ce_start_time + ef.timestamp_sec if ce_start_time > 0 else ef.timestamp_sec
                 time_str = datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S")
+                person_area = ef.metadata.get("person_area") if self.config.get("PERSON_AREA_DEBUG") else None
                 ef.frame = crop_utils.draw_timestamp_overlay(
-                    ef.frame, time_str, ef.camera, i + 1, image_count
+                    ef.frame, time_str, ef.camera, i + 1, image_count, person_area=person_area
                 )
 
             _log(f"Organizing timeline (saving {len(frames_raw)} frames).")

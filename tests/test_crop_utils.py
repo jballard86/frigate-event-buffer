@@ -44,6 +44,24 @@ class TestDrawTimestampOverlay(unittest.TestCase):
         self.assertIs(result, frame)
         self.assertTrue(result.flags.writeable)
 
+    def test_draw_timestamp_overlay_with_person_area_draws_bottom_right(self):
+        """When person_area is set, overlay draws at bottom-right; returned frame has same shape and is writable."""
+        frame = np.zeros((120, 200, 3), dtype=np.uint8)
+        result = crop_utils.draw_timestamp_overlay(
+            frame,
+            "2026-02-17 15:42:55",
+            "test_cam",
+            1,
+            3,
+            person_area=12345,
+        )
+        self.assertEqual(result.shape, frame.shape)
+        self.assertTrue(result.flags.writeable)
+        # Bottom-right region should have non-zero pixels from "person_area: 12345" text
+        h, w = result.shape[:2]
+        bottom_right = result[h - 30 : h, w - 120 : w]
+        self.assertGreater(np.count_nonzero(bottom_right), 0, "Bottom-right overlay should be drawn")
+
 
 class TestFullFrameResizeToTarget(unittest.TestCase):
     """Tests for full_frame_resize_to_target (letterbox to target size)."""

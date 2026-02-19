@@ -645,10 +645,12 @@ def extract_target_centric_frames(
                             else:
                                 best_frame = _crop_utils.center_crop(best_frame, crop_width, crop_height)
                             meta["is_full_frame_resize"] = False
+            raw_person_area = _person_area_at_time(sidecars.get(best_camera) or [], T)
+            meta["person_area"] = int(raw_person_area)
             skip_append = (
                 use_sidecar
                 and sidecars
-                and _person_area_at_time(sidecars.get(best_camera) or [], T) <= 0
+                and raw_person_area <= 0
             )
             if not skip_append:
                 collected.append(ExtractedFrame(frame=best_frame, timestamp_sec=T, camera=best_camera, metadata=meta))
