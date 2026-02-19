@@ -101,7 +101,7 @@ So the second camera **does** start; the FFmpeg reader for carport **dies mid-ru
 
 ---
 
-### D. Optional: Prefer CPU decode for second camera when both would use NVDEC
+### D. Prevent reader death: fallback and verbose logging (see carport_reader_bw_no_person.plan.md)
 
 **Goal:** Reduce chance of “read of closed file” by avoiding two simultaneous NVDEC decoders.
 
