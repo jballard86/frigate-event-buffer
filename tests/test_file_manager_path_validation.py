@@ -36,6 +36,10 @@ class TestFileManagerPathValidation(unittest.TestCase):
         self.assertNotIn("/", out)
         self.assertNotIn("\\", out)
 
+    def test_sanitize_camera_name_empty_or_all_special_returns_unknown(self):
+        self.assertEqual(self.fm.sanitize_camera_name(""), "unknown")
+        self.assertEqual(self.fm.sanitize_camera_name("!!!@@@###"), "unknown")
+
     def test_create_event_folder_path_traversal_raises(self):
         with self.assertRaises(ValueError) as ctx:
             self.fm.create_event_folder(
@@ -50,10 +54,32 @@ class TestFileManagerPathValidation(unittest.TestCase):
             self.fm.create_consolidated_event_folder("../../../evil")
         self.assertIn("Invalid consolidated event path", str(ctx.exception))
 
+    def test_create_consolidated_event_folder_dotdot_escape_raises(self):
+        # folder_name that resolves outside storage (path traversal)
+        with self.assertRaises(ValueError) as ctx:
+            self.fm.create_consolidated_event_folder("../../outside")
+        self.assertIn("Invalid consolidated event path", str(ctx.exception))
+
     def test_create_event_folder_valid_succeeds(self):
         path = self.fm.create_event_folder("evt123", "cam1", 1000.0)
         self.assertTrue(path.startswith(os.path.realpath(self.tmp)))
         self.assertTrue(os.path.isdir(path))
+
+    def test_delete_event_folder_under_storage_succeeds(self):
+        sub = os.path.join(self.tmp, "cam1", "1000_evt1")
+        os.makedirs(sub, exist_ok=True)
+        self.assertTrue(os.path.isdir(sub))
+        result = self.fm.delete_event_folder(sub)
+        self.assertTrue(result)
+        self.assertFalse(os.path.exists(sub))
+
+    def test_delete_event_folder_outside_storage_returns_false(self):
+        result = self.fm.delete_event_folder("/tmp/outside")
+        self.assertFalse(result)
+
+    def test_delete_event_folder_nonexistent_returns_false(self):
+        result = self.fm.delete_event_folder(os.path.join(self.tmp, "nonexistent"))
+        self.assertFalse(result)
 
 
 if __name__ == '__main__':

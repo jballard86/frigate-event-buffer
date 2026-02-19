@@ -10,6 +10,7 @@ class TestEventLifecycleService(unittest.TestCase):
             'NOTIFICATION_DELAY': 0.1,
             'EXPORT_BUFFER_BEFORE': 5,
             'EXPORT_BUFFER_AFTER': 30,
+            'MINIMUM_EVENT_SECONDS': 5,
             'SUMMARY_PADDING_BEFORE': 15,
             'SUMMARY_PADDING_AFTER': 15,
             'FRIGATE_URL': 'http://frigate',
@@ -81,30 +82,67 @@ class TestEventLifecycleService(unittest.TestCase):
         self.assertEqual(kwargs['target'], self.service._send_initial_notification)
 
     def test_process_event_end(self):
-        # Setup
-        event = EventState("evt1", "cam1", "person", 100.0)
+        # Setup: event in CE, duration 10s; expect CE path (no discard)
+        event = EventState("evt1", "cam1", "person", created_at=100.0)
         event.folder_path = "/tmp/evt1"
         event.has_clip = True
         event.has_snapshot = True
         event.end_time = 110.0
-
-        # Mock CE found
         ce = ConsolidatedEvent("ce1", "f1", "p1", 100.0, 110.0)
         self.consolidated_manager.get_by_frigate_event.return_value = ce
-
-        # Return value for cleanup
         self.file_manager.cleanup_old_events.return_value = 5
 
         # Act
         self.service.process_event_end(event)
 
-        # Assert
-        self.download_service.download_snapshot.assert_called_with("evt1", "/tmp/evt1")
+        # Assert: did not discard (duration 10s >= min 5s) (would call remove_event_from_ce and delete_event_folder)
+        self.consolidated_manager.remove_event_from_ce.assert_not_called()
+        self.file_manager.delete_event_folder.assert_not_called()
+        # CE path: update_activity, schedule_close_timer, write_summary, cleanup
         self.consolidated_manager.update_activity.assert_called()
         self.consolidated_manager.schedule_close_timer.assert_called_with("ce1")
-        # Cleanup called
         self.file_manager.cleanup_old_events.assert_called()
         self.assertIsNotNone(self.service.last_cleanup_time)
+
+    def test_process_event_end_discards_when_under_minimum_duration(self):
+        # Setup: duration 2s, minimum 10s -> discard
+        self.config['MINIMUM_EVENT_SECONDS'] = 10
+        event = EventState("evt1", "cam1", "person", created_at=100.0)
+        event.folder_path = "/tmp/storage/cam1/100_evt1"
+        event.end_time = 102.0
+        self.consolidated_manager.get_by_frigate_event.return_value = None
+
+        # Act
+        self.service.process_event_end(event)
+
+        # Assert: discard path
+        self.file_manager.delete_event_folder.assert_called_with("/tmp/storage/cam1/100_evt1")
+        self.state_manager.remove_event.assert_called_with("evt1")
+        self.notifier.publish_notification.assert_called_once()
+        call_args = self.notifier.publish_notification.call_args
+        self.assertEqual(call_args[0][1], "discarded")
+        self.notifier.mark_last_event_ended.assert_called_once()
+        self.download_service.download_snapshot.assert_not_called()
+        self.consolidated_manager.update_activity.assert_not_called()
+        self.consolidated_manager.schedule_close_timer.assert_not_called()
+
+    def test_process_event_end_keeps_event_when_at_or_above_minimum(self):
+        # Setup: duration 10s >= min 5 -> keep event (no discard)
+        event = EventState("evt1", "cam1", "person", created_at=100.0)
+        event.folder_path = "/tmp/evt1"
+        event.has_snapshot = True
+        event.end_time = 110.0
+        ce = ConsolidatedEvent("ce1", "f1", "p1", 100.0, 110.0)
+        self.consolidated_manager.get_by_frigate_event.return_value = ce
+        self.file_manager.cleanup_old_events.return_value = 0
+
+        # Act
+        self.service.process_event_end(event)
+
+        # Assert: discard path not taken (duration 10s >= min 5s)
+        self.consolidated_manager.remove_event_from_ce.assert_not_called()
+        self.file_manager.delete_event_folder.assert_not_called()
+        self.consolidated_manager.update_activity.assert_called()
 
     def test_finalize_consolidated_event(self):
         # Setup
@@ -121,7 +159,7 @@ class TestEventLifecycleService(unittest.TestCase):
         self.consolidated_manager._events = {ce_id: ce}
         self.consolidated_manager._lock = MagicMock()
 
-        evt1 = EventState("evt1", "cam1", "person", 100.0)
+        evt1 = EventState("evt1", "cam1", "person", created_at=100.0)
         evt1.end_time = 110.0
         self.state_manager.get_event.return_value = evt1
 
@@ -134,6 +172,43 @@ class TestEventLifecycleService(unittest.TestCase):
         # Assert
         self.consolidated_manager.mark_closing.assert_called_with(ce_id)
         self.download_service.export_and_transcode_clip.assert_called()
+        self.consolidated_manager.remove.assert_called_with(ce_id)
+        self.notifier.mark_last_event_ended.assert_called_once()
+
+    def test_finalize_consolidated_event_multi_cam_uses_download_then_transcode_pool(self):
+        """With 2+ cameras, lifecycle uses export_and_download_clip and transcode_temp_to_final in a pool (not export_and_transcode_clip)."""
+        ce_id = "ce1"
+        ce = ConsolidatedEvent(ce_id, "folder", "path", 100.0, 110.0)
+        ce.frigate_event_ids = ["evt1", "evt2"]
+        ce.cameras = ["cam1", "cam2"]
+        ce.primary_camera = "cam1"
+        ce.end_time_max = 110.0
+        ce.last_activity_time = 110.0
+        self.consolidated_manager.mark_closing.return_value = True
+        self.consolidated_manager._events = {ce_id: ce}
+        self.consolidated_manager._lock = MagicMock()
+        evt1 = EventState("evt1", "cam1", "person", created_at=100.0)
+        evt1.end_time = 110.0
+        evt2 = EventState("evt2", "cam2", "person", created_at=100.0)
+        evt2.end_time = 110.0
+        self.state_manager.get_event.side_effect = lambda fid: evt1 if fid == "evt1" else evt2
+        self.file_manager.ensure_consolidated_camera_folder.side_effect = lambda base, cam: f"{base}/{cam}"
+        self.file_manager.sanitize_camera_name.side_effect = lambda n: n or ""
+        self.download_service.export_and_download_clip.return_value = {
+            "success": True, "temp_path": "/tmp/cam/clip_original.mp4", "frigate_response": {}
+        }
+        self.download_service.transcode_temp_to_final.return_value = True
+        self.download_service.fetch_review_summary.return_value = None
+        self.config["GEMINI"] = {"enabled": False}
+        self.config["MAX_CONCURRENT_TRANSCODES"] = 2
+
+        self.service.finalize_consolidated_event(ce_id)
+
+        self.download_service.export_and_download_clip.assert_called()
+        self.assertEqual(self.download_service.export_and_download_clip.call_count, 2)
+        self.download_service.transcode_temp_to_final.assert_called()
+        self.assertEqual(self.download_service.transcode_temp_to_final.call_count, 2)
+        self.download_service.export_and_transcode_clip.assert_not_called()
         self.consolidated_manager.remove.assert_called_with(ce_id)
 
 if __name__ == '__main__':

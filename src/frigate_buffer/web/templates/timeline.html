@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Notification Timeline - {{ event_id }}</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: #1a1a2e;
+    color: #e0e0e0;
+    min-height: 100vh;
+  }
+
+  .header {
+    background: #16213e;
+    padding: 12px 16px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    border-bottom: 1px solid #0f3460;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .header h1 {
+    font-size: 1.1rem;
+    color: #e94560;
+  }
+
+  a {
+    color: #e94560;
+    text-decoration: none;
+  }
+  a:hover { text-decoration: underline; }
+
+  select, button {
+    background: #0f3460;
+    color: #e0e0e0;
+    border: 1px solid #533483;
+    border-radius: 6px;
+    padding: 6px 10px;
+    font-size: 0.85rem;
+    cursor: pointer;
+  }
+  select:focus, button:focus { outline: 2px solid #e94560; }
+  button:hover { background: #533483; }
+
+  .main {
+    max-width: 900px;
+    margin: 0 auto;
+    padding: 16px;
+  }
+
+  .timeline-intro {
+    margin-bottom: 20px;
+    padding: 12px;
+    background: #16213e;
+    border: 1px solid #0f3460;
+    border-radius: 8px;
+    font-size: 0.9rem;
+    color: #ccc;
+  }
+
+  .entry {
+    background: #16213e;
+    border: 1px solid #0f3460;
+    border-radius: 8px;
+    padding: 14px;
+    margin-bottom: 12px;
+  }
+
+  .entry-header {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 16px;
+    margin-bottom: 10px;
+    font-size: 0.85rem;
+  }
+
+  .entry-ts {
+    color: #888;
+    font-family: monospace;
+  }
+
+  .entry-source {
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 0.75rem;
+    font-weight: 600;
+  }
+
+  .entry-source.frigate_mqtt { background: #1a4a1a; color: #7dde7d; }
+  .entry-source.frigate_api { background: #4a3a1a; color: #deb87d; }
+  .entry-source.ha_notification { background: #3a2a4a; color: #c8a8e8; }
+
+  .entry-direction {
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-size: 0.75rem;
+  }
+
+  .entry-direction.in { background: #0f3460; color: #7db3e8; }
+  .entry-direction.out { background: #2a4a1a; color: #9fdf9f; }
+
+  .entry-label {
+    color: #e94560;
+    font-weight: 500;
+  }
+
+  .entry-data {
+    background: #0f3460;
+    border-radius: 4px;
+    padding: 10px;
+    font-family: 'Consolas', 'Monaco', monospace;
+    font-size: 0.8rem;
+    overflow-x: auto;
+    white-space: pre-wrap;
+    word-break: break-word;
+    max-height: 400px;
+    overflow-y: auto;
+  }
+
+  .empty-state {
+    text-align: center;
+    padding: 40px 20px;
+    color: #666;
+  }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>Notification Timeline</h1>
+  <a href="/player?camera={{ camera }}&subdir={{ subdir }}" style="text-decoration:none;"><button>Back to Player</button></a>
+  <a href="/events/{{ camera }}/{{ subdir }}/timeline/download" download="notification_timeline.json" style="text-decoration:none;"><button style="background:#1a4a1a;border-color:#2d7a2d;color:#7dde7d;padding:6px 12px;border-radius:6px;cursor:pointer;font-size:0.85rem;">Download Timeline</button></a>
+  {% if has_ai_analysis_zip and first_ai_analysis_zip_path %}
+  <a href="/files/{{ camera }}/{{ subdir }}/{{ first_ai_analysis_zip_path }}" download="{{ first_ai_analysis_zip_path | replace('/', '_') }}" style="text-decoration:none;"><button style="background:#3a2a4a;border-color:#533483;color:#c8a8e8;padding:6px 12px;border-radius:6px;cursor:pointer;font-size:0.85rem;">Download AI analysis (zip)</button></a>
+  {% endif %}
+</div>
+
+<div class="main">
+  <div class="timeline-intro">
+    <strong>Event:</strong> {{ event_id }} &bull; <strong>Camera:</strong> {{ camera }}
+    <br>
+    Data received from Frigate, sent to Frigate API, responses, and data sent to Home Assistant.
+    {% if export_duration_seconds is not none and export_file_list %}
+    <br>
+    Export took {{ "%.1f"|format(export_duration_seconds) }}s. Files: {{ export_file_list | join(", ") }}.
+    {% endif %}
+  </div>
+
+  {% if entries %}
+  {% for e in entries %}
+  <div class="entry">
+    <div class="entry-header">
+      <span class="entry-ts">{{ e.get('ts', '') }}</span>
+      <span class="entry-source {{ e.get('source', '') }}">{{ e.get('source', 'unknown') }}</span>
+      <span class="entry-direction {{ e.get('direction', '') }}">{{ e.get('direction', '') }}</span>
+      <span class="entry-label">{{ e.get('label', '') }}</span>
+    </div>
+    <div class="entry-data">{{ e.get('data', e) | tojson(indent=2) }}</div>
+  </div>
+  {% endfor %}
+  {% else %}
+  <div class="empty-state">
+    <p>No timeline data yet.</p>
+    <p style="margin-top:8px;font-size:0.9rem;">Data will appear as the event is processed.</p>
+  </div>
+  {% endif %}
+
+  {% if event_files %}
+  <div class="info-section" style="margin-top:24px;">
+    <h2 style="font-size:1rem;color:#e94560;margin-bottom:12px;border-bottom:1px solid #0f3460;padding-bottom:6px;">Event Files</h2>
+    <ul style="list-style:none;">
+    {% for f in event_files %}
+      <li style="margin:6px 0;"><a href="/files/{{ camera }}/{{ subdir }}/{{ f }}" download="{{ f }}" style="color:#7db3e8;">{{ f }}</a></li>
+    {% endfor %}
+    </ul>
+  </div>
+  {% endif %}
+</div>
+
+</body>
+</html>

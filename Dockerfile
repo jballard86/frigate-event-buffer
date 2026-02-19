@@ -1,53 +1,59 @@
-# Frigate Event Buffer - State-Aware Orchestrator
-# ================================================
-#
-# Environment Variables (override config.yaml):
-#   MQTT_BROKER     - MQTT broker IP (required)
-#   MQTT_PORT       - MQTT broker port (default: 1883)
-#   BUFFER_IP       - Buffer container's reachable IP (required, used in notification URLs)
-#   FRIGATE_URL     - Frigate API base URL (required)
-#   STORAGE_PATH    - Storage directory (default: /app/storage)
-#   RETENTION_DAYS  - Days to retain events (default: 3)
-#   FLASK_PORT      - Flask server port (default: 5055)
-#   LOG_LEVEL       - Logging level: DEBUG, INFO, WARNING, ERROR (default: INFO)
-#
-# Volume Mounts:
-#   /app/storage     - Event storage (clips, snapshots, summaries)
-#   /app/config.yaml - Configuration file (optional, for camera/label filtering)
-#
-# Example Docker Run:
-#   docker run -d \
-#     -p 5055:5055 \
-#     -v /mnt/user/appdata/frigate_buffer:/app/storage \
-#     -v /mnt/user/appdata/frigate_buffer/config.yaml:/app/config.yaml:ro \
-#     frigate-buffer
+# Build from repo root: docker build -t frigate-buffer:latest .
+# FFmpeg with NVENC comes from multi-stage build; no script or artifact folder required. See BUILD_NVENC.md.
+# Final stage is Ubuntu 24.04 (Python 3.12 in default repos; no PPA). Ubuntu base matches FFmpeg donor and avoids distro/ABI mismatch with NVIDIA libs.
+ARG FFMPEG_NVENC_IMAGE=jrottenberg/ffmpeg:7.0-nvidia2204
+FROM ${FFMPEG_NVENC_IMAGE} AS ffmpeg_nvenc
 
-FROM python:3.9-slim
+# Gather all FFmpeg/CUDA/NPP libs from donor into one tree (libnppig etc. may live in lib64 or cuda/lib64).
+FROM ${FFMPEG_NVENC_IMAGE} AS ffmpeg_libs
+RUN mkdir -p /out/lib && \
+    cp -a /usr/local/lib/. /out/lib/ 2>/dev/null || true && \
+    (cp -an /usr/local/lib64/. /out/lib/ 2>/dev/null || true) && \
+    (cp -an /usr/local/cuda/lib64/. /out/lib/ 2>/dev/null || true)
 
-# Install ffmpeg for video transcoding
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends ffmpeg curl && \
-    apt-get clean && \
-    rm -rf /var/lib/apt/lists/*
+FROM ubuntu:24.04
+# Copy FFmpeg + ffprobe and shared libs (including NPP/CUDA libs like libnppig.so.12) from the NVENC image.
+COPY --from=ffmpeg_nvenc /usr/local/bin/ffmpeg /usr/local/bin/ffmpeg
+COPY --from=ffmpeg_nvenc /usr/local/bin/ffprobe /usr/local/bin/ffprobe
+COPY --from=ffmpeg_libs /out/lib/. /usr/local/lib/
+RUN ldconfig /usr/local/lib 2>/dev/null || true
+
+ENV DEBIAN_FRONTEND=noninteractive
+# Ubuntu 24.04 marks Python as externally managed (PEP 668); allow pip system install in this container.
+ENV PIP_BREAK_SYSTEM_PACKAGES=1
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    ca-certificates \
+    python3.12 \
+    python3.12-venv \
+    python3.12-dev \
+    libgl1 \
+    libglib2.0-0 \
+    libgomp1 \
+    libxcb1 \
+    libxcb-shm0 \
+    libxext6 \
+    libxrender1 \
+    libsm6 \
+    && curl -sS https://bootstrap.pypa.io/get-pip.py | python3.12 \
+    && rm -rf /var/lib/apt/lists/*
+RUN ln -sf /usr/bin/python3.12 /usr/bin/python
 
 WORKDIR /app
 
-# Copy and install dependencies
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN python3.12 -m pip install --no-cache-dir -r requirements.txt
 
-# Copy application package and example config
-COPY frigate_buffer/ ./frigate_buffer/
+COPY pyproject.toml ./
+COPY src/frigate_buffer/ ./src/frigate_buffer/
 COPY config.example.yaml .
-
-# Create storage directory
 RUN mkdir -p /app/storage
 
-# Expose Flask port
+RUN python3.12 -m pip install --no-cache-dir --no-deps .
+
 EXPOSE 5055
 
-# Health check
 HEALTHCHECK --interval=60s --timeout=10s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:5055/status || exit 1
 
-CMD ["python", "-m", "frigate_buffer.main"]
+CMD ["python3.12", "-m", "frigate_buffer.main"]

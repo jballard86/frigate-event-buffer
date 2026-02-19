@@ -40,9 +40,12 @@ class TestEventQueryService(unittest.TestCase):
         self.ce_dir = os.path.join(self.events_dir, self.ce_id)
         os.makedirs(self.ce_dir)
 
-        # Camera subdir in CE
+        # Camera subdirs in CE (multi-cam: front_door and back_door)
         os.makedirs(os.path.join(self.ce_dir, "front_door"))
         with open(os.path.join(self.ce_dir, "front_door", "clip.mp4"), "w") as f:
+            f.write("dummy content")
+        os.makedirs(os.path.join(self.ce_dir, "back_door"))
+        with open(os.path.join(self.ce_dir, "back_door", "clip.mp4"), "w") as f:
             f.write("dummy content")
 
         with open(os.path.join(self.ce_dir, "summary.txt"), "w") as f:
@@ -64,6 +67,8 @@ class TestEventQueryService(unittest.TestCase):
         self.assertEqual(ev["title"], "Person detected")
         self.assertTrue(ev["has_clip"])
         self.assertEqual(ev["threat_level"], 5)
+        # No timeline or metadata end_time => end_timestamp absent (event ongoing)
+        self.assertNotIn("end_timestamp", ev)
 
     def test_get_consolidated_events(self):
         events = self.service.get_events("events")
@@ -73,6 +78,12 @@ class TestEventQueryService(unittest.TestCase):
         self.assertEqual(ev["title"], "Consolidated Event")
         self.assertTrue(ev["consolidated"])
         self.assertTrue(ev["has_clip"])
+        self.assertIn("hosted_clips", ev)
+        self.assertEqual(len(ev["hosted_clips"]), 2)  # front_door and back_door
+        cameras = [c["camera"] for c in ev["hosted_clips"]]
+        self.assertIn("front_door", cameras)
+        self.assertIn("back_door", cameras)
+        self.assertIn("clip.mp4", ev["hosted_clips"][0]["url"])
 
     def test_get_all_events(self):
         events, cameras = self.service.get_all_events()
@@ -88,6 +99,39 @@ class TestEventQueryService(unittest.TestCase):
         ce = next(e for e in events if e["event_id"] == self.ce_id)
         self.assertTrue(ce.get("consolidated"), "Consolidated event should have consolidated=True")
         self.assertTrue(ce.get("has_clip"), "Consolidated event should have has_clip=True")
+
+    def test_camera_event_includes_end_timestamp_when_in_timeline(self):
+        """When timeline has an entry with payload.after.end_time, event dict includes end_timestamp."""
+        timeline = {
+            "event_id": self.ev1_id,
+            "entries": [
+                {
+                    "source": "frigate_mqtt",
+                    "data": {
+                        "payload": {
+                            "after": {"end_time": 1234567890.5},
+                        }
+                    },
+                }
+            ],
+        }
+        with open(os.path.join(self.ev1_dir, "notification_timeline.json"), "w") as f:
+            json.dump(timeline, f)
+        events = self.service.get_events("front_door")
+        self.assertEqual(len(events), 1)
+        ev = events[0]
+        self.assertIn("end_timestamp", ev)
+        self.assertEqual(ev["end_timestamp"], 1234567890.5)
+
+    def test_camera_event_end_timestamp_fallback_from_metadata(self):
+        """When metadata.json has end_time but timeline has none, event gets end_timestamp from metadata."""
+        with open(os.path.join(self.ev1_dir, "metadata.json"), "w") as f:
+            json.dump({"label": "person", "threat_level": 0, "end_time": 1234567895.25}, f)
+        events = self.service.get_events("front_door")
+        self.assertEqual(len(events), 1)
+        ev = events[0]
+        self.assertIn("end_timestamp", ev)
+        self.assertEqual(ev["end_timestamp"], 1234567895.25)
 
 if __name__ == '__main__':
     unittest.main()

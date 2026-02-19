@@ -1,5 +1,5 @@
 import unittest
-from typing import Protocol, runtime_checkable, Optional
+from typing import Protocol, runtime_checkable
 import sys
 import os
 
