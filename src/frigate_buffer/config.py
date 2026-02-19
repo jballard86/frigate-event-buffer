@@ -43,7 +43,7 @@ CONFIG_SCHEMA = Schema({
         Optional('retention_days'): int,                         # Days to keep event data before cleanup.
         Optional('cleanup_interval_hours'): int,                 # How often to run retention cleanup (hours).
         Optional('export_watchdog_interval_minutes'): int,      # How often to check/remove completed exports in Frigate (minutes).
-        Optional('ffmpeg_timeout_seconds'): int,                # Timeout for FFmpeg transcode; kills hung processes.
+        Optional('ffmpeg_timeout_seconds'): int,                # Timeout for FFmpeg (e.g. GIF generation); kills hung processes.
         Optional('notification_delay_seconds'): int,            # Delay before fetching snapshot after notification (lets Frigate pick a better frame).
         Optional('log_level'): Any('DEBUG', 'INFO', 'WARNING', 'ERROR'),  # Logging verbosity.
         Optional('summary_padding_before'): int,                # Seconds before event start for Frigate review summary window.
@@ -98,6 +98,7 @@ CONFIG_SCHEMA = Schema({
         Optional('person_area_switch_threshold'): int,                  # Allow switch when current camera area below this (px²); 0 = disable.
         Optional('camera_switch_ratio'): Any(int, float),               # New camera must have this ratio of current to switch; default 1.2.
         Optional('decode_second_camera_cpu_only'): bool,                # Use CPU decode for second and subsequent cameras to avoid NVDEC contention.
+        Optional('tracking_target_frame_percent'): int,                 # When person area >= this % of reference area, use full-frame resize; default 40.
     },
     # Extended Gemini proxy options (e.g. for multi_cam); model params; single API key via GEMINI_API_KEY, URL here or env.
     Optional('gemini_proxy'): {
@@ -192,6 +193,7 @@ def load_config() -> dict:
         'PERSON_AREA_SWITCH_THRESHOLD': 200,
         'CAMERA_SWITCH_RATIO': 1.2,
         'DECODE_SECOND_CAMERA_CPU_ONLY': True,
+        'TRACKING_TARGET_FRAME_PERCENT': 40,
 
         # Gemini proxy (extended): Single API Key (GEMINI_API_KEY only). Default URL "" (no Google fallback).
         'GEMINI_PROXY_URL': '',
@@ -314,6 +316,7 @@ def load_config() -> dict:
                     config['PERSON_AREA_SWITCH_THRESHOLD'] = int(mc.get('person_area_switch_threshold', config['PERSON_AREA_SWITCH_THRESHOLD']))
                     config['CAMERA_SWITCH_RATIO'] = float(mc.get('camera_switch_ratio', config['CAMERA_SWITCH_RATIO']))
                     config['DECODE_SECOND_CAMERA_CPU_ONLY'] = bool(mc.get('decode_second_camera_cpu_only', config['DECODE_SECOND_CAMERA_CPU_ONLY']))
+                    config['TRACKING_TARGET_FRAME_PERCENT'] = int(mc.get('tracking_target_frame_percent', config['TRACKING_TARGET_FRAME_PERCENT']))
                 if 'gemini_proxy' in yaml_config:
                     gp = yaml_config['gemini_proxy']
                     config['GEMINI_PROXY_URL'] = gp.get('url', config['GEMINI_PROXY_URL']) or ''

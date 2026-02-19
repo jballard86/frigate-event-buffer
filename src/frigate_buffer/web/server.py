@@ -361,7 +361,7 @@ def create_app(orchestrator):
 
     @app.route('/files/<path:filename>')
     def serve_file(filename):
-        """Serve stored files (clips are already transcoded to H.264)."""
+        """Serve stored files (clips are stored as H.264/H.265 from Frigate)."""
         directory = os.path.realpath(storage_path)
         safe_path = os.path.realpath(os.path.join(directory, filename))
 

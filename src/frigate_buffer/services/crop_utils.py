@@ -90,6 +90,27 @@ def _crop_around_center(
     return crop
 
 
+def full_frame_resize_to_target(frame: Any, target_w: int, target_h: int) -> Any:
+    """
+    Scale the entire frame to fit inside target_w x target_h preserving aspect ratio, then pad with black to exactly target_w x target_h.
+
+    Used when the subject occupies too much of the crop area (e.g. 40% threshold); the AI proxy receives full context with letterboxing instead of a tight crop.
+    """
+    if target_w <= 0 or target_h <= 0:
+        return frame
+    h, w = frame.shape[:2]
+    scale = min(target_w / w, target_h / h)
+    new_w = int(round(w * scale))
+    new_h = int(round(h * scale))
+    scaled = cv2.resize(frame, (new_w, new_h))
+    # Pad to exact target size (letterbox): top/bottom or left/right black bars
+    top = (target_h - new_h) // 2
+    bottom = target_h - new_h - top
+    left = (target_w - new_w) // 2
+    right = target_w - new_w - left
+    return cv2.copyMakeBorder(scaled, top, bottom, left, right, cv2.BORDER_CONSTANT, value=(0, 0, 0))
+
+
 def motion_crop(
     frame: Any,
     prev_gray: Any | None,

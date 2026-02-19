@@ -79,13 +79,14 @@ def write_ai_frame_analysis_single_cam(
 
 def write_ai_frame_analysis_multi_cam(
     event_dir: str,
-    frames_with_time_and_camera: list[tuple[Any, float, str]],
+    frames_with_time_and_camera: list[Any],
     write_manifest: bool = True,
     create_zip_flag: bool = True,
     save_frames: bool = True,
 ) -> None:
     """Write ai_frame_analysis/frames at CE root with multi-cam manifest.
-    Each entry is (frame_bgr, timestamp_sec, camera_name). Manifest includes camera per frame."""
+    Accepts list of ExtractedFrame (or objects with .frame, .timestamp_sec, .camera, .metadata).
+    Manifest includes camera per frame and is_full_frame_resize when set in metadata."""
     if not save_frames or not frames_with_time_and_camera:
         return
     if not _CV2_AVAILABLE:
@@ -95,17 +96,26 @@ def write_ai_frame_analysis_multi_cam(
     os.makedirs(frames_dir, exist_ok=True)
     total = len(frames_with_time_and_camera)
     manifest_entries = []
-    for seq, (frame, frame_time_sec, camera) in enumerate(frames_with_time_and_camera, start=1):
-        fname = f"frame_{seq:03d}_{camera.replace(' ', '_')}.jpg"
+    for seq, item in enumerate(frames_with_time_and_camera, start=1):
+        frame = getattr(item, "frame", item[0] if isinstance(item, (tuple, list)) and len(item) >= 3 else None)
+        frame_time_sec = getattr(item, "timestamp_sec", item[1] if isinstance(item, (tuple, list)) and len(item) >= 2 else 0.0)
+        camera = getattr(item, "camera", item[2] if isinstance(item, (tuple, list)) and len(item) >= 3 else "")
+        meta = getattr(item, "metadata", item[3] if isinstance(item, (tuple, list)) and len(item) >= 4 else {}) or {}
+        if frame is None:
+            continue
+        fname = f"frame_{seq:03d}_{str(camera).replace(' ', '_')}.jpg"
         out_path = os.path.join(frames_dir, fname)
         if write_stitched_frame(frame, out_path):
-            manifest_entries.append({
+            m = {
                 "filename": fname,
                 "timestamp_sec": frame_time_sec,
                 "camera": camera,
                 "seq": seq,
                 "total": total,
-            })
+            }
+            if meta.get("is_full_frame_resize") is True:
+                m["is_full_frame_resize"] = True
+            manifest_entries.append(m)
     if write_manifest and manifest_entries:
         manifest_path = os.path.join(event_dir, "ai_frame_analysis", "manifest.json")
         try:
@@ -562,7 +572,7 @@ class FileManager:
                                             cam_descriptions += os.path.getsize(p)
                                     except OSError:
                                         pass
-                                # Camera subdirs: events/ce_id/camera/ with clip.mp4, snapshot.jpg, etc.
+                                # Camera subdirs: events/ce_id/camera/ with *.mp4, snapshot.jpg, etc.
                                 try:
                                     with os.scandir(ce_path) as it_cam:
                                         for cam_entry in it_cam:

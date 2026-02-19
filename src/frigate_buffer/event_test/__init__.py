@@ -1,5 +1,5 @@
 """
-Event test: mini orchestrator for running the post-download pipeline (transcode, frame extraction, build AI request)
+Event test: mini orchestrator for running the post-download pipeline (frame extraction, build AI request)
 without sending to the proxy. Used by the TEST button on the player for consolidated events.
 
 All test-specific code lives under this package for easy tracking.

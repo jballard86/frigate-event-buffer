@@ -74,8 +74,13 @@ class TestVideoService(unittest.TestCase):
             self.assertTrue(os.path.isfile(sidecar_path))
             with open(sidecar_path, encoding="utf-8") as f:
                 data = json.load(f)
-            self.assertIsInstance(data, list)
-            for entry in data:
+            self.assertIsInstance(data, dict)
+            self.assertIn("entries", data)
+            self.assertIn("native_width", data)
+            self.assertIn("native_height", data)
+            entries = data["entries"]
+            self.assertIsInstance(entries, list)
+            for entry in entries:
                 self.assertIn("frame_number", entry)
                 self.assertIn("timestamp_sec", entry)
                 self.assertIn("detections", entry)

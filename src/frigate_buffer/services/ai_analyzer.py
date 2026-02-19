@@ -159,10 +159,10 @@ class GeminiAnalysisService:
         )
 
     def _camera_from_clip_path(self, clip_path: str) -> str:
-        """Derive camera name from clip path (e.g. .../Doorbell/clip.mp4 -> Doorbell)."""
+        """Derive camera name from clip path (e.g. .../Doorbell/doorbell-12345.mp4 -> Doorbell)."""
         try:
             parent = os.path.basename(os.path.dirname(os.path.abspath(clip_path)))
-            if parent and parent != 'clip.mp4':
+            if parent and not parent.endswith(".mp4"):
                 return parent
         except Exception:
             pass
@@ -664,6 +664,7 @@ class GeminiAnalysisService:
                 max_frames_min=max_frames_min,
                 crop_width=self.crop_width,
                 crop_height=self.crop_height,
+                tracking_target_frame_percent=int(self.config.get("TRACKING_TARGET_FRAME_PERCENT", 40)),
                 first_camera_bias=primary_camera,
                 first_camera_bias_decay_seconds=float(self.config.get("FIRST_CAMERA_BIAS_DECAY_SECONDS", 1.0)),
                 first_camera_bias_initial=float(self.config.get("FIRST_CAMERA_BIAS_INITIAL", 1.5)),
@@ -676,33 +677,31 @@ class GeminiAnalysisService:
                 logger.warning("No frames extracted from CE %s", ce_id)
                 return None
 
-            # Add timestamp overlay: frame_time_sec is relative (0..duration); show as offset or use ce_start_time
+            # Add timestamp overlay; keep ExtractedFrame with overlay drawn on .frame
             image_count = len(frames_raw)
-            frames_with_time: list[tuple[Any, float, str]] = []
-            cameras_str = ", ".join(sorted({c for _, _, c in frames_raw}))
-            for i, (frame, frame_time_sec, camera) in enumerate(frames_raw):
-                ts = ce_start_time + frame_time_sec if ce_start_time > 0 else frame_time_sec
+            cameras_str = ", ".join(sorted({ef.camera for ef in frames_raw}))
+            for i, ef in enumerate(frames_raw):
+                ts = ce_start_time + ef.timestamp_sec if ce_start_time > 0 else ef.timestamp_sec
                 time_str = datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S")
-                frame_overlay = crop_utils.draw_timestamp_overlay(
-                    frame, time_str, camera, i + 1, image_count
+                ef.frame = crop_utils.draw_timestamp_overlay(
+                    ef.frame, time_str, ef.camera, i + 1, image_count
                 )
-                frames_with_time.append((frame_overlay, frame_time_sec, camera))
 
-            # Write ai_frame_analysis at CE root
+            # Write ai_frame_analysis at CE root (pass ExtractedFrame list)
             logger.info("Writing frames to disk")
             save_frames = bool(self.config.get("SAVE_AI_FRAMES", True))
             create_zip = bool(self.config.get("CREATE_AI_ANALYSIS_ZIP", True))
             write_ai_frame_analysis_multi_cam(
                 ce_folder_path,
-                frames_with_time,
+                frames_raw,
                 write_manifest=True,
                 create_zip_flag=create_zip,
                 save_frames=save_frames,
             )
 
             # Send to Gemini proxy
-            frames = [f for f, _, _ in frames_with_time]
-            first_ts = frames_with_time[0][1] if frames_with_time else 0
+            frames = [ef.frame for ef in frames_raw]
+            first_ts = frames_raw[0].timestamp_sec if frames_raw else 0
             activity_start_str = (
                 datetime.fromtimestamp(ce_start_time + first_ts).strftime("%Y-%m-%d %H:%M:%S")
                 if ce_start_time > 0 else datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -763,7 +762,7 @@ class GeminiAnalysisService:
                 if log_messages is not None:
                     log_messages.append(msg)
 
-            # Infer frame selection mode (detection sidecars vs HOG) for user-facing message
+            # Frame selection: require detection sidecars for every camera
             camera_subdirs: list[str] = []
             try:
                 with os.scandir(ce_folder_path) as it:
@@ -792,6 +791,7 @@ class GeminiAnalysisService:
                 max_frames_min=max_frames_min,
                 crop_width=self.crop_width,
                 crop_height=self.crop_height,
+                tracking_target_frame_percent=int(self.config.get("TRACKING_TARGET_FRAME_PERCENT", 40)),
                 first_camera_bias=None,
                 first_camera_bias_decay_seconds=float(self.config.get("FIRST_CAMERA_BIAS_DECAY_SECONDS", 1.0)),
                 first_camera_bias_initial=float(self.config.get("FIRST_CAMERA_BIAS_INITIAL", 1.5)),
@@ -805,33 +805,31 @@ class GeminiAnalysisService:
                 logger.warning("No frames extracted from CE folder %s", ce_folder_path)
                 return (None, "No frames extracted (check clips and sidecars).")
 
-            cameras_from_frames = ", ".join(sorted({c for _, _, c in frames_raw}))
+            cameras_from_frames = ", ".join(sorted({ef.camera for ef in frames_raw}))
             _log(f"Extracted {len(frames_raw)} frames from clips ({cameras_from_frames}).")
             _log(f"Adding timestamps to frames ({cameras_from_frames}).")
 
             image_count = len(frames_raw)
-            frames_with_time: list[tuple[Any, float, str]] = []
-            cameras_str = ", ".join(sorted({c for _, _, c in frames_raw}))
-            for i, (frame, frame_time_sec, camera) in enumerate(frames_raw):
-                ts = ce_start_time + frame_time_sec if ce_start_time > 0 else frame_time_sec
+            cameras_str = ", ".join(sorted({ef.camera for ef in frames_raw}))
+            for i, ef in enumerate(frames_raw):
+                ts = ce_start_time + ef.timestamp_sec if ce_start_time > 0 else ef.timestamp_sec
                 time_str = datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S")
-                frame_overlay = crop_utils.draw_timestamp_overlay(
-                    frame, time_str, camera, i + 1, image_count
+                ef.frame = crop_utils.draw_timestamp_overlay(
+                    ef.frame, time_str, ef.camera, i + 1, image_count
                 )
-                frames_with_time.append((frame_overlay, frame_time_sec, camera))
 
-            _log(f"Organizing timeline (saving {len(frames_with_time)} frames).")
+            _log(f"Organizing timeline (saving {len(frames_raw)} frames).")
             save_frames = bool(self.config.get("SAVE_AI_FRAMES", True))
             write_ai_frame_analysis_multi_cam(
                 ce_folder_path,
-                frames_with_time,
+                frames_raw,
                 write_manifest=True,
                 create_zip_flag=False,
                 save_frames=save_frames,
             )
 
-            frames = [f for f, _, _ in frames_with_time]
-            first_ts = frames_with_time[0][1] if frames_with_time else 0
+            frames = [ef.frame for ef in frames_raw]
+            first_ts = frames_raw[0].timestamp_sec if frames_raw else 0
             activity_start_str = (
                 datetime.fromtimestamp(ce_start_time + first_ts).strftime("%Y-%m-%d %H:%M:%S")
                 if ce_start_time > 0 else datetime.now().strftime("%Y-%m-%d %H:%M:%S")

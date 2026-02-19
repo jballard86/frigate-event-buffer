@@ -1,5 +1,5 @@
 """
-Mini test orchestrator: runs the post-download pipeline (transcode, frame extraction, build payload)
+Mini test orchestrator: runs the post-download pipeline (generate detection sidecar, frame extraction, build payload)
 for a copied event folder without sending to the AI proxy. Yields log events for SSE streaming.
 
 All logic here only delegates to the main codebase; bugs should surface in original modules.

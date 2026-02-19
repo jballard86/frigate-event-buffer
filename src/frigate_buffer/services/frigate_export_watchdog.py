@@ -39,7 +39,7 @@ def _parse_export_response_entries(
 ) -> list[tuple[str, str | None]]:
     """
     Read merged timeline (base + append JSONL) and return list of (export_id, camera_for_clip).
-    camera_for_clip is None for single-camera event (clip at root); else camera name for consolidated (clip at camera/clip.mp4).
+    camera_for_clip is None for single-camera event (clip at root); else camera name for consolidated (clip at camera subdir).
     """
     result: list[tuple[str, str | None]] = []
     try:

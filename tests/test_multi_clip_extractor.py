@@ -8,6 +8,7 @@ import shutil
 import numpy as np
 from unittest.mock import MagicMock, patch
 
+from frigate_buffer.models import ExtractedFrame
 from frigate_buffer.services.multi_clip_extractor import (
     extract_target_centric_frames,
     _get_fps_and_duration,
@@ -87,7 +88,7 @@ class TestMultiClipExtractorHelpers(unittest.TestCase):
             shutil.rmtree(d, ignore_errors=True)
 
     def test_load_sidecar_valid_returns_list(self):
-        """Valid detection.json returns list of entries."""
+        """Valid detection.json (legacy list) returns (entries, native_w, native_h) with entries list."""
         test_dir = os.path.dirname(os.path.abspath(__file__))
         d = os.path.join(test_dir, "_sidecar_fixture", str(id(self)))
         os.makedirs(d, exist_ok=True)
@@ -98,8 +99,12 @@ class TestMultiClipExtractorHelpers(unittest.TestCase):
                 json.dump(data, f)
             result = _load_sidecar_for_camera(d)
             self.assertIsNotNone(result)
-            self.assertEqual(len(result), 1)
-            self.assertEqual(result[0]["timestamp_sec"], 0.0)
+            entries, nw, nh = result
+            self.assertIsInstance(entries, list)
+            self.assertEqual(len(entries), 1)
+            self.assertEqual(entries[0]["timestamp_sec"], 0.0)
+            self.assertEqual(nw, 0)
+            self.assertEqual(nh, 0)
         finally:
             shutil.rmtree(d, ignore_errors=True)
 
@@ -258,10 +263,9 @@ class TestMultiClipExtractor(unittest.TestCase):
         self.assertGreaterEqual(len(result), 1)
         self.assertLessEqual(len(result), 5)
         for item in result:
-            self.assertEqual(len(item), 3)
-            frame_out, t_sec, cam = item
-            self.assertIsNotNone(frame_out)
-            self.assertIn(cam, ("cam1", "cam2"))
+            self.assertIsInstance(item, ExtractedFrame)
+            self.assertIsNotNone(item.frame)
+            self.assertIn(item.camera, ("cam1", "cam2"))
         mock_video_capture.assert_called()
 
     @patch("frigate_buffer.services.multi_clip_extractor.ffmpegcv.VideoCapture")
@@ -319,10 +323,9 @@ class TestMultiClipExtractor(unittest.TestCase):
         self.assertIsInstance(result, list)
         # Only cam1 should contribute (cam2 is dropped on first read failure).
         for item in result:
-            self.assertEqual(len(item), 3)
-            frame_out, t_sec, cam = item
-            self.assertIsNotNone(frame_out)
-            self.assertEqual(cam, "cam1", "Failed camera should be dropped; only cam1 should appear")
+            self.assertIsInstance(item, ExtractedFrame)
+            self.assertIsNotNone(item.frame)
+            self.assertEqual(item.camera, "cam1", "Failed camera should be dropped; only cam1 should appear")
 
     @patch("frigate_buffer.services.multi_clip_extractor.ffmpegcv.VideoCapture")
     @patch("frigate_buffer.services.multi_clip_extractor.ffmpegcv.VideoCaptureNV")
