@@ -55,6 +55,7 @@ class StateAwareOrchestrator:
             self.video_service,
             export_download_timeout=int(config.get('EXPORT_DOWNLOAD_TIMEOUT', DEFAULT_EXPORT_DOWNLOAD_TIMEOUT)),
             events_clip_timeout=int(config.get('EVENTS_CLIP_TIMEOUT', DEFAULT_EVENTS_CLIP_TIMEOUT)),
+            config=config,
         )
         self.file_manager = FileManager(
             config['STORAGE_PATH'],
@@ -133,7 +134,8 @@ class StateAwareOrchestrator:
                     self._gemini_analysis_semaphore.acquire()
                     try:
                         result = self.ai_analyzer.analyze_multi_clip_ce(
-                            ce_id, ce_folder_path, ce_start_time
+                            ce_id, ce_folder_path, ce_start_time,
+                            primary_camera=ce_info.get("primary_camera"),
                         )
                         if result:
                             self._handle_ce_analysis_result(ce_id, ce_folder_path, result, ce_info)

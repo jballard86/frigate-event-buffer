@@ -321,44 +321,46 @@ def ensure_detection_model_ready(config: dict) -> bool:
         return False
 
 
+# COCO class 0 = person; we restrict YOLO to this class only for sidecar.
+_PERSON_CLASS_ID = 0
+
+
 # Lazy import so ultralytics is only loaded when writing detection sidecar
 def _run_detection_on_frame(
     model: Any,
     frame: Any,
     device: str | None,
-    names: dict[int, str],
 ) -> list[dict[str, Any]]:
-    """Run YOLO on one frame; return list of {label, area} for sidecar."""
+    """Run YOLO on one frame (person class only); return list of {label, bbox, centerpoint, area} for sidecar."""
     detections: list[dict[str, Any]] = []
     try:
-        results = model(frame, device=device, verbose=False)
+        # classes=[0]: COCO person; hardcoded for robustness across models
+        results = model(frame, device=device, verbose=False, classes=[_PERSON_CLASS_ID])
         if not results:
             return detections
         for r in results:
             if r.boxes is None:
                 continue
             xyxy = r.boxes.xyxy
-            cls_ids = r.boxes.cls
             if xyxy is None:
                 continue
-            # Handle tensor/numpy: convert to list of floats
             try:
                 xyxy = xyxy.cpu().numpy() if hasattr(xyxy, "cpu") else xyxy
             except Exception:
                 pass
-            try:
-                cls_ids = cls_ids.cpu().numpy() if hasattr(cls_ids, "cpu") else cls_ids
-            except Exception:
-                pass
-            n = min(len(xyxy), len(cls_ids)) if cls_ids is not None else len(xyxy)
-            for i in range(n):
+            for i in range(len(xyxy)):
                 if len(xyxy[i]) < 4:
                     continue
                 x1, y1, x2, y2 = float(xyxy[i][0]), float(xyxy[i][1]), float(xyxy[i][2]), float(xyxy[i][3])
                 area = int((x2 - x1) * (y2 - y1))
-                cls_id = int(cls_ids[i]) if cls_ids is not None else 0
-                label = names.get(cls_id, f"class_{cls_id}")
-                detections.append({"label": label, "area": area})
+                cx = (x1 + x2) / 2.0
+                cy = (y1 + y2) / 2.0
+                detections.append({
+                    "label": "person",
+                    "bbox": [x1, y1, x2, y2],
+                    "centerpoint": [cx, cy],
+                    "area": area,
+                })
     except Exception as e:
         logger.debug("Detection on frame failed: %s", e)
     return detections
@@ -444,16 +446,19 @@ class VideoService:
         detection_sidecar_path: str | None = None,
         detection_model: str | None = None,
         detection_device: str | None = None,
+        detection_frame_interval: int = 1,
     ) -> tuple[bool, str]:
         """Transcode clip_original.mp4 to H.264 clip.mp4 (NVDEC decode, NVENC encode when GPU available).
         Removes temp on success. Falls back to libx264 if GPU path fails.
-        Returns (success, backend_string) where backend_string is 'GPU' or 'CPU: <reason>' for SSE logging."""
+        Returns (success, backend_string) where backend_string is 'GPU' or 'CPU: <reason>' for SSE logging.
+        When writing a detection sidecar, YOLO runs every detection_frame_interval frames (default 1 = every frame)."""
         if not self._probe_nvenc():
             ok, _ = self._transcode_clip_libx264(
                 event_id, temp_path, final_path,
                 detection_sidecar_path=detection_sidecar_path,
                 detection_model=detection_model,
                 detection_device=detection_device,
+                detection_frame_interval=detection_frame_interval,
                 cpu_reason="NVENC unavailable",
             )
             return (ok, "CPU: NVENC unavailable")
@@ -463,6 +468,7 @@ class VideoService:
                 detection_sidecar_path=detection_sidecar_path,
                 detection_model=detection_model,
                 detection_device=detection_device,
+                detection_frame_interval=detection_frame_interval,
             )
             if ok:
                 return (True, "GPU")
@@ -477,6 +483,7 @@ class VideoService:
             detection_sidecar_path=detection_sidecar_path,
             detection_model=detection_model,
             detection_device=detection_device,
+            detection_frame_interval=detection_frame_interval,
             cpu_reason="GPU transcode failed, fallback",
         )
         return (ok, "CPU: GPU transcode failed, fallback")
@@ -489,9 +496,10 @@ class VideoService:
         detection_sidecar_path: str | None = None,
         detection_model: str | None = None,
         detection_device: str | None = None,
+        detection_frame_interval: int = 1,
     ) -> bool:
         """Decode with VideoCaptureNV (NVDEC), encode with VideoWriterNV (h264_nvenc), mux audio via ffmpeg.
-        Optionally run ultralytics on each frame and write detection sidecar (same decode pass).
+        Optionally run ultralytics every Nth frame and write detection sidecar (same decode pass).
         May raise BrokenPipeError if the encoder subprocess exits early (e.g. NVENC session limit or GPU busy)."""
         cap = ffmpegcv.VideoCaptureNV(temp_path)
         if not cap.isOpened():
@@ -505,18 +513,18 @@ class VideoService:
             video_only_path = os.path.join(dirname, "clip_nvenc_tmp.mp4")
 
             yolo_model = None
-            yolo_names: dict[int, str] = {}
             device = (detection_device or "").strip() or None
             if detection_sidecar_path and detection_model:
                 try:
                     from ultralytics import YOLO
                     yolo_model = YOLO(detection_model)
-                    yolo_names = yolo_model.names or {}
+                    logger.info("Starting YOLO detection (GPU)")
                 except Exception as e:
                     logger.warning("Could not load YOLO for detection sidecar: %s", e)
 
             sidecar_entries: list[dict[str, Any]] = []
             frame_idx = 0
+            interval = max(1, int(detection_frame_interval))
 
             try:
                 vidout = ffmpegcv.VideoWriterNV(
@@ -527,18 +535,26 @@ class VideoService:
                 )
                 try:
                     vidout.write(first_frame)
-                    if yolo_model is not None:
-                        det = _run_detection_on_frame(yolo_model, first_frame, device or "", yolo_names)
-                        sidecar_entries.append({"timestamp_sec": frame_idx / fps, "detections": det})
+                    if yolo_model is not None and frame_idx % interval == 0:
+                        det = _run_detection_on_frame(yolo_model, first_frame, device)
+                        sidecar_entries.append({
+                            "frame_number": frame_idx,
+                            "timestamp_sec": frame_idx / fps,
+                            "detections": det,
+                        })
                     frame_idx += 1
                     while True:
                         ret, frame = cap.read()
                         if not ret:
                             break
                         vidout.write(frame)
-                        if yolo_model is not None:
-                            det = _run_detection_on_frame(yolo_model, frame, device or "", yolo_names)
-                            sidecar_entries.append({"timestamp_sec": frame_idx / fps, "detections": det})
+                        if yolo_model is not None and frame_idx % interval == 0:
+                            det = _run_detection_on_frame(yolo_model, frame, device)
+                            sidecar_entries.append({
+                                "frame_number": frame_idx,
+                                "timestamp_sec": frame_idx / fps,
+                                "detections": det,
+                            })
                         frame_idx += 1
                 finally:
                     vidout.release()
@@ -605,6 +621,7 @@ class VideoService:
         detection_sidecar_path: str | None = None,
         detection_model: str | None = None,
         detection_device: str | None = None,
+        detection_frame_interval: int = 1,
         cpu_reason: str = "libx264",
     ) -> tuple[bool, str]:
         """Transcode using ffmpeg libx264 (CPU). Used when GPU path is unavailable.
@@ -615,6 +632,7 @@ class VideoService:
                 detection_sidecar_path,
                 detection_model,
                 (detection_device or "").strip() or None,
+                detection_frame_interval,
             )
         process = None
         try:
@@ -656,8 +674,9 @@ class VideoService:
         detection_sidecar_path: str,
         detection_model: str,
         device: str | None,
+        detection_frame_interval: int = 1,
     ) -> None:
-        """Decode temp_path with CPU (ffmpegcv.VideoCapture), run YOLO per frame, write detection.json.
+        """Decode temp_path with CPU (ffmpegcv.VideoCapture), run YOLO every Nth frame, write detection.json.
         Same sidecar format as _transcode_clip_nvenc so multi-clip extractor can use it."""
         cap = None
         try:
@@ -666,22 +685,27 @@ class VideoService:
                 return
             fps = getattr(cap, "fps", None) or 30.0
             yolo_model = None
-            yolo_names: dict[int, str] = {}
             try:
                 from ultralytics import YOLO
                 yolo_model = YOLO(detection_model)
-                yolo_names = yolo_model.names or {}
+                logger.info("Starting YOLO detection (CPU)")
             except Exception as e:
                 logger.warning("Could not load YOLO for detection sidecar (CPU path): %s", e)
                 return
             sidecar_entries: list[dict[str, Any]] = []
             frame_idx = 0
+            interval = max(1, int(detection_frame_interval))
             while True:
                 ret, frame = cap.read()
                 if not ret or frame is None:
                     break
-                det = _run_detection_on_frame(yolo_model, frame, device or "", yolo_names)
-                sidecar_entries.append({"timestamp_sec": frame_idx / fps, "detections": det})
+                if frame_idx % interval == 0:
+                    det = _run_detection_on_frame(yolo_model, frame, device)
+                    sidecar_entries.append({
+                        "frame_number": frame_idx,
+                        "timestamp_sec": frame_idx / fps,
+                        "detections": det,
+                    })
                 frame_idx += 1
             if sidecar_entries:
                 try:

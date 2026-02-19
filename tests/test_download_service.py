@@ -372,6 +372,7 @@ class TestDownloadService(unittest.TestCase):
             self.mock_video_service.transcode_clip_to_h264.assert_called_once_with(
                 "evt1", temp_path, final_path,
                 detection_sidecar_path=None, detection_model=None, detection_device=None,
+                detection_frame_interval=5,
             )
             self.assertFalse(os.path.exists(temp_path), "Temp file should be removed after transcode")
         finally:

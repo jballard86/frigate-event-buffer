@@ -24,6 +24,7 @@ DEFAULT_MOTION_CROP_MIN_PX = 500
 
 def center_crop(frame: Any, target_w: int, target_h: int) -> Any:
     """Crop frame to target_w x target_h centered. Resize if crop larger than frame."""
+    logger.debug("Cropping frame (center)")
     h, w = frame.shape[:2]
     if target_w <= 0 or target_h <= 0:
         return frame
@@ -35,6 +36,25 @@ def center_crop(frame: Any, target_w: int, target_h: int) -> Any:
     if crop.shape[1] != target_w or crop.shape[0] != target_h:
         crop = cv2.resize(crop, (target_w, target_h))
     return crop
+
+
+def crop_around_center(
+    frame: Any,
+    center_x: float | int,
+    center_y: float | int,
+    target_w: int,
+    target_h: int,
+) -> Any:
+    """
+    Crop frame centered on (center_x, center_y), clamped to frame bounds, then resize to target.
+
+    YOLO/Ultralytics often return float centerpoints; we cast to int before slice bounds
+    so OpenCV/NumPy array indexing does not raise TypeError.
+    """
+    cx = int(center_x)
+    cy = int(center_y)
+    logger.debug("Cropping frame (centerpoint)")
+    return _crop_around_center(frame, cx, cy, target_w, target_h)
 
 
 def _crop_around_center(

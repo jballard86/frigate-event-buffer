@@ -25,6 +25,12 @@ try:
 except ImportError:
     _CV2_AVAILABLE = False
 
+try:
+    from frigate_buffer.services import crop_utils as _crop_utils
+    _CROP_AVAILABLE = True
+except ImportError:
+    _CROP_AVAILABLE = False
+
 
 # Preferred label for target-centric selection (person has highest priority)
 PREFERRED_LABELS = ("person", "people", "pedestrian")
@@ -73,12 +79,25 @@ def _load_sidecar_for_camera(camera_folder: str) -> list[dict[str, Any]] | None:
         return None
 
 
-def _person_area_at_time(sidecar_entries: list[dict[str, Any]], t_sec: float) -> float:
-    """Return person area at timestamp t_sec using nearest sidecar entry (by timestamp_sec)."""
+def _nearest_sidecar_entry(
+    sidecar_entries: list[dict[str, Any]], t_sec: float
+) -> dict[str, Any] | None:
+    """Return the sidecar entry with timestamp_sec closest to t_sec, or None if empty."""
     if not sidecar_entries:
+        return None
+    return min(sidecar_entries, key=lambda e: abs((e.get("timestamp_sec") or 0) - t_sec))
+
+
+def _person_area_at_time(sidecar_entries: list[dict[str, Any]], t_sec: float) -> float:
+    """Return person area at timestamp t_sec using nearest sidecar entry (by timestamp_sec).
+    Empty sidecar or missing detections defaults to 0.0."""
+    entry = _nearest_sidecar_entry(sidecar_entries, t_sec)
+    if entry is None:
         return 0.0
-    best = min(sidecar_entries, key=lambda e: abs((e.get("timestamp_sec") or 0) - t_sec))
-    return _person_area_from_detections(best.get("detections") or [])
+    detections = entry.get("detections")
+    if not detections:
+        return 0.0
+    return _person_area_from_detections(detections)
 
 
 def _detect_person_area(frame: Any) -> float:
@@ -141,6 +160,9 @@ def extract_target_centric_frames(
     max_frames_sec: float,
     max_frames_min: int,
     *,
+    crop_width: int = 0,
+    crop_height: int = 0,
+    first_camera_bias: str | None = None,
     log_callback: Callable[[str], None] | None = None,
 ) -> list[tuple[Any, float, str]]:
     """
@@ -262,10 +284,11 @@ def extract_target_centric_frames(
             durations[cam] = 0.0
 
     if log_callback and decode_backends:
+        cams = ", ".join(sorted(decode_backends.keys()))
         if all(b == "GPU" for b in decode_backends.values()):
-            log_callback("Decoding clips: GPU (NVDEC).")
+            log_callback(f"Decoding clips ({cams}): GPU (NVDEC).")
         else:
-            log_callback("Decoding clips: CPU (GPU not configured or fallback).")
+            log_callback(f"Decoding clips ({cams}): CPU (GPU not configured or fallback).")
 
     global_end = max(durations.values()) if durations else 0.0
     if global_end <= 0 or not caps:
@@ -275,6 +298,11 @@ def extract_target_centric_frames(
         return []
 
     use_sidecar = all_have_sidecar and len(sidecars) == len(clip_paths)
+    if log_callback:
+        if use_sidecar:
+            log_callback("Creating extraction metadata (sidecar).")
+        else:
+            log_callback("Creating extraction metadata (HOG fallback).")
     if use_sidecar:
         logger.debug("Using detection sidecars for multi-clip selection (no on-frame detector)")
     else:
@@ -284,6 +312,18 @@ def extract_target_centric_frames(
             ce_folder_path,
             missing_cameras,
         )
+
+    # First-camera bias decay: multiplier 1.5 at T=0 to 1.0 at T=global_end (avoid div by zero).
+    def _bias_multiplier(cam: str, t_sec: float) -> float:
+        if first_camera_bias is None or cam != first_camera_bias:
+            return 1.0
+        if global_end > 0:
+            return 1.5 - 0.5 * (t_sec / global_end)
+        return 1.0
+
+    # Hysteresis: stay on camera for min 3 frames; escape hatch when current camera area is 0.
+    current_camera: str | None = None
+    frames_on_current = 0
 
     # Sequential-read, time-sampled: per-camera state (prev_frame, prev_t, curr_frame, curr_t).
     # We advance all readers in lockstep; at each sample time T we use the frame at T for each camera.
@@ -367,12 +407,12 @@ def extract_target_centric_frames(
         if not any(c is not None for c in caps.values()):
             break
 
-        # For each camera, the frame at T is the one with timestamp <= T closest to T.
+        # For each camera, get frame at T and person area (with first-camera bias).
+        cam_candidates: dict[str, tuple[Any, float]] = {}  # cam -> (frame, area_with_bias)
         for cam in state:
             prev_f, prev_t, curr_f, curr_t = state[cam]
             if T >= durations.get(cam, 0):
                 continue
-            # Frame to use at T: prev_f if prev_t <= T < curr_t, else curr_f if curr_t <= T.
             if prev_t <= T < curr_t and prev_f is not None:
                 candidate = prev_f
             elif curr_t <= T and curr_f is not None:
@@ -384,16 +424,57 @@ def extract_target_centric_frames(
             if candidate is None:
                 continue
             if use_sidecar and sidecars:
-                area = _person_area_at_time(sidecars[cam], T)
+                area = _person_area_at_time(sidecars.get(cam) or [], T)
             else:
                 area = _detect_person_area(candidate)
-            if area > best_area:
-                best_area = area
-                best_camera = cam
-                best_frame = candidate.copy() if hasattr(candidate, "copy") else candidate
+            area *= _bias_multiplier(cam, T)
+            cam_candidates[cam] = (candidate.copy() if hasattr(candidate, "copy") else candidate, area)
+
+        # Hysteresis: stay on current camera for min 3 frames unless its area is 0 (escape hatch).
+        if current_camera is not None and frames_on_current < 3:
+            curr_area = cam_candidates.get(current_camera, (None, 0.0))[1]
+            if curr_area > 0:
+                best_camera = current_camera
+                best_frame, best_area = cam_candidates.get(current_camera, (None, 0.0))
+            else:
+                # Escape hatch: person left frame; pick camera with largest area.
+                best_camera = max(cam_candidates, key=lambda c: cam_candidates[c][1]) if cam_candidates else None
+                best_frame, best_area = (cam_candidates.get(best_camera, (None, 0.0))) if best_camera else (None, 0.0)
+        else:
+            best_camera = max(cam_candidates, key=lambda c: cam_candidates[c][1]) if cam_candidates else None
+            best_frame, best_area = (cam_candidates.get(best_camera, (None, 0.0))) if best_camera else (None, 0.0)
+            if best_camera and current_camera and best_camera != current_camera:
+                current_area = cam_candidates.get(current_camera, (None, 0.0))[1]
+                if best_area < 1.3 * current_area:
+                    best_camera = current_camera
+                    best_frame, best_area = cam_candidates.get(current_camera, (None, 0.0))
 
         if best_camera is not None and best_frame is not None:
+            # Optional centerpoint crop (empty sidecar -> center_crop).
+            if crop_width > 0 and crop_height > 0 and _CROP_AVAILABLE:
+                entry = _nearest_sidecar_entry(sidecars.get(best_camera) or [], T)
+                detections = (entry.get("detections") or []) if entry else []
+                if not detections:
+                    best_frame = _crop_utils.center_crop(best_frame, crop_width, crop_height)
+                else:
+                    person_dets = [d for d in detections if (d.get("label") or "").lower() in PREFERRED_LABELS]
+                    if not person_dets:
+                        best_frame = _crop_utils.center_crop(best_frame, crop_width, crop_height)
+                    else:
+                        largest = max(person_dets, key=lambda d: float(d.get("area") or 0))
+                        cp = largest.get("centerpoint")
+                        if cp and len(cp) >= 2:
+                            best_frame = _crop_utils.crop_around_center(
+                                best_frame, cp[0], cp[1], crop_width, crop_height
+                            )
+                        else:
+                            best_frame = _crop_utils.center_crop(best_frame, crop_width, crop_height)
             collected.append((best_frame, T, best_camera))
+            if best_camera == current_camera:
+                frames_on_current += 1
+            else:
+                current_camera = best_camera
+                frames_on_current = 1
         next_sample_time += step_sec
 
     for cap in caps.values():
