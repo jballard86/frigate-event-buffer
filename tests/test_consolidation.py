@@ -89,6 +89,29 @@ class TestConsolidationClosingState(unittest.TestCase):
         self.assertEqual(len(ce1.frigate_event_ids), 1)
         self.assertNotIn("e2", ce1.frigate_event_ids)
 
+    def test_remove_event_from_ce_returns_none_when_ce_has_other_events(self):
+        now = 1000.0
+        ce1, _, _ = self.mgr.get_or_create("e1", "cam1", "person", now)
+        self.mgr.get_or_create("e2", "cam2", "car", now + 5)
+        self.assertEqual(len(ce1.frigate_event_ids), 2)
+        result = self.mgr.remove_event_from_ce("e1")
+        self.assertIsNone(result)
+        self.assertEqual(len(ce1.frigate_event_ids), 1)
+        self.assertIn("e2", ce1.frigate_event_ids)
+
+    def test_remove_event_from_ce_returns_folder_path_when_ce_becomes_empty(self):
+        now = 1000.0
+        ce1, _, _ = self.mgr.get_or_create("e1", "cam1", "person", now)
+        ce_id = ce1.consolidated_id
+        ce_folder = ce1.folder_path
+        result = self.mgr.remove_event_from_ce("e1")
+        self.assertEqual(result, ce_folder)
+        self.assertNotIn(ce_id, self.mgr._events)
+
+    def test_remove_event_from_ce_unknown_event_returns_none(self):
+        result = self.mgr.remove_event_from_ce("nonexistent")
+        self.assertIsNone(result)
+
     def test_get_or_create_does_not_add_to_closed_ce(self):
         now = 1000.0
         ce1, is_new, _ = self.mgr.get_or_create("e1", "cam1", "person", now)

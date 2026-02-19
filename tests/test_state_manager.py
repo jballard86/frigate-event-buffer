@@ -12,8 +12,8 @@ sys.modules['yaml'] = MagicMock()
 sys.modules['voluptuous'] = MagicMock()
 
 import unittest
-from frigate_buffer.managers.state import EventStateManager
-from frigate_buffer.models import EventPhase
+from frigate_buffer.managers.state import EventStateManager, _normalize_box
+from frigate_buffer.models import EventPhase, FrameMetadata
 
 class TestEventStateManager(unittest.TestCase):
     def setUp(self):
@@ -232,6 +232,59 @@ class TestEventStateManager(unittest.TestCase):
         self.assertEqual(stats["by_phase"]["FINALIZED"], 1)
         self.assertEqual(stats["by_camera"]["cam1"], 2)
         self.assertEqual(stats["by_camera"]["cam2"], 1)
+
+    def test_normalize_box_pixels(self):
+        """_normalize_box converts pixel coords to normalized [ymin, xmin, ymax, xmax]."""
+        # Frigate [x1, y1, x2, y2] pixels
+        out = _normalize_box([100, 200, 300, 400], frame_width=1000, frame_height=800)
+        self.assertIsNotNone(out)
+        ymin, xmin, ymax, xmax = out
+        self.assertAlmostEqual(xmin, 0.1)
+        self.assertAlmostEqual(ymin, 0.25)
+        self.assertAlmostEqual(xmax, 0.3)
+        self.assertAlmostEqual(ymax, 0.5)
+        self.assertTrue(all(0 <= v <= 1 for v in out))
+
+    def test_normalize_box_invalid(self):
+        """_normalize_box returns None for invalid input."""
+        self.assertIsNone(_normalize_box(None))
+        self.assertIsNone(_normalize_box([]))
+        self.assertIsNone(_normalize_box([1, 2, 3]))
+        self.assertIsNone(_normalize_box("not a list"))
+
+    def test_add_and_get_frame_metadata(self):
+        """add_frame_metadata stores entries; get_frame_metadata returns copy."""
+        self.manager.create_event("e1", "cam", "person", 100.0)
+        self.manager.add_frame_metadata("e1", 101.0, [0.1, 0.2, 0.5, 0.6], 1000.0, 0.9)
+        self.manager.add_frame_metadata("e1", 102.0, [0.2, 0.3, 0.6, 0.7], 1200.0, 0.95)
+        lst = self.manager.get_frame_metadata("e1")
+        self.assertEqual(len(lst), 2)
+        self.assertEqual(lst[0].frame_time, 101.0)
+        self.assertEqual(lst[0].score, 0.9)
+        self.assertEqual(lst[1].frame_time, 102.0)
+        # Return is a copy
+        lst.append(FrameMetadata(0, (0, 0, 1, 1), 0, 0))
+        self.assertEqual(len(self.manager.get_frame_metadata("e1")), 2)
+
+    def test_get_frame_metadata_empty(self):
+        """get_frame_metadata returns empty list for unknown or empty event."""
+        self.assertEqual(self.manager.get_frame_metadata("unknown"), [])
+        self.manager.create_event("e1", "cam", "person", 100.0)
+        self.assertEqual(self.manager.get_frame_metadata("e1"), [])
+
+    def test_clear_frame_metadata(self):
+        """clear_frame_metadata removes all entries for the event."""
+        self.manager.create_event("e1", "cam", "person", 100.0)
+        self.manager.add_frame_metadata("e1", 101.0, [0.1, 0.1, 0.5, 0.5], 100.0, 0.8)
+        self.manager.clear_frame_metadata("e1")
+        self.assertEqual(self.manager.get_frame_metadata("e1"), [])
+
+    def test_remove_event_clears_frame_metadata(self):
+        """remove_event also clears frame metadata for that event."""
+        self.manager.create_event("e1", "cam", "person", 100.0)
+        self.manager.add_frame_metadata("e1", 101.0, [0.1, 0.1, 0.5, 0.5], 100.0, 0.8)
+        self.manager.remove_event("e1")
+        self.assertEqual(self.manager.get_frame_metadata("e1"), [])
 
 if __name__ == '__main__':
     unittest.main()

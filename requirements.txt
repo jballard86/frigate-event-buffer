@@ -4,3 +4,6 @@ requests
 schedule
 pyyaml
 voluptuous
+opencv-python-headless
+ffmpegcv
+ultralytics>=8.0.0

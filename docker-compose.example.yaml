@@ -31,6 +31,7 @@ services:
 
       # (Optional) Map timezone so container logs match your local time.
       - /etc/localtime:/etc/localtime:ro
+
     environment:
       # --- REQUIRED ---
       # The IP/hostname where this container is reachable (used in notification image/video URLs).
@@ -39,11 +40,24 @@ services:
       - FRIGATE_URL=http://YOUR_FRIGATE_IP:5000
       # Your MQTT Broker IP/hostname.
       - MQTT_BROKER=YOUR_MQTT_BROKER_IP
+      - YOLO_CONFIG_DIR=/tmp/Ultralytics
 
       # --- OPTIONAL (these will override settings in config.yaml) ---
       - MQTT_PORT=1883
       - RETENTION_DAYS=3
       - LOG_LEVEL=INFO
+      # GPU: NVDEC/NVENC for transcoding and multi-cam detection. Requires:
+      # (1) NVIDIA Container Toolkit installed on host, (2) deploy.reservations.devices below.
+      # "video" in capabilities is required for NVENC; some hosts (e.g. Unraid) need this explicit list.
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,video,utility
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:5055/status"]
       interval: 60s
