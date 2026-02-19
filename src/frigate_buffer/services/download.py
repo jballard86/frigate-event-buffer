@@ -28,11 +28,13 @@ class DownloadService:
         video_service: VideoService,
         export_download_timeout: int = DEFAULT_EXPORT_DOWNLOAD_TIMEOUT,
         events_clip_timeout: int = DEFAULT_EVENTS_CLIP_TIMEOUT,
+        config: dict | None = None,
     ):
         self.frigate_url = frigate_url
         self.video_service = video_service
         self.export_download_timeout = export_download_timeout
         self.events_clip_timeout = events_clip_timeout
+        self.config = config or {}
         logger.info(
             f"DownloadService initialized with Frigate URL: {frigate_url}, "
             f"export_download_timeout={export_download_timeout}s, events_clip_timeout={events_clip_timeout}s"
@@ -295,13 +297,15 @@ class DownloadService:
         detection_sidecar_path: str | None = None,
         detection_model: str | None = None,
         detection_device: str | None = None,
-) -> bool:
+        detection_frame_interval: int | None = None,
+    ) -> bool:
         """
         Transcode from temp file to final H.264 clip and remove temp.
         Used by the multi-cam pipeline so transcode can run in a bounded pool while the next clip downloads.
         When detection_sidecar_path is set (multi-cam), transcode will run ultralytics per frame and write detection.json.
         """
         try:
+            interval = detection_frame_interval if detection_frame_interval is not None else self.config.get("DETECTION_FRAME_INTERVAL", 5)
             ok, _ = self.video_service.transcode_clip_to_h264(
                 event_id,
                 temp_path,
@@ -309,6 +313,7 @@ class DownloadService:
                 detection_sidecar_path=detection_sidecar_path,
                 detection_model=detection_model,
                 detection_device=detection_device or None,
+                detection_frame_interval=interval,
             )
             return ok
         finally:
@@ -339,6 +344,7 @@ class DownloadService:
         temp_path = os.path.join(camera_folder_path, "clip_transcode_src.mp4")
         try:
             shutil.copy2(clip_path, temp_path)
+            interval = self.config.get("DETECTION_FRAME_INTERVAL", 5)
             ok, backend = self.video_service.transcode_clip_to_h264(
                 event_id,
                 temp_path,
@@ -346,6 +352,7 @@ class DownloadService:
                 detection_sidecar_path=detection_sidecar_path,
                 detection_model=detection_model,
                 detection_device=detection_device or None,
+                detection_frame_interval=interval,
             )
             return (ok, backend)
         finally:

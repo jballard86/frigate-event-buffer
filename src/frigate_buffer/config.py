@@ -94,6 +94,7 @@ CONFIG_SCHEMA = Schema({
         Optional('motion_crop_min_px'): int,                    # Minimum motion region area in pixels for crop.
         Optional('detection_model'): str,                         # Ultralytics model for transcode-time detection (e.g. yolov8n.pt).
         Optional('detection_device'): str,                       # Device for detection (e.g. cuda:0, cpu).
+        Optional('detection_frame_interval'): int,               # Run YOLO every N frames; default 5.
     },
     # Extended Gemini proxy options (e.g. for multi_cam); model params; single API key via GEMINI_API_KEY, URL here or env.
     Optional('gemini_proxy'): {
@@ -184,6 +185,7 @@ def load_config() -> dict:
         'MOTION_CROP_MIN_PX': 500,
         'DETECTION_MODEL': 'yolov8n.pt',
         'DETECTION_DEVICE': '',  # Empty = auto (CUDA if available else CPU)
+        'DETECTION_FRAME_INTERVAL': 5,
 
         # Gemini proxy (extended): Single API Key (GEMINI_API_KEY only). Default URL "" (no Google fallback).
         'GEMINI_PROXY_URL': '',
@@ -302,6 +304,7 @@ def load_config() -> dict:
                     config['MOTION_CROP_MIN_PX'] = int(mc.get('motion_crop_min_px', config.get('MOTION_CROP_MIN_PX', 500)))
                     config['DETECTION_MODEL'] = (mc.get('detection_model') or config.get('DETECTION_MODEL', 'yolov8n.pt')) or 'yolov8n.pt'
                     config['DETECTION_DEVICE'] = (mc.get('detection_device') or config.get('DETECTION_DEVICE', '')) or ''
+                    config['DETECTION_FRAME_INTERVAL'] = mc.get('detection_frame_interval', config['DETECTION_FRAME_INTERVAL'])
                 if 'gemini_proxy' in yaml_config:
                     gp = yaml_config['gemini_proxy']
                     config['GEMINI_PROXY_URL'] = gp.get('url', config['GEMINI_PROXY_URL']) or ''

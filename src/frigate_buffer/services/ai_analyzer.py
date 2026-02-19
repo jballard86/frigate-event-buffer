@@ -637,10 +637,12 @@ class GeminiAnalysisService:
         ce_id: str,
         ce_folder_path: str,
         ce_start_time: float = 0,
+        primary_camera: str | None = None,
     ) -> dict[str, Any] | None:
         """
         Target-centric multi-clip analysis for consolidated events.
         Extracts frames from full clips via object detection, sends to Gemini, saves to CE root.
+        primary_camera: optional camera that initiated the event (first-camera bias in selection).
         """
         if not self._enabled:
             logger.debug("Gemini analysis disabled, skipping CE %s", ce_id)
@@ -655,11 +657,14 @@ class GeminiAnalysisService:
 
             max_frames_sec = float(self.config.get("MAX_MULTI_CAM_FRAMES_SEC", 1))
             max_frames_min = int(self.config.get("MAX_MULTI_CAM_FRAMES_MIN", 60))
-
+            logger.info("Creating frame timeline")
             frames_raw = extract_target_centric_frames(
                 ce_folder_path,
                 max_frames_sec=max_frames_sec,
                 max_frames_min=max_frames_min,
+                crop_width=self.crop_width,
+                crop_height=self.crop_height,
+                first_camera_bias=primary_camera,
             )
             if not frames_raw:
                 logger.warning("No frames extracted from CE %s", ce_id)
@@ -678,6 +683,7 @@ class GeminiAnalysisService:
                 frames_with_time.append((frame_overlay, frame_time_sec, camera))
 
             # Write ai_frame_analysis at CE root
+            logger.info("Writing frames to disk")
             save_frames = bool(self.config.get("SAVE_AI_FRAMES", True))
             create_zip = bool(self.config.get("CREATE_AI_ANALYSIS_ZIP", True))
             write_ai_frame_analysis_multi_cam(
@@ -695,6 +701,7 @@ class GeminiAnalysisService:
                 datetime.fromtimestamp(ce_start_time + first_ts).strftime("%Y-%m-%d %H:%M:%S")
                 if ce_start_time > 0 else datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             )
+            logger.info("Preparing system prompt")
             system_prompt = self._build_system_prompt(
                 image_count=image_count,
                 camera_list=cameras_str,
@@ -705,6 +712,7 @@ class GeminiAnalysisService:
                 zones_str="none recorded",
                 labels_str="(none recorded)",
             )
+            logger.info("Sending to proxy")
             result = self.send_to_proxy(system_prompt, frames)
             if result and isinstance(result, dict):
                 out_path = os.path.join(ce_folder_path, "analysis_result.json")
@@ -771,18 +779,23 @@ class GeminiAnalysisService:
 
             max_frames_sec = float(self.config.get("MAX_MULTI_CAM_FRAMES_SEC", 1))
             max_frames_min = int(self.config.get("MAX_MULTI_CAM_FRAMES_MIN", 60))
+            _log("Creating frame timeline")
             frames_raw = extract_target_centric_frames(
                 ce_folder_path,
                 max_frames_sec=max_frames_sec,
                 max_frames_min=max_frames_min,
+                crop_width=self.crop_width,
+                crop_height=self.crop_height,
+                first_camera_bias=None,
                 log_callback=_log if log_messages is not None else None,
             )
             if not frames_raw:
                 logger.warning("No frames extracted from CE folder %s", ce_folder_path)
                 return (None, "No frames extracted (check clips and sidecars).")
 
-            _log(f"Extracted {len(frames_raw)} frames from clips.")
-            _log("Adding timestamps to frames.")
+            cameras_from_frames = ", ".join(sorted({c for _, _, c in frames_raw}))
+            _log(f"Extracted {len(frames_raw)} frames from clips ({cameras_from_frames}).")
+            _log(f"Adding timestamps to frames ({cameras_from_frames}).")
 
             image_count = len(frames_raw)
             frames_with_time: list[tuple[Any, float, str]] = []
@@ -811,6 +824,7 @@ class GeminiAnalysisService:
                 datetime.fromtimestamp(ce_start_time + first_ts).strftime("%Y-%m-%d %H:%M:%S")
                 if ce_start_time > 0 else datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             )
+            _log("Preparing system prompt")
             system_prompt = self._build_system_prompt(
                 image_count=image_count,
                 camera_list=cameras_str,
@@ -821,6 +835,7 @@ class GeminiAnalysisService:
                 zones_str="none recorded",
                 labels_str="(none recorded)",
             )
+            _log("Building payload for preview")
             user_content: list[Any] = [
                 {"type": "text", "text": "Analyze these security camera frames and respond with the requested JSON."}
             ]

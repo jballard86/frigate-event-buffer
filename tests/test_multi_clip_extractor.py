@@ -11,6 +11,7 @@ from unittest.mock import MagicMock, patch
 from frigate_buffer.services.multi_clip_extractor import (
     extract_target_centric_frames,
     _get_fps_and_duration,
+    _nearest_sidecar_entry,
     _person_area_from_detections,
     _person_area_at_time,
     _load_sidecar_for_camera,
@@ -34,6 +35,33 @@ class TestMultiClipExtractorHelpers(unittest.TestCase):
             {"label": "car", "area": 8000},
         ]
         self.assertEqual(_person_area_from_detections(dets), 1500.0)
+
+    def test_person_area_from_detections_new_sidecar_format(self):
+        """New sidecar format (label, bbox, centerpoint, area) is summed correctly."""
+        dets = [
+            {"label": "person", "bbox": [0, 0, 10, 20], "centerpoint": [5, 10], "area": 200},
+            {"label": "person", "bbox": [10, 0, 30, 15], "centerpoint": [20, 7.5], "area": 300},
+        ]
+        self.assertEqual(_person_area_from_detections(dets), 500.0)
+
+    def test_nearest_sidecar_entry_returns_none_for_empty(self):
+        """Empty sidecar entries returns None."""
+        self.assertIsNone(_nearest_sidecar_entry([], 0.5))
+
+    def test_nearest_sidecar_entry_returns_entry_closest_to_t(self):
+        """Returns entry with timestamp_sec closest to t_sec."""
+        entries = [
+            {"timestamp_sec": 0.0, "frame_number": 0, "detections": []},
+            {"timestamp_sec": 1.0, "frame_number": 30, "detections": []},
+            {"timestamp_sec": 2.0, "frame_number": 60, "detections": []},
+        ]
+        self.assertEqual(_nearest_sidecar_entry(entries, 0.6)["timestamp_sec"], 1.0)
+        self.assertEqual(_nearest_sidecar_entry(entries, 0.0)["timestamp_sec"], 0.0)
+
+    def test_person_area_at_time_empty_returns_zero(self):
+        """Empty sidecar or missing detections defaults to 0."""
+        self.assertEqual(_person_area_at_time([], 0.5), 0.0)
+        self.assertEqual(_person_area_at_time([{"timestamp_sec": 0.0}], 0.0), 0.0)
 
     def test_person_area_at_time_nearest(self):
         """Returns person area from nearest entry by timestamp_sec."""

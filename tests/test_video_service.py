@@ -153,6 +153,7 @@ class TestVideoService(unittest.TestCase):
         mock_libx264.assert_called_once_with(
             "evt1", "temp.mp4", "final.mp4",
             detection_sidecar_path=None, detection_model=None, detection_device=None,
+            detection_frame_interval=1,
             cpu_reason="NVENC unavailable",
         )
         mock_nvenc.assert_not_called()
@@ -178,6 +179,7 @@ class TestVideoService(unittest.TestCase):
             detection_sidecar_path="/ce/cam/detection.json",
             detection_model="yolov8n.pt",
             detection_device="0",
+            detection_frame_interval=1,
             cpu_reason="NVENC unavailable",
         )
 
@@ -251,6 +253,7 @@ class TestVideoService(unittest.TestCase):
             detection_sidecar_path="/ce/cam/detection.json",
             detection_model="yolov8n.pt",
             detection_device=None,
+            detection_frame_interval=1,
         )
 
         self.assertTrue(ok)
@@ -260,6 +263,7 @@ class TestVideoService(unittest.TestCase):
             "/ce/cam/detection.json",
             "yolov8n.pt",
             None,
+            1,
         )
         mock_popen.assert_called_once()
         call_args = mock_popen.call_args[0][0]
