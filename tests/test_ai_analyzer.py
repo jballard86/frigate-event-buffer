@@ -586,3 +586,17 @@ class TestGeminiAnalysisServiceSaveAnalysisResult(unittest.TestCase):
             except OSError:
                 self.fail("_save_analysis_result should catch OSError and not re-raise")
         self.assertFalse(os.path.isfile(out_path), "File should not be created when open raises OSError")
+
+
+class TestGeminiAnalysisServiceAnalyzeMultiClipCe(unittest.TestCase):
+    """Test analyze_multi_clip_ce: exception handling returns None and does not propagate."""
+
+    def test_analyze_multi_clip_ce_returns_none_when_extraction_raises(self):
+        """When extract_target_centric_frames raises, analyze_multi_clip_ce catches and returns None."""
+        ce_dir = tempfile.mkdtemp()
+        self.addCleanup(lambda: os.path.exists(ce_dir) and __import__("shutil").rmtree(ce_dir, ignore_errors=True))
+        config = {"GEMINI": {"enabled": True, "proxy_url": "http://p", "api_key": "k"}}
+        service = GeminiAnalysisService(config)
+        with patch("frigate_buffer.services.ai_analyzer.extract_target_centric_frames", side_effect=ValueError("read of closed file")):
+            result = service.analyze_multi_clip_ce("ce_123", ce_dir, ce_start_time=0.0)
+        self.assertIsNone(result)

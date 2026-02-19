@@ -172,6 +172,7 @@ def extract_target_centric_frames(
 
     step_sec = float(max_frames_sec) if max_frames_sec > 0 else 1.0
     collected: list[tuple[Any, float, str]] = []
+    path_per_cam = {cam: path for cam, path in clip_paths}
 
     # Prefer sidecar-based selection when every camera has detection.json (from transcode+ultralytics).
     camera_folders = {cam: os.path.dirname(path) for cam, path in clip_paths}
@@ -275,12 +276,29 @@ def extract_target_centric_frames(
 
     # Sequential-read, time-sampled: per-camera state (prev_frame, prev_t, curr_frame, curr_t).
     # We advance all readers in lockstep; at each sample time T we use the frame at T for each camera.
+    # Reader failures (e.g. ValueError: read of closed file when FFmpeg process dies) drop that camera only.
+    _READ_ERRORS = (ValueError, OSError, BrokenPipeError, RuntimeError)
     State = tuple[Any, float, Any, float]  # prev_frame, prev_t, curr_frame, curr_t
     state: dict[str, State] = {}
     for cam in caps:
         if caps[cam] is None:
             continue
-        ret, frame = caps[cam].read()
+        try:
+            ret, frame = caps[cam].read()
+        except _READ_ERRORS as e:
+            logger.warning(
+                "Reader process died for camera %s (%s); dropping camera for rest of extraction: %s",
+                cam,
+                path_per_cam.get(cam, ""),
+                e,
+            )
+            try:
+                caps[cam].release()
+            except Exception:
+                pass
+            caps[cam] = None
+            state[cam] = (None, -1.0, None, -1.0)
+            continue
         if not ret or frame is None:
             state[cam] = (None, -1.0, None, -1.0)
             continue
@@ -303,7 +321,25 @@ def extract_target_centric_frames(
                 cap = caps.get(cam)
                 if cap is None:
                     break
-                ret, frame = cap.read()
+                try:
+                    ret, frame = cap.read()
+                except _READ_ERRORS as e:
+                    logger.warning(
+                        "Reader process died for camera %s (%s); dropping camera for rest of extraction: %s",
+                        cam,
+                        path_per_cam.get(cam, ""),
+                        e,
+                    )
+                    try:
+                        cap.release()
+                    except Exception:
+                        pass
+                    caps[cam] = None
+                    if curr_f is not None:
+                        state[cam] = (curr_f, curr_t, curr_f, curr_t)
+                    else:
+                        state[cam] = (None, -1.0, None, -1.0)
+                    break
                 if not ret or frame is None:
                     # EOF: use last frame as final state
                     if curr_f is not None:
@@ -315,6 +351,10 @@ def extract_target_centric_frames(
                 frame_index[cam] = idx + 1
                 state[cam] = (curr_f, curr_t, frame, new_t)
                 prev_f, prev_t, curr_f, curr_t = state[cam]
+
+        # If no cameras left, return what we have so far.
+        if not any(c is not None for c in caps.values()):
+            break
 
         # For each camera, the frame at T is the one with timestamp <= T closest to T.
         for cam in state:
