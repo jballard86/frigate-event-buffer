@@ -74,23 +74,27 @@ def run_test_pipeline(
         yield _yield_error("Events directory not found")
         return
 
-    # 1. Validate source: every camera subdir has clip.mp4
+    # 1. Validate source: need at least one camera subdir with clip.mp4
     try:
         with os.scandir(source_folder_path) as it:
-            camera_subdirs = [e.name for e in it if e.is_dir() and not e.name.startswith(".")]
+            all_subdirs = [e.name for e in it if e.is_dir() and not e.name.startswith(".")]
     except OSError as e:
         yield _yield_error(f"Source folder not readable: {e}")
         return
 
-    missing: list[str] = []
-    for cam in camera_subdirs:
-        clip_path = os.path.join(source_folder_path, cam, "clip.mp4")
-        if not os.path.isfile(clip_path):
-            missing.append(cam)
-    if missing:
-        yield _yield_error(f"Source event incomplete: missing clip for camera(s): {', '.join(missing)}")
+    camera_subdirs = [
+        cam for cam in all_subdirs
+        if os.path.isfile(os.path.join(source_folder_path, cam, "clip.mp4"))
+    ]
+    if not camera_subdirs:
+        yield _yield_error(
+            "Need clip and data from at least one camera. No camera in this event has clip.mp4 yet."
+        )
         return
 
+    if len(camera_subdirs) < len(all_subdirs):
+        missing = [c for c in all_subdirs if c not in camera_subdirs]
+        yield _yield_log(f"Skipping camera(s) without clip: {', '.join(missing)}")
     yield _yield_log(f"Source validated: {len(camera_subdirs)} camera(s) with clip.mp4")
 
     # 2. Allocate testN with lock
