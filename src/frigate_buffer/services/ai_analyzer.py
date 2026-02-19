@@ -781,7 +781,7 @@ class GeminiAnalysisService:
                 _log("Frame selection: using detection sidecars (picks best camera per moment from pre-computed object detections).")
             else:
                 part = f" (missing for: {', '.join(missing)})" if missing else ""
-                _log(f"Frame selection: HOG fallback (motion-based; no detection sidecars available).{part}")
+                _log(f"Frame selection: detection sidecars missing; skipping multi-clip extraction.{part}")
 
             max_frames_sec = float(self.config.get("MAX_MULTI_CAM_FRAMES_SEC", 1))
             max_frames_min = int(self.config.get("MAX_MULTI_CAM_FRAMES_MIN", 60))

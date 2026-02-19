@@ -79,7 +79,8 @@ class TestMultiClipExtractorHelpers(unittest.TestCase):
     def test_load_sidecar_missing_returns_none(self):
         """Missing file returns None."""
         test_dir = os.path.dirname(os.path.abspath(__file__))
-        d = tempfile.mkdtemp(prefix="frigate_sidecar_", dir=test_dir)
+        d = os.path.join(test_dir, "_sidecar_fixture", "missing_" + str(id(self)))
+        os.makedirs(d, exist_ok=True)
         try:
             self.assertIsNone(_load_sidecar_for_camera(d))
         finally:
@@ -88,7 +89,8 @@ class TestMultiClipExtractorHelpers(unittest.TestCase):
     def test_load_sidecar_valid_returns_list(self):
         """Valid detection.json returns list of entries."""
         test_dir = os.path.dirname(os.path.abspath(__file__))
-        d = tempfile.mkdtemp(prefix="frigate_sidecar_", dir=test_dir)
+        d = os.path.join(test_dir, "_sidecar_fixture", str(id(self)))
+        os.makedirs(d, exist_ok=True)
         try:
             path = os.path.join(d, DETECTION_SIDECAR_FILENAME)
             data = [{"timestamp_sec": 0.0, "detections": [{"label": "person", "area": 100}]}]
@@ -144,9 +146,11 @@ class TestMultiClipExtractor(unittest.TestCase):
     """Tests for extract_target_centric_frames."""
 
     def setUp(self):
-        # Use a temp dir under the project so sandbox/Windows can access it
+        # Use a deterministic workspace path so sandbox/Windows can create subdirs (mkdtemp can block makedirs on Windows).
         self._test_dir = os.path.dirname(os.path.abspath(__file__))
-        self.tmp = tempfile.mkdtemp(prefix="frigate_extractor_test_", dir=self._test_dir)
+        base = os.path.join(self._test_dir, "_extractor_fixture")
+        self.tmp = os.path.join(base, str(id(self)))
+        os.makedirs(self.tmp, exist_ok=True)
 
     def tearDown(self):
         if os.path.exists(self.tmp):

@@ -472,7 +472,9 @@ class FileManager:
 
     def _sum_event_folder(self, event_path: str) -> tuple:
         """Sum clip, snapshot, and description sizes in an event folder. Returns (clips, snapshots, descriptions) in bytes."""
-        clip_path = os.path.join(event_path, 'clip.mp4')
+        from frigate_buffer.services.query import resolve_clip_in_folder
+        clip_basename = resolve_clip_in_folder(event_path)
+        clip_path = os.path.join(event_path, clip_basename) if clip_basename else None
         snapshot_path = os.path.join(event_path, 'snapshot.jpg')
         desc_files = (
             'summary.txt', 'review_summary.md', 'metadata.json',
@@ -480,7 +482,7 @@ class FileManager:
         )
         cam_clips = cam_snapshots = cam_descriptions = 0
         try:
-            if os.path.exists(clip_path):
+            if clip_path and os.path.exists(clip_path):
                 cam_clips = os.path.getsize(clip_path)
         except OSError:
             pass

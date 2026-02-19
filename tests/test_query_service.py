@@ -8,7 +8,10 @@ from frigate_buffer.services.query import EventQueryService
 
 class TestEventQueryService(unittest.TestCase):
     def setUp(self):
-        self.test_dir = tempfile.mkdtemp()
+        # Use a unique subdir per test to avoid Windows rmtree permission errors on open files.
+        base = os.path.join(os.path.dirname(__file__), "_query_test_fixture")
+        self.test_dir = os.path.join(base, str(id(self)))
+        os.makedirs(self.test_dir, exist_ok=True)
         self.service = EventQueryService(self.test_dir)
 
         # Create structure
@@ -52,7 +55,10 @@ class TestEventQueryService(unittest.TestCase):
             f.write("Title: Consolidated Event\nDescription: Something happened.")
 
     def tearDown(self):
-        shutil.rmtree(self.test_dir)
+        try:
+            shutil.rmtree(self.test_dir)
+        except OSError:
+            pass
 
     def test_get_cameras(self):
         cameras = self.service.get_cameras()

@@ -169,8 +169,6 @@ class TestConfigSchema(unittest.TestCase):
                 'motion_threshold_px': 80,
                 'crop_width': 1920,
                 'crop_height': 1080,
-                'nvenc_probe_width': 1920,
-                'nvenc_probe_height': 1080,
                 'multi_cam_system_prompt_file': '/path/to/prompt.txt',
             },
             'gemini_proxy': {
@@ -191,8 +189,6 @@ class TestConfigSchema(unittest.TestCase):
         self.assertEqual(config['MOTION_THRESHOLD_PX'], 80)
         self.assertEqual(config['CROP_WIDTH'], 1920)
         self.assertEqual(config['CROP_HEIGHT'], 1080)
-        self.assertEqual(config['NVENC_PROBE_WIDTH'], 1920)
-        self.assertEqual(config['NVENC_PROBE_HEIGHT'], 1080)
         self.assertEqual(config['MULTI_CAM_SYSTEM_PROMPT_FILE'], '/path/to/prompt.txt')
         self.assertEqual(config['GEMINI_PROXY_URL'], 'http://proxy:5050')
         self.assertEqual(config['GEMINI_PROXY_MODEL'], 'gemini-2.0-flash')
@@ -224,8 +220,6 @@ class TestConfigSchema(unittest.TestCase):
         self.assertEqual(config['MOTION_THRESHOLD_PX'], 50)
         self.assertEqual(config['CROP_WIDTH'], 1280)
         self.assertEqual(config['CROP_HEIGHT'], 720)
-        self.assertEqual(config['NVENC_PROBE_WIDTH'], 1280)
-        self.assertEqual(config['NVENC_PROBE_HEIGHT'], 720)
         self.assertEqual(config['MULTI_CAM_SYSTEM_PROMPT_FILE'], '')
         self.assertEqual(config['DECODE_SECOND_CAMERA_CPU_ONLY'], True)
         self.assertEqual(config['GEMINI_PROXY_URL'], '')

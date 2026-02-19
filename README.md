@@ -17,7 +17,7 @@ A state-aware orchestrator that listens to Frigate NVR events via MQTT, tracks t
 - **Smart Zone Filtering**: Optional per-camera tracked zones (create event only when object enters); exceptions (e.g., UPS, FedEx) trigger regardless of zone; Late Start when creation is triggered by a later update
 - **Multi-Camera Support**: Handles events from multiple cameras simultaneously without state collision
 - **Clip Export via Frigate API**: Requests clips from Frigate's Export API (POST with JSON body `playback`/`name` per Frigate schema; polls by `export_id` when async); full event duration with configurable buffer. For **consolidated events**, exports use per-camera time ranges and a representative event ID per camera (from sub-events) to avoid 404s and incorrect footage. Falls back to per-event clip via events API if export fails or times out; export failures log full raw response at WARNING for debugging; timeline includes full Frigate response; "Event ongoing" badge clears when clip is available, when Frigate signals event end (from timeline), or after 90 minutes
-- **Auto-Transcoding**: Transcodes clips to H.264 for broad compatibility
+- **Raw clip pipeline**: Clips are downloaded from Frigate and stored as-is (H.264/H.265); no re-encoding. Detection sidecars (YOLO) are generated in a decode-only pass for multi-camera frame selection.
 - **Clip Download Retry**: Retries clip downloads up to 3 times on HTTP 400 (Frigate not ready), with 5-second delays when using events API fallback. HTTP 404 (no recording available) is not retried—logged once and returns immediately
 - **FFmpeg Safety**: 60-second timeout with graceful termination prevents zombie processes
 - **Rolling Retention**: Automatically cleans up events older than the retention period (default: 3 days)
@@ -43,7 +43,7 @@ The **StateAwareOrchestrator** is the central coordinator. It owns event-handlin
 
 ### Refactor Additions (This Fork)
 
-- **VideoService** (`services/video.py`) — FFmpeg transcoding and GIF generation; used by FileManager so clip handling is isolated and process/timeout logic is in one place.
+- **VideoService** (`services/video.py`) — Decode-only frame reading (ffmpegcv/NVDEC), detection sidecar generation (YOLO), and GIF generation; no encoding.
 - **EventLifecycleService** (`services/lifecycle.py`) — Handles event creation, event end (clip export, cleanup), and consolidated-event finalization (export, review summary, notifications); orchestrator delegates to it instead of inlining logic.
 - **GeminiAnalysisService** (`services/ai_analyzer.py`) — Optional. When `gemini.enabled`, extracts frames (motion-aware selection, optional center/smart crop from per-frame metadata), sends them to an OpenAI-compatible Gemini proxy, and **returns** the analysis metadata to the orchestrator. Writes **analysis_result.json** in the event folder for the Daily Report. Does not publish to MQTT; the orchestrator persists the result (state, files, Frigate API, HA notification).
 - **DailyReporterService** (`services/daily_reporter.py`) — Optional. When the Gemini analyzer is enabled, runs at **DAILY_REPORT_SCHEDULE_HOUR** (default 1am) for the previous calendar day: scans storage for **analysis_result.json** in event folders, aggregates event lines, fills the report prompt template (e.g. `report_prompt.txt`), calls **send_text_prompt** on the analyzer (text-only, no images), and writes the proxy response to `{STORAGE_PATH}/daily_reports/{date}_report.md`.
