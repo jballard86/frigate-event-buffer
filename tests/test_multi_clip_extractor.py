@@ -15,6 +15,8 @@ from frigate_buffer.services.multi_clip_extractor import (
     _person_area_from_detections,
     _person_area_at_time,
     _load_sidecar_for_camera,
+    _detection_timestamps_with_person,
+    _subsample_with_min_gap,
     DETECTION_SIDECAR_FILENAME,
 )
 
@@ -98,6 +100,44 @@ class TestMultiClipExtractorHelpers(unittest.TestCase):
             self.assertEqual(result[0]["timestamp_sec"], 0.0)
         finally:
             shutil.rmtree(d, ignore_errors=True)
+
+    def test_detection_timestamps_with_person_empty_sidecar_safe(self):
+        """One camera has entries with person area, other is None/empty; no exception."""
+        sidecars = {
+            "cam1": [{"timestamp_sec": 0.0, "detections": [{"label": "person", "area": 100}]}],
+            "cam2": None,
+        }
+        result = _detection_timestamps_with_person(sidecars, global_end=10.0)
+        self.assertEqual(result, [0.0])
+        sidecars["cam2"] = []
+        result = _detection_timestamps_with_person(sidecars, global_end=10.0)
+        self.assertEqual(result, [0.0])
+
+    def test_detection_timestamps_with_person_filters_zero_area(self):
+        """Only entries with person area > 0 are included."""
+        sidecars = {
+            "cam1": [
+                {"timestamp_sec": 0.0, "detections": [{"label": "person", "area": 50}]},
+                {"timestamp_sec": 1.0, "detections": []},
+                {"timestamp_sec": 2.0, "detections": [{"label": "car", "area": 1000}]},
+            ],
+        }
+        result = _detection_timestamps_with_person(sidecars, global_end=10.0)
+        self.assertEqual(result, [0.0])
+
+    def test_subsample_with_min_gap_enforces_step(self):
+        """Selected timestamps have at least step_sec between them; not all from start."""
+        timestamps = [0.0, 0.1, 0.2, 1.0, 1.05, 2.0, 2.1, 3.0]
+        result = _subsample_with_min_gap(timestamps, step_sec=1.0, max_count=5)
+        self.assertEqual(result, [0.0, 1.0, 2.0, 3.0])
+        self.assertLessEqual(len(result), 5)
+
+    def test_subsample_with_min_gap_respects_max_count(self):
+        """Subsample stops at max_count."""
+        timestamps = [float(i) for i in range(20)]
+        result = _subsample_with_min_gap(timestamps, step_sec=1.0, max_count=3)
+        self.assertEqual(len(result), 3)
+        self.assertEqual(result, [0.0, 1.0, 2.0])
 
 
 class TestMultiClipExtractor(unittest.TestCase):

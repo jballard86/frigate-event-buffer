@@ -135,6 +135,11 @@ network:
 #   motion_crop_min_area_fraction: 0.001
 #   motion_crop_min_px: 500
 #   detection_frame_interval: 5   # run YOLO every N frames; default 5
+#   first_camera_bias_decay_seconds: 1.0   # time constant for exponential bias decay (primary camera)
+#   first_camera_bias_initial: 1.5         # initial bias multiplier for primary camera
+#   first_camera_bias_cap_seconds: 0       # cap bias to 0 after this many seconds; 0 = no cap
+#   person_area_switch_threshold: 200      # allow switch when current camera person area below this (px²); 0 = disable
+#   camera_switch_ratio: 1.2               # new camera must have this ratio of current to switch (e.g. 1.2 = 1.2×)
 
 # Optional: Gemini proxy (extended) - model params for proxy calls (e.g. multi-cam)
 # API key: GEMINI_API_KEY only. Proxy URL: set here or GEMINI_PROXY_URL env (default "").
