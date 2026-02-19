@@ -3,6 +3,7 @@ Download Service - Handles network downloads and API interactions with Frigate.
 """
 
 import os
+import shutil
 import time
 import logging
 
@@ -305,6 +306,42 @@ class DownloadService:
                 event_id,
                 temp_path,
                 final_path,
+                detection_sidecar_path=detection_sidecar_path,
+                detection_model=detection_model,
+                detection_device=detection_device or None,
+            )
+            return ok
+        finally:
+            if os.path.exists(temp_path):
+                try:
+                    os.remove(temp_path)
+                except OSError:
+                    pass
+
+    def transcode_existing_clip(
+        self,
+        event_id: str,
+        camera_folder_path: str,
+        detection_sidecar_path: str | None = None,
+        detection_model: str | None = None,
+        detection_device: str | None = None,
+    ) -> bool:
+        """
+        Transcode an existing clip.mp4 in place (copy to temp, transcode to clip.mp4, remove temp).
+        Used by the event_test orchestrator to run the post-download transcode step on copied event data.
+        When detection_sidecar_path is set, transcode writes detection.json (e.g. for multi-cam frame extraction).
+        """
+        clip_path = os.path.join(camera_folder_path, "clip.mp4")
+        if not os.path.isfile(clip_path):
+            logger.warning("No clip.mp4 at %s", camera_folder_path)
+            return False
+        temp_path = os.path.join(camera_folder_path, "clip_transcode_src.mp4")
+        try:
+            shutil.copy2(clip_path, temp_path)
+            ok = self.video_service.transcode_clip_to_h264(
+                event_id,
+                temp_path,
+                clip_path,
                 detection_sidecar_path=detection_sidecar_path,
                 detection_model=detection_model,
                 detection_device=detection_device or None,

@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Test multi-cam pipeline</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #1a1a2e; color: #e0e0e0; min-height: 100vh; padding: 16px; }
+  .header { background: #16213e; padding: 12px 16px; border-radius: 8px; margin-bottom: 16px; border: 1px solid #0f3460; }
+  .header h1 { font-size: 1.1rem; color: #e94560; }
+  .log-area { background: #0f3460; border: 1px solid #533483; border-radius: 8px; padding: 12px; min-height: 200px; max-height: 60vh; overflow-y: auto; font-family: monospace; font-size: 0.85rem; white-space: pre-wrap; word-break: break-all; }
+  .log-area .err { color: #ff6b6b; }
+  .log-area .done { color: #7dde7d; margin-top: 12px; }
+  .link-box { margin-top: 16px; padding: 12px; background: #16213e; border-radius: 8px; border: 1px solid #0f3460; }
+  .link-box a { color: #e94560; }
+  .link-box p { margin: 8px 0; }
+  .no-subdir { color: #888; }
+</style>
+</head>
+<body>
+  <div class="header">
+    <h1>Test multi-cam pipeline</h1>
+    <p class="no-subdir">{% if subdir %}Event: <strong>{{ subdir }}</strong>{% else %}Open this page from the player TEST button (select a consolidated event with clips ready).{% endif %}</p>
+  </div>
+  <div id="logContainer">
+    <div class="log-area" id="logArea">{% if subdir %}Connecting...{% else %}No event selected. Use the TEST button on the player for a consolidated event.{% endif %}</div>
+    <div class="link-box" id="linkBox" style="display: none;">
+      <p><strong>Done.</strong></p>
+      <p><a id="aiRequestLink" href="">View AI request (frames and prompt)</a></p>
+    </div>
+  </div>
+<script>
+(function() {
+  const subdir = {{ subdir|tojson }};
+  const logArea = document.getElementById('logArea');
+  const linkBox = document.getElementById('linkBox');
+  const aiRequestLink = document.getElementById('aiRequestLink');
+  if (!subdir) return;
+  logArea.textContent = 'Connecting...\n';
+  const url = '/api/test-multi-cam/stream?subdir=' + encodeURIComponent(subdir);
+  const es = new EventSource(url);
+  es.onmessage = function(e) {
+    try {
+      const ev = JSON.parse(e.data);
+      if (ev.type === 'log') {
+        logArea.appendChild(document.createTextNode(ev.message + '\n'));
+        logArea.scrollTop = logArea.scrollHeight;
+      } else if (ev.type === 'done') {
+        logArea.appendChild(document.createElement('span')).className = 'done';
+        logArea.lastChild.textContent = 'Done.\n';
+        aiRequestLink.href = ev.ai_request_url || ('/files/events/' + ev.test_run_id + '/ai_request.html');
+        aiRequestLink.textContent = 'View AI request (frames and prompt)';
+        linkBox.style.display = 'block';
+        es.close();
+      } else if (ev.type === 'error') {
+        const span = document.createElement('span');
+        span.className = 'err';
+        span.textContent = 'Error: ' + (ev.message || 'Unknown') + '\n';
+        logArea.appendChild(span);
+        logArea.scrollTop = logArea.scrollHeight;
+        es.close();
+      }
+    } catch (err) {
+      logArea.appendChild(document.createElement('span')).className = 'err';
+      logArea.lastChild.textContent = 'Parse error: ' + err.message + '\n';
+      es.close();
+    }
+  };
+  es.onerror = function() {
+    if (linkBox.style.display !== 'block') {
+      logArea.appendChild(document.createElement('span')).className = 'err';
+      logArea.lastChild.textContent = 'Connection error or stream ended.\n';
+    }
+    es.close();
+  };
+})();
+</script>
+</body>
+</html>

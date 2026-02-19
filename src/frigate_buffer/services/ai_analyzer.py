@@ -720,3 +720,92 @@ class GeminiAnalysisService:
                 e,
             )
             return None
+
+    def build_multi_cam_payload_for_preview(
+        self,
+        ce_folder_path: str,
+        ce_start_time: float = 0,
+    ) -> tuple[str, list[Any], list[str]] | None:
+        """
+        Build the same payload as analyze_multi_clip_ce (system prompt + user content with frames)
+        and write frame files to ce_folder_path, but do not call send_to_proxy.
+
+        Used by the event_test orchestrator to produce system_prompt.txt and ai_request.html
+        with download links to the written frame files.
+
+        Returns (system_prompt, user_content, frame_relative_paths) or None on failure.
+        user_content: list of dicts (text + image_url items) for the API payload.
+        frame_relative_paths: paths under ce_folder_path for each frame image file written
+            (e.g. ai_frame_analysis/frames/frame_001_Camera.jpg) for generating download links.
+        """
+        if not os.path.isdir(ce_folder_path):
+            logger.warning("CE folder not found: %s", ce_folder_path)
+            return None
+        try:
+            max_frames_sec = float(self.config.get("MAX_MULTI_CAM_FRAMES_SEC", 1))
+            max_frames_min = int(self.config.get("MAX_MULTI_CAM_FRAMES_MIN", 60))
+            frames_raw = extract_target_centric_frames(
+                ce_folder_path,
+                max_frames_sec=max_frames_sec,
+                max_frames_min=max_frames_min,
+            )
+            if not frames_raw:
+                logger.warning("No frames extracted from CE folder %s", ce_folder_path)
+                return None
+
+            image_count = len(frames_raw)
+            frames_with_time: list[tuple[Any, float, str]] = []
+            cameras_str = ", ".join(sorted({c for _, _, c in frames_raw}))
+            for i, (frame, frame_time_sec, camera) in enumerate(frames_raw):
+                ts = ce_start_time + frame_time_sec if ce_start_time > 0 else frame_time_sec
+                time_str = datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S")
+                frame_overlay = crop_utils.draw_timestamp_overlay(
+                    frame, time_str, camera, i + 1, image_count
+                )
+                frames_with_time.append((frame_overlay, frame_time_sec, camera))
+
+            save_frames = bool(self.config.get("SAVE_AI_FRAMES", True))
+            write_ai_frame_analysis_multi_cam(
+                ce_folder_path,
+                frames_with_time,
+                write_manifest=True,
+                create_zip_flag=False,
+                save_frames=save_frames,
+            )
+
+            frames = [f for f, _, _ in frames_with_time]
+            first_ts = frames_with_time[0][1] if frames_with_time else 0
+            activity_start_str = (
+                datetime.fromtimestamp(ce_start_time + first_ts).strftime("%Y-%m-%d %H:%M:%S")
+                if ce_start_time > 0 else datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            )
+            system_prompt = self._build_system_prompt(
+                image_count=image_count,
+                camera_list=cameras_str,
+                first_image_number=1,
+                last_image_number=image_count,
+                activity_start_str=activity_start_str,
+                duration_str="multi-camera event",
+                zones_str="none recorded",
+                labels_str="(none recorded)",
+            )
+            user_content: list[Any] = [
+                {"type": "text", "text": "Analyze these security camera frames and respond with the requested JSON."}
+            ]
+            for frame in frames:
+                user_content.append({
+                    "type": "image_url",
+                    "image_url": {"url": self._frame_to_base64_url(frame)},
+                })
+
+            frame_relative_paths: list[str] = []
+            frames_dir = os.path.join(ce_folder_path, "ai_frame_analysis", "frames")
+            if os.path.isdir(frames_dir):
+                for name in sorted(os.listdir(frames_dir)):
+                    if name.startswith("frame_") and name.endswith(".jpg"):
+                        frame_relative_paths.append(os.path.join("ai_frame_analysis", "frames", name))
+
+            return (system_prompt, user_content, frame_relative_paths)
+        except Exception as e:
+            logger.exception("build_multi_cam_payload_for_preview failed for %s: %s", ce_folder_path, e)
+            return None

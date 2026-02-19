@@ -1,6 +1,7 @@
 """Flask app and routes for the Frigate Event Buffer web interface."""
 
 import os
+import re
 import json
 import time
 import shutil
@@ -13,6 +14,7 @@ from flask import Flask, Response, send_from_directory, jsonify, render_template
 
 from frigate_buffer.logging_utils import error_buffer
 from frigate_buffer.services.query import EventQueryService, read_timeline_merged
+from frigate_buffer.event_test.event_test_orchestrator import run_test_pipeline
 
 logger = logging.getLogger('frigate-buffer')
 
@@ -363,6 +365,91 @@ def create_app(orchestrator):
             return "File not found", 404
 
         return send_from_directory(directory, filename)
+
+    @app.route('/test-multi-cam')
+    def test_multi_cam_page():
+        """Test run page: shows verbose log (via SSE) and link to AI request viewer."""
+        subdir = request.args.get('subdir', '')
+        return render_template('test_run.html', subdir=subdir)
+
+    @app.route('/api/test-multi-cam/stream')
+    def test_multi_cam_stream():
+        """Stream SSE events from the mini test orchestrator (post-download pipeline, no AI send)."""
+        subdir = request.args.get('subdir', '').strip()
+        if not subdir:
+            return jsonify({"error": "Missing subdir"}), 400
+        source_path = os.path.realpath(os.path.join(storage_path, "events", subdir))
+        events_dir = os.path.realpath(os.path.join(storage_path, "events"))
+        if not source_path.startswith(events_dir) or not os.path.isdir(source_path):
+            return jsonify({"error": "Invalid or missing event folder"}), 404
+        try:
+            with os.scandir(source_path) as it:
+                has_subdir = any(e.is_dir() for e in it)
+            if not has_subdir:
+                return jsonify({"error": "Event folder has no camera subdirs"}), 400
+        except OSError:
+            return jsonify({"error": "Cannot read event folder"}), 400
+
+        def generate():
+            for ev in run_test_pipeline(
+                source_path,
+                storage_path,
+                file_manager,
+                orchestrator.download_service,
+                orchestrator.ai_analyzer,
+                orchestrator.config,
+            ):
+                yield f"data: {json.dumps(ev)}\n\n"
+                if ev.get("type") in ("done", "error"):
+                    break
+
+        return Response(
+            generate(),
+            mimetype="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+
+    @app.route('/api/test-multi-cam/send', methods=['POST'])
+    def test_multi_cam_send():
+        """Send the stored AI request for a test run to the Gemini proxy. Returns API response or error."""
+        test_run = request.args.get('test_run', '').strip()
+        if not test_run or not re.match(r"^test\d+$", test_run):
+            return jsonify({"error": "Invalid test_run"}), 400
+        test_path = os.path.realpath(os.path.join(storage_path, "events", test_run))
+        events_dir = os.path.realpath(os.path.join(storage_path, "events"))
+        if not test_path.startswith(events_dir) or not os.path.isdir(test_path):
+            return jsonify({"error": "Test run folder not found"}), 404
+        prompt_path = os.path.join(test_path, "system_prompt.txt")
+        if not os.path.isfile(prompt_path):
+            return jsonify({"error": "system_prompt.txt not found"}), 404
+        try:
+            with open(prompt_path, "r", encoding="utf-8") as f:
+                system_prompt = f.read()
+        except OSError as e:
+            return jsonify({"error": str(e)}), 500
+        frames_dir = os.path.join(test_path, "ai_frame_analysis", "frames")
+        frame_paths = []
+        if os.path.isdir(frames_dir):
+            for name in sorted(os.listdir(frames_dir)):
+                if name.startswith("frame_") and name.endswith(".jpg"):
+                    frame_paths.append(os.path.join(frames_dir, name))
+        if not frame_paths:
+            return jsonify({"error": "No frame images found"}), 404
+        try:
+            import cv2
+            frames = []
+            for p in frame_paths:
+                img = cv2.imread(p)
+                if img is not None:
+                    frames.append(img)
+            if not frames:
+                return jsonify({"error": "Could not load any frame"}), 500
+        except Exception as e:
+            return jsonify({"error": f"Loading frames: {e}"}), 500
+        result = orchestrator.ai_analyzer.send_to_proxy(system_prompt, frames)
+        if result is None:
+            return jsonify({"error": "Proxy request failed"}), 502
+        return jsonify(result)
 
     @app.route('/stats')
     def stats():

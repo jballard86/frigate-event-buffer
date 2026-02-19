@@ -46,3 +46,4 @@ storage/
 # Temporary files
 *.tmp
 *.temp
+tests/tmp_*/
