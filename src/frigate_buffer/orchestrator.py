@@ -16,7 +16,7 @@ import requests
 import schedule
 from urllib.parse import urlparse, urlunparse
 
-from frigate_buffer.models import EventState, _is_no_concerns
+from frigate_buffer.models import EventState, EventPhase, _is_no_concerns
 from frigate_buffer.managers.file import FileManager
 from frigate_buffer.managers.state import EventStateManager
 from frigate_buffer.services.video import VideoService
@@ -458,7 +458,7 @@ class StateAwareOrchestrator:
             'event_id': ce_id, 'camera': ce_info.get('camera', 'events'), 'label': label,
             'folder_path': media_folder,
             'created_at': ce_info.get('_start_time', 0), 'end_time': ce_info.get('end_time'),
-            'phase': 'finalized',
+            'phase': EventPhase.FINALIZED,
             'genai_title': title, 'genai_description': description, 'ai_description': None,
             'review_summary': None, 'threat_level': threat_level, 'severity': 'detection',
             'snapshot_downloaded': True, 'clip_downloaded': True, 'image_url_override': None,

@@ -14,6 +14,139 @@ logger = logging.getLogger('frigate-buffer')
 STDERR_TRUNCATE = 800
 # Truncation length for ffmpeg -encoders output in NVENC-failure warning (stderr snippet).
 FFMPEG_ENCODERS_SNIPPET_LEN = 500
+# Extended stderr length when returncode is 234 for buffer/surface/AVERROR diagnosis.
+STDERR_TRUNCATE_234 = 2000
+
+# Module-level cache set by run_nvenc_preflight_probe() on main thread; workers skip subprocess when set.
+_nvenc_preflight_result: bool | None = None
+
+# Common errno (Linux) for mapping exit codes that may be -errno & 0xFF.
+_ERRNO_NAMES: dict[int, str] = {
+    1: "EPERM (Operation not permitted)",
+    16: "EBUSY (Device or resource busy)",
+    22: "EINVAL (Invalid argument)",
+    12: "ENOMEM (Out of memory)",
+}
+
+
+def decode_nvenc_returncode(returncode: int) -> list[str]:
+    """
+    Map a process returncode (e.g. 234) to possible signal/errno/AVERROR interpretations.
+
+    Helps diagnose NVENC probe failures: 234 is often a masked negative (e.g. 256-22 for
+    SIGPIPE or -22 for EINVAL/SIGPIPE). Also checks 128+signal (SIGILL=4, SIGSEGV=11) and
+    common errno when exit code is (-errno) & 0xFF.
+    """
+    interpretations: list[str] = []
+    if returncode == 0:
+        return interpretations
+    # 128 + signal_number (common shell convention when process is killed by signal)
+    if 128 <= returncode <= 255:
+        sig = returncode - 128
+        if sig == 4:
+            interpretations.append("128+4: process killed by SIGILL (Illegal instruction)")
+        elif sig == 11:
+            interpretations.append("128+11: process killed by SIGSEGV (Segmentation fault)")
+        elif sig == 22:
+            interpretations.append("128+22: process killed by SIGPIPE (Broken pipe)")
+    # 256 - signal (alternative encoding: 234 = 256-22 = SIGPIPE)
+    if 0 <= returncode <= 255:
+        sig_from_256 = 256 - returncode
+        if 0 < sig_from_256 <= 31:
+            interpretations.append(
+                f"256-{sig_from_256}={returncode}: possible signal {sig_from_256} (e.g. SIGPIPE=22)"
+            )
+    # -errno & 0xFF (e.g. 234 = (-22) & 0xFF → EINVAL or signal 22)
+    if returncode >= 256 - 22:  # negative errno in 8-bit
+        neg = returncode - 256
+        errno_name = _ERRNO_NAMES.get(-neg, None)
+        if errno_name:
+            interpretations.append(f"Possible -errno: {errno_name}")
+    # 234-specific hints
+    if returncode == 234:
+        interpretations.append(
+            "234: often NVENC/FFmpeg hardware-accel failure or AVERROR_EXTERNAL; check stderr for "
+            "buffer/surface/CUDA/NVENC messages."
+        )
+    return interpretations
+
+
+def _nvenc_probe_cmd() -> list[str]:
+    """Return the exact ffmpeg command used for NVENC probe (shared by preflight and in-process probe)."""
+    return [
+        "ffmpeg", "-y", "-f", "lavfi", "-i", "nullsrc=s=64x64:d=0.1",
+        "-c:v", "h264_nvenc", "-frames:v", "1", "-f", "null", "-",
+    ]
+
+
+def _log_nvenc_env_and_warn() -> None:
+    """Log NVIDIA-related env vars (DEBUG) and warn if capabilities lack 'video'."""
+    nv_visible = os.environ.get("NVIDIA_VISIBLE_DEVICES", "")
+    nv_caps = os.environ.get("NVIDIA_DRIVER_CAPABILITIES", "")
+    ld_path = os.environ.get("LD_LIBRARY_PATH", "")
+    logger.debug(
+        "NVENC probe env: NVIDIA_VISIBLE_DEVICES=%r NVIDIA_DRIVER_CAPABILITIES=%r LD_LIBRARY_PATH=%s",
+        nv_visible or "(unset)",
+        nv_caps or "(unset)",
+        (ld_path[:200] + "..." if len(ld_path) > 200 else ld_path) or "(unset)",
+    )
+    if nv_caps and "video" not in nv_caps.lower():
+        logger.warning(
+            "NVIDIA_DRIVER_CAPABILITIES does not include 'video'; NVENC may fail. See BUILD_NVENC.md."
+        )
+
+
+def _log_probe_failure_verbose(returncode: int, stderr: str, cmd: list[str]) -> None:
+    """Log full command, extended stderr for 234, and decode_nvenc_returncode interpretations."""
+    cmd_str = " ".join(cmd)
+    logger.warning("NVENC probe command: %s", cmd_str)
+    truncate = STDERR_TRUNCATE_234 if returncode == 234 else STDERR_TRUNCATE
+    stderr_snippet = stderr[:truncate] + ("..." if len(stderr) > truncate else "")
+    logger.warning("NVENC probe stderr (returncode=%s): %s", returncode, stderr_snippet)
+    for interp in decode_nvenc_returncode(returncode):
+        logger.info("NVENC returncode interpretation: %s", interp)
+
+
+def run_nvenc_preflight_probe() -> None:
+    """
+    Run NVENC probe on the main thread at startup and cache the result.
+
+    Establishes CUDA/NVENC context on the main thread before any worker threads
+    run, avoiding returncode 234 when the first GPU use would otherwise happen
+    in a ThreadPoolExecutor worker. Workers then read the module-level cache
+    and skip the subprocess entirely.
+    """
+    global _nvenc_preflight_result
+    if _nvenc_preflight_result is not None:
+        return
+    _log_nvenc_env_and_warn()
+    cmd = _nvenc_probe_cmd()
+    try:
+        proc = subprocess.run(
+            cmd,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            timeout=15,
+        )
+        stderr = (proc.stderr or b"").decode("utf-8", errors="replace")
+        failed = (
+            proc.returncode != 0
+            or "No capable devices found" in stderr
+            or "cannot load" in stderr.lower()
+        )
+        if failed:
+            _nvenc_preflight_result = False
+            _log_probe_failure_verbose(proc.returncode, stderr, cmd)
+            logger.info(
+                "NVENC preflight: unavailable; transcodes will use CPU (libx264). "
+                "If startup showed NVENC success, see BUILD_NVENC.md and check verbose logs above."
+            )
+        else:
+            _nvenc_preflight_result = True
+            logger.info("NVENC preflight: success — GPU transcode enabled (main-thread init).")
+    except Exception as e:
+        _nvenc_preflight_result = False
+        logger.warning("NVENC preflight: exception — %s; transcodes will use CPU (libx264).", e)
 
 
 def log_gpu_status() -> None:
@@ -232,19 +365,20 @@ class VideoService:
     def _probe_nvenc(self) -> bool:
         """
         Run a minimal NVENC encode to detect if GPU encoding is available.
-        Serialized with a lock so only one thread runs the probe (avoids concurrent
-        probes and returncode 234 from GPU/NVENC contention). Logs exactly once
-        (INFO) with the result. Returns True if NVENC is usable.
+
+        If run_nvenc_preflight_probe() was called at startup (main thread), uses the
+        cached result and does not run a subprocess. Otherwise serialized with a lock;
+        logs once. Returns True if NVENC is usable.
         """
+        if _nvenc_preflight_result is not None:
+            self._nvenc_available = _nvenc_preflight_result
+            return self._nvenc_available
         with self._nvenc_probe_lock:
             if self._nvenc_available is not None:
                 return self._nvenc_available
             try:
-                cmd = [
-                    "ffmpeg", "-y", "-f", "lavfi", "-i", "nullsrc=s=64x64:d=0.1",
-                    "-c:v", "h264_nvenc", "-frames:v", "1", "-f", "null", "-",
-                ]
-                # Use DEVNULL for stdout so ffmpeg does not write to a pipe (avoids pipe-related failures).
+                _log_nvenc_env_and_warn()
+                cmd = _nvenc_probe_cmd()
                 proc = subprocess.run(
                     cmd,
                     stdout=subprocess.DEVNULL,
@@ -258,7 +392,6 @@ class VideoService:
                     or "cannot load" in stderr.lower()
                 )
                 if failed and proc.returncode != 0:
-                    # Retry once after delay (transient contention).
                     time.sleep(2.5)
                     proc = subprocess.run(
                         cmd,
@@ -274,16 +407,10 @@ class VideoService:
                     )
                 if failed:
                     self._nvenc_available = False
-                    stderr_snippet = stderr[:STDERR_TRUNCATE] + ("..." if len(stderr) > STDERR_TRUNCATE else "")
-                    logger.warning(
-                        "NVENC probe: failure — returncode=%s. stderr: %s",
-                        proc.returncode,
-                        stderr_snippet,
-                    )
+                    _log_probe_failure_verbose(proc.returncode, stderr, cmd)
                     logger.info(
                         "NVENC probe: unavailable; transcodes will use CPU (libx264). "
-                        "Returncode 234 can occur from concurrent probe or transient GPU use; "
-                        "if startup showed NVENC success and 234 persists, check GPU contention from other processes."
+                        "See BUILD_NVENC.md; if 234 persists after preflight, check verbose logs above."
                     )
                     return False
                 self._nvenc_available = True
