@@ -646,7 +646,7 @@
           ${!ev.viewed ? `<button class="btn-success" id="btnMarkReviewed">Reviewed</button>` : ''}
           ${ev.has_clip ? `<a id="btnDownloadLink" href="${escapeHtml(primaryClipUrl)}" download style="text-decoration:none;"><button class="btn-download">Download</button></a>` : ''}
           <a href="/events/${escapeHtml(ev.camera)}/${escapeHtml(subdir)}/timeline" style="text-decoration:none;"><button>View Timeline</button></a>
-          ${ev.consolidated && ev.hosted_clips && ev.cameras && ev.hosted_clips.length >= ev.cameras.length
+          ${ev.consolidated
             ? `<a href="/test-multi-cam?subdir=${encodeURIComponent(subdir)}" target="_blank" rel="noopener" style="text-decoration:none;"><button class="btn-success">TEST</button></a>`
             : ''}
           <button class="btn-danger" id="btnDelete">Delete</button>
