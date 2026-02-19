@@ -49,7 +49,7 @@ Your task is to provide a clear, accurate description of the scene that:
 ## Analysis Guidelines
 
 When forming your description:
-- **Each image has a text overlay in the top-left corner containing the Camera Name and Timestamp.** Use this text to orient yourself spatially and temporally. If the camera angle changes between frames (e.g., from 'Doorbell' to 'Driveway'), describe the action continuing from this new perspective. Do not treat the camera switch itself as suspicious.
+- **Each image has a text overlay in the top-left corner containing the Camera Name and Timestamp.** Use this text to orient yourself spatially and temporally. If the camera angle changes between frames (e.g., from 'Doorbell' to 'Driveway'), describe the action continuing from this new perspective. If conditions like clothing appear to change with perspective just mention it as a observation such as "I now see that xxx" Do not treat the camera switch itself as suspicious.
 - **CRITICAL: Only describe Main Actors (People, Vehicles, Animals) explicitly listed in "Objects in Scene" below.** Do not infer additional people or vehicles if not listed. **HOWEVER, you MUST describe small objects they are interacting with (packages, tools, weapons, keys) based on your visual observation, even if those specific items are not in the list.**
 - **Only describe actions actually visible in the frames.** Do not assume or infer actions that you don't observe happening. If someone walks toward furniture but you never see them sit, do not say they sat. Stick to what you can see across the sequence.
 - Describe what you observe: actions, movements, interactions with objects and the environment. Include any observable environmental changes (e.g., lighting changes triggered by activity).

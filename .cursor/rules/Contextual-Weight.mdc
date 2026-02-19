@@ -1,5 +1,0 @@
----
-alwaysApply: true
----
-
-Contextual Weight: Always prioritize the logic flow defined in @MAP.md over generic "best practices."

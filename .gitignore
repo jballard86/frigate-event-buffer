@@ -24,6 +24,9 @@ venv/
 .venv/
 env/
 
+# Cursor IDE (local plans, rules, state)
+.cursor/
+
 # IDE
 .vscode/
 .idea/
@@ -47,3 +50,13 @@ storage/
 *.tmp
 *.temp
 tests/tmp_*/
+
+# Testing / tooling
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+
+# Model weights (downloaded at runtime via ensure_detection_model_ready)
+*.pt
