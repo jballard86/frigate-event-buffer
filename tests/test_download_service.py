@@ -312,7 +312,7 @@ class TestDownloadService(unittest.TestCase):
     @patch('time.sleep')
     def test_export_in_progress_false_proceeds_to_download(self, mock_sleep, mock_post, mock_get):
         """When GET /api/exports returns in_progress False, set export_filename and proceed to download."""
-        self.download_service.video_service.transcode_clip_to_h264.return_value = True
+        self.download_service.video_service.transcode_clip_to_h264.return_value = (True, "GPU")
         mock_post.return_value = MagicMock(status_code=200, headers={"content-type": "application/json"}, text='{}')
         mock_post.return_value.json.return_value = {"export_id": "exp1"}
         mock_post.return_value.ok = True
@@ -340,7 +340,7 @@ class TestDownloadService(unittest.TestCase):
     @patch('time.sleep')
     def test_export_in_progress_missing_proceeds_backward_compat(self, mock_sleep, mock_post, mock_get):
         """When in_progress key is missing (older Frigate), treat as completed and proceed."""
-        self.download_service.video_service.transcode_clip_to_h264.return_value = True
+        self.download_service.video_service.transcode_clip_to_h264.return_value = (True, "GPU")
         mock_post.return_value = MagicMock(status_code=200, headers={"content-type": "application/json"}, text='{}')
         mock_post.return_value.json.return_value = {"export_id": "exp1"}
         mock_post.return_value.ok = True
@@ -365,7 +365,7 @@ class TestDownloadService(unittest.TestCase):
         with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as f:
             temp_path = f.name
         try:
-            self.mock_video_service.transcode_clip_to_h264.return_value = True
+            self.mock_video_service.transcode_clip_to_h264.return_value = (True, "GPU")
             final_path = "/tmp/out/clip.mp4"
             result = self.download_service.transcode_temp_to_final("evt1", temp_path, final_path)
             self.assertTrue(result)

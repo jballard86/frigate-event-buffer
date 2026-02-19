@@ -600,3 +600,38 @@ class TestGeminiAnalysisServiceAnalyzeMultiClipCe(unittest.TestCase):
         with patch("frigate_buffer.services.ai_analyzer.extract_target_centric_frames", side_effect=ValueError("read of closed file")):
             result = service.analyze_multi_clip_ce("ce_123", ce_dir, ce_start_time=0.0)
         self.assertIsNone(result)
+
+
+class TestBuildMultiCamPayloadForPreview(unittest.TestCase):
+    """Test build_multi_cam_payload_for_preview return (result, error_message) and log_messages."""
+
+    def test_nonexistent_folder_returns_error_and_no_logs(self):
+        """When CE folder does not exist, returns (None, error) and does not append to log_messages."""
+        config = {"GEMINI": {"enabled": False}}
+        service = GeminiAnalysisService(config)
+        log_messages = []
+        result, err = service.build_multi_cam_payload_for_preview(
+            "/nonexistent/ce_folder", 0.0, log_messages=log_messages
+        )
+        self.assertIsNone(result)
+        self.assertEqual(err, "CE folder not found")
+        self.assertEqual(log_messages, [])
+
+    def test_no_frames_extracted_returns_error_and_appends_logs(self):
+        """When extraction returns no frames, returns (None, error) and log_messages contains frame selection line."""
+        ce_dir = tempfile.mkdtemp()
+        self.addCleanup(lambda: os.path.exists(ce_dir) and __import__("shutil").rmtree(ce_dir, ignore_errors=True))
+        config = {"GEMINI": {"enabled": False}}
+        service = GeminiAnalysisService(config)
+        log_messages = []
+        with patch("frigate_buffer.services.ai_analyzer.extract_target_centric_frames", return_value=[]):
+            result, err = service.build_multi_cam_payload_for_preview(
+                ce_dir, 0.0, log_messages=log_messages
+            )
+        self.assertIsNone(result)
+        self.assertIn("No frames extracted", err)
+        self.assertGreater(len(log_messages), 0)
+        self.assertTrue(
+            any("Frame selection:" in m for m in log_messages),
+            f"Expected a 'Frame selection:' message in {log_messages}",
+        )

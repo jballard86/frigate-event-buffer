@@ -121,9 +121,9 @@ class TestVideoService(unittest.TestCase):
 
         mock_exists.return_value = False
 
-        result = self.video_service.transcode_clip_to_h264("evt1", "temp.mp4", "final.mp4")
+        ok, _ = self.video_service.transcode_clip_to_h264("evt1", "temp.mp4", "final.mp4")
 
-        self.assertTrue(result)
+        self.assertTrue(ok)
         mock_remove.assert_called_with("temp.mp4")
         mock_popen.assert_called_once()
         mock_probe.assert_called_once()
@@ -143,15 +143,17 @@ class TestVideoService(unittest.TestCase):
     def test_transcode_skips_nvenc_when_probe_unavailable(self, mock_probe, mock_libx264, mock_nvenc):
         """When NVENC probe returns False, transcode uses libx264 only and never calls _transcode_clip_nvenc."""
         mock_probe.return_value = False
-        mock_libx264.return_value = True
+        mock_libx264.return_value = (True, "CPU: NVENC unavailable")
 
-        result = self.video_service.transcode_clip_to_h264("evt1", "temp.mp4", "final.mp4")
+        ok, backend = self.video_service.transcode_clip_to_h264("evt1", "temp.mp4", "final.mp4")
 
-        self.assertTrue(result)
+        self.assertTrue(ok)
+        self.assertEqual(backend, "CPU: NVENC unavailable")
         mock_probe.assert_called_once()
         mock_libx264.assert_called_once_with(
             "evt1", "temp.mp4", "final.mp4",
             detection_sidecar_path=None, detection_model=None, detection_device=None,
+            cpu_reason="NVENC unavailable",
         )
         mock_nvenc.assert_not_called()
 
@@ -161,21 +163,22 @@ class TestVideoService(unittest.TestCase):
     def test_transcode_fallback_passes_sidecar_args_to_libx264(self, mock_probe, mock_libx264, mock_nvenc):
         """When NVENC probe returns False, transcode passes detection_sidecar_path/model/device to libx264."""
         mock_probe.return_value = False
-        mock_libx264.return_value = True
+        mock_libx264.return_value = (True, "CPU: NVENC unavailable")
 
-        result = self.video_service.transcode_clip_to_h264(
+        ok, _ = self.video_service.transcode_clip_to_h264(
             "evt1", "temp.mp4", "final.mp4",
             detection_sidecar_path="/ce/cam/detection.json",
             detection_model="yolov8n.pt",
             detection_device="0",
         )
 
-        self.assertTrue(result)
+        self.assertTrue(ok)
         mock_libx264.assert_called_once_with(
             "evt1", "temp.mp4", "final.mp4",
             detection_sidecar_path="/ce/cam/detection.json",
             detection_model="yolov8n.pt",
             detection_device="0",
+            cpu_reason="NVENC unavailable",
         )
 
     @patch('frigate_buffer.services.video.VideoService._probe_nvenc')
@@ -193,9 +196,9 @@ class TestVideoService(unittest.TestCase):
 
         mock_exists.return_value = True
 
-        result = self.video_service.transcode_clip_to_h264("evt1", "temp.mp4", "final.mp4")
+        ok, _ = self.video_service.transcode_clip_to_h264("evt1", "temp.mp4", "final.mp4")
 
-        self.assertTrue(result)
+        self.assertTrue(ok)
         mock_rename.assert_called_with("temp.mp4", "final.mp4")
 
     @patch('frigate_buffer.services.video.VideoService._probe_nvenc')
@@ -221,9 +224,10 @@ class TestVideoService(unittest.TestCase):
         mock_run.return_value = MagicMock(returncode=0)
         mock_exists.side_effect = lambda p: True
 
-        result = self.video_service.transcode_clip_to_h264("evt1", "/tmp/temp.mp4", "/tmp/final.mp4")
+        ok, backend = self.video_service.transcode_clip_to_h264("evt1", "/tmp/temp.mp4", "/tmp/final.mp4")
 
-        self.assertTrue(result)
+        self.assertTrue(ok)
+        self.assertEqual(backend, "GPU")
         mock_capture_nv.assert_called_once()
         mock_writer_nv.assert_called_once()
         mock_writer.write.assert_called()
@@ -242,14 +246,15 @@ class TestVideoService(unittest.TestCase):
         mock_process.returncode = 0
         mock_popen.return_value = mock_process
 
-        result = self.video_service._transcode_clip_libx264(
+        ok, backend = self.video_service._transcode_clip_libx264(
             "evt1", "/tmp/temp.mp4", "/tmp/final.mp4",
             detection_sidecar_path="/ce/cam/detection.json",
             detection_model="yolov8n.pt",
             detection_device=None,
         )
 
-        self.assertTrue(result)
+        self.assertTrue(ok)
+        self.assertIn("CPU", backend)
         mock_write_sidecar.assert_called_once_with(
             "/tmp/temp.mp4",
             "/ce/cam/detection.json",

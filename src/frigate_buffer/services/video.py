@@ -444,38 +444,42 @@ class VideoService:
         detection_sidecar_path: str | None = None,
         detection_model: str | None = None,
         detection_device: str | None = None,
-) -> bool:
+    ) -> tuple[bool, str]:
         """Transcode clip_original.mp4 to H.264 clip.mp4 (NVDEC decode, NVENC encode when GPU available).
         Removes temp on success. Falls back to libx264 if GPU path fails.
-        When detection_sidecar_path is set (multi-cam), runs ultralytics on each frame in the NVENC
-        pass and writes detection.json; if we fall back to libx264 no sidecar is written."""
+        Returns (success, backend_string) where backend_string is 'GPU' or 'CPU: <reason>' for SSE logging."""
         if not self._probe_nvenc():
-            return self._transcode_clip_libx264(
+            ok, _ = self._transcode_clip_libx264(
+                event_id, temp_path, final_path,
+                detection_sidecar_path=detection_sidecar_path,
+                detection_model=detection_model,
+                detection_device=detection_device,
+                cpu_reason="NVENC unavailable",
+            )
+            return (ok, "CPU: NVENC unavailable")
+        try:
+            ok = self._transcode_clip_nvenc(
                 event_id, temp_path, final_path,
                 detection_sidecar_path=detection_sidecar_path,
                 detection_model=detection_model,
                 detection_device=detection_device,
             )
-        try:
-            if self._transcode_clip_nvenc(
-                event_id, temp_path, final_path,
-                detection_sidecar_path=detection_sidecar_path,
-                detection_model=detection_model,
-                detection_device=detection_device,
-            ):
-                return True
+            if ok:
+                return (True, "GPU")
         except Exception as e:
             logger.warning(
                 "GPU transcode failed for event %s: %s: %s. "
                 "Falling back to CPU (libx264).",
                 event_id, type(e).__name__, e,
             )
-        return self._transcode_clip_libx264(
+        ok, _ = self._transcode_clip_libx264(
             event_id, temp_path, final_path,
             detection_sidecar_path=detection_sidecar_path,
             detection_model=detection_model,
             detection_device=detection_device,
+            cpu_reason="GPU transcode failed, fallback",
         )
+        return (ok, "CPU: GPU transcode failed, fallback")
 
     def _transcode_clip_nvenc(
         self,
@@ -601,10 +605,10 @@ class VideoService:
         detection_sidecar_path: str | None = None,
         detection_model: str | None = None,
         detection_device: str | None = None,
-    ) -> bool:
+        cpu_reason: str = "libx264",
+    ) -> tuple[bool, str]:
         """Transcode using ffmpeg libx264 (CPU). Used when GPU path is unavailable.
-        When detection_sidecar_path and detection_model are set, decodes with CPU,
-        runs YOLO per frame and writes detection.json, then runs ffmpeg (same as NVENC path sidecar)."""
+        Returns (success, backend_string). cpu_reason is for SSE (e.g. 'NVENC unavailable')."""
         if detection_sidecar_path and detection_model:
             self._write_detection_sidecar_cpu(
                 temp_path,
@@ -629,22 +633,22 @@ class VideoService:
             if process.returncode == 0:
                 os.remove(temp_path)
                 logger.info(f"Transcoded clip for {event_id}")
-                return True
+                return (True, f"CPU: {cpu_reason}")
             logger.error(f"FFmpeg error for {event_id}: {stderr.decode()[:500]}")
             if os.path.exists(temp_path):
                 os.rename(temp_path, final_path)
-            return True
+            return (True, f"CPU: {cpu_reason}")
         except subprocess.TimeoutExpired:
             self._terminate_process_gracefully(process, event_id)
             if os.path.exists(temp_path):
                 os.rename(temp_path, final_path)
-            return True
+            return (True, f"CPU: {cpu_reason}")
         except Exception as e:
             logger.exception(f"Transcode failed for {event_id}: {e}")
             self._terminate_process_gracefully(process, event_id)
             if os.path.exists(temp_path):
                 os.rename(temp_path, final_path)
-            return True
+            return (True, f"CPU: {cpu_reason}")
 
     def _write_detection_sidecar_cpu(
         self,
