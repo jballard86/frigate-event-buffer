@@ -16,6 +16,16 @@ If you have set `NVIDIA_DRIVER_CAPABILITIES=compute,video,utility`, rebuilt the 
 - **(4) LD_LIBRARY_PATH** — Try running the container with `LD_LIBRARY_PATH` set so the loader can find the injected lib (e.g. `LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:${LD_LIBRARY_PATH}`). Use `find /usr -name 'libnvidia-encode*'` inside the container to see where the host mounted it.
 - **(5) Alternative FFmpeg donor** — Try building with Frigate's FFmpeg image as the multi-stage donor (e.g. `blakeblackshear/frigate-ffmpeg`) instead of jrottenberg; that image is built on an NVIDIA CUDA base for the Frigate ecosystem. See the plan or repo for Dockerfile build-arg and paths.
 
+### Pre-flight NVENC probe (main-thread init)
+
+At startup, the app runs a **pre-flight NVENC probe on the main thread** (immediately after `log_gpu_status`). That establishes the CUDA/NVENC context before any worker threads run, which avoids returncode 234 when the first GPU use would otherwise happen in a ThreadPoolExecutor worker. The result is cached so workers do not run the probe again.
+
 ### Probe fails with returncode 234 after startup
 
-If startup shows **NVENC success** (nvidia-smi OK, FFmpeg NVENC encoders available) but the **NVENC probe** later fails with returncode 234 (on first transcode), that is not a runtime GPU/capability failure. The app now serializes the probe (only one thread runs it), sends probe output to DEVNULL (no pipe), and retries once after a short delay. That should resolve 234 from concurrent probes or transient GPU contention. If 234 persists, consider GPU contention from other processes (e.g. Frigate, another container) or driver/session limits.
+If startup shows **NVENC success** but the probe (preflight or in-process) still fails with returncode 234, the app now:
+
+- Logs the **exact FFmpeg command** used for the probe.
+- Logs **extended stderr** (up to 2000 chars) when returncode is 234.
+- Logs **returncode interpretations** (e.g. 256-22=SIGPIPE, possible EINVAL/EBUSY, AVERROR/NVENC hints) via `decode_nvenc_returncode()` in `video.py`.
+
+Use these logs to see if 234 correlates with buffer/surface/CUDA messages. If 234 persists after preflight, consider GPU contention from other processes or driver/session limits.

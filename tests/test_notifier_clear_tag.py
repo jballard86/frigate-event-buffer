@@ -101,6 +101,31 @@ class TestNotifierClearTag(unittest.TestCase):
         self.assertIn("clear_tag", payload)
         self.assertEqual(payload["clear_tag"], "frigate_ce_abc")
 
+    def test_publish_accepts_phase_as_string(self):
+        """CE path can pass event-like object with phase as string; payload uses it without AttributeError."""
+        event_like = type("NotifyTarget", (), {
+            "event_id": "ce_123",
+            "camera": "events",
+            "label": "person",
+            "folder_path": "/storage/events/ce_123/doorbell",
+            "created_at": 1234567890.0,
+            "end_time": 1234567900.0,
+            "phase": "finalized",
+            "threat_level": 0,
+            "snapshot_downloaded": True,
+            "clip_downloaded": True,
+            "genai_title": "Title",
+            "genai_description": None,
+            "ai_description": None,
+            "review_summary": None,
+            "image_url_override": None,
+        })()
+        self.publisher.publish_notification(event_like, "finalized", tag_override="frigate_ce_123")
+        payload = self._last_payload()
+        self.assertEqual(payload["phase"], "finalized")
+        self.assertEqual(payload["event_id"], "ce_123")
+        self.assertEqual(payload["tag"], "frigate_ce_123")
+
 
 if __name__ == "__main__":
     unittest.main()

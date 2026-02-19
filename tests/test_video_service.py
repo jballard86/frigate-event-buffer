@@ -6,7 +6,45 @@ import sys
 # Add parent dir to path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from frigate_buffer.services.video import VideoService, ensure_detection_model_ready
+from frigate_buffer.services.video import (
+    VideoService,
+    decode_nvenc_returncode,
+    ensure_detection_model_ready,
+)
+
+
+class TestDecodeNvencReturncode(unittest.TestCase):
+    """Tests for returncode-to-signal/errno mapping utility."""
+
+    def test_returncode_0_returns_empty(self):
+        self.assertEqual(decode_nvenc_returncode(0), [])
+
+    def test_returncode_234_includes_interpretations(self):
+        interp = decode_nvenc_returncode(234)
+        self.assertGreater(len(interp), 0)
+        # 256-22=234 (SIGPIPE)
+        self.assertTrue(
+            any("256" in s and "22" in s for s in interp),
+            "expected 256-22 or similar in %s" % interp,
+        )
+        self.assertTrue(
+            any("234" in s and "AVERROR" in s for s in interp),
+            "expected 234/AVERROR hint in %s" % interp,
+        )
+
+    def test_returncode_132_includes_sigill(self):
+        interp = decode_nvenc_returncode(132)
+        self.assertTrue(
+            any("SIGILL" in s or "128+4" in s for s in interp),
+            "expected SIGILL/128+4 in %s" % interp,
+        )
+
+    def test_returncode_139_includes_sigsegv(self):
+        interp = decode_nvenc_returncode(139)
+        self.assertTrue(
+            any("SIGSEGV" in s or "128+11" in s for s in interp),
+            "expected SIGSEGV/128+11 in %s" % interp,
+        )
 
 
 class TestProbeNvenc(unittest.TestCase):
@@ -64,6 +102,15 @@ class TestVideoService(unittest.TestCase):
         mock_remove.assert_called_with("temp.mp4")
         mock_popen.assert_called_once()
         mock_probe.assert_called_once()
+
+    @patch('frigate_buffer.services.video._nvenc_preflight_result', True)
+    @patch('frigate_buffer.services.video.subprocess.run')
+    def test_probe_nvenc_uses_preflight_cache_and_skips_subprocess(self, mock_run):
+        """When preflight cache is True, _probe_nvenc returns True without calling subprocess."""
+        self.video_service._nvenc_available = None
+        result = self.video_service._probe_nvenc()
+        self.assertTrue(result)
+        mock_run.assert_not_called()
 
     @patch('frigate_buffer.services.video.VideoService._transcode_clip_nvenc')
     @patch('frigate_buffer.services.video.VideoService._transcode_clip_libx264')

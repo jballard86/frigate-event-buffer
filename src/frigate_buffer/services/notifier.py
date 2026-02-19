@@ -250,10 +250,11 @@ class NotificationPublisher:
         else:
             player_url = f"http://{self.buffer_ip}:{self.flask_port}/player"
 
+        phase_name = getattr(event.phase, "name", None) or str(event.phase)
         payload = {
             "event_id": event.event_id,
             "status": status,
-            "phase": event.phase.name,
+            "phase": phase_name,
             "camera": event.camera,
             "label": event.label,
             "title": title,
