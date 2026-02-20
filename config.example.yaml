@@ -83,6 +83,11 @@ settings:
   # report_prompt_file: ""
   # report_known_person_name: ""   # Placeholder {known_person_name} in report prompt; default "Unspecified"
 
+  # Single-clip / multi-camera: max images sent to Gemini per request (default 20)
+  final_review_image_count: 20
+  # Rolling cap: max frames sent to Gemini API per hour; 0 = disabled. Logs rate/blocked each call.
+  gemini_frames_per_hour_cap: 200
+
   # Consolidated event series
   # Time since last event before the next one starts a NEW consolidated group.
   # If no events for 120s, the next event is new. If an event occurs within
@@ -123,24 +128,25 @@ network:
 # multi_cam:
 #   max_multi_cam_frames_min: 45   # max frames per clip (cap)
 #   max_multi_cam_frames_sec: 2    # target capture interval (seconds)
-#   detection_model: yolov8n.pt   # ultralytics model for transcode-time detection
+#   detection_model: yolov8n.pt   # ultralytics model for detection sidecar
 #   detection_device: ""           # e.g. cuda:0 or cpu; empty = auto
 #   motion_threshold_px: 50        # min pixels movement for high-rate capture
 #   crop_width: 1280
 #   crop_height: 720
-#   nvenc_probe_width: 1280   # NVENC preflight probe resolution (match crop for safety)
-#   nvenc_probe_height: 720
 #   multi_cam_system_prompt_file: ""   # path to prompt file; empty = use built-in
+#   tracking_target_frame_percent: 40   # when person area >= this % of reference area, use full-frame resize
 #   smart_crop_padding: 0.15       # padding fraction around motion crop
 #   motion_crop_min_area_fraction: 0.001
 #   motion_crop_min_px: 500
 #   detection_frame_interval: 5   # run YOLO every N frames; default 5
+#   detection_imgsz: 640   # YOLO inference size; higher (e.g. 1280) = better small objects, slower; default 640
 #   first_camera_bias_decay_seconds: 1.0   # time constant for exponential bias decay (primary camera)
 #   first_camera_bias_initial: 1.5         # initial bias multiplier for primary camera
 #   first_camera_bias_cap_seconds: 0       # cap bias to 0 after this many seconds; 0 = no cap
 #   person_area_switch_threshold: 200      # allow switch when current camera person area below this (px²); 0 = disable
 #   camera_switch_ratio: 1.2               # new camera must have this ratio of current to switch (e.g. 1.2 = 1.2×)
-#   decode_second_camera_cpu_only: true    # default: use CPU decode for 2nd+ cameras to avoid NVDEC contention (avoids "Reader process died … read of closed file"). Set false to try GPU decode for all cameras.
+#   person_area_debug: false               # draw person area (px²) on frame bottom-right when true (multi-cam only)
+
 
 # Optional: Gemini proxy (extended) - model params for proxy calls (e.g. multi-cam)
 # API key: GEMINI_API_KEY only. Proxy URL: set here or GEMINI_PROXY_URL env (default "").
