@@ -216,6 +216,9 @@ settings:
   export_buffer_before: 5     # Seconds before event start for clip export time range
   export_buffer_after: 30    # Seconds after event end for clip export time range
   export_watchdog_interval_minutes: 2   # How often to run export watchdog (remove completed exports from Frigate, verify links)
+  final_review_image_count: 20          # Max images sent to Gemini per request
+  gemini_max_concurrent_analyses: 3     # Max concurrent Gemini clip analyses
+  gemini_frames_per_hour_cap: 200       # Rolling cap for Gemini proxy requests (frames per hour); 0 = disabled
 
 # Network configuration (REQUIRED - no defaults)
 network:
@@ -278,6 +281,9 @@ Environment variables override config.yaml values:
 | `REPORT_KNOWN_PERSON_NAME` | *(empty)* | Value for `{known_person_name}` in report prompt; empty = "Unspecified". |
 | `MQTT_USER` | *(optional)* | MQTT broker username (when auth required). |
 | `MQTT_PASSWORD` | *(optional)* | MQTT broker password. |
+| `GEMINI_FRAMES_PER_HOUR_CAP` | `200` | Rolling cap for Gemini proxy requests (frames per hour); 0 = disabled. |
+| `CREATE_AI_ANALYSIS_ZIP` | `true` | Create zip of AI analysis frames/metadata. |
+| `SAVE_AI_FRAMES` | `true` | Save extracted AI analysis frames to disk. |
 
 Optional **gemini** config section (in `config.yaml`): `proxy_url`, `api_key`, `model`, `enabled`. When `enabled` is true and proxy is configured, the buffer runs in-process clip analysis via the proxy, then updates state, writes files, POSTs the description to Frigate, and notifies HA.
 
