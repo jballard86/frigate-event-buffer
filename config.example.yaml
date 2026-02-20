@@ -148,6 +148,7 @@ network:
 #   first_camera_bias_cap_seconds: 0       # cap bias to 0 after this many seconds; 0 = no cap
 #   person_area_switch_threshold: 200      # allow switch when current camera person area below this (px²); 0 = disable
 #   camera_switch_ratio: 1.2               # new camera must have this ratio of current to switch (e.g. 1.2 = 1.2×)
+#   camera_switch_bias: 1.2               # initial stickiness for non-initial cameras (decays like first camera); >1 = stickier; 0 clamped to 0.1; default 1.2
 #   person_area_debug: false               # draw person area (px²) on frame bottom-right when true (multi-cam only)
 
 

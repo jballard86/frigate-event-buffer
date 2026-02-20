@@ -196,6 +196,7 @@ def extract_target_centric_frames(
     first_camera_bias_cap_seconds: float = 0.0,
     person_area_switch_threshold: int = 0,
     camera_switch_ratio: float = 1.2,
+    camera_switch_bias: float = 1.2,
     decode_second_camera_cpu_only: bool = False,
     log_callback: Callable[[str], None] | None = None,
     config: dict[str, Any] | None = None,
@@ -212,6 +213,11 @@ def extract_target_centric_frames(
 
     Optional config may provide LOG_EXTRACTION_PHASE_TIMING (bool) for phase elapsed-time logs,
     and MERGE_FRAME_TIMEOUT_SEC (int) for timeout when waiting for a camera frame in the merge step.
+
+    camera_switch_bias applies only to non-initial (non-primary) cameras: when we have switched away
+    from the first camera, the currently selected camera's area is multiplied by a stickiness factor
+    (initial camera_switch_bias, clamped so 0 becomes 0.1) that decays using first_camera_bias_decay_seconds
+    and first_camera_bias_cap_seconds, so non-initial cameras are slightly stickier and reduce flip-flop.
     """
     if not _CV2_AVAILABLE or ExtractedFrame is None:
         logger.warning("cv2/ffmpegcv or ExtractedFrame not available, skipping multi-clip extraction")
@@ -465,8 +471,10 @@ def extract_target_centric_frames(
         return first_camera_bias_initial * math.exp(-t_sec / first_camera_bias_decay_seconds)
 
     # Hysteresis: stay on camera for min 3 frames; escape when current area is 0 or below threshold.
+    # T_switch: sample time T at which we last switched to current_camera (for stickiness decay).
     current_camera: str | None = None
     frames_on_current = 0
+    T_switch: float | None = None
 
     # Build list of sample times: detection-aligned from sidecars, or fixed-step if no person detections.
     merged_t = _detection_timestamps_with_person(sidecars, global_end)
@@ -612,9 +620,22 @@ def extract_target_centric_frames(
             best_frame, best_area = (cam_candidates.get(best_camera, (None, 0.0))) if best_camera else (None, 0.0)
             if best_camera and current_camera and best_camera != current_camera:
                 current_area = cam_candidates.get(current_camera, (None, 0.0))[1]
+                # Stickiness for non-initial cameras: use same decay/cap as first camera; 0 clamped to 0.1.
+                if first_camera_bias is not None and current_camera == first_camera_bias:
+                    effective_current = current_area
+                else:
+                    bias_val = max(0.1, camera_switch_bias)
+                    t_since_switch = (T - T_switch) if T_switch is not None else 0.0
+                    if first_camera_bias_cap_seconds > 0 and t_since_switch >= first_camera_bias_cap_seconds:
+                        stickiness = 1.0
+                    elif first_camera_bias_decay_seconds <= 0:
+                        stickiness = bias_val
+                    else:
+                        stickiness = bias_val * math.exp(-t_since_switch / first_camera_bias_decay_seconds)
+                    effective_current = current_area * stickiness
                 allow_switch = (
                     (person_area_switch_threshold > 0 and current_area < person_area_switch_threshold and best_area > current_area)
-                    or (best_area >= camera_switch_ratio * current_area)
+                    or (best_area >= camera_switch_ratio * effective_current)
                 )
                 if not allow_switch:
                     best_camera = current_camera
@@ -672,6 +693,7 @@ def extract_target_centric_frames(
             else:
                 current_camera = best_camera
                 frames_on_current = 1
+                T_switch = T
 
     if _log_phase_timing and _t0_read is not None and log_callback:
         log_callback(f"Reading frames: {time.monotonic() - _t0_read:.1f}s")

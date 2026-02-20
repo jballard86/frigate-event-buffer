@@ -384,3 +384,86 @@ class TestMultiClipExtractor(unittest.TestCase):
             any("GPU" in m and "CPU" in m for m in decode_logs),
             f"Expected a mixed GPU/CPU decode message in {decode_logs}",
         )
+
+    @patch("frigate_buffer.services.multi_clip_extractor.ffmpegcv.VideoCapture")
+    @patch("frigate_buffer.services.multi_clip_extractor.ffmpegcv.VideoCaptureNV")
+    def test_camera_switch_bias_and_first_camera_bias_accepted(self, mock_video_capture_nv, mock_video_capture):
+        """extract_target_centric_frames accepts camera_switch_bias and first_camera_bias; returns frames without error."""
+        os.makedirs(os.path.join(self.tmp, "cam1"))
+        os.makedirs(os.path.join(self.tmp, "cam2"))
+        with open(os.path.join(self.tmp, "cam1", "clip.mp4"), "wb"):
+            pass
+        with open(os.path.join(self.tmp, "cam2", "clip.mp4"), "wb"):
+            pass
+        for cam_name in ("cam1", "cam2"):
+            sidecar_path = os.path.join(self.tmp, cam_name, DETECTION_SIDECAR_FILENAME)
+            with open(sidecar_path, "w", encoding="utf-8") as f:
+                json.dump(
+                    {"native_width": 100, "native_height": 100, "entries": [{"timestamp_sec": t, "detections": [{"label": "person", "area": 100}]} for t in range(11)]},
+                    f,
+                )
+        frame = np.zeros((100, 100, 3), dtype=np.uint8)
+
+        def make_mock():
+            m = MagicMock()
+            m.fps = 1.0
+            m.__len__ = MagicMock(return_value=10)
+            m.isOpened.return_value = True
+            m.read.side_effect = [(True, frame)] * 10 + [(False, None)]
+            m.release = MagicMock()
+            return m
+
+        mock_video_capture_nv.side_effect = Exception("no nv")
+        mock_video_capture.side_effect = lambda path: make_mock()
+
+        result = extract_target_centric_frames(
+            self.tmp,
+            max_frames_sec=1.0,
+            max_frames_min=5,
+            first_camera_bias="cam1",
+            camera_switch_bias=1.2,
+        )
+        self.assertGreaterEqual(len(result), 1)
+        for item in result:
+            self.assertIsInstance(item, ExtractedFrame)
+            self.assertIn(item.camera, ("cam1", "cam2"))
+
+    @patch("frigate_buffer.services.multi_clip_extractor.ffmpegcv.VideoCapture")
+    @patch("frigate_buffer.services.multi_clip_extractor.ffmpegcv.VideoCaptureNV")
+    def test_camera_switch_bias_zero_clamped_no_crash(self, mock_video_capture_nv, mock_video_capture):
+        """camera_switch_bias=0 is clamped to 0.1 internally; extraction completes without error."""
+        os.makedirs(os.path.join(self.tmp, "cam1"))
+        os.makedirs(os.path.join(self.tmp, "cam2"))
+        with open(os.path.join(self.tmp, "cam1", "clip.mp4"), "wb"):
+            pass
+        with open(os.path.join(self.tmp, "cam2", "clip.mp4"), "wb"):
+            pass
+        for cam_name in ("cam1", "cam2"):
+            sidecar_path = os.path.join(self.tmp, cam_name, DETECTION_SIDECAR_FILENAME)
+            with open(sidecar_path, "w", encoding="utf-8") as f:
+                json.dump(
+                    {"native_width": 100, "native_height": 100, "entries": [{"timestamp_sec": t, "detections": [{"label": "person", "area": 100}]} for t in range(11)]},
+                    f,
+                )
+        frame = np.zeros((100, 100, 3), dtype=np.uint8)
+
+        def make_mock():
+            m = MagicMock()
+            m.fps = 1.0
+            m.__len__ = MagicMock(return_value=10)
+            m.isOpened.return_value = True
+            m.read.side_effect = [(True, frame)] * 10 + [(False, None)]
+            m.release = MagicMock()
+            return m
+
+        mock_video_capture_nv.side_effect = Exception("no nv")
+        mock_video_capture.side_effect = lambda path: make_mock()
+
+        result = extract_target_centric_frames(
+            self.tmp,
+            max_frames_sec=1.0,
+            max_frames_min=5,
+            first_camera_bias="cam1",
+            camera_switch_bias=0.0,
+        )
+        self.assertGreaterEqual(len(result), 1)

@@ -726,6 +726,7 @@ class GeminiAnalysisService:
                 first_camera_bias_cap_seconds=float(self.config.get("FIRST_CAMERA_BIAS_CAP_SECONDS", 0)),
                 person_area_switch_threshold=int(self.config.get("PERSON_AREA_SWITCH_THRESHOLD", 0)),
                 camera_switch_ratio=float(self.config.get("CAMERA_SWITCH_RATIO", 1.2)),
+                camera_switch_bias=float(self.config.get("CAMERA_SWITCH_BIAS", 1.2)),
                 decode_second_camera_cpu_only=bool(self.config.get("DECODE_SECOND_CAMERA_CPU_ONLY", False)),
                 config=self.config,
             )
@@ -855,6 +856,7 @@ class GeminiAnalysisService:
                 first_camera_bias_cap_seconds=float(self.config.get("FIRST_CAMERA_BIAS_CAP_SECONDS", 0)),
                 person_area_switch_threshold=int(self.config.get("PERSON_AREA_SWITCH_THRESHOLD", 0)),
                 camera_switch_ratio=float(self.config.get("CAMERA_SWITCH_RATIO", 1.2)),
+                camera_switch_bias=float(self.config.get("CAMERA_SWITCH_BIAS", 1.2)),
                 decode_second_camera_cpu_only=bool(self.config.get("DECODE_SECOND_CAMERA_CPU_ONLY", False)),
                 log_callback=_log if log_messages is not None else None,
                 config=self.config,

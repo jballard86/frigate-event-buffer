@@ -290,6 +290,42 @@ class TestConfigSchema(unittest.TestCase):
     @patch('builtins.open', new_callable=mock_open)
     @patch('os.path.exists')
     @patch('frigate_buffer.config.yaml.safe_load')
+    def test_camera_switch_bias_from_yaml_and_default(self, mock_yaml_load, mock_exists, mock_file):
+        """camera_switch_bias from multi_cam is flattened to CAMERA_SWITCH_BIAS; default when omitted is 1.2."""
+        yaml_with_bias = {
+            'cameras': [{'name': 'cam1'}],
+            'network': {
+                'mqtt_broker': 'localhost',
+                'frigate_url': 'http://frigate',
+                'buffer_ip': 'localhost',
+                'storage_path': '/tmp',
+            },
+            'multi_cam': {
+                'max_multi_cam_frames_min': 45,
+                'camera_switch_bias': 1.5,
+            },
+        }
+        mock_exists.return_value = True
+        mock_yaml_load.return_value = yaml_with_bias
+        config = load_config()
+        self.assertEqual(config['CAMERA_SWITCH_BIAS'], 1.5)
+
+        yaml_no_bias = {
+            'cameras': [{'name': 'cam1'}],
+            'network': {
+                'mqtt_broker': 'localhost',
+                'frigate_url': 'http://frigate',
+                'buffer_ip': 'localhost',
+                'storage_path': '/tmp',
+            },
+        }
+        mock_yaml_load.return_value = yaml_no_bias
+        config = load_config()
+        self.assertEqual(config['CAMERA_SWITCH_BIAS'], 1.2)
+
+    @patch('builtins.open', new_callable=mock_open)
+    @patch('os.path.exists')
+    @patch('frigate_buffer.config.yaml.safe_load')
     def test_multi_cam_gemini_proxy_defaults_when_omitted(self, mock_yaml_load, mock_exists, mock_file):
         """When multi_cam and gemini_proxy are omitted, flat keys use source defaults."""
         yaml_minimal = {
@@ -312,6 +348,7 @@ class TestConfigSchema(unittest.TestCase):
         self.assertEqual(config['CROP_HEIGHT'], 720)
         self.assertEqual(config['MULTI_CAM_SYSTEM_PROMPT_FILE'], '')
         self.assertFalse(config['PERSON_AREA_DEBUG'])
+        self.assertEqual(config['CAMERA_SWITCH_BIAS'], 1.2)
         self.assertEqual(config['DECODE_SECOND_CAMERA_CPU_ONLY'], False)
         self.assertEqual(config['GEMINI_PROXY_URL'], '')
         self.assertEqual(config['GEMINI_PROXY_MODEL'], 'gemini-2.5-flash-lite')
