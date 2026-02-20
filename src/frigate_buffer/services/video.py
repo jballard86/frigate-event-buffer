@@ -222,6 +222,114 @@ class VideoService:
         native_w = native_res[0] if native_res else 0
         native_h = native_res[1] if native_res else 0
         use_resize = native_w > 0 and native_h > 0 and (native_w != crop_w or native_h != crop_h)
+        interval = detection_frame_interval
+
+        # Attempt FFmpeg native frame skipping first via subprocess
+        import subprocess
+        import numpy as np
+
+        fps_val = 30.0
+        try:
+            out = subprocess.run(
+                ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=r_frame_rate", "-of", "csv=p=0", clip_path],
+                capture_output=True, timeout=5, check=False
+            )
+            if out.returncode == 0 and out.stdout:
+                fps_str = out.stdout.decode("utf-8").strip()
+                if "/" in fps_str:
+                    num, den = fps_str.split("/")
+                    fps_val = float(num) / float(den)
+                else:
+                    fps_val = float(fps_str)
+        except Exception:
+            pass
+
+        read_w = crop_w if use_resize else native_w
+        read_h = crop_h if use_resize else native_h
+        
+        if read_w > 0 and read_h > 0:
+            proc = None
+            try:
+                cmd = [
+                    "ffmpeg", "-v", "error",
+                    "-hwaccel", "nvdec",
+                    "-i", clip_path
+                ]
+                vf_opts = f"framestep={interval}"
+                if use_resize:
+                    vf_opts += f",scale={crop_w}:{crop_h}"
+                cmd.extend([
+                    "-vf", vf_opts,
+                    "-f", "image2pipe",
+                    "-pix_fmt", "bgr24",
+                    "-vcodec", "rawvideo",
+                    "-"
+                ])
+                proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=10**8)
+                
+                model_to_use = yolo_model
+                if model_to_use is None and detection_model:
+                    try:
+                        from ultralytics import YOLO
+                        model_to_use = YOLO(detection_model)
+                        logger.debug("YOLO loaded for detection sidecar: %s", clip_path)
+                    except Exception as e:
+                        logger.warning("Could not load YOLO for detection sidecar: %s", e)
+                
+                sidecar_entries = []
+                decoded_idx = 0
+                frame_size = read_w * read_h * 3
+                
+                while True:
+                    in_bytes = proc.stdout.read(frame_size)
+                    if not in_bytes or len(in_bytes) < frame_size:
+                        break
+                    
+                    frame = np.frombuffer(in_bytes, dtype=np.uint8).reshape((read_h, read_w, 3))
+                    
+                    original_frame_idx = decoded_idx * interval
+                    if model_to_use is not None:
+                        if yolo_lock is not None:
+                            with yolo_lock:
+                                det = _run_detection_on_frame(model_to_use, frame, detection_device, imgsz=detection_imgsz)
+                        else:
+                            det = _run_detection_on_frame(model_to_use, frame, detection_device, imgsz=detection_imgsz)
+                            
+                        if use_resize and native_w > 0 and native_h > 0 and read_w > 0 and read_h > 0:
+                            det = _scale_detections_to_native(det, read_w, read_h, native_w, native_h)
+                            
+                        sidecar_entries.append({
+                            "frame_number": original_frame_idx,
+                            "timestamp_sec": original_frame_idx / fps_val if fps_val > 0 else 0,
+                            "detections": det,
+                        })
+                    decoded_idx += 1
+                
+                proc.stdout.close()
+                proc.wait()
+                
+                if proc.returncode == 0 or len(sidecar_entries) > 0:
+                    payload = {
+                        "native_width": native_w or read_w,
+                        "native_height": native_h or read_h,
+                        "entries": sidecar_entries,
+                    }
+                    with open(sidecar_path, "w", encoding="utf-8") as f:
+                        json.dump(payload, f, indent=None, separators=(",", ":"))
+                    logger.debug("Wrote detection sidecar (native FFmpeg) %s (%d frames)", sidecar_path, len(sidecar_entries))
+                    return True
+                else:
+                    err = proc.stderr.read().decode('utf-8')
+                    logger.debug("Native FFmpeg extraction failed or returned no frames (code %s): %s", proc.returncode, err)
+            except Exception as e:
+                logger.debug("Native FFmpeg extraction raised exception for %s: %s", clip_path, e)
+                if proc is not None:
+                    try:
+                        proc.kill()
+                    except:
+                        pass
+        
+        logger.info("Native FFmpeg frame skipping could not be completed for %s. Falling back to ffmpegcv loop.", clip_path)
 
         cap = None
         try:
@@ -257,9 +365,8 @@ class VideoService:
                 except Exception as e:
                     logger.warning("Could not load YOLO for detection sidecar: %s", e)
 
-            sidecar_entries: list[dict[str, Any]] = []
+            sidecar_entries = []
             frame_idx = 0
-            interval = detection_frame_interval
 
             while True:
                 ret, frame = cap.read()
@@ -306,6 +413,8 @@ class VideoService:
                     cap.release()
                 except Exception:
                     pass
+
+        return False
 
     def generate_detection_sidecars_for_cameras(
         self,

@@ -157,15 +157,12 @@ def _subsample_with_min_gap(timestamps: list[float], step_sec: float, max_count:
 
 def _get_fps_and_duration(cap: Any, path: str) -> tuple[float, float, bool]:
     """
-    Get (fps, duration_sec, used_read_to_eof) from a video capture in an ffmpegcv-safe way.
+    Get (fps, duration_sec, used_read_to_eof) from a video capture.
 
-    Uses only ffmpegcv-compatible APIs: getattr(cap, "fps"), getattr(cap, "count"),
-    and len(cap). Does NOT use cap.get()—ffmpegcv readers (FFmpegReaderNV, etc.) have
-    no OpenCV-style .get(CAP_PROP_*). If frame count is unknown, reads until EOF
-    to count frames and returns duration = count/fps with used_read_to_eof=True;
-    caller must reopen the clip after this.
+    Uses only ffmpegcv-compatible APIs or ffprobe to avoid full frame decodes.
+    If frame count is unknown, attempts ffprobe to get duration.
+    If ffprobe fails, falls back to reading until EOF (caller must reopen).
     """
-    del path  # unused; kept for API clarity
     fps = getattr(cap, "fps", None) or 1.0
     count: int = 0
     if hasattr(cap, "__len__"):
@@ -177,7 +174,31 @@ def _get_fps_and_duration(cap: Any, path: str) -> tuple[float, float, bool]:
         count = int(getattr(cap, "count", 0) or 0)
     if count > 0 and fps > 0:
         return (fps, count / fps, False)
+        
+    import subprocess
+    try:
+        out = subprocess.run(
+            [
+                "ffprobe", "-v", "error", "-show_entries",
+                "format=duration", "-of",
+                "default=noprint_wrappers=1:nokey=1", path
+            ],
+            capture_output=True,
+            timeout=5,
+            check=False,
+        )
+        if out.returncode == 0 and out.stdout:
+            duration_str = out.stdout.decode("utf-8", errors="replace").strip()
+            if duration_str and duration_str != "N/A":
+                duration = float(duration_str)
+                if duration > 0:
+                    logger.debug("ffprobe successfully returned duration %.2fs for %s", duration, path)
+                    return (fps, duration, False)
+    except Exception as e:
+        logger.debug("ffprobe duration check failed for %s: %s", path, e)
+
     # Unknown count: read until EOF to get frame count (consumes stream; caller must reopen).
+    logger.info("Falling back to full sequential decode to calculate duration for %s", path)
     frame_idx = 0
     while True:
         ret, _ = cap.read()
