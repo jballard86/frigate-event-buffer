@@ -96,6 +96,9 @@ settings:
   # Events shorter than this (seconds) are discarded: data deleted, removed from state/CE,
   # and a "discarded" MQTT notification is sent so HA can clear the phone notification.
   # minimum_event_seconds: 5
+  # Events with duration >= this (seconds) are canceled: no AI/decode, folder renamed with "-canceled",
+  # notification "Event canceled see event viewer for details"; default 120 (2 min).
+  # max_event_length_seconds: 120
   # Export time range buffers (seconds)
   export_buffer_before: 5
   export_buffer_after: 30

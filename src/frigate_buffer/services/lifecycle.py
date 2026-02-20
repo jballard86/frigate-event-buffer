@@ -124,10 +124,28 @@ class EventLifecycleService:
         """Background processing when event ends. For consolidated events, defers clip export to CE close."""
         try:
             min_sec = self.config.get('MINIMUM_EVENT_SECONDS', 5)
+            max_sec = self.config.get('MAX_EVENT_LENGTH_SECONDS', 120)
             end_ts = event.end_time or event.created_at
             duration = end_ts - event.created_at
             if duration < min_sec:
                 self._discard_short_event(event)
+                return
+            if duration >= max_sec:
+                logger.info(f"Canceled event {event.event_id} (duration >= max_event_length_seconds)")
+                if event.folder_path:
+                    self.file_manager.write_canceled_summary(event.folder_path)
+                    self.notifier.publish_notification(
+                        event, "canceled",
+                        message="Event canceled see event viewer for details",
+                        tag_override=f"frigate_{event.event_id}"
+                    )
+                    try:
+                        new_path = self.file_manager.rename_event_folder(event.folder_path)
+                        event.folder_path = new_path
+                    except ValueError:
+                        pass
+                self.notifier.mark_last_event_ended()
+                self.run_cleanup()
                 return
 
             if event.has_snapshot:
@@ -261,6 +279,38 @@ class EventLifecycleService:
         def get_duration(e):
             end = e.end_time if e.end_time else (e.created_at + export_after)
             return end - e.created_at
+
+        max_sec = self.config.get('MAX_EVENT_LENGTH_SECONDS', 120)
+        if any(get_duration(e) >= max_sec for e in all_events):
+            logger.info(f"Canceled consolidated event {ce_id} (max event length exceeded)")
+            self.file_manager.write_canceled_summary(ce.folder_path)
+            try:
+                new_path = self.file_manager.rename_event_folder(ce.folder_path)
+                ce.folder_path = new_path
+                ce.folder_name = os.path.basename(new_path)
+            except ValueError:
+                pass
+            primary_cam = ce.primary_camera or (ce.cameras[0] if ce.cameras else None)
+            media_folder = os.path.join(ce.folder_path, self.file_manager.sanitize_camera_name(primary_cam or "")) if primary_cam else ce.folder_path
+            notify_target = type('NotifyTarget', (), {
+                'event_id': ce.consolidated_id, 'camera': ce.camera or "events", 'label': ce.label or "unknown",
+                'folder_path': media_folder, 'created_at': ce.start_time,
+                'end_time': ce.end_time, 'phase': ce.phase,
+                'genai_title': None, 'genai_description': None, 'ai_description': None, 'review_summary': None,
+                'threat_level': 0, 'severity': None,
+                'snapshot_downloaded': False, 'clip_downloaded': False,
+            })()
+            self.notifier.publish_notification(
+                notify_target, "canceled",
+                message="Event canceled see event viewer for details",
+                tag_override=f"frigate_{ce.consolidated_id}"
+            )
+            for fid in ce.frigate_event_ids:
+                self.state_manager.remove_event(fid)
+            self.consolidated_manager.remove(ce_id)
+            self.notifier.mark_last_event_ended()
+            logger.info(f"Consolidated event {ce_id} closed (canceled)")
+            return
 
         start_ts = int(global_min_start - export_before)
         end_ts = int(global_max_end + export_after)

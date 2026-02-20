@@ -391,6 +391,43 @@ class FileManager:
             logger.warning(f"Failed to delete event folder {folder_path}: {e}")
             return False
 
+    def rename_event_folder(self, folder_path: str, suffix: str = "-canceled") -> str:
+        """Rename an event folder by appending suffix to its basename. Path must be under storage_path.
+        Returns the new path. Raises ValueError if path is outside storage."""
+        real_storage = os.path.realpath(self.storage_path)
+        real_folder = os.path.realpath(folder_path)
+        if os.path.commonpath([real_storage, real_folder]) != real_storage or real_folder == real_storage:
+            raise ValueError(f"Invalid event path for rename: {folder_path}")
+        if not os.path.isdir(real_folder):
+            raise ValueError(f"Not a directory: {folder_path}")
+        parent = os.path.dirname(real_folder)
+        basename = os.path.basename(real_folder)
+        if basename.endswith(suffix):
+            return folder_path
+        new_basename = basename + suffix
+        new_path = os.path.join(parent, new_basename)
+        if os.path.exists(new_path):
+            raise ValueError(f"Target already exists: {new_path}")
+        os.rename(real_folder, new_path)
+        logger.info(f"Renamed event folder to {new_basename}")
+        return new_path
+
+    def write_canceled_summary(self, folder_path: str, reason: str = "Event exceeded max_event_length_seconds; AI analysis skipped.") -> bool:
+        """Write summary.txt for a canceled event so the event view shows the cancel title and reason."""
+        try:
+            summary_path = os.path.join(folder_path, "summary.txt")
+            lines = [
+                "Title: Canceled event: max event length exceeded",
+                f"Description: {reason}",
+            ]
+            with open(summary_path, 'w') as f:
+                f.write('\n'.join(lines))
+            logger.debug(f"Written canceled summary to {folder_path}")
+            return True
+        except Exception as e:
+            logger.exception(f"Failed to write canceled summary to {folder_path}: {e}")
+            return False
+
     def cleanup_old_events(self, active_event_ids: list[str],
                           active_ce_folder_names: list[str] | None = None) -> int:
         """Delete folders older than retention period. Returns count deleted.
@@ -420,8 +457,9 @@ class FileManager:
                         try:
                             ts = float(first_item[0])
                             event_id = first_item[1]
+                            base_id = (event_id[:-len('-canceled')] if (event_id and event_id.endswith('-canceled')) else event_id) if event_id else None
 
-                            if event_id and event_id in active_event_ids:
+                            if base_id and base_id in active_event_ids:
                                 continue
 
                             if ts < cutoff:
@@ -456,9 +494,11 @@ class FileManager:
                                 parts = event_dir.split('_', 1)
                                 ts = float(parts[0])
                                 event_id = parts[1] if len(parts) > 1 else None
+                                # For -canceled folders, match by base id so we protect until event is removed; folder remains deletable when past retention
+                                base_id = (event_id[:-len('-canceled')] if (event_id and event_id.endswith('-canceled')) else event_id) if event_id else None
 
                                 # Skip if event is still active (legacy) or CE is active (events/ folder)
-                                if event_id and event_id in active_event_ids:
+                                if base_id and base_id in active_event_ids:
                                     logger.debug(f"Skipping active event: {camera_dir}/{event_dir}")
                                     continue
                                 if camera_dir == "events" and event_dir in active_ce:

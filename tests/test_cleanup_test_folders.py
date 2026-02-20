@@ -68,3 +68,37 @@ def test_cleanup_ignores_non_test_events_folders():
         assert not os.path.isdir(old_ce)
     finally:
         shutil.rmtree(sub, ignore_errors=True)
+
+
+def test_cleanup_keeps_canceled_folder_when_base_id_active():
+    """Folder events/1700000000_ev123-canceled is not deleted while ev123 is in active_event_ids."""
+    tmp = _tmp_dir()
+    sub = os.path.join(tmp, "canceled_active")
+    try:
+        fm = FileManager(storage_path=sub, retention_days=1)
+        events_dir = os.path.join(sub, "events")
+        os.makedirs(events_dir, exist_ok=True)
+        canceled = os.path.join(events_dir, "1700000000_ev123-canceled")
+        os.makedirs(canceled, exist_ok=True)
+        deleted = fm.cleanup_old_events(active_event_ids=["ev123"], active_ce_folder_names=[])
+        assert deleted == 0
+        assert os.path.isdir(canceled)
+    finally:
+        shutil.rmtree(sub, ignore_errors=True)
+
+
+def test_cleanup_deletes_canceled_folder_when_past_retention():
+    """Folder events/1700000000_ev123-canceled is deleted when past retention (appended folders still deletable)."""
+    tmp = _tmp_dir()
+    sub = os.path.join(tmp, "canceled_old")
+    try:
+        fm = FileManager(storage_path=sub, retention_days=1)
+        events_dir = os.path.join(sub, "events")
+        os.makedirs(events_dir, exist_ok=True)
+        canceled = os.path.join(events_dir, "1700000000_ev123-canceled")
+        os.makedirs(canceled, exist_ok=True)
+        deleted = fm.cleanup_old_events(active_event_ids=[], active_ce_folder_names=[])
+        assert deleted == 1
+        assert not os.path.isdir(canceled)
+    finally:
+        shutil.rmtree(sub, ignore_errors=True)

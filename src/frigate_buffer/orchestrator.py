@@ -109,9 +109,17 @@ class StateAwareOrchestrator:
                 def _run():
                     if not self.ai_analyzer or not self._gemini_analysis_semaphore:
                         return
+                    event = self.state_manager.get_event(event_id)
+                    if event:
+                        end_ts = event.end_time or event.created_at
+                        duration = end_ts - event.created_at
+                        max_sec = self.config.get('MAX_EVENT_LENGTH_SECONDS', 120)
+                        if duration >= max_sec:
+                            return
                     self._gemini_analysis_semaphore.acquire()
                     try:
-                        event = self.state_manager.get_event(event_id)
+                        if not event:
+                            event = self.state_manager.get_event(event_id)
                         event_start_ts = event.created_at if event else 0
                         event_end_ts = (event.end_time or event.created_at) if event else 0
                         frame_metadata = self.state_manager.get_frame_metadata(event_id)

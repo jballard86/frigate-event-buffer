@@ -11,6 +11,7 @@ class TestEventLifecycleService(unittest.TestCase):
             'EXPORT_BUFFER_BEFORE': 5,
             'EXPORT_BUFFER_AFTER': 30,
             'MINIMUM_EVENT_SECONDS': 5,
+            'MAX_EVENT_LENGTH_SECONDS': 120,
             'SUMMARY_PADDING_BEFORE': 15,
             'SUMMARY_PADDING_AFTER': 15,
             'FRIGATE_URL': 'http://frigate',
@@ -174,6 +175,87 @@ class TestEventLifecycleService(unittest.TestCase):
         self.download_service.export_and_download_clip.assert_called()
         self.consolidated_manager.remove.assert_called_with(ce_id)
         self.notifier.mark_last_event_ended.assert_called_once()
+
+    def test_process_event_end_max_length_does_not_call_clip_ready_or_export(self):
+        """When duration >= max_event_length_seconds, no export and no on_clip_ready_for_analysis (API never sent)."""
+        on_clip_ready_mock = MagicMock()
+        self.service.on_clip_ready_for_analysis = on_clip_ready_mock
+        self.config['MAX_EVENT_LENGTH_SECONDS'] = 120
+
+        event = EventState("evt1", "cam1", "person", created_at=100.0)
+        event.folder_path = "/tmp/storage/cam1/100_evt1"
+        event.has_clip = True
+        event.end_time = 250.0  # duration 150s >= 120
+        self.consolidated_manager.get_by_frigate_event.return_value = None
+        self.file_manager.rename_event_folder.return_value = "/tmp/storage/cam1/100_evt1-canceled"
+
+        self.service.process_event_end(event)
+
+        self.file_manager.write_canceled_summary.assert_called_once_with("/tmp/storage/cam1/100_evt1")
+        self.notifier.publish_notification.assert_called_once()
+        call_args = self.notifier.publish_notification.call_args
+        self.assertEqual(call_args[0][1], "canceled")
+        self.assertEqual(call_args[1].get("message"), "Event canceled see event viewer for details")
+        self.file_manager.rename_event_folder.assert_called_once()
+        self.download_service.export_and_download_clip.assert_not_called()
+        on_clip_ready_mock.assert_not_called()
+
+    def test_process_event_end_duration_exactly_max_is_canceled(self):
+        """Duration exactly equal to max_event_length_seconds is treated as canceled (>=)."""
+        on_clip_ready_mock = MagicMock()
+        self.service.on_clip_ready_for_analysis = on_clip_ready_mock
+        self.config['MAX_EVENT_LENGTH_SECONDS'] = 120
+
+        event = EventState("evt1", "cam1", "person", created_at=100.0)
+        event.folder_path = "/tmp/storage/cam1/100_evt1"
+        event.has_clip = True
+        event.end_time = 220.0  # duration 120s
+        self.consolidated_manager.get_by_frigate_event.return_value = None
+        self.file_manager.rename_event_folder.return_value = "/tmp/storage/cam1/100_evt1-canceled"
+
+        self.service.process_event_end(event)
+
+        self.file_manager.write_canceled_summary.assert_called_once()
+        self.notifier.publish_notification.assert_called_once()
+        self.assertEqual(self.notifier.publish_notification.call_args[0][1], "canceled")
+        on_clip_ready_mock.assert_not_called()
+
+    def test_finalize_consolidated_event_max_length_does_not_call_analysis(self):
+        """When any event in CE has duration >= max, no export and no on_ce_ready/on_clip_ready (API never sent)."""
+        on_clip_ready_mock = MagicMock()
+        on_ce_ready_mock = MagicMock()
+        self.service.on_clip_ready_for_analysis = on_clip_ready_mock
+        self.service.on_ce_ready_for_analysis = on_ce_ready_mock
+        self.config['MAX_EVENT_LENGTH_SECONDS'] = 120
+
+        ce_id = "ce1"
+        ce = ConsolidatedEvent(ce_id, "folder", "/tmp/storage/events/100_ce1", 100.0, 110.0)
+        ce.frigate_event_ids = ["evt1", "evt2"]
+        ce.cameras = ["cam1", "cam2"]
+        ce.primary_camera = "cam1"
+        ce.end_time_max = 250.0
+        ce.last_activity_time = 250.0
+        self.consolidated_manager.mark_closing.return_value = True
+        self.consolidated_manager._events = {ce_id: ce}
+        self.consolidated_manager._lock = MagicMock()
+
+        evt1 = EventState("evt1", "cam1", "person", created_at=100.0)
+        evt1.end_time = 110.0
+        evt2 = EventState("evt2", "cam2", "person", created_at=100.0)
+        evt2.end_time = 250.0  # duration 150s >= 120
+
+        self.state_manager.get_event.side_effect = lambda fid: evt1 if fid == "evt1" else evt2
+        self.file_manager.rename_event_folder.return_value = "/tmp/storage/events/100_ce1-canceled"
+
+        self.service.finalize_consolidated_event(ce_id)
+
+        self.file_manager.write_canceled_summary.assert_called_once_with("/tmp/storage/events/100_ce1")
+        self.notifier.publish_notification.assert_called_once()
+        self.assertEqual(self.notifier.publish_notification.call_args[0][1], "canceled")
+        self.download_service.export_and_download_clip.assert_not_called()
+        on_clip_ready_mock.assert_not_called()
+        on_ce_ready_mock.assert_not_called()
+        self.consolidated_manager.remove.assert_called_with(ce_id)
 
     def test_finalize_consolidated_event_multi_cam_uses_download_then_sidecar(self):
         """With 2+ cameras, lifecycle uses export_and_download_clip then generate_detection_sidecar (no transcode)."""

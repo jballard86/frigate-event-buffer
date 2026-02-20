@@ -56,6 +56,7 @@ CONFIG_SCHEMA = Schema({
         Optional('report_known_person_name'): str,              # Placeholder value for {known_person_name} in report prompt.
         Optional('event_gap_seconds'): int,                     # Seconds of inactivity before next event starts a new consolidated group.
         Optional('minimum_event_seconds'): int,                 # Events shorter than this are discarded (data deleted, state/CE updated, discarded MQTT notification sent).
+        Optional('max_event_length_seconds'): int,             # Events with duration >= this are canceled: no AI/decode, folder renamed with "-canceled", notification sent; default 120 (2 min).
         Optional('export_buffer_before'): int,                  # Seconds to include before event start in exported clip.
         Optional('export_buffer_after'): int,                    # Seconds to include after event end in exported clip.
         Optional('final_review_image_count'): int,              # Max number of images to send to Frigate final review summary.
@@ -154,6 +155,7 @@ def load_config() -> dict:
         'REPORT_KNOWN_PERSON_NAME': '',
         'EVENT_GAP_SECONDS': 120,
         'MINIMUM_EVENT_SECONDS': 5,
+        'MAX_EVENT_LENGTH_SECONDS': 120,
         'EXPORT_BUFFER_BEFORE': 5,
         'EXPORT_BUFFER_AFTER': 30,
         'FINAL_REVIEW_IMAGE_COUNT': 20,
@@ -268,6 +270,7 @@ def load_config() -> dict:
                     config['REPORT_KNOWN_PERSON_NAME'] = (settings.get('report_known_person_name') or config['REPORT_KNOWN_PERSON_NAME']) or ''
                     config['EVENT_GAP_SECONDS'] = settings.get('event_gap_seconds', config['EVENT_GAP_SECONDS'])
                     config['MINIMUM_EVENT_SECONDS'] = settings.get('minimum_event_seconds', config['MINIMUM_EVENT_SECONDS'])
+                    config['MAX_EVENT_LENGTH_SECONDS'] = settings.get('max_event_length_seconds', config['MAX_EVENT_LENGTH_SECONDS'])
                     config['EXPORT_BUFFER_BEFORE'] = settings.get('export_buffer_before', config['EXPORT_BUFFER_BEFORE'])
                     config['EXPORT_BUFFER_AFTER'] = settings.get('export_buffer_after', config['EXPORT_BUFFER_AFTER'])
                     config['FINAL_REVIEW_IMAGE_COUNT'] = settings.get('final_review_image_count', config.get('FINAL_REVIEW_IMAGE_COUNT', 20))
