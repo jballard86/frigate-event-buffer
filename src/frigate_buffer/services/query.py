@@ -13,6 +13,28 @@ from typing import Any
 logger = logging.getLogger('frigate-buffer')
 
 
+def resolve_clip_in_folder(folder_path: str) -> str | None:
+    """
+    Return the basename of the clip file in folder_path, or None if no clip.
+
+    Lists *.mp4 in folder_path; if multiple, returns the newest by mtime (most recently modified).
+    """
+    try:
+        candidates = [
+            os.path.join(folder_path, n)
+            for n in os.listdir(folder_path)
+            if n.lower().endswith(".mp4") and os.path.isfile(os.path.join(folder_path, n))
+        ]
+    except OSError:
+        return None
+    if not candidates:
+        return None
+    if len(candidates) == 1:
+        return os.path.basename(candidates[0])
+    newest = max(candidates, key=lambda p: os.path.getmtime(p))
+    return os.path.basename(newest)
+
+
 def read_timeline_merged(folder_path: str) -> dict[str, Any]:
     """
     Read timeline from folder: merge notification_timeline.json (if present)
@@ -129,7 +151,9 @@ class EventQueryService:
         except (FileNotFoundError, IOError):
             pass
 
-        data['has_clip'] = os.path.exists(os.path.join(folder_path, 'clip.mp4'))
+        clip_basename = resolve_clip_in_folder(folder_path)
+        data['has_clip'] = clip_basename is not None
+        data['clip_basename'] = clip_basename
         data['has_snapshot'] = os.path.exists(os.path.join(folder_path, 'snapshot.jpg'))
         data['viewed'] = os.path.exists(os.path.join(folder_path, '.viewed'))
 
@@ -139,12 +163,13 @@ class EventQueryService:
             with os.scandir(folder_path) as it:
                 for entry in it:
                     if entry.is_dir() and not entry.name.startswith('.'):
-                        sub_clip = os.path.join(entry.path, 'clip.mp4')
+                        sub_clip_basename = resolve_clip_in_folder(entry.path)
                         sub_snap = os.path.join(entry.path, 'snapshot.jpg')
                         sub_meta = os.path.join(entry.path, 'metadata.json')
 
                         sub_data = {
-                            'has_clip': os.path.exists(sub_clip),
+                            'has_clip': sub_clip_basename is not None,
+                            'clip_basename': sub_clip_basename,
                             'has_snapshot': os.path.exists(sub_snap),
                             'metadata': None
                         }
@@ -283,7 +308,7 @@ class EventQueryService:
             if '.' in ce_id and not ce_id.split('_')[0].isdigit():
                 continue
 
-            # Cache key uses content mtime so adding clip.mp4 in any camera subdir invalidates cache
+            # Cache key uses content mtime so adding a clip (*.mp4) in any camera subdir invalidates cache
             content_mtime = entry.stat().st_mtime
             try:
                 with os.scandir(entry.path) as it:
@@ -325,8 +350,9 @@ class EventQueryService:
             hosted_clips: list[dict[str, str]] = []
             for cam in cameras:
                 cam_data = subdirs.get(cam, {})
-                if cam_data.get('has_clip'):
-                    url = f"/files/events/{ce_id}/{cam}/clip.mp4"
+                clip_basename = cam_data.get('clip_basename')
+                if cam_data.get('has_clip') and clip_basename:
+                    url = f"/files/events/{ce_id}/{cam}/{clip_basename}"
                     if primary_clip is None:
                         primary_clip = url
                     hosted_clips.append({"camera": cam, "url": url})
@@ -439,7 +465,8 @@ class EventQueryService:
                 cameras_with_zones = [{"camera": camera_name, "zones": []}]
 
             end_ts = self._extract_end_timestamp_from_timeline(timeline) or metadata.get('end_time')
-            clip_url = f"/files/{camera_name}/{subdir}/clip.mp4" if has_clip else None
+            clip_basename = data.get('clip_basename')
+            clip_url = f"/files/{camera_name}/{subdir}/{clip_basename}" if (has_clip and clip_basename) else None
             legacy_hosted_clips = [{"camera": camera_name, "url": clip_url}] if has_clip else []
             event_dict = {
                 "event_id": eid,

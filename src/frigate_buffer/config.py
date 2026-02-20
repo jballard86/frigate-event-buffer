@@ -43,7 +43,7 @@ CONFIG_SCHEMA = Schema({
         Optional('retention_days'): int,                         # Days to keep event data before cleanup.
         Optional('cleanup_interval_hours'): int,                 # How often to run retention cleanup (hours).
         Optional('export_watchdog_interval_minutes'): int,      # How often to check/remove completed exports in Frigate (minutes).
-        Optional('ffmpeg_timeout_seconds'): int,                # Timeout for FFmpeg transcode; kills hung processes.
+        Optional('ffmpeg_timeout_seconds'): int,                # Timeout for FFmpeg (e.g. GIF generation); kills hung processes.
         Optional('notification_delay_seconds'): int,            # Delay before fetching snapshot after notification (lets Frigate pick a better frame).
         Optional('log_level'): Any('DEBUG', 'INFO', 'WARNING', 'ERROR'),  # Logging verbosity.
         Optional('summary_padding_before'): int,                # Seconds before event start for Frigate review summary window.
@@ -60,9 +60,9 @@ CONFIG_SCHEMA = Schema({
         Optional('export_buffer_after'): int,                    # Seconds to include after event end in exported clip.
         Optional('final_review_image_count'): int,              # Max number of images to send to Frigate final review summary.
         Optional('gemini_max_concurrent_analyses'): int,        # Max concurrent Gemini clip analyses (throttling).
-        Optional('max_concurrent_transcodes'): int,     # Max concurrent clip transcodes for multi-cam CE (overlap download + transcode).
         Optional('save_ai_frames'): bool,                        # Whether to save extracted AI analysis frames to disk.
         Optional('create_ai_analysis_zip'): bool,               # Whether to create a zip of AI analysis assets (e.g. for multi-cam).
+        Optional('gemini_frames_per_hour_cap'): int,             # Rolling cap: max frames sent to proxy per hour; 0 = disabled.
     },
     # Home Assistant REST API; used for stats page to display Gemini cost/token entities.
     Optional('ha'): {
@@ -86,21 +86,22 @@ CONFIG_SCHEMA = Schema({
         Optional('motion_threshold_px'): int,                   # Minimum pixel change to trigger high-rate capture.
         Optional('crop_width'): int,                            # Width of output crop for stitched/multi-cam frames.
         Optional('crop_height'): int,                            # Height of output crop for stitched/multi-cam frames.
-        Optional('nvenc_probe_width'): int,                      # Width for NVENC preflight probe (match crop for safety).
-        Optional('nvenc_probe_height'): int,                     # Height for NVENC preflight probe.
         Optional('multi_cam_system_prompt_file'): str,          # Path to system prompt file for multi-cam Gemini; empty = built-in.
         Optional('smart_crop_padding'): Any(int, float),        # Padding fraction around motion-based crop (e.g. 0.15).
         Optional('motion_crop_min_area_fraction'): Any(int, float),  # Minimum motion region area as fraction of frame to consider for crop.
         Optional('motion_crop_min_px'): int,                    # Minimum motion region area in pixels for crop.
-        Optional('detection_model'): str,                         # Ultralytics model for transcode-time detection (e.g. yolov8n.pt).
+        Optional('detection_model'): str,                         # Ultralytics model for detection sidecar (e.g. yolov8n.pt).
         Optional('detection_device'): str,                       # Device for detection (e.g. cuda:0, cpu).
         Optional('detection_frame_interval'): int,               # Run YOLO every N frames; default 5.
+        Optional('detection_imgsz'): int,                        # YOLO inference size (higher = better small objects, slower); default 640.
         Optional('first_camera_bias_decay_seconds'): Any(int, float),   # Time constant for exponential bias decay; default 1.0.
         Optional('first_camera_bias_initial'): Any(int, float),         # Initial bias multiplier for primary camera; default 1.5.
         Optional('first_camera_bias_cap_seconds'): Any(int, float),     # Cap bias to 0 after this many seconds; 0 = no cap.
         Optional('person_area_switch_threshold'): int,                  # Allow switch when current camera area below this (px²); 0 = disable.
         Optional('camera_switch_ratio'): Any(int, float),               # New camera must have this ratio of current to switch; default 1.2.
         Optional('decode_second_camera_cpu_only'): bool,                # Use CPU decode for second and subsequent cameras to avoid NVDEC contention.
+        Optional('tracking_target_frame_percent'): int,                 # When person area >= this % of reference area, use full-frame resize; default 40.
+        Optional('person_area_debug'): bool,                             # Draw person area (px²) on frame bottom-right when true; default false.
     },
     # Extended Gemini proxy options (e.g. for multi_cam); model params; single API key via GEMINI_API_KEY, URL here or env.
     Optional('gemini_proxy'): {
@@ -157,9 +158,9 @@ def load_config() -> dict:
         'EXPORT_BUFFER_AFTER': 30,
         'FINAL_REVIEW_IMAGE_COUNT': 20,
         'GEMINI_MAX_CONCURRENT_ANALYSES': 3,
-        'MAX_CONCURRENT_TRANSCODES': 2,
         'SAVE_AI_FRAMES': True,
         'CREATE_AI_ANALYSIS_ZIP': True,
+        'GEMINI_FRAMES_PER_HOUR_CAP': 200,
 
         # Optional HA REST API (for stats page token/cost display)
         'HA_URL': None,
@@ -183,8 +184,6 @@ def load_config() -> dict:
         'MOTION_THRESHOLD_PX': 50,
         'CROP_WIDTH': 1280,
         'CROP_HEIGHT': 720,
-        'NVENC_PROBE_WIDTH': 1280,
-        'NVENC_PROBE_HEIGHT': 720,
         'MULTI_CAM_SYSTEM_PROMPT_FILE': '',
         'SMART_CROP_PADDING': 0.15,
         'MOTION_CROP_MIN_AREA_FRACTION': 0.001,
@@ -192,12 +191,15 @@ def load_config() -> dict:
         'DETECTION_MODEL': 'yolov8n.pt',
         'DETECTION_DEVICE': '',  # Empty = auto (CUDA if available else CPU)
         'DETECTION_FRAME_INTERVAL': 5,
+        'DETECTION_IMGSZ': 640,
         'FIRST_CAMERA_BIAS_DECAY_SECONDS': 1.0,
         'FIRST_CAMERA_BIAS_INITIAL': 1.5,
         'FIRST_CAMERA_BIAS_CAP_SECONDS': 0,
         'PERSON_AREA_SWITCH_THRESHOLD': 200,
         'CAMERA_SWITCH_RATIO': 1.2,
         'DECODE_SECOND_CAMERA_CPU_ONLY': True,
+        'TRACKING_TARGET_FRAME_PERCENT': 40,
+        'PERSON_AREA_DEBUG': False,
 
         # Gemini proxy (extended): Single API Key (GEMINI_API_KEY only). Default URL "" (no Google fallback).
         'GEMINI_PROXY_URL': '',
@@ -270,9 +272,9 @@ def load_config() -> dict:
                     config['EXPORT_BUFFER_AFTER'] = settings.get('export_buffer_after', config['EXPORT_BUFFER_AFTER'])
                     config['FINAL_REVIEW_IMAGE_COUNT'] = settings.get('final_review_image_count', config.get('FINAL_REVIEW_IMAGE_COUNT', 20))
                     config['GEMINI_MAX_CONCURRENT_ANALYSES'] = settings.get('gemini_max_concurrent_analyses', config.get('GEMINI_MAX_CONCURRENT_ANALYSES', 3))
-                    config['MAX_CONCURRENT_TRANSCODES'] = settings.get('max_concurrent_transcodes', config.get('MAX_CONCURRENT_TRANSCODES', 2))
                     config['SAVE_AI_FRAMES'] = settings.get('save_ai_frames', config.get('SAVE_AI_FRAMES', True))
                     config['CREATE_AI_ANALYSIS_ZIP'] = settings.get('create_ai_analysis_zip', config.get('CREATE_AI_ANALYSIS_ZIP', True))
+                    config['GEMINI_FRAMES_PER_HOUR_CAP'] = settings.get('gemini_frames_per_hour_cap', config.get('GEMINI_FRAMES_PER_HOUR_CAP', 200))
 
                 if 'network' in yaml_config:
                     network = yaml_config['network']
@@ -308,8 +310,6 @@ def load_config() -> dict:
                     config['MOTION_THRESHOLD_PX'] = mc.get('motion_threshold_px', config['MOTION_THRESHOLD_PX'])
                     config['CROP_WIDTH'] = mc.get('crop_width', config['CROP_WIDTH'])
                     config['CROP_HEIGHT'] = mc.get('crop_height', config['CROP_HEIGHT'])
-                    config['NVENC_PROBE_WIDTH'] = mc.get('nvenc_probe_width', config['NVENC_PROBE_WIDTH'])
-                    config['NVENC_PROBE_HEIGHT'] = mc.get('nvenc_probe_height', config['NVENC_PROBE_HEIGHT'])
                     config['MULTI_CAM_SYSTEM_PROMPT_FILE'] = mc.get('multi_cam_system_prompt_file', config['MULTI_CAM_SYSTEM_PROMPT_FILE']) or ''
                     config['SMART_CROP_PADDING'] = float(mc.get('smart_crop_padding', config.get('SMART_CROP_PADDING', 0.15)))
                     config['MOTION_CROP_MIN_AREA_FRACTION'] = float(mc.get('motion_crop_min_area_fraction', config.get('MOTION_CROP_MIN_AREA_FRACTION', 0.001)))
@@ -317,12 +317,15 @@ def load_config() -> dict:
                     config['DETECTION_MODEL'] = (mc.get('detection_model') or config.get('DETECTION_MODEL', 'yolov8n.pt')) or 'yolov8n.pt'
                     config['DETECTION_DEVICE'] = (mc.get('detection_device') or config.get('DETECTION_DEVICE', '')) or ''
                     config['DETECTION_FRAME_INTERVAL'] = mc.get('detection_frame_interval', config['DETECTION_FRAME_INTERVAL'])
+                    config['DETECTION_IMGSZ'] = int(mc.get('detection_imgsz', config['DETECTION_IMGSZ']))
                     config['FIRST_CAMERA_BIAS_DECAY_SECONDS'] = float(mc.get('first_camera_bias_decay_seconds', config['FIRST_CAMERA_BIAS_DECAY_SECONDS']))
                     config['FIRST_CAMERA_BIAS_INITIAL'] = float(mc.get('first_camera_bias_initial', config['FIRST_CAMERA_BIAS_INITIAL']))
                     config['FIRST_CAMERA_BIAS_CAP_SECONDS'] = float(mc.get('first_camera_bias_cap_seconds', config['FIRST_CAMERA_BIAS_CAP_SECONDS']))
                     config['PERSON_AREA_SWITCH_THRESHOLD'] = int(mc.get('person_area_switch_threshold', config['PERSON_AREA_SWITCH_THRESHOLD']))
                     config['CAMERA_SWITCH_RATIO'] = float(mc.get('camera_switch_ratio', config['CAMERA_SWITCH_RATIO']))
                     config['DECODE_SECOND_CAMERA_CPU_ONLY'] = bool(mc.get('decode_second_camera_cpu_only', config['DECODE_SECOND_CAMERA_CPU_ONLY']))
+                    config['TRACKING_TARGET_FRAME_PERCENT'] = int(mc.get('tracking_target_frame_percent', config['TRACKING_TARGET_FRAME_PERCENT']))
+                    config['PERSON_AREA_DEBUG'] = bool(mc.get('person_area_debug', config['PERSON_AREA_DEBUG']))
                 if 'gemini_proxy' in yaml_config:
                     gp = yaml_config['gemini_proxy']
                     config['GEMINI_PROXY_URL'] = gp.get('url', config['GEMINI_PROXY_URL']) or ''
@@ -376,6 +379,12 @@ def load_config() -> dict:
     _create_zip = os.getenv('CREATE_AI_ANALYSIS_ZIP')
     if _create_zip is not None:
         config['CREATE_AI_ANALYSIS_ZIP'] = str(_create_zip).lower() in ('true', '1', 'yes')
+    _cap = os.getenv('GEMINI_FRAMES_PER_HOUR_CAP')
+    if _cap is not None:
+        try:
+            config['GEMINI_FRAMES_PER_HOUR_CAP'] = int(_cap)
+        except ValueError:
+            pass
 
     # Gemini env overrides (api_key for secrets). Single API Key: GEMINI_API_KEY only.
     config['GEMINI'] = dict(config.get('GEMINI') or {})
