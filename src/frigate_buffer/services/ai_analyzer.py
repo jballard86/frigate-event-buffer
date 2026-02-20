@@ -736,6 +736,7 @@ class GeminiAnalysisService:
                 camera_timeline_primary_bias_multiplier=float(self.config.get("CAMERA_TIMELINE_PRIMARY_BIAS_MULTIPLIER", 1.2)),
                 camera_switch_min_segment_frames=int(self.config.get("CAMERA_SWITCH_MIN_SEGMENT_FRAMES", 5)),
                 camera_switch_hysteresis_margin=float(self.config.get("CAMERA_SWITCH_HYSTERESIS_MARGIN", 1.15)),
+                camera_timeline_final_yolo_drop_no_person=bool(self.config.get("CAMERA_TIMELINE_FINAL_YOLO_DROP_NO_PERSON", False)),
             )
             if not frames_raw:
                 logger.warning("No frames extracted from CE %s", ce_id)
@@ -874,6 +875,7 @@ class GeminiAnalysisService:
                 camera_timeline_primary_bias_multiplier=float(self.config.get("CAMERA_TIMELINE_PRIMARY_BIAS_MULTIPLIER", 1.2)),
                 camera_switch_min_segment_frames=int(self.config.get("CAMERA_SWITCH_MIN_SEGMENT_FRAMES", 5)),
                 camera_switch_hysteresis_margin=float(self.config.get("CAMERA_SWITCH_HYSTERESIS_MARGIN", 1.15)),
+                camera_timeline_final_yolo_drop_no_person=bool(self.config.get("CAMERA_TIMELINE_FINAL_YOLO_DROP_NO_PERSON", False)),
             )
             if not frames_raw:
                 logger.warning("No frames extracted from CE folder %s", ce_folder_path)

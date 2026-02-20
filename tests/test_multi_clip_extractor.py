@@ -510,3 +510,52 @@ class TestMultiClipExtractor(unittest.TestCase):
         for item in result:
             self.assertIsInstance(item, ExtractedFrame)
             self.assertIn(item.camera, ("cam1", "cam2"))
+
+    @patch("frigate_buffer.services.multi_clip_extractor.ffmpegcv.VideoCapture")
+    @patch("frigate_buffer.services.multi_clip_extractor.ffmpegcv.VideoCaptureNV")
+    def test_ema_drop_no_person_excludes_zero_area_frames(self, mock_video_capture_nv, mock_video_capture):
+        """With use_ema_pipeline and camera_timeline_final_yolo_drop_no_person=True, frames with person_area=0 are not in the result."""
+        os.makedirs(os.path.join(self.tmp, "cam1"))
+        os.makedirs(os.path.join(self.tmp, "cam2"))
+        with open(os.path.join(self.tmp, "cam1", "clip.mp4"), "wb"):
+            pass
+        with open(os.path.join(self.tmp, "cam2", "clip.mp4"), "wb"):
+            pass
+        # Sidecar: at t=0, 0.5 person area 0; at t>=1 person area 100. So first two sample times get 0.
+        times = [0.0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0]
+        entries = [
+            {"timestamp_sec": t, "detections": [{"label": "person", "area": 0 if t < 1.0 else 100}]}
+            for t in times
+        ]
+        for cam_name in ("cam1", "cam2"):
+            sidecar_path = os.path.join(self.tmp, cam_name, DETECTION_SIDECAR_FILENAME)
+            with open(sidecar_path, "w", encoding="utf-8") as f:
+                json.dump({"native_width": 100, "native_height": 100, "entries": entries}, f)
+        frame = np.zeros((100, 100, 3), dtype=np.uint8)
+
+        def make_mock():
+            m = MagicMock()
+            m.fps = 1.0
+            m.__len__ = MagicMock(return_value=10)
+            m.isOpened.return_value = True
+            m.read.side_effect = [(True, frame)] * 10 + [(False, None)]
+            m.release = MagicMock()
+            return m
+
+        mock_video_capture_nv.side_effect = Exception("no nv")
+        mock_video_capture.side_effect = lambda path: make_mock()
+
+        result = extract_target_centric_frames(
+            self.tmp,
+            max_frames_sec=1.0,
+            max_frames_min=10,
+            use_ema_pipeline=True,
+            camera_timeline_final_yolo_drop_no_person=True,
+        )
+        for ef in result:
+            self.assertIsInstance(ef, ExtractedFrame)
+            self.assertGreater(
+                ef.metadata.get("person_area", 0),
+                0,
+                "With camera_timeline_final_yolo_drop_no_person=True, no frame should have person_area=0",
+            )

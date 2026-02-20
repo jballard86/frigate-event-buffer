@@ -214,6 +214,7 @@ def extract_target_centric_frames(
     camera_timeline_primary_bias_multiplier: float = 1.2,
     camera_switch_min_segment_frames: int = 5,
     camera_switch_hysteresis_margin: float = 1.15,
+    camera_timeline_final_yolo_drop_no_person: bool = False,
 ) -> list[Any]:
     """
     Extract time-ordered, target-centric frames from all clips under a CE folder.
@@ -752,12 +753,13 @@ def extract_target_centric_frames(
                             meta["is_full_frame_resize"] = False
             raw_person_area = _person_area_at_time(sidecars.get(best_camera) or [], T)
             meta["person_area"] = int(raw_person_area)
-            # EMA pipeline: keep all frames (tag only); legacy may skip frames with no person.
-            skip_append = (
-                (use_sidecar and sidecars and raw_person_area <= 0)
-                if not use_ema_pipeline
-                else False
-            )
+            # Legacy: skip frames with no person when sidecar in use. EMA: drop when config says so.
+            if not use_ema_pipeline:
+                skip_append = bool(use_sidecar and sidecars and raw_person_area <= 0)
+            else:
+                skip_append = (
+                    (raw_person_area <= 0) if camera_timeline_final_yolo_drop_no_person else False
+                )
             if not skip_append:
                 collected.append(ExtractedFrame(frame=best_frame, timestamp_sec=T, camera=best_camera, metadata=meta))
             if best_camera == current_camera:
