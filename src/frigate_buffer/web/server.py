@@ -286,11 +286,15 @@ def create_app(orchestrator):
                 fp = os.path.join(folder_path, f)
                 if os.path.isfile(fp):
                     event_files.append(f)
-            # Include files from camera subdirs (consolidated: Carport/clip.mp4, etc.)
+            # Include files from camera subdirs (consolidated: any .mp4, snapshot, etc.)
+            from frigate_buffer.services.query import resolve_clip_in_folder
             for sub in os.listdir(folder_path):
                 sub_fp = os.path.join(folder_path, sub)
                 if os.path.isdir(sub_fp) and not sub.startswith('.'):
-                    for sf in ('clip.mp4', 'snapshot.jpg', 'metadata.json', 'summary.txt', 'review_summary.md', 'ai_analysis_debug.zip'):
+                    clip_basename = resolve_clip_in_folder(sub_fp)
+                    if clip_basename:
+                        event_files.append(f"{sub}/{clip_basename}")
+                    for sf in ('snapshot.jpg', 'metadata.json', 'summary.txt', 'review_summary.md', 'ai_analysis_debug.zip'):
                         if os.path.isfile(os.path.join(sub_fp, sf)):
                             event_files.append(f"{sub}/{sf}")
             event_files.sort()
@@ -300,9 +304,9 @@ def create_app(orchestrator):
         has_ai_analysis_zip = bool(zip_entries)
         first_ai_analysis_zip_path = zip_entries[0] if zip_entries else None
 
-        # Export duration and clip files for intro line
+        # Export duration and clip files for intro line (any .mp4)
         export_duration_seconds = None
-        export_file_list = [f for f in event_files if f == 'clip.mp4' or f.endswith('/clip.mp4')]
+        export_file_list = [f for f in event_files if f.endswith('.mp4')]
         request_entries = [e for e in entries if e.get("source") == "frigate_api" and e.get("direction") == "out" and "Clip export request" in (e.get("label") or "")]
         response_entries = [e for e in entries if e.get("source") == "frigate_api" and e.get("direction") == "in" and "Clip export response" in (e.get("label") or "")]
         if request_entries and response_entries:
@@ -357,7 +361,7 @@ def create_app(orchestrator):
 
     @app.route('/files/<path:filename>')
     def serve_file(filename):
-        """Serve stored files (clips are already transcoded to H.264)."""
+        """Serve stored files (clips are stored as H.264/H.265 from Frigate)."""
         directory = os.path.realpath(storage_path)
         safe_path = os.path.realpath(os.path.join(directory, filename))
 
@@ -396,6 +400,7 @@ def create_app(orchestrator):
                 storage_path,
                 file_manager,
                 orchestrator.download_service,
+                orchestrator.video_service,
                 orchestrator.ai_analyzer,
                 orchestrator.config,
             ):

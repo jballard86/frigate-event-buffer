@@ -39,7 +39,7 @@ def _parse_export_response_entries(
 ) -> list[tuple[str, str | None]]:
     """
     Read merged timeline (base + append JSONL) and return list of (export_id, camera_for_clip).
-    camera_for_clip is None for single-camera event (clip at root); else camera name for consolidated (clip at camera/clip.mp4).
+    camera_for_clip is None for single-camera event (clip at root); else camera name for consolidated (clip at camera subdir).
     """
     result: list[tuple[str, str | None]] = []
     try:
@@ -72,12 +72,16 @@ def _parse_export_response_entries(
 def _clip_path_for_entry(
     folder_path: str,
     camera_for_clip: str | None,
-) -> str:
-    """Path to clip.mp4 for this entry (single-cam or consolidated)."""
+) -> str | None:
+    """Path to the clip file for this entry (single-cam or consolidated). Uses resolve_clip_in_folder for dynamic names."""
+    from frigate_buffer.services.query import resolve_clip_in_folder
     if camera_for_clip is None:
-        return os.path.join(folder_path, "clip.mp4")
+        clip_basename = resolve_clip_in_folder(folder_path)
+        return os.path.join(folder_path, clip_basename) if clip_basename else None
     sub = _sanitize_camera_name(camera_for_clip)
-    return os.path.join(folder_path, sub, "clip.mp4")
+    cam_folder = os.path.join(folder_path, sub)
+    clip_basename = resolve_clip_in_folder(cam_folder)
+    return os.path.join(cam_folder, clip_basename) if clip_basename else None
 
 
 def _rel_path_from_storage(folder_path: str, storage_path: str) -> tuple[str, str] | None:
@@ -99,7 +103,8 @@ def _rel_path_from_storage(folder_path: str, storage_path: str) -> tuple[str, st
 
 
 def _event_files_list(folder_path: str) -> list[str]:
-    """Build same file list as timeline page: root files + camera_subdir/clip.mp4 etc."""
+    """Build same file list as timeline page: root files + camera_subdir/<clip>.mp4 etc. (dynamic clip names)."""
+    from frigate_buffer.services.query import resolve_clip_in_folder
     files: list[str] = []
     try:
         for name in os.listdir(folder_path):
@@ -109,7 +114,10 @@ def _event_files_list(folder_path: str) -> list[str]:
         for sub in os.listdir(folder_path):
             sub_fp = os.path.join(folder_path, sub)
             if os.path.isdir(sub_fp) and not sub.startswith("."):
-                for sf in ("clip.mp4", "snapshot.jpg", "metadata.json", "summary.txt", "review_summary.md"):
+                clip_basename = resolve_clip_in_folder(sub_fp)
+                if clip_basename:
+                    files.append(f"{sub}/{clip_basename}")
+                for sf in ("snapshot.jpg", "metadata.json", "summary.txt", "review_summary.md"):
                     if os.path.isfile(os.path.join(sub_fp, sf)):
                         files.append(f"{sub}/{sf}")
         files.sort()
@@ -262,7 +270,7 @@ def run_once(config: dict[str, Any]) -> None:
                                 if export_id in seen_export_ids:
                                     continue
                                 clip_path = _clip_path_for_entry(event_path, camera_for_clip)
-                                if not os.path.isfile(clip_path):
+                                if not clip_path or not os.path.isfile(clip_path):
                                     continue
                                 seen_export_ids.add(export_id)
                                 outcome = _delete_export_from_frigate(frigate_url, export_id)
@@ -275,7 +283,7 @@ def run_once(config: dict[str, Any]) -> None:
 
                             # Remember for link verification (any folder with timeline and at least one clip)
                             if pairs and any(
-                                os.path.isfile(_clip_path_for_entry(event_path, c))
+                                (lambda p: p is not None and os.path.isfile(p))(_clip_path_for_entry(event_path, c))
                                 for _, c in pairs
                             ):
                                 rel = _rel_path_from_storage(event_path, storage_path)

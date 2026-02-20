@@ -1,6 +1,6 @@
 # Build from repo root: docker build -t frigate-buffer:latest .
-# FFmpeg with NVENC comes from multi-stage build; no script or artifact folder required. See BUILD_NVENC.md.
-# Final stage is Ubuntu 24.04 (Python 3.12 in default repos; no PPA). Ubuntu base matches FFmpeg donor and avoids distro/ABI mismatch with NVIDIA libs.
+# FFmpeg from multi-stage build provides NVDEC (decode) for ffmpegcv; encoding is not used (clips are stored as-is).
+# Final stage is Ubuntu 24.04 (Python 3.12). Ubuntu base matches FFmpeg donor for NVIDIA lib compatibility.
 ARG FFMPEG_NVENC_IMAGE=jrottenberg/ffmpeg:7.0-nvidia2204
 FROM ${FFMPEG_NVENC_IMAGE} AS ffmpeg_nvenc
 

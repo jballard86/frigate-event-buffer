@@ -46,6 +46,7 @@ class TestRunTestPipelineValidation:
                     None,
                     None,
                     None,
+                    None,
                     {},
                 )
             )
@@ -68,6 +69,7 @@ class TestRunTestPipelineValidation:
                 run_test_pipeline(
                     source,
                     tmp,
+                    None,
                     None,
                     None,
                     None,

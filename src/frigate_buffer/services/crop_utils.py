@@ -90,6 +90,27 @@ def _crop_around_center(
     return crop
 
 
+def full_frame_resize_to_target(frame: Any, target_w: int, target_h: int) -> Any:
+    """
+    Scale the entire frame to fit inside target_w x target_h preserving aspect ratio, then pad with black to exactly target_w x target_h.
+
+    Used when the subject occupies too much of the crop area (e.g. 40% threshold); the AI proxy receives full context with letterboxing instead of a tight crop.
+    """
+    if target_w <= 0 or target_h <= 0:
+        return frame
+    h, w = frame.shape[:2]
+    scale = min(target_w / w, target_h / h)
+    new_w = int(round(w * scale))
+    new_h = int(round(h * scale))
+    scaled = cv2.resize(frame, (new_w, new_h))
+    # Pad to exact target size (letterbox): top/bottom or left/right black bars
+    top = (target_h - new_h) // 2
+    bottom = target_h - new_h - top
+    left = (target_w - new_w) // 2
+    right = target_w - new_w - left
+    return cv2.copyMakeBorder(scaled, top, bottom, left, right, cv2.BORDER_CONSTANT, value=(0, 0, 0))
+
+
 def motion_crop(
     frame: Any,
     prev_gray: Any | None,
@@ -157,6 +178,7 @@ def draw_timestamp_overlay(
     thickness_outline: int = 2,
     thickness_text: int = 1,
     position: tuple[int, int] = (10, 30),
+    person_area: int | None = None,
 ) -> Any:
     """
     Draw timestamp overlay on frame (top-left by default).
@@ -168,6 +190,9 @@ def draw_timestamp_overlay(
     Uses shadow/outline: black with thicker stroke first, then white with thinner
     stroke, so text is readable on both bright (snow) and dark (night) backgrounds.
     Format: time_str | camera_name | seq_index/seq_total (e.g. "12:34:56 | Doorbell | 3/24").
+
+    When person_area is not None, draws "person_area: {value}" at bottom-right in the
+    same style, for debugging camera-switch threshold tuning (multi-cam only).
 
     Returns:
         The frame with overlay drawn (same object if already writable, else a copy).
@@ -197,4 +222,33 @@ def draw_timestamp_overlay(
         thickness_text,
         cv2.LINE_AA,
     )
+    if person_area is not None:
+        br_label = f"person_area: {person_area}"
+        h_frame, w_frame = frame.shape[:2]
+        margin = 10
+        (tw, _), _ = cv2.getTextSize(
+            br_label, cv2.FONT_HERSHEY_SIMPLEX, font_scale, thickness_outline
+        )
+        br_x = w_frame - tw - margin
+        br_y = h_frame - margin
+        cv2.putText(
+            frame,
+            br_label,
+            (br_x, br_y),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            font_scale,
+            (0, 0, 0),
+            thickness_outline,
+            cv2.LINE_AA,
+        )
+        cv2.putText(
+            frame,
+            br_label,
+            (br_x, br_y),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            font_scale,
+            (255, 255, 255),
+            thickness_text,
+            cv2.LINE_AA,
+        )
     return frame

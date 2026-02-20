@@ -4,7 +4,16 @@ import time
 import uuid
 from enum import Enum, auto
 from dataclasses import dataclass, field
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
+
+
+@dataclass
+class ExtractedFrame:
+    """Single frame from multi-clip extraction: image, timestamp, camera, and optional metadata (e.g. is_full_frame_resize)."""
+    frame: Any  # BGR numpy array (cv2/opencv)
+    timestamp_sec: float
+    camera: str
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

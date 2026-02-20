@@ -164,19 +164,19 @@ class TestEventLifecycleService(unittest.TestCase):
         self.state_manager.get_event.return_value = evt1
 
         self.file_manager.ensure_consolidated_camera_folder.return_value = "/tmp/ce1/cam1"
-        self.download_service.export_and_transcode_clip.return_value = {"success": True}
+        self.download_service.export_and_download_clip.return_value = {"success": True, "clip_path": "/tmp/ce1/cam1/cam1-123.mp4"}
 
         # Act
         self.service.finalize_consolidated_event(ce_id)
 
         # Assert
         self.consolidated_manager.mark_closing.assert_called_with(ce_id)
-        self.download_service.export_and_transcode_clip.assert_called()
+        self.download_service.export_and_download_clip.assert_called()
         self.consolidated_manager.remove.assert_called_with(ce_id)
         self.notifier.mark_last_event_ended.assert_called_once()
 
-    def test_finalize_consolidated_event_multi_cam_uses_download_then_transcode_pool(self):
-        """With 2+ cameras, lifecycle uses export_and_download_clip and transcode_temp_to_final in a pool (not export_and_transcode_clip)."""
+    def test_finalize_consolidated_event_multi_cam_uses_download_then_sidecar(self):
+        """With 2+ cameras, lifecycle uses export_and_download_clip then generate_detection_sidecar (no transcode)."""
         ce_id = "ce1"
         ce = ConsolidatedEvent(ce_id, "folder", "path", 100.0, 110.0)
         ce.frigate_event_ids = ["evt1", "evt2"]
@@ -195,20 +195,18 @@ class TestEventLifecycleService(unittest.TestCase):
         self.file_manager.ensure_consolidated_camera_folder.side_effect = lambda base, cam: f"{base}/{cam}"
         self.file_manager.sanitize_camera_name.side_effect = lambda n: n or ""
         self.download_service.export_and_download_clip.return_value = {
-            "success": True, "temp_path": "/tmp/cam/clip_original.mp4", "frigate_response": {}
+            "success": True, "clip_path": "/tmp/ce1/cam1/cam1-123.mp4", "frigate_response": {}
         }
-        self.download_service.transcode_temp_to_final.return_value = True
+        self.video_service.generate_detection_sidecar.return_value = True
         self.download_service.fetch_review_summary.return_value = None
         self.config["GEMINI"] = {"enabled": False}
-        self.config["MAX_CONCURRENT_TRANSCODES"] = 2
 
         self.service.finalize_consolidated_event(ce_id)
 
         self.download_service.export_and_download_clip.assert_called()
         self.assertEqual(self.download_service.export_and_download_clip.call_count, 2)
-        self.download_service.transcode_temp_to_final.assert_called()
-        self.assertEqual(self.download_service.transcode_temp_to_final.call_count, 2)
-        self.download_service.export_and_transcode_clip.assert_not_called()
+        self.video_service.generate_detection_sidecar.assert_called()
+        self.assertEqual(self.video_service.generate_detection_sidecar.call_count, 2)
         self.consolidated_manager.remove.assert_called_with(ce_id)
 
 if __name__ == '__main__':
