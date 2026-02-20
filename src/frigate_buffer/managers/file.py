@@ -36,74 +36,44 @@ def write_stitched_frame(frame_bgr: Any, filepath: str) -> bool:
         return False
 
 
-def write_ai_frame_analysis_single_cam(
+def _write_ai_analysis_internal(
     event_dir: str,
-    frames_with_time: list[tuple[Any, float]],
-    camera: str,
+    frames_data: list[Any],
+    camera_override: str | None = None,
     write_manifest: bool = True,
     create_zip_flag: bool = True,
     save_frames: bool = True,
+    include_camera_in_filename: bool = True,
 ) -> None:
-    """Write ai_frame_analysis/frames (stitched color+B/W per frame), optional manifest, and optional zip.
-    Only runs when save_frames is True; create_zip_flag controls zip creation after frames."""
-    if not save_frames or not frames_with_time:
+    """Internal helper to write AI frame analysis data."""
+    if not save_frames or not frames_data:
         return
     if not _CV2_AVAILABLE:
         logger.warning("cv2/numpy not available, skipping AI frame analysis write")
         return
+
     frames_dir = os.path.join(event_dir, "ai_frame_analysis", "frames")
     os.makedirs(frames_dir, exist_ok=True)
-    total = len(frames_with_time)
+    total = len(frames_data)
     manifest_entries = []
-    for seq, (frame, frame_time_sec) in enumerate(frames_with_time, start=1):
-        fname = f"frame_{seq:03d}.jpg"
-        out_path = os.path.join(frames_dir, fname)
-        if write_stitched_frame(frame, out_path):
-            manifest_entries.append({
-                "filename": fname,
-                "timestamp_sec": frame_time_sec,
-                "camera": camera,
-                "seq": seq,
-                "total": total,
-            })
-    if write_manifest and manifest_entries:
-        manifest_path = os.path.join(event_dir, "ai_frame_analysis", "manifest.json")
-        try:
-            with open(manifest_path, "w", encoding="utf-8") as f:
-                json.dump(manifest_entries, f, indent=2)
-        except OSError as e:
-            logger.warning("Failed to write ai_frame_analysis manifest: %s", e)
-    if create_zip_flag:
-        create_ai_analysis_zip(event_dir)
 
+    for seq, item in enumerate(frames_data, start=1):
+        # Extract fields from item (tuple/list or object with attributes)
+        is_tuple = isinstance(item, (tuple, list))
+        frame = getattr(item, "frame", item[0] if is_tuple and len(item) >= 1 else None)
+        frame_time_sec = getattr(item, "timestamp_sec", item[1] if is_tuple and len(item) >= 2 else 0.0)
+        camera = camera_override or getattr(item, "camera", item[2] if is_tuple and len(item) >= 3 else "")
+        meta = getattr(item, "metadata", item[3] if is_tuple and len(item) >= 4 else {}) or {}
 
-def write_ai_frame_analysis_multi_cam(
-    event_dir: str,
-    frames_with_time_and_camera: list[Any],
-    write_manifest: bool = True,
-    create_zip_flag: bool = True,
-    save_frames: bool = True,
-) -> None:
-    """Write ai_frame_analysis/frames at CE root with multi-cam manifest.
-    Accepts list of ExtractedFrame (or objects with .frame, .timestamp_sec, .camera, .metadata).
-    Manifest includes camera per frame and is_full_frame_resize when set in metadata."""
-    if not save_frames or not frames_with_time_and_camera:
-        return
-    if not _CV2_AVAILABLE:
-        logger.warning("cv2/numpy not available, skipping AI frame analysis write")
-        return
-    frames_dir = os.path.join(event_dir, "ai_frame_analysis", "frames")
-    os.makedirs(frames_dir, exist_ok=True)
-    total = len(frames_with_time_and_camera)
-    manifest_entries = []
-    for seq, item in enumerate(frames_with_time_and_camera, start=1):
-        frame = getattr(item, "frame", item[0] if isinstance(item, (tuple, list)) and len(item) >= 3 else None)
-        frame_time_sec = getattr(item, "timestamp_sec", item[1] if isinstance(item, (tuple, list)) and len(item) >= 2 else 0.0)
-        camera = getattr(item, "camera", item[2] if isinstance(item, (tuple, list)) and len(item) >= 3 else "")
-        meta = getattr(item, "metadata", item[3] if isinstance(item, (tuple, list)) and len(item) >= 4 else {}) or {}
         if frame is None:
             continue
-        fname = f"frame_{seq:03d}_{str(camera).replace(' ', '_')}.jpg"
+
+        camera_str = str(camera)
+        if include_camera_in_filename and camera_str:
+            fname = f"frame_{seq:03d}_{camera_str.replace(' ', '_')}.jpg"
+        else:
+            fname = f"frame_{seq:03d}.jpg"
+
         out_path = os.path.join(frames_dir, fname)
         if write_stitched_frame(frame, out_path):
             m = {
@@ -116,6 +86,7 @@ def write_ai_frame_analysis_multi_cam(
             if meta.get("is_full_frame_resize") is True:
                 m["is_full_frame_resize"] = True
             manifest_entries.append(m)
+
     if write_manifest and manifest_entries:
         manifest_path = os.path.join(event_dir, "ai_frame_analysis", "manifest.json")
         try:
@@ -123,8 +94,48 @@ def write_ai_frame_analysis_multi_cam(
                 json.dump(manifest_entries, f, indent=2)
         except OSError as e:
             logger.warning("Failed to write ai_frame_analysis manifest: %s", e)
+
     if create_zip_flag:
         create_ai_analysis_zip(event_dir)
+
+
+def write_ai_frame_analysis_single_cam(
+    event_dir: str,
+    frames_with_time: list[tuple[Any, float]],
+    camera: str,
+    write_manifest: bool = True,
+    create_zip_flag: bool = True,
+    save_frames: bool = True,
+) -> None:
+    """Write ai_frame_analysis/frames (stitched color+B/W per frame), optional manifest, and optional zip."""
+    _write_ai_analysis_internal(
+        event_dir,
+        frames_with_time,
+        camera_override=camera,
+        write_manifest=write_manifest,
+        create_zip_flag=create_zip_flag,
+        save_frames=save_frames,
+        include_camera_in_filename=False
+    )
+
+
+def write_ai_frame_analysis_multi_cam(
+    event_dir: str,
+    frames_with_time_and_camera: list[Any],
+    write_manifest: bool = True,
+    create_zip_flag: bool = True,
+    save_frames: bool = True,
+) -> None:
+    """Write ai_frame_analysis/frames at CE root with multi-cam manifest.
+    Accepts list of ExtractedFrame (or objects with .frame, .timestamp_sec, .camera, .metadata)."""
+    _write_ai_analysis_internal(
+        event_dir,
+        frames_with_time_and_camera,
+        write_manifest=write_manifest,
+        create_zip_flag=create_zip_flag,
+        save_frames=save_frames,
+        include_camera_in_filename=True
+    )
 
 
 def create_ai_analysis_zip(event_dir: str) -> None:
