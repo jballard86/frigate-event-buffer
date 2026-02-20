@@ -1,9 +1,9 @@
 """
 Target-centric multi-clip frame extraction for consolidated events.
 
-When detection sidecars (detection.json per camera) exist from transcode, reads them
-and picks the camera with largest person area per time step without running a detector.
-Otherwise falls back to OpenCV HOG person detection on each frame. No Frigate metadata.
+Requires detection sidecars (detection.json per camera) from generate_detection_sidecar.
+Reads sidecars and picks the camera with largest person area per time step.
+If any camera lacks a sidecar, returns [] (no on-frame detector fallback). No Frigate metadata.
 
 Uses ffmpegcv for decode and a sequential-read, time-sampled strategy (no seek),
 since ffmpegcv readers do not support frame-index seek.
@@ -32,11 +32,16 @@ try:
 except ImportError:
     _CROP_AVAILABLE = False
 
+try:
+    from frigate_buffer.models import ExtractedFrame
+except ImportError:
+    ExtractedFrame = None  # type: ignore[misc, assignment]
+
 
 # Preferred label for target-centric selection (person has highest priority)
 PREFERRED_LABELS = ("person", "people", "pedestrian")
 
-# Sidecar filename written by transcode (video.py)
+# Sidecar filename written by generate_detection_sidecar (video.py)
 DETECTION_SIDECAR_FILENAME = "detection.json"
 
 
@@ -64,17 +69,28 @@ def _person_area_from_detections(detections: list[dict[str, Any]]) -> float:
     return total
 
 
-def _load_sidecar_for_camera(camera_folder: str) -> list[dict[str, Any]] | None:
-    """Load detection.json from camera folder. Returns list of {timestamp_sec, detections} or None."""
+def _load_sidecar_for_camera(camera_folder: str) -> tuple[list[dict[str, Any]], int, int] | None:
+    """
+    Load detection.json from camera folder.
+    Returns (entries, native_width, native_height) or None. Supports both legacy list format
+    and new dict format with "entries" and "native_width"/"native_height".
+    """
     path = os.path.join(camera_folder, DETECTION_SIDECAR_FILENAME)
     if not os.path.isfile(path):
         return None
     try:
         with open(path, encoding="utf-8") as f:
             data = json.load(f)
-        if not isinstance(data, list):
-            return None
-        return data
+        if isinstance(data, list):
+            return (data, 0, 0)
+        if isinstance(data, dict):
+            entries = data.get("entries")
+            if entries is None:
+                return None
+            nw = int(data.get("native_width", 0) or 0)
+            nh = int(data.get("native_height", 0) or 0)
+            return (entries, nw, nh)
+        return None
     except (OSError, json.JSONDecodeError) as e:
         logger.debug("Could not load sidecar %s: %s", path, e)
         return None
@@ -132,28 +148,6 @@ def _subsample_with_min_gap(timestamps: list[float], step_sec: float, max_count:
     return selected
 
 
-def _detect_person_area(frame: Any) -> float:
-    """Run HOG person detector on frame. Returns total pixel area of detections (0 if none)."""
-    if not _CV2_AVAILABLE:
-        return 0.0
-    try:
-        hog = cv2.HOGDescriptor()
-        hog.setSVMDetector(cv2.HOGDescriptor_getDefaultPeopleDetector())
-        # DetectMultiScale returns (rects, weights). Rects are (x, y, w, h)
-        rects, _ = hog.detectMultiScale(
-            frame,
-            winStride=(8, 8),
-            padding=(8, 8),
-            scale=1.05,
-        )
-        if rects is None or len(rects) == 0:
-            return 0.0
-        return float(sum(w * h for (_, _, w, h) in rects))
-    except Exception as e:
-        logger.debug("HOG detection failed: %s", e)
-        return 0.0
-
-
 def _get_fps_and_duration(cap: Any, path: str) -> tuple[float, float, bool]:
     """
     Get (fps, duration_sec, used_read_to_eof) from a video capture in an ffmpegcv-safe way.
@@ -194,6 +188,7 @@ def extract_target_centric_frames(
     *,
     crop_width: int = 0,
     crop_height: int = 0,
+    tracking_target_frame_percent: int = 40,
     first_camera_bias: str | None = None,
     first_camera_bias_decay_seconds: float = 1.0,
     first_camera_bias_initial: float = 1.5,
@@ -202,28 +197,33 @@ def extract_target_centric_frames(
     camera_switch_ratio: float = 1.2,
     decode_second_camera_cpu_only: bool = False,
     log_callback: Callable[[str], None] | None = None,
-) -> list[tuple[Any, float, str]]:
+) -> list[Any]:
     """
     Extract time-ordered, target-centric frames from all clips under a CE folder.
 
     Uses full clip per camera with a sequential-read, time-sampled strategy (no seek).
     Steps at max_frames_sec intervals; at each sample time picks the camera with
-    largest person area (from sidecar or HOG). Returns list of (frame_bgr, timestamp_sec, camera_name).
-    Caps at max_frames_min.
+    largest person area from sidecars. Returns list of ExtractedFrame (frame, timestamp_sec, camera, metadata).
+    When person area >= tracking_target_frame_percent of reference_area (min of target crop area and frame area),
+    uses full-frame resize with letterbox instead of crop and sets metadata is_full_frame_resize=True.
+    Caps at max_frames_min. Returns [] if any camera lacks detection.json.
     """
-    if not _CV2_AVAILABLE:
-        logger.warning("cv2/ffmpegcv not available, skipping multi-clip extraction")
+    if not _CV2_AVAILABLE or ExtractedFrame is None:
+        logger.warning("cv2/ffmpegcv or ExtractedFrame not available, skipping multi-clip extraction")
         return []
 
-    # Discover camera clips: ce_folder/CameraName/clip.mp4
+    # Discover camera clips: ce_folder/CameraName/*.mp4 (dynamic clip names)
+    from frigate_buffer.services.query import resolve_clip_in_folder
     clip_paths: list[tuple[str, str]] = []  # (camera_name, path)
     try:
         for name in os.listdir(ce_folder_path):
             sub = os.path.join(ce_folder_path, name)
             if os.path.isdir(sub) and not name.startswith("."):
-                clip_path = os.path.join(sub, "clip.mp4")
-                if os.path.isfile(clip_path):
-                    clip_paths.append((name, clip_path))
+                clip_basename = resolve_clip_in_folder(sub)
+                if clip_basename:
+                    clip_path = os.path.join(sub, clip_basename)
+                    if os.path.isfile(clip_path):
+                        clip_paths.append((name, clip_path))
     except OSError as e:
         logger.warning("Could not scan CE folder %s: %s", ce_folder_path, e)
         return []
@@ -233,17 +233,21 @@ def extract_target_centric_frames(
         return []
 
     step_sec = float(max_frames_sec) if max_frames_sec > 0 else 1.0
-    collected: list[tuple[Any, float, str]] = []
+    collected: list[Any] = []
     path_per_cam = {cam: path for cam, path in clip_paths}
+    target_crop_area = (crop_width * crop_height) if (crop_width > 0 and crop_height > 0) else 0
 
-    # Prefer sidecar-based selection when every camera has detection.json (from transcode+ultralytics).
+    # Sidecar-based selection when every camera has detection.json.
     camera_folders = {cam: os.path.dirname(path) for cam, path in clip_paths}
     sidecars: dict[str, list[dict[str, Any]]] = {}
+    native_size_per_cam: dict[str, tuple[int, int]] = {}
     all_have_sidecar = True
     for cam, folder in camera_folders.items():
-        entries = _load_sidecar_for_camera(folder)
-        if entries is not None:
+        loaded = _load_sidecar_for_camera(folder)
+        if loaded is not None:
+            entries, nw, nh = loaded
             sidecars[cam] = entries
+            native_size_per_cam[cam] = (nw, nh)
         else:
             all_have_sidecar = False
 
@@ -426,20 +430,23 @@ def extract_target_centric_frames(
         return []
 
     use_sidecar = all_have_sidecar and len(sidecars) == len(clip_paths)
-    if log_callback:
-        if use_sidecar:
-            log_callback("Creating extraction metadata (sidecar).")
-        else:
-            log_callback("Creating extraction metadata (HOG fallback).")
-    if use_sidecar:
-        logger.debug("Using detection sidecars for multi-clip selection (no on-frame detector)")
-    else:
+    if not use_sidecar:
         missing_cameras = [cam for cam, _ in clip_paths if cam not in sidecars]
         logger.warning(
-            "HOG fallback in use for multi-clip selection: not all cameras have detection sidecars (expected when transcode used libx264). CE folder=%s cameras_missing_sidecar=%s. Fix by ensuring NVENC transcode runs so detection.json is written per camera.",
+            "Skipping multi-clip extraction: not all cameras have detection sidecars. CE folder=%s cameras_missing_sidecar=%s",
             ce_folder_path,
             missing_cameras,
         )
+        for cap in caps.values():
+            if cap is not None:
+                try:
+                    cap.release()
+                except Exception:
+                    pass
+        return []
+    if log_callback:
+        log_callback("Creating extraction metadata (sidecar).")
+    logger.debug("Using detection sidecars for multi-clip selection")
 
     # First-camera bias: exponential decay to (effectively) 0. No seek; time-based only.
     def _bias_multiplier(cam: str, t_sec: float) -> float:
@@ -455,26 +462,18 @@ def extract_target_centric_frames(
     current_camera: str | None = None
     frames_on_current = 0
 
-    # Build list of sample times: detection-aligned (when sidecars have person detections) or fixed-step.
-    sample_times_list: list[float]
-    if use_sidecar and sidecars:
-        merged_t = _detection_timestamps_with_person(sidecars, global_end)
-        sample_times_list = _subsample_with_min_gap(merged_t, step_sec, max_frames_min)
-        if not sample_times_list:
-            sample_times_list = []
-            t = 0.0
-            while t <= global_end and len(sample_times_list) < max_frames_min:
-                sample_times_list.append(t)
-                t += step_sec
-            logger.debug("Detection-aligned sample list empty; using fixed-step grid (%d times)", len(sample_times_list))
-        else:
-            logger.debug("Using detection-aligned sample times (%d)", len(sample_times_list))
-    else:
+    # Build list of sample times: detection-aligned from sidecars, or fixed-step if no person detections.
+    merged_t = _detection_timestamps_with_person(sidecars, global_end)
+    sample_times_list = _subsample_with_min_gap(merged_t, step_sec, max_frames_min)
+    if not sample_times_list:
         sample_times_list = []
         t = 0.0
         while t <= global_end and len(sample_times_list) < max_frames_min:
             sample_times_list.append(t)
             t += step_sec
+        logger.debug("Detection-aligned sample list empty; using fixed-step grid (%d times)", len(sample_times_list))
+    else:
+        logger.debug("Using detection-aligned sample times (%d)", len(sample_times_list))
 
     # Sequential-read, time-sampled: per-camera state (prev_frame, prev_t, curr_frame, curr_t).
     # We advance all readers in lockstep; at each sample time T we use the frame at T for each camera.
@@ -580,10 +579,7 @@ def extract_target_centric_frames(
                 candidate = curr_f
             if candidate is None:
                 continue
-            if use_sidecar and sidecars:
-                area = _person_area_at_time(sidecars.get(cam) or [], T)
-            else:
-                area = _detect_person_area(candidate)
+            area = _person_area_at_time(sidecars.get(cam) or [], T)
             area *= _bias_multiplier(cam, T)
             cam_candidates[cam] = (candidate.copy() if hasattr(candidate, "copy") else candidate, area)
 
@@ -612,10 +608,16 @@ def extract_target_centric_frames(
                     best_frame, best_area = cam_candidates.get(current_camera, (None, 0.0))
 
         if best_camera is not None and best_frame is not None:
-            # Optional centerpoint crop (empty sidecar -> center_crop).
+            meta: dict[str, Any] = {}
             if crop_width > 0 and crop_height > 0 and _CROP_AVAILABLE:
                 entry = _nearest_sidecar_entry(sidecars.get(best_camera) or [], T)
                 detections = (entry.get("detections") or []) if entry else []
+                frame_h, frame_w = best_frame.shape[:2]
+                frame_area = frame_w * frame_h
+                native_w, native_h = native_size_per_cam.get(best_camera, (0, 0))
+                if native_w > 0 and native_h > 0:
+                    frame_area = native_w * native_h
+                reference_area = min(target_crop_area, frame_area) if target_crop_area > 0 else frame_area
                 if not detections:
                     best_frame = _crop_utils.center_crop(best_frame, crop_width, crop_height)
                 else:
@@ -624,21 +626,34 @@ def extract_target_centric_frames(
                         best_frame = _crop_utils.center_crop(best_frame, crop_width, crop_height)
                     else:
                         largest = max(person_dets, key=lambda d: float(d.get("area") or 0))
-                        cp = largest.get("centerpoint")
-                        if cp and len(cp) >= 2:
-                            best_frame = _crop_utils.crop_around_center(
-                                best_frame, cp[0], cp[1], crop_width, crop_height
+                        person_area_val = float(largest.get("area") or 0)
+                        if (
+                            reference_area > 0
+                            and tracking_target_frame_percent > 0
+                            and (person_area_val / reference_area) >= (tracking_target_frame_percent / 100.0)
+                        ):
+                            best_frame = _crop_utils.full_frame_resize_to_target(
+                                best_frame, crop_width, crop_height
                             )
+                            meta["is_full_frame_resize"] = True
                         else:
-                            best_frame = _crop_utils.center_crop(best_frame, crop_width, crop_height)
-            # When using sidecars, skip output if chosen camera has zero person area at T (avoids no-person frames when other camera died).
+                            cp = largest.get("centerpoint")
+                            if cp and len(cp) >= 2:
+                                best_frame = _crop_utils.crop_around_center(
+                                    best_frame, cp[0], cp[1], crop_width, crop_height
+                                )
+                            else:
+                                best_frame = _crop_utils.center_crop(best_frame, crop_width, crop_height)
+                            meta["is_full_frame_resize"] = False
+            raw_person_area = _person_area_at_time(sidecars.get(best_camera) or [], T)
+            meta["person_area"] = int(raw_person_area)
             skip_append = (
                 use_sidecar
                 and sidecars
-                and _person_area_at_time(sidecars.get(best_camera) or [], T) <= 0
+                and raw_person_area <= 0
             )
             if not skip_append:
-                collected.append((best_frame, T, best_camera))
+                collected.append(ExtractedFrame(frame=best_frame, timestamp_sec=T, camera=best_camera, metadata=meta))
             if best_camera == current_camera:
                 frames_on_current += 1
             else:

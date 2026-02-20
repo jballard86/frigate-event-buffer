@@ -75,6 +75,80 @@ class TestGeminiAnalysisServicePayload(unittest.TestCase):
         self.assertTrue(url.startswith("data:image/jpeg;base64,"), f"Expected data URL, got: {url[:80]}")
 
 
+class TestGeminiFrameCapAndLogging(unittest.TestCase):
+    """Test rolling frame cap and API rate stats logging."""
+
+    @patch("frigate_buffer.services.ai_analyzer.requests.post")
+    def test_cap_disabled_sends_and_logs(self, mock_post):
+        """When GEMINI_FRAMES_PER_HOUR_CAP is 0, request is sent and log mentions cap=disabled."""
+        mock_post.return_value.status_code = 200
+        mock_post.return_value.json.return_value = {
+            "choices": [{"message": {"content": json.dumps({
+                "title": "T", "shortSummary": "S", "scene": "Sc", "confidence": 0.9, "potential_threat_level": 0
+            })}}]
+        }
+        config = {
+            "GEMINI": {"enabled": True, "proxy_url": "http://p", "api_key": "k", "model": "m"},
+            "GEMINI_FRAMES_PER_HOUR_CAP": 0,
+        }
+        service = GeminiAnalysisService(config)
+        frame = np.zeros((50, 50, 3), dtype=np.uint8)
+        with patch("frigate_buffer.services.ai_analyzer.logger") as mock_log:
+            result = service.send_to_proxy("Prompt", [frame])
+        self.assertIsNotNone(result)
+        self.assertEqual(mock_post.call_count, 1)
+        log_calls = [str(c) for c in mock_log.info.call_args_list]
+        self.assertTrue(
+            any("cap=disabled" in c for c in log_calls),
+            f"Expected log to contain 'cap=disabled', got: {log_calls}",
+        )
+
+    @patch("frigate_buffer.services.ai_analyzer.requests.post")
+    def test_cap_enforced_blocks_second_request(self, mock_post):
+        """When cap is 2, first send (2 frames) succeeds; second send (1 frame) is blocked."""
+        mock_post.return_value.status_code = 200
+        mock_post.return_value.json.return_value = {
+            "choices": [{"message": {"content": json.dumps({
+                "title": "T", "shortSummary": "S", "scene": "Sc", "confidence": 0.9, "potential_threat_level": 0
+            })}}]
+        }
+        config = {
+            "GEMINI": {"enabled": True, "proxy_url": "http://p", "api_key": "k", "model": "m"},
+            "GEMINI_FRAMES_PER_HOUR_CAP": 2,
+        }
+        service = GeminiAnalysisService(config)
+        frame = np.zeros((50, 50, 3), dtype=np.uint8)
+        result1 = service.send_to_proxy("P", [frame, frame])
+        self.assertIsNotNone(result1)
+        self.assertEqual(mock_post.call_count, 1)
+        result2 = service.send_to_proxy("P", [frame])
+        self.assertIsNone(result2, "Second request should be blocked by cap")
+        self.assertEqual(mock_post.call_count, 1, "POST should not be called again when blocked")
+
+    @patch("frigate_buffer.services.ai_analyzer.requests.post")
+    def test_cap_logs_current_rate_status_blocked(self, mock_post):
+        """When cap is enabled, info log contains current_frames, status, blocked."""
+        mock_post.return_value.status_code = 200
+        mock_post.return_value.json.return_value = {
+            "choices": [{"message": {"content": json.dumps({
+                "title": "T", "shortSummary": "S", "scene": "Sc", "confidence": 0.9, "potential_threat_level": 0
+            })}}]
+        }
+        config = {
+            "GEMINI": {"enabled": True, "proxy_url": "http://p", "api_key": "k", "model": "m"},
+            "GEMINI_FRAMES_PER_HOUR_CAP": 10,
+        }
+        service = GeminiAnalysisService(config)
+        frame = np.zeros((50, 50, 3), dtype=np.uint8)
+        with patch("frigate_buffer.services.ai_analyzer.logger") as mock_log:
+            service.send_to_proxy("P", [frame])
+        log_msg = mock_log.info.call_args[0][0]
+        self.assertIn("current_frames", log_msg)
+        self.assertIn("cap=", log_msg)
+        self.assertIn("status=", log_msg)
+        self.assertIn("blocked=", log_msg)
+
+
 class TestGeminiAnalysisServiceSendTextPrompt(unittest.TestCase):
     """Test send_text_prompt: text-only POST, no images; returns raw content string or None."""
 

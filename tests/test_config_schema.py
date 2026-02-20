@@ -57,6 +57,49 @@ class TestConfigSchema(unittest.TestCase):
     @patch('builtins.open', new_callable=mock_open)
     @patch('os.path.exists')
     @patch('frigate_buffer.config.yaml.safe_load')
+    def test_gemini_frames_per_hour_cap_config(self, mock_yaml_load, mock_exists, mock_file):
+        """gemini_frames_per_hour_cap from settings is merged; default 200 when omitted."""
+        valid_yaml = {
+            'cameras': [{'name': 'cam1'}],
+            'network': {
+                'mqtt_broker': 'localhost',
+                'frigate_url': 'http://frigate',
+                'buffer_ip': 'localhost',
+                'storage_path': '/tmp',
+            },
+            'settings': {
+                'gemini_frames_per_hour_cap': 100,
+            },
+        }
+        mock_exists.return_value = True
+        mock_yaml_load.return_value = valid_yaml
+
+        config = load_config()
+        self.assertEqual(config['GEMINI_FRAMES_PER_HOUR_CAP'], 100)
+
+    @patch('builtins.open', new_callable=mock_open)
+    @patch('os.path.exists')
+    @patch('frigate_buffer.config.yaml.safe_load')
+    def test_gemini_frames_per_hour_cap_default(self, mock_yaml_load, mock_exists, mock_file):
+        """When settings omit gemini_frames_per_hour_cap, default is 200."""
+        valid_yaml = {
+            'cameras': [{'name': 'cam1'}],
+            'network': {
+                'mqtt_broker': 'localhost',
+                'frigate_url': 'http://frigate',
+                'buffer_ip': 'localhost',
+                'storage_path': '/tmp',
+            },
+        }
+        mock_exists.return_value = True
+        mock_yaml_load.return_value = valid_yaml
+
+        config = load_config()
+        self.assertEqual(config['GEMINI_FRAMES_PER_HOUR_CAP'], 200)
+
+    @patch('builtins.open', new_callable=mock_open)
+    @patch('os.path.exists')
+    @patch('frigate_buffer.config.yaml.safe_load')
     def test_mqtt_auth_config(self, mock_yaml_load, mock_exists, mock_file):
         # Mock config with MQTT auth
         auth_yaml = {
@@ -169,9 +212,9 @@ class TestConfigSchema(unittest.TestCase):
                 'motion_threshold_px': 80,
                 'crop_width': 1920,
                 'crop_height': 1080,
-                'nvenc_probe_width': 1920,
-                'nvenc_probe_height': 1080,
                 'multi_cam_system_prompt_file': '/path/to/prompt.txt',
+                'detection_imgsz': 1280,
+                'person_area_debug': True,
             },
             'gemini_proxy': {
                 'url': 'http://proxy:5050',
@@ -191,9 +234,9 @@ class TestConfigSchema(unittest.TestCase):
         self.assertEqual(config['MOTION_THRESHOLD_PX'], 80)
         self.assertEqual(config['CROP_WIDTH'], 1920)
         self.assertEqual(config['CROP_HEIGHT'], 1080)
-        self.assertEqual(config['NVENC_PROBE_WIDTH'], 1920)
-        self.assertEqual(config['NVENC_PROBE_HEIGHT'], 1080)
         self.assertEqual(config['MULTI_CAM_SYSTEM_PROMPT_FILE'], '/path/to/prompt.txt')
+        self.assertEqual(config['DETECTION_IMGSZ'], 1280)
+        self.assertTrue(config['PERSON_AREA_DEBUG'])
         self.assertEqual(config['GEMINI_PROXY_URL'], 'http://proxy:5050')
         self.assertEqual(config['GEMINI_PROXY_MODEL'], 'gemini-2.0-flash')
         self.assertEqual(config['GEMINI_PROXY_TEMPERATURE'], 0.5)
@@ -224,9 +267,8 @@ class TestConfigSchema(unittest.TestCase):
         self.assertEqual(config['MOTION_THRESHOLD_PX'], 50)
         self.assertEqual(config['CROP_WIDTH'], 1280)
         self.assertEqual(config['CROP_HEIGHT'], 720)
-        self.assertEqual(config['NVENC_PROBE_WIDTH'], 1280)
-        self.assertEqual(config['NVENC_PROBE_HEIGHT'], 720)
         self.assertEqual(config['MULTI_CAM_SYSTEM_PROMPT_FILE'], '')
+        self.assertFalse(config['PERSON_AREA_DEBUG'])
         self.assertEqual(config['DECODE_SECOND_CAMERA_CPU_ONLY'], True)
         self.assertEqual(config['GEMINI_PROXY_URL'], '')
         self.assertEqual(config['GEMINI_PROXY_MODEL'], 'gemini-2.5-flash-lite')
