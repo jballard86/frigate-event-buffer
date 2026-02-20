@@ -93,6 +93,7 @@ CONFIG_SCHEMA = Schema({
         Optional('detection_model'): str,                         # Ultralytics model for detection sidecar (e.g. yolov8n.pt).
         Optional('detection_device'): str,                       # Device for detection (e.g. cuda:0, cpu).
         Optional('detection_frame_interval'): int,               # Run YOLO every N frames; default 5.
+        Optional('detection_imgsz'): int,                        # YOLO inference size (higher = better small objects, slower); default 640.
         Optional('first_camera_bias_decay_seconds'): Any(int, float),   # Time constant for exponential bias decay; default 1.0.
         Optional('first_camera_bias_initial'): Any(int, float),         # Initial bias multiplier for primary camera; default 1.5.
         Optional('first_camera_bias_cap_seconds'): Any(int, float),     # Cap bias to 0 after this many seconds; 0 = no cap.
@@ -190,6 +191,7 @@ def load_config() -> dict:
         'DETECTION_MODEL': 'yolov8n.pt',
         'DETECTION_DEVICE': '',  # Empty = auto (CUDA if available else CPU)
         'DETECTION_FRAME_INTERVAL': 5,
+        'DETECTION_IMGSZ': 640,
         'FIRST_CAMERA_BIAS_DECAY_SECONDS': 1.0,
         'FIRST_CAMERA_BIAS_INITIAL': 1.5,
         'FIRST_CAMERA_BIAS_CAP_SECONDS': 0,
@@ -315,6 +317,7 @@ def load_config() -> dict:
                     config['DETECTION_MODEL'] = (mc.get('detection_model') or config.get('DETECTION_MODEL', 'yolov8n.pt')) or 'yolov8n.pt'
                     config['DETECTION_DEVICE'] = (mc.get('detection_device') or config.get('DETECTION_DEVICE', '')) or ''
                     config['DETECTION_FRAME_INTERVAL'] = mc.get('detection_frame_interval', config['DETECTION_FRAME_INTERVAL'])
+                    config['DETECTION_IMGSZ'] = int(mc.get('detection_imgsz', config['DETECTION_IMGSZ']))
                     config['FIRST_CAMERA_BIAS_DECAY_SECONDS'] = float(mc.get('first_camera_bias_decay_seconds', config['FIRST_CAMERA_BIAS_DECAY_SECONDS']))
                     config['FIRST_CAMERA_BIAS_INITIAL'] = float(mc.get('first_camera_bias_initial', config['FIRST_CAMERA_BIAS_INITIAL']))
                     config['FIRST_CAMERA_BIAS_CAP_SECONDS'] = float(mc.get('first_camera_bias_cap_seconds', config['FIRST_CAMERA_BIAS_CAP_SECONDS']))
