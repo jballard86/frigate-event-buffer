@@ -197,6 +197,7 @@ def extract_target_centric_frames(
     person_area_switch_threshold: int = 0,
     camera_switch_ratio: float = 1.2,
     camera_switch_bias: float = 1.2,
+    camera_switch_min_hold_frames: int = 5,
     decode_second_camera_cpu_only: bool = False,
     log_callback: Callable[[str], None] | None = None,
     config: dict[str, Any] | None = None,
@@ -218,6 +219,9 @@ def extract_target_centric_frames(
     from the first camera, the currently selected camera's area is multiplied by a stickiness factor
     (initial camera_switch_bias, clamped so 0 becomes 0.1) that decays using first_camera_bias_decay_seconds
     and first_camera_bias_cap_seconds, so non-initial cameras are slightly stickier and reduce flip-flop.
+
+    camera_switch_min_hold_frames: after any switch, do not allow another switch for this many timeline
+    samples unless the current camera has no person (area 0). Reduces rapid flip-flop; 0 disables.
     """
     if not _CV2_AVAILABLE or ExtractedFrame is None:
         logger.warning("cv2/ffmpegcv or ExtractedFrame not available, skipping multi-clip extraction")
@@ -640,6 +644,19 @@ def extract_target_centric_frames(
                 if not allow_switch:
                     best_camera = current_camera
                     best_frame, best_area = cam_candidates.get(current_camera, (None, 0.0))
+
+        # Minimum hold: after a switch, stay on current camera for at least this many frames unless person left (area 0).
+        if (
+            best_camera is not None
+            and current_camera is not None
+            and best_camera != current_camera
+            and camera_switch_min_hold_frames > 0
+            and frames_on_current < camera_switch_min_hold_frames
+        ):
+            current_raw = _person_area_at_time(sidecars.get(current_camera) or [], T)
+            if current_raw > 0:
+                best_camera = current_camera
+                best_frame, best_area = cam_candidates.get(current_camera, (None, 0.0))
 
         if best_camera is not None and best_frame is not None:
             meta: dict[str, Any] = {}

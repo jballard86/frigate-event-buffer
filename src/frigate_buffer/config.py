@@ -101,6 +101,7 @@ CONFIG_SCHEMA = Schema({
         Optional('person_area_switch_threshold'): int,                  # Allow switch when current camera area below this (px²); 0 = disable.
         Optional('camera_switch_ratio'): Any(int, float),               # New camera must have this ratio of current to switch; default 1.2.
         Optional('camera_switch_bias'): Any(int, float),                # Initial stickiness for non-initial cameras when deciding to switch; uses same decay as first camera; >1 = stickier; default 1.2.
+        Optional('camera_switch_min_hold_frames'): int,                # Min timeline frames to stay on camera after switch before allowing another (0=disabled); reduces flip-flop; default 5.
         Optional('decode_second_camera_cpu_only'): bool,                # If true, use CPU decode for 2nd+ cameras (legacy/contention workaround). Default false: NVDEC for all; CPU only when NVDEC fails.
         Optional('log_extraction_phase_timing'): bool,                  # Log elapsed time per extraction phase (e.g. "Opening clips: 0.5s") for debugging; default false.
         Optional('merge_frame_timeout_sec'): int,                       # Timeout (seconds) when merge waits for a camera frame; on timeout camera is dropped from active pool; default 10.
@@ -203,6 +204,7 @@ def load_config() -> dict:
         'PERSON_AREA_SWITCH_THRESHOLD': 200,
         'CAMERA_SWITCH_RATIO': 1.2,
         'CAMERA_SWITCH_BIAS': 1.2,
+        'CAMERA_SWITCH_MIN_HOLD_FRAMES': 5,
         'DECODE_SECOND_CAMERA_CPU_ONLY': False,
         'LOG_EXTRACTION_PHASE_TIMING': False,
         'MERGE_FRAME_TIMEOUT_SEC': 10,
@@ -333,6 +335,7 @@ def load_config() -> dict:
                     config['PERSON_AREA_SWITCH_THRESHOLD'] = int(mc.get('person_area_switch_threshold', config['PERSON_AREA_SWITCH_THRESHOLD']))
                     config['CAMERA_SWITCH_RATIO'] = float(mc.get('camera_switch_ratio', config['CAMERA_SWITCH_RATIO']))
                     config['CAMERA_SWITCH_BIAS'] = float(mc.get('camera_switch_bias', config['CAMERA_SWITCH_BIAS']))
+                    config['CAMERA_SWITCH_MIN_HOLD_FRAMES'] = int(mc.get('camera_switch_min_hold_frames', config['CAMERA_SWITCH_MIN_HOLD_FRAMES']))
                     config['DECODE_SECOND_CAMERA_CPU_ONLY'] = bool(mc.get('decode_second_camera_cpu_only', config['DECODE_SECOND_CAMERA_CPU_ONLY']))
                     config['LOG_EXTRACTION_PHASE_TIMING'] = bool(mc.get('log_extraction_phase_timing', config['LOG_EXTRACTION_PHASE_TIMING']))
                     config['MERGE_FRAME_TIMEOUT_SEC'] = int(mc.get('merge_frame_timeout_sec', config['MERGE_FRAME_TIMEOUT_SEC']))
