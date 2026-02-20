@@ -130,7 +130,7 @@ network:
 # All frame-limit and crop options below are configurable; same config is used by both.
 # multi_cam:
 #   max_multi_cam_frames_min: 45   # max frames per clip (cap)
-#   max_multi_cam_frames_sec: 2    # target capture interval (seconds)
+#   max_multi_cam_frames_sec: 2    # target capture interval (seconds, float can be a decimal)
 #   detection_model: yolov8n.pt   # Ultralytics model for detection sidecar
 #   detection_device: ""          # e.g. cuda:0 or cpu; empty = auto
 #   motion_threshold_px: 50       # min pixels movement for high-rate capture
