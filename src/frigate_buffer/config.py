@@ -83,7 +83,7 @@ CONFIG_SCHEMA = Schema({
     # Multi-cam frame extraction (main app AI analyzer + standalone multi_cam_recap); frame limits and crop options.
     Optional('multi_cam'): {
         Optional('max_multi_cam_frames_min'): int,              # Maximum frames to extract per clip (cap).
-        Optional('max_multi_cam_frames_sec'): int,              # Target interval in seconds between captured frames.
+        Optional('max_multi_cam_frames_sec'): Any(int, float),  # Target interval in seconds between captured frames (e.g. 1, 0.5, 1.5).
         Optional('motion_threshold_px'): int,                   # Minimum pixel change to trigger high-rate capture.
         Optional('crop_width'): int,                            # Width of output crop for stitched/multi-cam frames.
         Optional('crop_height'): int,                            # Height of output crop for stitched/multi-cam frames.
@@ -335,7 +335,7 @@ def load_config() -> dict:
                 if 'multi_cam' in yaml_config:
                     mc = yaml_config['multi_cam']
                     config['MAX_MULTI_CAM_FRAMES_MIN'] = mc.get('max_multi_cam_frames_min', config['MAX_MULTI_CAM_FRAMES_MIN'])
-                    config['MAX_MULTI_CAM_FRAMES_SEC'] = mc.get('max_multi_cam_frames_sec', config['MAX_MULTI_CAM_FRAMES_SEC'])
+                    config['MAX_MULTI_CAM_FRAMES_SEC'] = float(mc.get('max_multi_cam_frames_sec', config['MAX_MULTI_CAM_FRAMES_SEC']))
                     config['MOTION_THRESHOLD_PX'] = mc.get('motion_threshold_px', config['MOTION_THRESHOLD_PX'])
                     config['CROP_WIDTH'] = mc.get('crop_width', config['CROP_WIDTH'])
                     config['CROP_HEIGHT'] = mc.get('crop_height', config['CROP_HEIGHT'])

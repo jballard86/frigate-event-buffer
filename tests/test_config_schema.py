@@ -349,6 +349,30 @@ class TestConfigSchema(unittest.TestCase):
     @patch('builtins.open', new_callable=mock_open)
     @patch('os.path.exists')
     @patch('frigate_buffer.config.yaml.safe_load')
+    def test_max_multi_cam_frames_sec_accepts_decimal(self, mock_yaml_load, mock_exists, mock_file):
+        """max_multi_cam_frames_sec accepts decimal values (e.g. 0.5, 1.5) and is stored as float."""
+        yaml_with_decimal = {
+            'cameras': [{'name': 'cam1'}],
+            'network': {
+                'mqtt_broker': 'localhost',
+                'frigate_url': 'http://frigate',
+                'buffer_ip': 'localhost',
+                'storage_path': '/tmp',
+            },
+            'multi_cam': {
+                'max_multi_cam_frames_min': 45,
+                'max_multi_cam_frames_sec': 1.5,
+            },
+        }
+        mock_exists.return_value = True
+        mock_yaml_load.return_value = yaml_with_decimal
+        config = load_config()
+        self.assertEqual(config['MAX_MULTI_CAM_FRAMES_SEC'], 1.5)
+        self.assertIsInstance(config['MAX_MULTI_CAM_FRAMES_SEC'], float)
+
+    @patch('builtins.open', new_callable=mock_open)
+    @patch('os.path.exists')
+    @patch('frigate_buffer.config.yaml.safe_load')
     def test_multi_cam_gemini_proxy_defaults_when_omitted(self, mock_yaml_load, mock_exists, mock_file):
         """When multi_cam and gemini_proxy are omitted, flat keys use source defaults."""
         yaml_minimal = {
