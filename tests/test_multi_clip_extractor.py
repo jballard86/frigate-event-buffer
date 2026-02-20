@@ -333,7 +333,7 @@ class TestMultiClipExtractor(unittest.TestCase):
     @patch("frigate_buffer.services.multi_clip_extractor.ffmpegcv.VideoCapture")
     @patch("frigate_buffer.services.multi_clip_extractor.ffmpegcv.VideoCaptureNV")
     def test_decode_second_camera_cpu_only_logs_mixed_backends(self, mock_video_capture_nv, mock_video_capture):
-        """When decode_second_camera_cpu_only is True and two cameras are used, log_callback receives mixed GPU/CPU message."""
+        """When one camera falls back to CPU (NVDEC fails), log_callback receives mixed GPU/CPU message."""
         os.makedirs(os.path.join(self.tmp, "cam1"))
         os.makedirs(os.path.join(self.tmp, "cam2"))
         with open(os.path.join(self.tmp, "cam1", "clip.mp4"), "wb"):
@@ -344,7 +344,7 @@ class TestMultiClipExtractor(unittest.TestCase):
             sidecar_path = os.path.join(self.tmp, cam_name, DETECTION_SIDECAR_FILENAME)
             with open(sidecar_path, "w", encoding="utf-8") as f:
                 json.dump(
-                    [{"timestamp_sec": t, "detections": [{"label": "person", "area": 100}]} for t in range(11)],
+                    {"native_width": 100, "native_height": 100, "entries": [{"timestamp_sec": t, "detections": [{"label": "person", "area": 100}]} for t in range(11)]},
                     f,
                 )
 
@@ -359,11 +359,12 @@ class TestMultiClipExtractor(unittest.TestCase):
             m.release = MagicMock()
             return m
 
-        # open_caps: NVDEC tried for both and fails; then CPU for both to get fps/duration. Reopen: cam1 NVDEC, cam2 CPU only.
+        # open_caps: NVDEC fails for both, CPU used for fps/duration. Reopen: cam1 NVDEC succeeds, cam2 NVDEC fails then CPU.
         mock_video_capture_nv.side_effect = [
             Exception("nv"),
             Exception("nv"),
             make_mock(),
+            Exception("nv"),
         ]
         mock_video_capture.side_effect = lambda path: make_mock()
 
@@ -372,7 +373,7 @@ class TestMultiClipExtractor(unittest.TestCase):
             self.tmp,
             max_frames_sec=1.0,
             max_frames_min=5,
-            decode_second_camera_cpu_only=True,
+            decode_second_camera_cpu_only=False,
             log_callback=logs.append,
         )
 

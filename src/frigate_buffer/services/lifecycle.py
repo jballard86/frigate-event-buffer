@@ -316,7 +316,8 @@ class EventLifecycleService:
         end_ts = int(global_max_end + export_after)
 
         if len(camera_events) > 1:
-            # Download each clip to dynamic path, then generate detection sidecar (no transcode).
+            # Download each clip to dynamic path, then generate detection sidecar in parallel (shared YOLO).
+            clips_for_sidecar: list[tuple[str, str, str]] = []  # (camera, clip_path, sidecar_path)
             for camera, events in camera_events.items():
                 camera_folder = self.file_manager.ensure_consolidated_camera_folder(ce.folder_path, camera)
                 representative_event = max(events, key=get_duration)
@@ -335,14 +336,17 @@ class EventLifecycleService:
                 ok = result.get("success", False)
                 clip_path = result.get("clip_path")
                 if ok and clip_path:
-                    sidecar_path = os.path.join(camera_folder, "detection.json")
-                    self.video_service.generate_detection_sidecar(clip_path, sidecar_path, self.config)
                     if first_clip_path is None:
                         first_clip_path = clip_path
+                    sidecar_path = os.path.join(camera_folder, "detection.json")
+                    clips_for_sidecar.append((camera, clip_path, sidecar_path))
                 timeline_data = {"success": ok, "frigate_response": result.get("frigate_response")}
                 if "fallback" in result:
                     timeline_data["fallback"] = result["fallback"]
                 self.timeline_logger.log_frigate_api(ce.folder_path, 'in', f'Clip export response for {camera}', timeline_data)
+
+            if clips_for_sidecar:
+                self.video_service.generate_detection_sidecars_for_cameras(clips_for_sidecar, self.config)
         else:
             # Single-camera CE: export_and_download_clip then optionally on_clip_ready.
             for camera, events in camera_events.items():

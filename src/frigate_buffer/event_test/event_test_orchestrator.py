@@ -1,8 +1,10 @@
 """
-Mini test orchestrator: runs the post-download pipeline (generate detection sidecar, frame extraction, build payload)
-for a copied event folder without sending to the AI proxy. Yields log events for SSE streaming.
+Test-button-only orchestrator: runs the post-download pipeline (generate detection sidecar, frame extraction,
+build payload) for a copied event folder without sending to the AI proxy. Yields log events for SSE streaming.
 
-All logic here only delegates to the main codebase; bugs should surface in original modules.
+This module is only used for test-button orchestration. No core behavior may depend on it—deleting
+src/frigate_buffer/event_test/ would break only the TEST button and event_test tests. All logic here
+only delegates to the main codebase (no YOLO, no sidecar lock, no ThreadPoolExecutor); it must stay thin.
 """
 
 from __future__ import annotations
@@ -172,7 +174,8 @@ def run_test_pipeline(
             except OSError:
                 pass
 
-    # 6. Generate detection sidecar for each camera in testN (decode-only, no transcode)
+    # 6. Generate detection sidecar for each camera in testN (delegate to VideoService; parallel + shared YOLO in core)
+    sidecar_tasks: list[tuple[str, str, str]] = []  # (cam, clip_path, sidecar_path)
     for cam in camera_subdirs:
         camera_folder = os.path.join(test_folder_path, cam)
         clip_basename = resolve_clip_in_folder(camera_folder)
@@ -181,9 +184,14 @@ def run_test_pipeline(
             continue
         clip_path = os.path.join(camera_folder, clip_basename)
         sidecar_path = os.path.join(camera_folder, "detection.json")
+        sidecar_tasks.append((cam, clip_path, sidecar_path))
+
+    for cam, _clip, _sidecar in sidecar_tasks:
         yield _yield_log(f"Generating detection sidecar for {cam}...")
-        ok = video_service.generate_detection_sidecar(clip_path, sidecar_path, config)
-        yield _yield_log(f"Sidecar {cam}: {'OK' if ok else 'failed'}.")
+    if sidecar_tasks:
+        results = video_service.generate_detection_sidecars_for_cameras(sidecar_tasks, config)
+        for cam, ok in results:
+            yield _yield_log(f"Sidecar {cam}: {'OK' if ok else 'failed'}.")
 
     # 7. Build payload (delegate to analyzer; writes frames and returns prompt + paths)
     payload_logs: list[str] = []

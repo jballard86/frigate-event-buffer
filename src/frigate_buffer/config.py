@@ -100,7 +100,9 @@ CONFIG_SCHEMA = Schema({
         Optional('first_camera_bias_cap_seconds'): Any(int, float),     # Cap bias to 0 after this many seconds; 0 = no cap.
         Optional('person_area_switch_threshold'): int,                  # Allow switch when current camera area below this (px²); 0 = disable.
         Optional('camera_switch_ratio'): Any(int, float),               # New camera must have this ratio of current to switch; default 1.2.
-        Optional('decode_second_camera_cpu_only'): bool,                # Use CPU decode for second and subsequent cameras to avoid NVDEC contention.
+        Optional('decode_second_camera_cpu_only'): bool,                # If true, use CPU decode for 2nd+ cameras (legacy/contention workaround). Default false: NVDEC for all; CPU only when NVDEC fails.
+        Optional('log_extraction_phase_timing'): bool,                  # Log elapsed time per extraction phase (e.g. "Opening clips: 0.5s") for debugging; default false.
+        Optional('merge_frame_timeout_sec'): int,                       # Timeout (seconds) when merge waits for a camera frame; on timeout camera is dropped from active pool; default 10.
         Optional('tracking_target_frame_percent'): int,                 # When person area >= this % of reference area, use full-frame resize; default 40.
         Optional('person_area_debug'): bool,                             # Draw person area (px²) on frame bottom-right when true; default false.
     },
@@ -199,7 +201,9 @@ def load_config() -> dict:
         'FIRST_CAMERA_BIAS_CAP_SECONDS': 0,
         'PERSON_AREA_SWITCH_THRESHOLD': 200,
         'CAMERA_SWITCH_RATIO': 1.2,
-        'DECODE_SECOND_CAMERA_CPU_ONLY': True,
+        'DECODE_SECOND_CAMERA_CPU_ONLY': False,
+        'LOG_EXTRACTION_PHASE_TIMING': False,
+        'MERGE_FRAME_TIMEOUT_SEC': 10,
         'TRACKING_TARGET_FRAME_PERCENT': 40,
         'PERSON_AREA_DEBUG': False,
 
@@ -327,6 +331,8 @@ def load_config() -> dict:
                     config['PERSON_AREA_SWITCH_THRESHOLD'] = int(mc.get('person_area_switch_threshold', config['PERSON_AREA_SWITCH_THRESHOLD']))
                     config['CAMERA_SWITCH_RATIO'] = float(mc.get('camera_switch_ratio', config['CAMERA_SWITCH_RATIO']))
                     config['DECODE_SECOND_CAMERA_CPU_ONLY'] = bool(mc.get('decode_second_camera_cpu_only', config['DECODE_SECOND_CAMERA_CPU_ONLY']))
+                    config['LOG_EXTRACTION_PHASE_TIMING'] = bool(mc.get('log_extraction_phase_timing', config['LOG_EXTRACTION_PHASE_TIMING']))
+                    config['MERGE_FRAME_TIMEOUT_SEC'] = int(mc.get('merge_frame_timeout_sec', config['MERGE_FRAME_TIMEOUT_SEC']))
                     config['TRACKING_TARGET_FRAME_PERCENT'] = int(mc.get('tracking_target_frame_percent', config['TRACKING_TARGET_FRAME_PERCENT']))
                     config['PERSON_AREA_DEBUG'] = bool(mc.get('person_area_debug', config['PERSON_AREA_DEBUG']))
                 if 'gemini_proxy' in yaml_config:

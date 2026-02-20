@@ -2,6 +2,8 @@ import json
 import os
 import subprocess
 import logging
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
 import ffmpegcv
@@ -183,19 +185,29 @@ class VideoService:
 
     def __init__(self, ffmpeg_timeout: int = DEFAULT_FFMPEG_TIMEOUT):
         self.ffmpeg_timeout = ffmpeg_timeout
+        self._sidecar_app_lock: threading.Lock | None = None
         logger.debug("VideoService initialized with FFmpeg timeout: %ss", ffmpeg_timeout)
+
+    def set_sidecar_app_lock(self, lock: threading.Lock) -> None:
+        """Set app-level lock so only one sidecar batch (TEST or lifecycle) runs at a time. Called by orchestrator at startup."""
+        self._sidecar_app_lock = lock
 
     def generate_detection_sidecar(
         self,
         clip_path: str,
         sidecar_path: str,
         config: dict,
+        *,
+        yolo_model: Any = None,
+        yolo_lock: threading.Lock | None = None,
     ) -> bool:
         """
         Decode-only pass: read clip with ffmpegcv (optionally resized for GPU efficiency), run YOLO every N frames, write detection.json.
 
         Uses NVDEC (VideoCaptureNV) when available, else CPU (VideoCapture). May resize during decode to crop target size (CROP_WIDTH x CROP_HEIGHT); all bbox/centerpoint/area in the sidecar are scaled to **native** resolution so Phase 3 crop logic is correct. Writes native_width and native_height in the sidecar. Does not re-encode.
         Returns True if sidecar was written (even if empty); False on open/read failure.
+
+        When yolo_model and yolo_lock are both provided (e.g. by event_test or lifecycle for parallel sidecar), inference is run under the lock to allow a single shared model across threads. When either is omitted, YOLO is loaded inside this call (legacy/single-camera behavior).
         """
         detection_model = (config.get("DETECTION_MODEL") or "").strip()
         detection_device = (config.get("DETECTION_DEVICE") or "").strip() or None
@@ -234,11 +246,11 @@ class VideoService:
 
             read_h, read_w = 0, 0
             fps = getattr(cap, "fps", None) or 30.0
-            yolo_model = None
-            if detection_model:
+            model_to_use = yolo_model
+            if model_to_use is None and detection_model:
                 try:
                     from ultralytics import YOLO
-                    yolo_model = YOLO(detection_model)
+                    model_to_use = YOLO(detection_model)
                     logger.debug("YOLO loaded for detection sidecar: %s", clip_path)
                 except Exception as e:
                     logger.warning("Could not load YOLO for detection sidecar: %s", e)
@@ -253,10 +265,16 @@ class VideoService:
                     break
                 if read_h == 0 and frame is not None:
                     read_h, read_w = frame.shape[:2]
-                if yolo_model is not None and frame_idx % interval == 0:
-                    det = _run_detection_on_frame(
-                        yolo_model, frame, detection_device, imgsz=detection_imgsz
-                    )
+                if model_to_use is not None and frame_idx % interval == 0:
+                    if yolo_lock is not None:
+                        with yolo_lock:
+                            det = _run_detection_on_frame(
+                                model_to_use, frame, detection_device, imgsz=detection_imgsz
+                            )
+                    else:
+                        det = _run_detection_on_frame(
+                            model_to_use, frame, detection_device, imgsz=detection_imgsz
+                        )
                     if use_resize and native_w > 0 and native_h > 0 and read_w > 0 and read_h > 0:
                         det = _scale_detections_to_native(det, read_w, read_h, native_w, native_h)
                     sidecar_entries.append({
@@ -286,6 +304,63 @@ class VideoService:
                     cap.release()
                 except Exception:
                     pass
+
+    def generate_detection_sidecars_for_cameras(
+        self,
+        tasks: list[tuple[str, str, str]],
+        config: dict[str, Any],
+    ) -> list[tuple[str, bool]]:
+        """
+        Generate detection sidecars for multiple cameras in parallel with one shared YOLO model and lock.
+
+        tasks: list of (camera_name, clip_path, sidecar_path). Returns list of (camera_name, ok) in same order.
+        Used by lifecycle (multi-cam) and event_test; keeps YOLO/threading logic in the core so event_test stays thin.
+        When _sidecar_app_lock is set (by main orchestrator), acquires it for the whole batch so only one
+        sidecar run (TEST or lifecycle) executes at a time.
+        """
+        if not tasks:
+            return []
+        lock = self._sidecar_app_lock
+        if lock is not None:
+            lock.acquire()
+        try:
+            yolo_model = None
+            yolo_lock = threading.Lock()
+            detection_model = (config.get("DETECTION_MODEL") or "").strip()
+            if detection_model:
+                try:
+                    from ultralytics import YOLO
+                    yolo_model = YOLO(detection_model)
+                except Exception as e:
+                    logger.warning("Could not load shared YOLO for sidecar: %s", e)
+            results: list[tuple[str, bool]] = []
+            with ThreadPoolExecutor(max_workers=len(tasks)) as executor:
+                future_to_cam = {}
+                for camera_name, clip_path, sidecar_path in tasks:
+                    future = executor.submit(
+                        self.generate_detection_sidecar,
+                        clip_path,
+                        sidecar_path,
+                        config,
+                        yolo_model=yolo_model,
+                        yolo_lock=yolo_lock if yolo_model is not None else None,
+                    )
+                    future_to_cam[future] = camera_name
+                for future in as_completed(future_to_cam):
+                    camera_name = future_to_cam[future]
+                    try:
+                        ok = future.result()
+                    except Exception as e:
+                        logger.exception("Sidecar %s failed", camera_name)
+                        ok = False
+                    results.append((camera_name, ok))
+            # Preserve order of tasks for predictable log/output order
+            order = {cam: i for i, (cam, _, _) in enumerate(tasks)}
+            results.sort(key=lambda r: order.get(r[0], 0))
+            return results
+        finally:
+            if lock is not None:
+                lock.release()
 
     def generate_gif_from_clip(self, clip_path: str, output_path: str,
                                fps: int = 5, duration_sec: float = 5.0) -> bool:

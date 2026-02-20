@@ -126,6 +126,28 @@ class TestVideoService(unittest.TestCase):
                 except OSError:
                     pass
 
+    def test_generate_detection_sidecars_for_cameras_acquires_and_releases_app_lock(self):
+        """When set_sidecar_app_lock was called, generate_detection_sidecars_for_cameras acquires and releases the lock."""
+        mock_lock = MagicMock()
+        self.video_service.set_sidecar_app_lock(mock_lock)
+        with patch.object(
+            self.video_service,
+            "generate_detection_sidecar",
+            return_value=True,
+        ):
+            result = self.video_service.generate_detection_sidecars_for_cameras(
+                [("cam1", "/fake/clip.mp4", "/fake/detection.json")], {}
+            )
+        self.assertEqual(result, [("cam1", True)])
+        mock_lock.acquire.assert_called_once()
+        mock_lock.release.assert_called_once()
+
+    def test_generate_detection_sidecars_for_cameras_no_lock_when_not_set(self):
+        """When set_sidecar_app_lock was never called, no lock is used (e.g. in tests)."""
+        self.assertIsNone(self.video_service._sidecar_app_lock)
+        result = self.video_service.generate_detection_sidecars_for_cameras([], {})
+        self.assertEqual(result, [])
+
 
 class TestEnsureDetectionModelReady(unittest.TestCase):
     def test_ensure_detection_model_ready_skips_when_not_configured(self):

@@ -50,6 +50,8 @@ class StateAwareOrchestrator:
         # Initialize components (file_manager first - needed by consolidated_manager)
         self.state_manager = EventStateManager()
         self.video_service = VideoService(config.get('FFMPEG_TIMEOUT', VideoService.DEFAULT_FFMPEG_TIMEOUT))
+        self._sidecar_generation_lock = threading.Lock()
+        self.video_service.set_sidecar_app_lock(self._sidecar_generation_lock)
         self.download_service = DownloadService(
             config['FRIGATE_URL'],
             self.video_service,

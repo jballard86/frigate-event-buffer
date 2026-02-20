@@ -15,6 +15,7 @@ import json
 import logging
 import math
 import os
+import time
 from typing import Any, Callable
 
 logger = logging.getLogger("frigate-buffer")
@@ -197,6 +198,7 @@ def extract_target_centric_frames(
     camera_switch_ratio: float = 1.2,
     decode_second_camera_cpu_only: bool = False,
     log_callback: Callable[[str], None] | None = None,
+    config: dict[str, Any] | None = None,
 ) -> list[Any]:
     """
     Extract time-ordered, target-centric frames from all clips under a CE folder.
@@ -207,6 +209,9 @@ def extract_target_centric_frames(
     When person area >= tracking_target_frame_percent of reference_area (min of target crop area and frame area),
     uses full-frame resize with letterbox instead of crop and sets metadata is_full_frame_resize=True.
     Caps at max_frames_min. Returns [] if any camera lacks detection.json.
+
+    Optional config may provide LOG_EXTRACTION_PHASE_TIMING (bool) for phase elapsed-time logs,
+    and MERGE_FRAME_TIMEOUT_SEC (int) for timeout when waiting for a camera frame in the merge step.
     """
     if not _CV2_AVAILABLE or ExtractedFrame is None:
         logger.warning("cv2/ffmpegcv or ExtractedFrame not available, skipping multi-clip extraction")
@@ -232,6 +237,10 @@ def extract_target_centric_frames(
         logger.debug("No clips found in CE folder %s", ce_folder_path)
         return []
 
+    if log_callback:
+        cams_str = ", ".join(sorted(cam for cam, _ in clip_paths))
+        log_callback(f"Found {len(clip_paths)} clip(s): {cams_str}.")
+
     step_sec = float(max_frames_sec) if max_frames_sec > 0 else 1.0
     collected: list[Any] = []
     path_per_cam = {cam: path for cam, path in clip_paths}
@@ -251,6 +260,16 @@ def extract_target_centric_frames(
         else:
             all_have_sidecar = False
 
+    if log_callback:
+        log_callback(f"Loaded sidecars for {len(sidecars)} camera(s).")
+
+    _log_phase_timing = bool(config.get("LOG_EXTRACTION_PHASE_TIMING", False)) if config else False
+    if not _log_phase_timing and logger.isEnabledFor(logging.DEBUG):
+        _log_phase_timing = True
+
+    _t0_open = time.monotonic() if _log_phase_timing else None
+    if log_callback:
+        log_callback("Opening clips for fps/duration.")
     def open_caps() -> dict[str, Any]:
         caps_out: dict[str, Any] = {}
         for cam, path in clip_paths:
@@ -280,6 +299,9 @@ def extract_target_centric_frames(
     if not caps:
         return []
 
+    if _log_phase_timing and _t0_open is not None and log_callback:
+        log_callback(f"Opening clips for fps/duration: {time.monotonic() - _t0_open:.1f}s")
+
     # Get fps and duration per camera (ffmpegcv-safe; may consume stream if count unknown).
     durations: dict[str, float] = {}
     fps_per_cam: dict[str, float] = {}
@@ -294,11 +316,11 @@ def extract_target_centric_frames(
         cap.release()
     caps.clear()
 
-    # Reopen all caps (we released them above). Fallback: NVDEC -> CPU; if CPU fails, retry GPU then CPU before skipping.
+    # Reopen all caps (we released them above). GPU-first for every camera; CPU only when NVDEC fails (fallback).
+    _t0_reopen = time.monotonic() if _log_phase_timing else None
     decode_backends: dict[str, str] = {}
     for idx, (cam, path) in enumerate(clip_paths):
         cap = None
-        use_cpu_only = decode_second_camera_cpu_only and idx >= 1
 
         def _try_cpu() -> Any:
             try:
@@ -333,12 +355,22 @@ def extract_target_centric_frames(
                     )
                 return (None, None)
 
-        if use_cpu_only:
+        # GPU-first for all cameras; CPU only when NVDEC fails (avoids accidental CPU use).
+        cap, backend = _try_nvdec()
+        if cap is not None:
+            decode_backends[cam] = backend or "GPU"
+        else:
             cap = _try_cpu()
-            if cap is None:
-                cap, backend = _try_nvdec()
+            if cap is not None:
+                decode_backends[cam] = "CPU"
+                logger.warning(
+                    "Camera %s using CPU decode; this will throttle parallel extraction for the entire group.",
+                    cam,
+                )
+            else:
+                cap, _ = _try_nvdec()
                 if cap is not None:
-                    decode_backends[cam] = backend or "GPU"
+                    decode_backends[cam] = "GPU"
                 else:
                     logger.warning(
                         "GPU retry failed for camera %s (%s); trying CPU again.",
@@ -348,6 +380,10 @@ def extract_target_centric_frames(
                     try:
                         cap = ffmpegcv.VideoCapture(path)
                         decode_backends[cam] = "CPU"
+                        logger.warning(
+                            "Camera %s using CPU decode; this will throttle parallel extraction for the entire group.",
+                            cam,
+                        )
                     except Exception as e3:
                         logger.error(
                             "Camera %s (%s): GPU and CPU decode both failed (last error: %s: %s). Skipping camera for extraction.",
@@ -357,38 +393,6 @@ def extract_target_centric_frames(
                             e3,
                         )
                         cap = None
-            else:
-                decode_backends[cam] = "CPU"
-        else:
-            cap, backend = _try_nvdec()
-            if cap is not None:
-                decode_backends[cam] = backend or "GPU"
-            else:
-                cap = _try_cpu()
-                if cap is not None:
-                    decode_backends[cam] = "CPU"
-                else:
-                    cap, _ = _try_nvdec()
-                    if cap is not None:
-                        decode_backends[cam] = "GPU"
-                    else:
-                        logger.warning(
-                            "GPU retry failed for camera %s (%s); trying CPU again.",
-                            cam,
-                            path,
-                        )
-                        try:
-                            cap = ffmpegcv.VideoCapture(path)
-                            decode_backends[cam] = "CPU"
-                        except Exception as e3:
-                            logger.error(
-                                "Camera %s (%s): GPU and CPU decode both failed (last error: %s: %s). Skipping camera for extraction.",
-                                cam,
-                                path,
-                                type(e3).__name__,
-                                e3,
-                            )
-                            cap = None
 
         if cap is not None and getattr(cap, "isOpened", lambda: True)():
             caps[cam] = cap
@@ -411,6 +415,8 @@ def extract_target_centric_frames(
                 fps_per_cam.get(cam, 0),
             )
 
+    if _log_phase_timing and _t0_reopen is not None and log_callback:
+        log_callback(f"Reopened clips: {time.monotonic() - _t0_reopen:.1f}s")
     if log_callback and decode_backends:
         cams = ", ".join(sorted(decode_backends.keys()))
         backends_set = set(decode_backends.values())
@@ -420,7 +426,7 @@ def extract_target_centric_frames(
             log_callback(f"Decoding clips ({cams}): CPU (GPU not configured or fallback).")
         else:
             parts = [f"{cam}: {decode_backends[cam]}" for cam in sorted(decode_backends.keys())]
-            log_callback(f"Decoding clips: {', '.join(parts)} (first camera GPU, 2nd+ CPU to avoid NVDEC contention).")
+            log_callback(f"Decoding clips: {', '.join(parts)}.")
 
     global_end = max(durations.values()) if durations else 0.0
     if global_end <= 0 or not caps:
@@ -474,6 +480,8 @@ def extract_target_centric_frames(
         logger.debug("Detection-aligned sample list empty; using fixed-step grid (%d times)", len(sample_times_list))
     else:
         logger.debug("Using detection-aligned sample times (%d)", len(sample_times_list))
+    if log_callback:
+        log_callback(f"Built {len(sample_times_list)} sample times for frame selection.")
 
     # Sequential-read, time-sampled: per-camera state (prev_frame, prev_t, curr_frame, curr_t).
     # We advance all readers in lockstep; at each sample time T we use the frame at T for each camera.
@@ -489,7 +497,7 @@ def extract_target_centric_frames(
         except _READ_ERRORS as e:
             remaining = [c for c in caps if caps.get(c) is not None and c != cam]
             logger.warning(
-                "Reader process died for camera %s (%s); dropping camera for rest of extraction: %s (sample_time=initial_read remaining_cameras=%s). Consider enabling multi_cam.decode_second_camera_cpu_only to avoid NVDEC contention.",
+                "Reader process died for camera %s (%s); dropping camera for rest of extraction: %s (sample_time=initial_read remaining_cameras=%s). Check GPU memory and driver if multiple NVDEC readers fail.",
                 cam,
                 path_per_cam.get(cam, ""),
                 e,
@@ -510,9 +518,14 @@ def extract_target_centric_frames(
     # frame_index per camera: next frame to read will be at index 1 (first frame was index 0, t=0).
     frame_index: dict[str, int] = {cam: 1 for cam in caps if caps[cam] is not None}
 
-    for T in sample_times_list:
+    _t0_read = time.monotonic() if _log_phase_timing else None
+    _num_sample_times = len(sample_times_list)
+    _progress_interval = max(1, _num_sample_times // 10)
+    for _step_idx, T in enumerate(sample_times_list, start=1):
         if len(collected) >= max_frames_min:
             break
+        if log_callback and _step_idx % _progress_interval == 1:
+            log_callback(f"Reading frames ({_step_idx}/{_num_sample_times}).")
         best_camera: str | None = None
         best_frame: Any = None
         best_area = 0.0
@@ -529,7 +542,7 @@ def extract_target_centric_frames(
                 except _READ_ERRORS as e:
                     remaining = [c for c in caps if caps.get(c) is not None and c != cam]
                     logger.warning(
-                        "Reader process died for camera %s (%s); dropping camera for rest of extraction: %s (sample_time_sec=%.2f frame_index=%s remaining_cameras=%s). Consider enabling multi_cam.decode_second_camera_cpu_only to avoid NVDEC contention.",
+                        "Reader process died for camera %s (%s); dropping camera for rest of extraction: %s (sample_time_sec=%.2f frame_index=%s remaining_cameras=%s). Check GPU memory and driver if multiple NVDEC readers fail.",
                         cam,
                         path_per_cam.get(cam, ""),
                         e,
@@ -660,6 +673,8 @@ def extract_target_centric_frames(
                 current_camera = best_camera
                 frames_on_current = 1
 
+    if _log_phase_timing and _t0_read is not None and log_callback:
+        log_callback(f"Reading frames: {time.monotonic() - _t0_read:.1f}s")
     for cap in caps.values():
         if cap is not None:
             cap.release()
