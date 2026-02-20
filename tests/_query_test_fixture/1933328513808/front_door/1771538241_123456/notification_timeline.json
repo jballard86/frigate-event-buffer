@@ -1,0 +1,1 @@
+{"event_id": "123456", "entries": [{"source": "frigate_mqtt", "data": {"payload": {"after": {"end_time": 1234567890.5}}}}]}
