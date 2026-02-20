@@ -139,6 +139,7 @@ network:
 #   motion_crop_min_area_fraction: 0.001
 #   motion_crop_min_px: 500
 #   detection_frame_interval: 5   # run YOLO every N frames; default 5
+#   detection_imgsz: 640   # YOLO inference size; higher (e.g. 1280) = better small objects, slower; default 640
 #   first_camera_bias_decay_seconds: 1.0   # time constant for exponential bias decay (primary camera)
 #   first_camera_bias_initial: 1.5         # initial bias multiplier for primary camera
 #   first_camera_bias_cap_seconds: 0       # cap bias to 0 after this many seconds; 0 = no cap

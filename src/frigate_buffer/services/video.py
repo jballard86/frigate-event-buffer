@@ -137,12 +137,15 @@ def _run_detection_on_frame(
     model: Any,
     frame: Any,
     device: str | None,
+    imgsz: int = 640,
 ) -> list[dict[str, Any]]:
     """Run YOLO on one frame (person class only); return list of {label, bbox, centerpoint, area} for sidecar."""
     detections: list[dict[str, Any]] = []
     try:
         # classes=[0]: COCO person; hardcoded for robustness across models
-        results = model(frame, device=device, verbose=False, classes=[_PERSON_CLASS_ID])
+        results = model(
+            frame, device=device, verbose=False, classes=[_PERSON_CLASS_ID], imgsz=imgsz
+        )
         if not results:
             return detections
         for r in results:
@@ -197,6 +200,7 @@ class VideoService:
         detection_model = (config.get("DETECTION_MODEL") or "").strip()
         detection_device = (config.get("DETECTION_DEVICE") or "").strip() or None
         detection_frame_interval = max(1, int(config.get("DETECTION_FRAME_INTERVAL", 5)))
+        detection_imgsz = max(320, int(config.get("DETECTION_IMGSZ", 640)))
         crop_w = max(1, int(config.get("CROP_WIDTH", 1280)))
         crop_h = max(1, int(config.get("CROP_HEIGHT", 720)))
 
@@ -250,7 +254,9 @@ class VideoService:
                 if read_h == 0 and frame is not None:
                     read_h, read_w = frame.shape[:2]
                 if yolo_model is not None and frame_idx % interval == 0:
-                    det = _run_detection_on_frame(yolo_model, frame, detection_device)
+                    det = _run_detection_on_frame(
+                        yolo_model, frame, detection_device, imgsz=detection_imgsz
+                    )
                     if use_resize and native_w > 0 and native_h > 0 and read_w > 0 and read_h > 0:
                         det = _scale_detections_to_native(det, read_w, read_h, native_w, native_h)
                     sidecar_entries.append({
