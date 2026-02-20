@@ -730,6 +730,12 @@ class GeminiAnalysisService:
                 camera_switch_min_hold_frames=int(self.config.get("CAMERA_SWITCH_MIN_HOLD_FRAMES", 5)),
                 decode_second_camera_cpu_only=bool(self.config.get("DECODE_SECOND_CAMERA_CPU_ONLY", False)),
                 config=self.config,
+                use_ema_pipeline=bool(self.config.get("CAMERA_TIMELINE_USE_EMA_PIPELINE", True)),
+                camera_timeline_analysis_multiplier=float(self.config.get("CAMERA_TIMELINE_ANALYSIS_MULTIPLIER", 2)),
+                camera_timeline_ema_alpha=float(self.config.get("CAMERA_TIMELINE_EMA_ALPHA", 0.4)),
+                camera_timeline_primary_bias_multiplier=float(self.config.get("CAMERA_TIMELINE_PRIMARY_BIAS_MULTIPLIER", 1.2)),
+                camera_switch_min_segment_frames=int(self.config.get("CAMERA_SWITCH_MIN_SEGMENT_FRAMES", 5)),
+                camera_switch_hysteresis_margin=float(self.config.get("CAMERA_SWITCH_HYSTERESIS_MARGIN", 1.15)),
             )
             if not frames_raw:
                 logger.warning("No frames extracted from CE %s", ce_id)
@@ -862,6 +868,12 @@ class GeminiAnalysisService:
                 decode_second_camera_cpu_only=bool(self.config.get("DECODE_SECOND_CAMERA_CPU_ONLY", False)),
                 log_callback=_log if log_messages is not None else None,
                 config=self.config,
+                use_ema_pipeline=bool(self.config.get("CAMERA_TIMELINE_USE_EMA_PIPELINE", True)),
+                camera_timeline_analysis_multiplier=float(self.config.get("CAMERA_TIMELINE_ANALYSIS_MULTIPLIER", 2)),
+                camera_timeline_ema_alpha=float(self.config.get("CAMERA_TIMELINE_EMA_ALPHA", 0.4)),
+                camera_timeline_primary_bias_multiplier=float(self.config.get("CAMERA_TIMELINE_PRIMARY_BIAS_MULTIPLIER", 1.2)),
+                camera_switch_min_segment_frames=int(self.config.get("CAMERA_SWITCH_MIN_SEGMENT_FRAMES", 5)),
+                camera_switch_hysteresis_margin=float(self.config.get("CAMERA_SWITCH_HYSTERESIS_MARGIN", 1.15)),
             )
             if not frames_raw:
                 logger.warning("No frames extracted from CE folder %s", ce_folder_path)

@@ -95,13 +95,22 @@ CONFIG_SCHEMA = Schema({
         Optional('detection_device'): str,                       # Device for detection (e.g. cuda:0, cpu).
         Optional('detection_frame_interval'): int,               # Run YOLO every N frames; default 5.
         Optional('detection_imgsz'): int,                        # YOLO inference size (higher = better small objects, slower); default 640.
-        Optional('first_camera_bias_decay_seconds'): Any(int, float),   # Time constant for exponential bias decay; default 1.0.
-        Optional('first_camera_bias_initial'): Any(int, float),         # Initial bias multiplier for primary camera; default 1.5.
-        Optional('first_camera_bias_cap_seconds'): Any(int, float),     # Cap bias to 0 after this many seconds; 0 = no cap.
-        Optional('person_area_switch_threshold'): int,                  # Allow switch when current camera area below this (px²); 0 = disable.
-        Optional('camera_switch_ratio'): Any(int, float),               # New camera must have this ratio of current to switch; default 1.2.
-        Optional('camera_switch_bias'): Any(int, float),                # Initial stickiness for non-initial cameras when deciding to switch; uses same decay as first camera; >1 = stickier; default 1.2.
-        Optional('camera_switch_min_hold_frames'): int,                # Min timeline frames to stay on camera after switch before allowing another (0=disabled); reduces flip-flop; default 5.
+        # Timeline / EMA (Trust-the-EMA pipeline)
+        Optional('camera_timeline_use_ema_pipeline'): bool,     # Use Phase 1 EMA + hysteresis + merge; default True.
+        Optional('camera_timeline_analysis_multiplier'): Any(int, float),  # Denser analysis grid vs base step (2 or 3); default 2.
+        Optional('camera_timeline_ema_alpha'): Any(int, float),            # EMA smoothing factor 0–1; default 0.4.
+        Optional('camera_timeline_primary_bias_multiplier'): Any(int, float),  # Weight on primary camera area curve; default 1.2.
+        Optional('camera_switch_min_segment_frames'): int,                # Min frames per segment; short runs merged into previous; default 5.
+        Optional('camera_switch_hysteresis_margin'): Any(int, float),     # New camera must exceed current by this factor to switch (e.g. 1.15 = 15%); default 1.15.
+        Optional('camera_timeline_final_yolo_drop_no_person'): bool,     # If true drop frames with no person after Phase 2 YOLO; default False (keep all, tag).
+        # Legacy (deprecated; kept for backward compat until new pipeline is default)
+        Optional('first_camera_bias_decay_seconds'): Any(int, float),
+        Optional('first_camera_bias_initial'): Any(int, float),
+        Optional('first_camera_bias_cap_seconds'): Any(int, float),
+        Optional('person_area_switch_threshold'): int,
+        Optional('camera_switch_ratio'): Any(int, float),
+        Optional('camera_switch_bias'): Any(int, float),
+        Optional('camera_switch_min_hold_frames'): int,
         Optional('decode_second_camera_cpu_only'): bool,                # If true, use CPU decode for 2nd+ cameras (legacy/contention workaround). Default false: NVDEC for all; CPU only when NVDEC fails.
         Optional('log_extraction_phase_timing'): bool,                  # Log elapsed time per extraction phase (e.g. "Opening clips: 0.5s") for debugging; default false.
         Optional('merge_frame_timeout_sec'): int,                       # Timeout (seconds) when merge waits for a camera frame; on timeout camera is dropped from active pool; default 10.
@@ -198,6 +207,15 @@ def load_config() -> dict:
         'DETECTION_DEVICE': '',  # Empty = auto (CUDA if available else CPU)
         'DETECTION_FRAME_INTERVAL': 5,
         'DETECTION_IMGSZ': 640,
+        # Timeline / EMA (Trust-the-EMA pipeline)
+        'CAMERA_TIMELINE_USE_EMA_PIPELINE': True,
+        'CAMERA_TIMELINE_ANALYSIS_MULTIPLIER': 2,
+        'CAMERA_TIMELINE_EMA_ALPHA': 0.4,
+        'CAMERA_TIMELINE_PRIMARY_BIAS_MULTIPLIER': 1.2,
+        'CAMERA_SWITCH_MIN_SEGMENT_FRAMES': 5,
+        'CAMERA_SWITCH_HYSTERESIS_MARGIN': 1.15,
+        'CAMERA_TIMELINE_FINAL_YOLO_DROP_NO_PERSON': False,
+        # Legacy (used by current extractor until new pipeline)
         'FIRST_CAMERA_BIAS_DECAY_SECONDS': 1.0,
         'FIRST_CAMERA_BIAS_INITIAL': 1.5,
         'FIRST_CAMERA_BIAS_CAP_SECONDS': 0,
@@ -329,6 +347,14 @@ def load_config() -> dict:
                     config['DETECTION_DEVICE'] = (mc.get('detection_device') or config.get('DETECTION_DEVICE', '')) or ''
                     config['DETECTION_FRAME_INTERVAL'] = mc.get('detection_frame_interval', config['DETECTION_FRAME_INTERVAL'])
                     config['DETECTION_IMGSZ'] = int(mc.get('detection_imgsz', config['DETECTION_IMGSZ']))
+                    config['CAMERA_TIMELINE_USE_EMA_PIPELINE'] = bool(mc.get('camera_timeline_use_ema_pipeline', config['CAMERA_TIMELINE_USE_EMA_PIPELINE']))
+                    config['CAMERA_TIMELINE_ANALYSIS_MULTIPLIER'] = float(mc.get('camera_timeline_analysis_multiplier', config['CAMERA_TIMELINE_ANALYSIS_MULTIPLIER']))
+                    config['CAMERA_TIMELINE_EMA_ALPHA'] = float(mc.get('camera_timeline_ema_alpha', config['CAMERA_TIMELINE_EMA_ALPHA']))
+                    config['CAMERA_TIMELINE_PRIMARY_BIAS_MULTIPLIER'] = float(mc.get('camera_timeline_primary_bias_multiplier', config['CAMERA_TIMELINE_PRIMARY_BIAS_MULTIPLIER']))
+                    config['CAMERA_SWITCH_MIN_SEGMENT_FRAMES'] = int(mc.get('camera_switch_min_segment_frames', config['CAMERA_SWITCH_MIN_SEGMENT_FRAMES']))
+                    config['CAMERA_SWITCH_HYSTERESIS_MARGIN'] = float(mc.get('camera_switch_hysteresis_margin', config['CAMERA_SWITCH_HYSTERESIS_MARGIN']))
+                    config['CAMERA_TIMELINE_FINAL_YOLO_DROP_NO_PERSON'] = bool(mc.get('camera_timeline_final_yolo_drop_no_person', config['CAMERA_TIMELINE_FINAL_YOLO_DROP_NO_PERSON']))
+                    # Legacy
                     config['FIRST_CAMERA_BIAS_DECAY_SECONDS'] = float(mc.get('first_camera_bias_decay_seconds', config['FIRST_CAMERA_BIAS_DECAY_SECONDS']))
                     config['FIRST_CAMERA_BIAS_INITIAL'] = float(mc.get('first_camera_bias_initial', config['FIRST_CAMERA_BIAS_INITIAL']))
                     config['FIRST_CAMERA_BIAS_CAP_SECONDS'] = float(mc.get('first_camera_bias_cap_seconds', config['FIRST_CAMERA_BIAS_CAP_SECONDS']))

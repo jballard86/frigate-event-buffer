@@ -38,6 +38,12 @@ try:
 except ImportError:
     ExtractedFrame = None  # type: ignore[misc, assignment]
 
+try:
+    from frigate_buffer.services import timeline_ema as _timeline_ema
+    _TIMELINE_EMA_AVAILABLE = True
+except ImportError:
+    _TIMELINE_EMA_AVAILABLE = False
+
 
 # Preferred label for target-centric selection (person has highest priority)
 PREFERRED_LABELS = ("person", "people", "pedestrian")
@@ -201,6 +207,13 @@ def extract_target_centric_frames(
     decode_second_camera_cpu_only: bool = False,
     log_callback: Callable[[str], None] | None = None,
     config: dict[str, Any] | None = None,
+    # Trust-the-EMA pipeline (Phase 1 dense grid + EMA + hysteresis + merge)
+    use_ema_pipeline: bool = False,
+    camera_timeline_analysis_multiplier: float = 2.0,
+    camera_timeline_ema_alpha: float = 0.4,
+    camera_timeline_primary_bias_multiplier: float = 1.2,
+    camera_switch_min_segment_frames: int = 5,
+    camera_switch_hysteresis_margin: float = 1.15,
 ) -> list[Any]:
     """
     Extract time-ordered, target-centric frames from all clips under a CE folder.
@@ -464,36 +477,57 @@ def extract_target_centric_frames(
         log_callback("Creating extraction metadata (sidecar).")
     logger.debug("Using detection sidecars for multi-clip selection")
 
-    # First-camera bias: exponential decay to (effectively) 0. No seek; time-based only.
-    def _bias_multiplier(cam: str, t_sec: float) -> float:
-        if first_camera_bias is None or cam != first_camera_bias:
-            return 1.0
-        if first_camera_bias_cap_seconds > 0 and t_sec >= first_camera_bias_cap_seconds:
-            return 0.0
-        if first_camera_bias_decay_seconds <= 0:
-            return first_camera_bias_initial
-        return first_camera_bias_initial * math.exp(-t_sec / first_camera_bias_decay_seconds)
+    # Phase 1 (EMA pipeline): dense grid, EMA, hysteresis, merge short segments (including first-segment roll-forward).
+    assignment_list: list[str] | None = None
+    if use_ema_pipeline and _TIMELINE_EMA_AVAILABLE:
+        dense_times = _timeline_ema.build_dense_times(
+            step_sec, max_frames_min, camera_timeline_analysis_multiplier, global_end
+        )
+        cameras_list = list(sidecars.keys())
+        assignments = _timeline_ema.build_phase1_assignments(
+            dense_times,
+            cameras_list,
+            lambda cam, t: _person_area_at_time(sidecars.get(cam) or [], t),
+            native_size_per_cam,
+            ema_alpha=camera_timeline_ema_alpha,
+            primary_bias_multiplier=camera_timeline_primary_bias_multiplier,
+            primary_camera=first_camera_bias,
+            hysteresis_margin=camera_switch_hysteresis_margin,
+            min_segment_frames=camera_switch_min_segment_frames,
+        )
+        sample_times_list = [t for t, _ in assignments]
+        assignment_list = [c for _, c in assignments]
+        if log_callback:
+            log_callback(f"Phase 1 EMA: {len(sample_times_list)} sample times, segment merge (min {camera_switch_min_segment_frames} frames).")
+    else:
+        # Legacy: first-camera bias and hysteresis/min_hold for in-loop selection.
+        def _bias_multiplier(cam: str, t_sec: float) -> float:
+            if first_camera_bias is None or cam != first_camera_bias:
+                return 1.0
+            if first_camera_bias_cap_seconds > 0 and t_sec >= first_camera_bias_cap_seconds:
+                return 0.0
+            if first_camera_bias_decay_seconds <= 0:
+                return first_camera_bias_initial
+            return first_camera_bias_initial * math.exp(-t_sec / first_camera_bias_decay_seconds)
 
-    # Hysteresis: stay on camera for min 3 frames; escape when current area is 0 or below threshold.
-    # T_switch: sample time T at which we last switched to current_camera (for stickiness decay).
+        merged_t = _detection_timestamps_with_person(sidecars, global_end)
+        sample_times_list = _subsample_with_min_gap(merged_t, step_sec, max_frames_min)
+        if not sample_times_list:
+            sample_times_list = []
+            t = 0.0
+            while t <= global_end and len(sample_times_list) < max_frames_min:
+                sample_times_list.append(t)
+                t += step_sec
+            logger.debug("Detection-aligned sample list empty; using fixed-step grid (%d times)", len(sample_times_list))
+        else:
+            logger.debug("Using detection-aligned sample times (%d)", len(sample_times_list))
+    if log_callback and assignment_list is None:
+        log_callback(f"Built {len(sample_times_list)} sample times for frame selection.")
+
+    # For legacy path: hysteresis and min_hold state.
     current_camera: str | None = None
     frames_on_current = 0
     T_switch: float | None = None
-
-    # Build list of sample times: detection-aligned from sidecars, or fixed-step if no person detections.
-    merged_t = _detection_timestamps_with_person(sidecars, global_end)
-    sample_times_list = _subsample_with_min_gap(merged_t, step_sec, max_frames_min)
-    if not sample_times_list:
-        sample_times_list = []
-        t = 0.0
-        while t <= global_end and len(sample_times_list) < max_frames_min:
-            sample_times_list.append(t)
-            t += step_sec
-        logger.debug("Detection-aligned sample list empty; using fixed-step grid (%d times)", len(sample_times_list))
-    else:
-        logger.debug("Using detection-aligned sample times (%d)", len(sample_times_list))
-    if log_callback:
-        log_callback(f"Built {len(sample_times_list)} sample times for frame selection.")
 
     # Sequential-read, time-sampled: per-camera state (prev_frame, prev_t, curr_frame, curr_t).
     # We advance all readers in lockstep; at each sample time T we use the frame at T for each camera.
@@ -588,11 +622,14 @@ def extract_target_centric_frames(
         if not any(c is not None for c in caps.values()):
             break
 
-        # For each camera, get frame at T and person area (with first-camera bias).
-        cam_candidates: dict[str, tuple[Any, float]] = {}  # cam -> (frame, area_with_bias)
-        for cam in state:
-            prev_f, prev_t, curr_f, curr_t = state[cam]
-            if T >= durations.get(cam, 0):
+        if assignment_list is not None:
+            # EMA pipeline: camera comes from Phase 1 assignment; get frame for that camera only.
+            idx = _step_idx - 1
+            if idx >= len(assignment_list):
+                break
+            best_camera = assignment_list[idx]
+            prev_f, prev_t, curr_f, curr_t = state.get(best_camera, (None, -1.0, None, -1.0))
+            if T >= durations.get(best_camera, 0):
                 continue
             if prev_t <= T < curr_t and prev_f is not None:
                 candidate = prev_f
@@ -602,61 +639,78 @@ def extract_target_centric_frames(
                 candidate = prev_f
             else:
                 candidate = curr_f
-            if candidate is None:
-                continue
-            area = _person_area_at_time(sidecars.get(cam) or [], T)
-            area *= _bias_multiplier(cam, T)
-            cam_candidates[cam] = (candidate.copy() if hasattr(candidate, "copy") else candidate, area)
-
-        # Hysteresis: stay on current camera for min 3 frames unless area is 0 or below threshold (escape).
-        if current_camera is not None and frames_on_current < 3:
-            curr_area = cam_candidates.get(current_camera, (None, 0.0))[1]
-            below_threshold = person_area_switch_threshold > 0 and curr_area < person_area_switch_threshold
-            if curr_area > 0 and not below_threshold:
-                best_camera = current_camera
-                best_frame, best_area = cam_candidates.get(current_camera, (None, 0.0))
-            else:
-                # Escape: person left or area below threshold; pick camera with largest area.
-                best_camera = max(cam_candidates, key=lambda c: cam_candidates[c][1]) if cam_candidates else None
-                best_frame, best_area = (cam_candidates.get(best_camera, (None, 0.0))) if best_camera else (None, 0.0)
+            best_frame = candidate.copy() if (candidate is not None and hasattr(candidate, "copy")) else candidate
+            best_area = _person_area_at_time(sidecars.get(best_camera) or [], T) if best_frame is not None else 0.0
         else:
-            best_camera = max(cam_candidates, key=lambda c: cam_candidates[c][1]) if cam_candidates else None
-            best_frame, best_area = (cam_candidates.get(best_camera, (None, 0.0))) if best_camera else (None, 0.0)
-            if best_camera and current_camera and best_camera != current_camera:
-                current_area = cam_candidates.get(current_camera, (None, 0.0))[1]
-                # Stickiness for non-initial cameras: use same decay/cap as first camera; 0 clamped to 0.1.
-                if first_camera_bias is not None and current_camera == first_camera_bias:
-                    effective_current = current_area
+            # Legacy: for each camera get frame at T and person area (with first-camera bias).
+            cam_candidates: dict[str, tuple[Any, float]] = {}  # cam -> (frame, area_with_bias)
+            for cam in state:
+                prev_f, prev_t, curr_f, curr_t = state[cam]
+                if T >= durations.get(cam, 0):
+                    continue
+                if prev_t <= T < curr_t and prev_f is not None:
+                    candidate = prev_f
+                elif curr_t <= T and curr_f is not None:
+                    candidate = curr_f
+                elif prev_f is not None:
+                    candidate = prev_f
                 else:
-                    bias_val = max(0.1, camera_switch_bias)
-                    t_since_switch = (T - T_switch) if T_switch is not None else 0.0
-                    if first_camera_bias_cap_seconds > 0 and t_since_switch >= first_camera_bias_cap_seconds:
-                        stickiness = 1.0
-                    elif first_camera_bias_decay_seconds <= 0:
-                        stickiness = bias_val
-                    else:
-                        stickiness = bias_val * math.exp(-t_since_switch / first_camera_bias_decay_seconds)
-                    effective_current = current_area * stickiness
-                allow_switch = (
-                    (person_area_switch_threshold > 0 and current_area < person_area_switch_threshold and best_area > current_area)
-                    or (best_area >= camera_switch_ratio * effective_current)
-                )
-                if not allow_switch:
+                    candidate = curr_f
+                if candidate is None:
+                    continue
+                area = _person_area_at_time(sidecars.get(cam) or [], T)
+                area *= _bias_multiplier(cam, T)
+                cam_candidates[cam] = (candidate.copy() if hasattr(candidate, "copy") else candidate, area)
+
+            # Hysteresis: stay on current camera for min 3 frames unless area is 0 or below threshold (escape).
+            if current_camera is not None and frames_on_current < 3:
+                curr_area = cam_candidates.get(current_camera, (None, 0.0))[1]
+                below_threshold = person_area_switch_threshold > 0 and curr_area < person_area_switch_threshold
+                if curr_area > 0 and not below_threshold:
                     best_camera = current_camera
                     best_frame, best_area = cam_candidates.get(current_camera, (None, 0.0))
+                else:
+                    # Escape: person left or area below threshold; pick camera with largest area.
+                    best_camera = max(cam_candidates, key=lambda c: cam_candidates[c][1]) if cam_candidates else None
+                    best_frame, best_area = (cam_candidates.get(best_camera, (None, 0.0))) if best_camera else (None, 0.0)
+            else:
+                best_camera = max(cam_candidates, key=lambda c: cam_candidates[c][1]) if cam_candidates else None
+                best_frame, best_area = (cam_candidates.get(best_camera, (None, 0.0))) if best_camera else (None, 0.0)
+                if best_camera and current_camera and best_camera != current_camera:
+                    current_area = cam_candidates.get(current_camera, (None, 0.0))[1]
+                    # Stickiness for non-initial cameras: use same decay/cap as first camera; 0 clamped to 0.1.
+                    if first_camera_bias is not None and current_camera == first_camera_bias:
+                        effective_current = current_area
+                    else:
+                        bias_val = max(0.1, camera_switch_bias)
+                        t_since_switch = (T - T_switch) if T_switch is not None else 0.0
+                        if first_camera_bias_cap_seconds > 0 and t_since_switch >= first_camera_bias_cap_seconds:
+                            stickiness = 1.0
+                        elif first_camera_bias_decay_seconds <= 0:
+                            stickiness = bias_val
+                        else:
+                            stickiness = bias_val * math.exp(-t_since_switch / first_camera_bias_decay_seconds)
+                        effective_current = current_area * stickiness
+                    allow_switch = (
+                        (person_area_switch_threshold > 0 and current_area < person_area_switch_threshold and best_area > current_area)
+                        or (best_area >= camera_switch_ratio * effective_current)
+                    )
+                    if not allow_switch:
+                        best_camera = current_camera
+                        best_frame, best_area = cam_candidates.get(current_camera, (None, 0.0))
 
-        # Minimum hold: after a switch, stay on current camera for at least this many frames unless person left (area 0).
-        if (
-            best_camera is not None
-            and current_camera is not None
-            and best_camera != current_camera
-            and camera_switch_min_hold_frames > 0
-            and frames_on_current < camera_switch_min_hold_frames
-        ):
-            current_raw = _person_area_at_time(sidecars.get(current_camera) or [], T)
-            if current_raw > 0:
-                best_camera = current_camera
-                best_frame, best_area = cam_candidates.get(current_camera, (None, 0.0))
+            # Minimum hold: after a switch, stay on current camera for at least this many frames unless person left (area 0).
+            if (
+                best_camera is not None
+                and current_camera is not None
+                and best_camera != current_camera
+                and camera_switch_min_hold_frames > 0
+                and frames_on_current < camera_switch_min_hold_frames
+            ):
+                current_raw = _person_area_at_time(sidecars.get(current_camera) or [], T)
+                if current_raw > 0:
+                    best_camera = current_camera
+                    best_frame, best_area = cam_candidates.get(current_camera, (None, 0.0))
 
         if best_camera is not None and best_frame is not None:
             meta: dict[str, Any] = {}
@@ -698,10 +752,11 @@ def extract_target_centric_frames(
                             meta["is_full_frame_resize"] = False
             raw_person_area = _person_area_at_time(sidecars.get(best_camera) or [], T)
             meta["person_area"] = int(raw_person_area)
+            # EMA pipeline: keep all frames (tag only); legacy may skip frames with no person.
             skip_append = (
-                use_sidecar
-                and sidecars
-                and raw_person_area <= 0
+                (use_sidecar and sidecars and raw_person_area <= 0)
+                if not use_ema_pipeline
+                else False
             )
             if not skip_append:
                 collected.append(ExtractedFrame(frame=best_frame, timestamp_sec=T, camera=best_camera, metadata=meta))

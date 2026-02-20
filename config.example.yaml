@@ -131,26 +131,31 @@ network:
 # multi_cam:
 #   max_multi_cam_frames_min: 45   # max frames per clip (cap)
 #   max_multi_cam_frames_sec: 2    # target capture interval (seconds)
-#   detection_model: yolov8n.pt   # ultralytics model for detection sidecar
-#   detection_device: ""           # e.g. cuda:0 or cpu; empty = auto
-#   motion_threshold_px: 50        # min pixels movement for high-rate capture
+#   detection_model: yolov8n.pt   # Ultralytics model for detection sidecar
+#   detection_device: ""          # e.g. cuda:0 or cpu; empty = auto
+#   motion_threshold_px: 50       # min pixels movement for high-rate capture
 #   crop_width: 1280
 #   crop_height: 720
 #   multi_cam_system_prompt_file: ""   # path to prompt file; empty = use built-in
 #   tracking_target_frame_percent: 40   # when person area >= this % of reference area, use full-frame resize
-#   smart_crop_padding: 0.15       # padding fraction around motion crop
+#   smart_crop_padding: 0.15
 #   motion_crop_min_area_fraction: 0.001
 #   motion_crop_min_px: 500
-#   detection_frame_interval: 5   # run YOLO every N frames; default 5
-#   detection_imgsz: 640   # YOLO inference size; higher (e.g. 1280) = better small objects, slower; default 640
-#   first_camera_bias_decay_seconds: 5     # time constant for primary bias decay; higher = longer preference (stable timeline)
-#   first_camera_bias_initial: 1.3         # initial bias multiplier for primary camera
-#   first_camera_bias_cap_seconds: 0       # cap bias to 0 after this many seconds; 0 = no cap
-#   person_area_switch_threshold: 20000    # allow escape when current camera area below this (px²); tune for your resolutions; 0 = disable
-#   camera_switch_ratio: 1.2               # new camera must have this ratio of current to switch (e.g. 1.2 = 1.2×)
-#   camera_switch_bias: 1.2                # stickiness for non-primary after switch (decays like first); >1 = stickier; 0 clamped to 0.1
-#   camera_switch_min_hold_frames: 5       # min timeline frames to stay on camera after switch (0=disabled); reduces flip-flop; default 5
-#   person_area_debug: false               # draw person area (px²) on frame bottom-right when true (multi-cam only)
+#   detection_frame_interval: 5   # run YOLO every N frames; increase for more accuracy
+#   detection_imgsz: 640          # YOLO inference size; higher = better small objects, slower
+#   person_area_debug: false      # draw person area (px²) on frame when true
+#
+#   # --- Timeline / EMA (Trust-the-EMA pipeline) ---
+#   camera_timeline_use_ema_pipeline: true   # true = Phase 1 EMA + hysteresis + merge; false = legacy in-loop selection
+#   # Core smoothing & grid
+#   camera_timeline_analysis_multiplier: 2   # denser analysis grid vs base step (2 or 3 = smoother curve)
+#   camera_timeline_ema_alpha: 0.4           # EMA smoothing 0–1; lower = hold focus during dropouts, higher = faster reaction
+#   camera_timeline_primary_bias_multiplier: 1.2   # weight on primary camera area curve
+#   # Segment & switching
+#   camera_switch_min_segment_frames: 5      # min frames per camera; short runs merged into previous (no drop)
+#   camera_switch_hysteresis_margin: 1.15    # new camera must exceed current by this (1.15 = 15%) to switch
+#   # Final output
+#   camera_timeline_final_yolo_drop_no_person: false   # true = drop no-person frames; false = keep all, tag in metadata
 
 
 # Optional: Gemini proxy (extended) - model params for proxy calls (e.g. multi-cam)
