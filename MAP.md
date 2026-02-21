@@ -200,7 +200,7 @@ frigate-event-buffer/
 | `src/frigate_buffer/managers/file.py` | **FileManager:** storage paths, clip/snapshot download (via DownloadService), export coordination (no transcode), cleanup, path validation (realpath/commonpath). `cleanup_old_events`, `rename_event_folder`, `write_canceled_summary`, `compute_storage_stats`, `resolve_clip_in_folder`. | Used by orchestrator, lifecycle, query, download, timeline, event_test. |
 | `src/frigate_buffer/managers/state.py` | **EventStateManager:** in-memory event state (phase, metadata), active event tracking. | Orchestrator, lifecycle. |
 | `src/frigate_buffer/managers/consolidation.py` | **ConsolidatedEventManager:** CE grouping, `closing` state, `mark_closing`, on_close callback. `schedule_close_timer(ce_id, delay_seconds=None)` — when delay_seconds is set (e.g. 0 for single-camera CE), uses it instead of event_gap_seconds so CE can close immediately. | Orchestrator, lifecycle, timeline_logger, query. |
-| `src/frigate_buffer/managers/zone_filter.py` | **SmartZoneFilter:** per-camera zone/exception filters; `should_start_event`. | Orchestrator (event creation). |
+| `src/frigate_buffer/managers/zone_filter.py` | **SmartZoneFilter:** per-camera zone/exception filters; `should_start_event` uses both **entered_zones** and **current_zones** so events start as soon as the object is in a tracked zone (avoids delayed first notification when Frigate populates zone only in later messages). | Orchestrator (event creation). |
 
 ### Services
 

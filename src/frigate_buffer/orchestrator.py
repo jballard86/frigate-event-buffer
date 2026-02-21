@@ -230,6 +230,7 @@ class StateAwareOrchestrator:
         sub_label = after_data.get("sub_label")
         start_time = after_data.get("start_time", time.time())
         entered_zones = after_data.get("entered_zones") or []
+        current_zones = after_data.get("current_zones") or []
 
         if not event_id:
             logger.debug("Skipping event: no event_id in payload")
@@ -272,8 +273,13 @@ class StateAwareOrchestrator:
                 self.timeline_logger.log_mqtt(folder, "frigate/events", payload, f"Event {mqtt_type} (from Frigate)")
             return
 
-        if not self.zone_filter.should_start_event(camera, label or "", sub_label, entered_zones):
-            logger.debug(f"Ignoring {event_id} (smart zone filter: not in tracked zones, entered={entered_zones})")
+        if not self.zone_filter.should_start_event(
+            camera, label or "", sub_label, entered_zones, current_zones
+        ):
+            logger.debug(
+                f"Ignoring {event_id} (smart zone filter: not in tracked zones, "
+                f"entered={entered_zones}, current={current_zones})"
+            )
             return
 
         self._handle_event_new(
