@@ -172,7 +172,7 @@ frigate-event-buffer/
 | `config.example.yaml` | Example config with all keys and comments. | Reference only. |
 | `pyproject.toml` | Package metadata, deps, `where = ["src"]`, pytest `pythonpath = ["src"]`, `requires-python = ">=3.12"`. | Used by `pip install -e .` and pytest. |
 | `requirements.txt` | Pip install list. | Referenced by Dockerfile. |
-| `Dockerfile` | Multi-stage build: lean Python base + FFmpeg/NVDEC from donor; installs libgomp1 for FFmpeg/ffprobe OpenMP runtime; no entrypoint; runs `python -m frigate_buffer.main`. After deps, uninstalls `opencv-python` (if present) and installs `opencv-python-headless` only so the container has no X11/libxcb dependency. | Build from repo root. |
+| `Dockerfile` | Multi-stage build: lean Python base + FFmpeg/NVDEC from donor; donor stage copies ldd-discovered system libs (libcrypto, libexpat, libgomp, libssl, libz; excludes glibc/toolchain) into `/out/lib`; installs libgomp1 in final stage as fallback; no entrypoint; runs `python -m frigate_buffer.main`. After deps, uninstalls `opencv-python` (if present) and installs `opencv-python-headless` only so the container has no X11/libxcb dependency. | Build from repo root. |
 | `docker-compose.yaml` / `docker-compose.example.yaml` | Compose for local run; GPU, env, mounts. | Deployment. |
 | `MAP.md` | This file—architecture and context for AI. | Must be updated when structure or flows change. |
 | `PHASE1_REFACTOR_CATALOG.md` | Phase 1 discovery catalog for "Everything is a CE" refactor: removals and changes list. | Reference only; delete or archive after refactor is complete. |

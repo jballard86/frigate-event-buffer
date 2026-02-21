@@ -5,11 +5,15 @@ ARG FFMPEG_DONOR_IMAGE=jrottenberg/ffmpeg:7.0-nvidia2204
 FROM ${FFMPEG_DONOR_IMAGE} AS ffmpeg_donor
 
 # Gather all FFmpeg/CUDA/NPP libs from donor into one tree (libnppig etc. may live in lib64 or cuda/lib64).
+# Copy donor system libs required by ffmpeg/ffprobe (from ldd); exclude glibc/toolchain so the final image keeps Debian's.
 FROM ${FFMPEG_DONOR_IMAGE} AS ffmpeg_libs
 RUN mkdir -p /out/lib && \
     cp -a /usr/local/lib/. /out/lib/ 2>/dev/null || true && \
     (cp -an /usr/local/lib64/. /out/lib/ 2>/dev/null || true) && \
-    (cp -an /usr/local/cuda/lib64/. /out/lib/ 2>/dev/null || true)
+    (cp -an /usr/local/cuda/lib64/. /out/lib/ 2>/dev/null || true) && \
+    cp -L /lib/x86_64-linux-gnu/libcrypto.so.3 /lib/x86_64-linux-gnu/libexpat.so.1 \
+        /lib/x86_64-linux-gnu/libgomp.so.1 /lib/x86_64-linux-gnu/libssl.so.3 \
+        /lib/x86_64-linux-gnu/libz.so.1 /out/lib/
 
 FROM python:3.12-slim-bookworm
 # Copy FFmpeg + ffprobe and shared libs (NPP/CUDA for NVDEC) from donor. No GUI libs; opencv-python-headless only.
