@@ -247,46 +247,10 @@
     50% { opacity: 0.7; }
   }
 
-  /* AI Analysis expandable blocks */
-  .ai-block { margin-bottom: 14px; padding-bottom: 10px; border-bottom: 1px solid #0f3460; }
-  .ai-block:last-child { border-bottom: none; margin-bottom: 0; }
-  .ai-block-label { font-weight: 600; color: #e94560; font-size: 0.85rem; margin-bottom: 6px; }
-
-  /* Collapsible review summary */
-  .summary-excerpt {
-    font-size: 0.9rem;
-    line-height: 1.5;
-    color: #ccc;
-  }
-  .summary-full {
-    display: none;
-    margin-top: 8px;
-  }
-  .summary-full.expanded { display: block; }
-  .btn-expand {
-    background: none;
-    border: 1px solid #533483;
-    color: #e94560;
-    padding: 4px 12px;
-    font-size: 0.8rem;
-    margin-top: 8px;
-    cursor: pointer;
-  }
-  .btn-expand:hover { background: #0f3460; }
-
-  /* Rendered markdown content */
-  .markdown-content h1, .markdown-content h2, .markdown-content h3 {
-    color: #e94560;
-    margin: 12px 0 6px 0;
-  }
-  .markdown-content h1 { font-size: 1.05rem; }
-  .markdown-content h2 { font-size: 0.95rem; }
-  .markdown-content h3 { font-size: 0.9rem; }
-  .markdown-content p { margin: 6px 0; line-height: 1.5; color: #ccc; }
-  .markdown-content ul, .markdown-content ol { margin: 6px 0 6px 20px; color: #ccc; }
-  .markdown-content li { margin: 3px 0; }
-  .markdown-content strong { color: #fff; }
-  .markdown-content hr { border-color: #0f3460; margin: 10px 0; }
+  /* AI Analysis tile: placeholder, title, scene */
+  .ai-placeholder { font-style: italic; color: #888; margin: 0 0 10px 0; font-size: 0.9rem; }
+  .ai-title { color: #e94560; font-size: 1rem; margin: 0 0 8px 0; font-weight: 600; }
+  .ai-scene { margin: 0; line-height: 1.5; color: #ccc; font-size: 0.9rem; }
 
   /* Responsive: mobile */
   @media (max-width: 600px) {
@@ -461,111 +425,14 @@
     }
   }
 
-  // Renders GenAI blocks: each genai_entries item gets expand/collapse; fallback to single summary/scene/review.
-  // Returns { html, blocks } so render() can bind expand handlers with full content.
+  // Renders the AI Analysis tile: placeholder, title, and scene from the event object.
   function renderAiAnalysisBlocks(ev) {
-    const parts = [];
-    const blockData = [];
-    let blockIdx = 0;
-    const genaiEntries = ev.genai_entries || [];
-
-    function addAiBlock(label, excerptHtml, content, format, expandable) {
-      const idBase = 'aiBlock' + blockIdx++;
-      const expandBtnHtml = expandable
-        ? `<button class="btn-expand" id="${idBase}Btn" type="button">Expand</button>`
-        : '';
-      const fullHtml = expandable
-        ? `<div class="summary-full" id="${idBase}Full"></div>`
-        : '';
-      parts.push(`<div class="ai-block"><div class="ai-block-label">${label}</div><div class="summary-excerpt" id="${idBase}Excerpt">${excerptHtml}</div>${expandBtnHtml}${fullHtml}</div>`);
-      if (expandable) {
-        blockData.push({ id: idBase, content: content, format: format });
-      }
-    }
-
-    if (genaiEntries.length > 0) {
-      // Render each GenAI event from timeline with its own expand/collapse
-      genaiEntries.forEach((entry, i) => {
-        const title = entry.title || `GenAI Analysis ${i + 1}`;
-        const summary = entry.shortSummary || '';
-        const scene = entry.scene || '';
-        const timeStr = entry.time ? ` (${entry.time})` : '';
-        const content = [summary, scene].filter(Boolean).join('\n\n');
-        if (!content) return;
-        const isTruncated = content.length > 200;
-        const excerpt = isTruncated ? escapeHtml(content.substring(0, 200) + '...') : escapeHtml(content);
-        addAiBlock(
-          `${escapeHtml(title)}${escapeHtml(timeStr)}`,
-          excerpt,
-          content,
-          'text',
-          isTruncated
-        );
-      });
-    }
-
-    // Fallback: single GenAI Summary (title + description) when no genai_entries
-    if (genaiEntries.length === 0) {
-      const summaryContent = (ev.title || ev.description)
-        ? (ev.title ? escapeHtml(ev.title) : '') + (ev.description ? (ev.title ? ' — ' : '') + escapeHtml(ev.description) : '')
-        : null;
-      if (summaryContent) {
-        const isTruncated = summaryContent.length > 200;
-        const excerpt = isTruncated ? summaryContent.substring(0, 200) + '...' : summaryContent;
-        addAiBlock('GenAI Summary', excerpt, summaryContent, 'html', isTruncated);
-      }
-      if (ev.scene) {
-        const isTruncated = ev.scene.length > 200;
-        const excerpt = isTruncated ? escapeHtml(ev.scene.substring(0, 200) + '...') : escapeHtml(ev.scene);
-        addAiBlock('GenAI Scene', excerpt, ev.scene, 'text', isTruncated);
-      }
-    }
-
-    // Cross-Camera Review (or "Review Summary" when single camera)
-    const reviewSummary = ev.review_summary || '';
-    const isNoActivity = /no activity was found|no concerns/i.test(reviewSummary);
-    const isSingleCamera = (ev.cameras && ev.cameras.length === 1) || !ev.cameras;
-    const reviewLabel = (isSingleCamera && isNoActivity) ? 'Review Summary' : 'Cross-Camera Review';
-    if (reviewSummary && !(isNoActivity && genaiEntries.length > 0)) {
-      const lines = reviewSummary.split('\n').filter(l => l.trim() && !l.trim().startsWith('#'));
-      const previewText = lines.slice(0, 3).join(' ');
-      const isTruncated = previewText.length > 200 || lines.length > 3;
-      const rawExcerpt = previewText.substring(0, 200);
-      const excerpt = escapeHtml(rawExcerpt + (isTruncated ? '...' : ''));
-      addAiBlock(escapeHtml(reviewLabel), excerpt, reviewSummary, 'markdown', isTruncated);
-    }
-
-    if (parts.length === 0) return { html: '<p class="description-text">No AI analysis available.</p>', blocks: [] };
-    return { html: parts.join(''), blocks: blockData };
-  }
-
-  /** Set expand/collapse state and content for one AI block. Used by click handler and restore after re-render. */
-  function setBlockExpanded(btn, fullEl, excerptEl, b, expanded) {
-    if (expanded) {
-      fullEl.classList.add('expanded');
-      btn.textContent = 'Collapse';
-      if (fullEl.innerHTML === '') {
-        let displayContent;
-        if (b.format === 'markdown' && typeof marked !== 'undefined') {
-          if (typeof DOMPurify !== 'undefined') {
-            displayContent = DOMPurify.sanitize(marked.parse(b.content));
-            fullEl.innerHTML = '<div class="markdown-content">' + displayContent + '</div>';
-          } else {
-            displayContent = escapeHtml(b.content);
-            fullEl.innerHTML = '<p class="description-text" style="color:#e94560;">(Sanitizer not loaded - showing raw text)</p><p class="description-text">' + displayContent + '</p>';
-          }
-        } else if (b.format === 'html') {
-          fullEl.innerHTML = '<p class="description-text">' + b.content + '</p>';
-        } else {
-          fullEl.innerHTML = '<p class="description-text">' + escapeHtml(b.content) + '</p>';
-        }
-      }
-      if (excerptEl) excerptEl.style.display = 'none';
-    } else {
-      fullEl.classList.remove('expanded');
-      btn.textContent = 'Expand';
-      if (excerptEl) excerptEl.style.display = '';
-    }
+    const placeholder = '<p class="ai-placeholder">future screenshot analysis</p>';
+    const titleText = ev.title != null && ev.title !== '' ? escapeHtml(ev.title) : 'No AI Title Available';
+    const titleHtml = '<h3 class="ai-title">' + titleText + '</h3>';
+    const sceneText = ev.scene != null && ev.scene !== '' ? escapeHtml(ev.scene) : 'No scene description.';
+    const sceneHtml = '<p class="ai-scene">' + sceneText + '</p>';
+    return placeholder + titleHtml + sceneHtml;
   }
 
   // --- Render ---
@@ -582,15 +449,6 @@
     }
 
     const ev = events[currentIndex];
-    // Capture which AI blocks were expanded so we can restore after re-render (e.g. auto-refresh).
-    let expandedAiBlockIds = new Set();
-    const aiContainerOld = document.getElementById('aiAnalysisContainer');
-    if (aiContainerOld && ev.event_id && lastRenderedEventId === ev.event_id) {
-      aiContainerOld.querySelectorAll('.summary-full.expanded').forEach((el) => {
-        const baseId = el.id ? el.id.replace(/Full$/, '') : '';
-        if (baseId) expandedAiBlockIds.add(baseId);
-      });
-    }
     const ts = ev.timestamp ? new Date(parseInt(ev.timestamp) * 1000) : null;
     const endTs = ev.end_timestamp != null ? new Date(Math.round(parseFloat(ev.end_timestamp) * 1000)) : null;
     const dateStr = ts ? ts.toLocaleDateString() : 'Unknown';
@@ -716,24 +574,10 @@
       });
     }
 
-    // Populate AI Analysis blocks and bind expand handlers
-    const aiResult = renderAiAnalysisBlocks(ev);
+    // Populate AI Analysis tile (placeholder, title, scene)
     const aiContainer = document.getElementById('aiAnalysisContainer');
     if (aiContainer) {
-      aiContainer.innerHTML = aiResult.html;
-      aiResult.blocks.forEach((b) => {
-        const btn = document.getElementById(b.id + 'Btn');
-        const excerptEl = document.getElementById(b.id + 'Excerpt');
-        const fullEl = document.getElementById(b.id + 'Full');
-        if (!btn || !fullEl) return;
-        btn.addEventListener('click', () => {
-          const isExpanded = fullEl.classList.toggle('expanded');
-          setBlockExpanded(btn, fullEl, excerptEl, b, isExpanded);
-        });
-        if (expandedAiBlockIds.has(b.id)) {
-          setBlockExpanded(btn, fullEl, excerptEl, b, true);
-        }
-      });
+      aiContainer.innerHTML = renderAiAnalysisBlocks(ev);
       lastRenderedEventId = ev.event_id;
     }
   }

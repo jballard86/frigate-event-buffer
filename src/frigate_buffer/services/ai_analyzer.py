@@ -330,7 +330,21 @@ class GeminiAnalysisService:
                 )
                 resp.raise_for_status()
                 data = resp.json()
-                content = (data.get("choices") or [{}])[0].get("message", {}).get("content")
+                # Prefer native Gemini format; fallback to OpenAI-compatible format.
+                content = None
+                candidates = data.get("candidates") or []
+                if candidates:
+                    first = candidates[0]
+                    if isinstance(first, dict):
+                        content_obj = first.get("content")
+                        if isinstance(content_obj, dict):
+                            parts = content_obj.get("parts") or []
+                            for part in parts:
+                                if isinstance(part, dict) and "text" in part:
+                                    content = part.get("text")
+                                    break
+                if content is None:
+                    content = (data.get("choices") or [{}])[0].get("message", {}).get("content")
                 if not content or not content.strip():
                     logger.warning("Empty response content from proxy")
                     return None

@@ -124,3 +124,39 @@ class TestProxyFailureAfterTwoAttempts(unittest.TestCase):
         self.assertEqual(mock_post.call_count, 2)
         self.assertIsNone(result)
         self.assertGreaterEqual(mock_logger.warning.call_count, 1)
+
+
+class TestSendToProxyNativeGeminiFormat(unittest.TestCase):
+    """send_to_proxy parses native Gemini API response (candidates[].content.parts[].text)."""
+
+    @patch("frigate_buffer.services.ai_analyzer.requests.post")
+    def test_send_to_proxy_parses_native_gemini_response(self, mock_post):
+        gemini_payload = {
+            "title": "G",
+            "shortSummary": "S",
+            "scene": "Sc",
+            "confidence": 0.9,
+            "potential_threat_level": 0,
+        }
+        mock_post.return_value.status_code = 200
+        mock_post.return_value.raise_for_status = lambda: None
+        mock_post.return_value.json.return_value = {
+            "candidates": [
+                {
+                    "content": {
+                        "parts": [{"text": json.dumps(gemini_payload)}],
+                    },
+                },
+            ],
+        }
+        service = GeminiAnalysisService(_minimal_config())
+        frame = np.zeros((100, 100, 3), dtype=np.uint8)
+
+        result = service.send_to_proxy("System prompt", [frame])
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result.get("title"), "G")
+        self.assertEqual(result.get("scene"), "Sc")
+        self.assertEqual(result.get("shortSummary"), "S")
+        self.assertEqual(result.get("confidence"), 0.9)
+        self.assertEqual(result.get("potential_threat_level"), 0)

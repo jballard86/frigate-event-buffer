@@ -206,7 +206,7 @@ frigate-event-buffer/
 
 | Path/Name | Purpose | Dependencies/Interactions |
 |-----------|---------|---------------------------|
-| `src/frigate_buffer/services/ai_analyzer.py` | **GeminiAnalysisService:** system prompt from file; POST to OpenAI-compatible proxy; returns analysis dict; writes `analysis_result.json`; rolling frame cap. All analysis via `analyze_multi_clip_ce` (single- or multi-camera CE); uses multi_clip_extractor. Sends to proxy before writing ai_frame_analysis to disk (deferred write). | Called by orchestrator (`on_ce_ready_for_analysis`); uses VideoService, FileManager (write_ai_frame_analysis_multi_cam). |
+| `src/frigate_buffer/services/ai_analyzer.py` | **GeminiAnalysisService:** system prompt from file; POST to OpenAI-compatible proxy; parses both **native Gemini** (`candidates[].content.parts[].text`) and OpenAI-shaped responses; returns analysis dict; writes `analysis_result.json`; rolling frame cap. All analysis via `analyze_multi_clip_ce` (single- or multi-camera CE); uses multi_clip_extractor. Sends to proxy before writing ai_frame_analysis to disk (deferred write). | Called by orchestrator (`on_ce_ready_for_analysis`); uses VideoService, FileManager (write_ai_frame_analysis_multi_cam). |
 | `src/frigate_buffer/services/multi_clip_extractor.py` | Target-centric frame extraction for CE; requires detection sidecars (no HOG fallback when any camera lacks sidecar). Camera assignment uses **timeline_ema** (Phase 1 dense grid + EMA + hysteresis + segment merge) as the sole logic. Single ffprobe per path for fps/duration; parallel sidecar JSON load; parallel per-camera advance to sample time. | Used by ai_analyzer, event_test_orchestrator. |
 | `src/frigate_buffer/services/timeline_ema.py` | Core camera-assignment logic for multi-cam: dense time grid, EMA smoothing, hysteresis, and segment merge (including first-segment roll-forward). Sole path for which camera is chosen per sample time. | Used by multi_clip_extractor. |
 | `src/frigate_buffer/services/video.py` | **VideoService:** NVDEC decode (ffmpegcv), `generate_detection_sidecar`, `generate_detection_sidecars_for_cameras` (shared YOLO + lock), `generate_gif_from_clip`. Single `_get_video_metadata` ffprobe per clip (width, height, fps, duration). App-level sidecar lock injected by orchestrator. | Used by lifecycle, ai_analyzer, event_test. |
@@ -234,7 +234,7 @@ frigate-event-buffer/
 | Path/Name | Purpose | Dependencies/Interactions |
 |-----------|---------|---------------------------|
 | `src/frigate_buffer/web/server.py` | **create_app(orchestrator):** routes `/player`, `/stats-page`, `/daily-review`, `/test-multi-cam`, `/api/test-multi-cam/*`, `/api/events`, `/api/files`, `/api/daily-review/dates`, `/api/daily-review/<date>`, `/api/daily-review/current`, `/api/daily-review/generate` (POST), `/api/stats`, `/status`, timeline page/download. Daily report UI served from `daily_reports/*_report.md`; no Frigate API. Uses EventQueryService, path safety via file_manager. | Closes over orchestrator; uses query service, file_manager. |
-| `src/frigate_buffer/web/templates/*.html` | Jinja2 templates for player, stats, daily report, timeline, test run. | Rendered by Flask. |
+| `src/frigate_buffer/web/templates/*.html` | Jinja2 templates for player, stats, daily report, timeline, test run. Player's AI Analysis tile shows a static layout: placeholder, event title, and scene (from event data; no expand/collapse). | Rendered by Flask. |
 | `src/frigate_buffer/web/static/*.js` | DOMPurify, Marked (min). | Served by Flask. |
 
 ### Tests
