@@ -22,7 +22,8 @@ services:
     volumes:
       # --- IMPORTANT: Update these paths to match your host system ---
       # Maps the container's storage folder to a directory on your host.
-      # This is where clips, snapshots, and summaries will be saved.
+      # This is where clips, snapshots, and summaries are saved. The app also uses
+      # storage/ultralytics/ and storage/yolo_models/ for YOLO config and model cache (persisted across restarts).
       - /path/to/your/appdata/frigate_buffer:/app/storage
 
       # (Optional) Mount a config.yaml file for advanced camera/label filtering.
@@ -40,7 +41,6 @@ services:
       - FRIGATE_URL=http://YOUR_FRIGATE_IP:5000
       # Your MQTT Broker IP/hostname.
       - MQTT_BROKER=YOUR_MQTT_BROKER_IP
-      - YOLO_CONFIG_DIR=/tmp/Ultralytics
 
       # --- OPTIONAL (these will override settings in config.yaml) ---
       - MQTT_PORT=1883

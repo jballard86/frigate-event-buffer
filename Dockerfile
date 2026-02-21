@@ -31,7 +31,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt && \
+    pip uninstall -y opencv-python opencv-python-headless 2>/dev/null || true && \
+    pip install --no-cache-dir --force-reinstall opencv-python-headless
+
+# (Opencv fix above: Ultralytics pulls in opencv-python (GUI); we keep only headless so no libxcb/X11. Runs only when requirements.txt changes.)
 
 COPY pyproject.toml ./
 COPY src/frigate_buffer/ ./src/frigate_buffer/
@@ -39,11 +43,6 @@ COPY config.example.yaml ./
 RUN mkdir -p /app/storage
 
 RUN pip install --no-cache-dir --no-deps .
-
-# Ultralytics pulls in opencv-python (GUI); ensure only headless is present so no libxcb/X11 in container.
-# Uninstall both variants then force-reinstall headless so cv2 is always present.
-RUN pip uninstall -y opencv-python opencv-python-headless 2>/dev/null || true && \
-    pip install --no-cache-dir --force-reinstall opencv-python-headless
 
 EXPOSE 5055
 

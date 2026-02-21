@@ -9,6 +9,7 @@ Run with: python -m frigate_buffer.main
 """
 
 import logging
+import os
 import signal
 import sys
 from pathlib import Path
@@ -68,6 +69,13 @@ def main():
 
     # Setup logging with configured level
     setup_logging(config.get('LOG_LEVEL', 'INFO'))
+
+    # Ultralytics config and model cache under storage so they persist and are writable (no warning, no re-download each boot).
+    storage_path = config.get("STORAGE_PATH", "/app/storage")
+    yolo_config_dir = os.path.join(storage_path, "ultralytics")
+    os.makedirs(yolo_config_dir, exist_ok=True)
+    os.environ.setdefault("YOLO_CONFIG_DIR", yolo_config_dir)
+    os.makedirs(os.path.join(storage_path, "yolo_models"), exist_ok=True)
 
     VERSION = _load_version()
     logger.info("VERSION = %s", VERSION)

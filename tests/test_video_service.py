@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 from frigate_buffer.services.video import (
     VideoService,
     ensure_detection_model_ready,
+    get_detection_model_path,
 )
 
 
@@ -157,15 +158,30 @@ class TestEnsureDetectionModelReady(unittest.TestCase):
     @patch("ultralytics.YOLO")
     def test_ensure_detection_model_ready_loads_and_reports(self, mock_yolo_cls):
         mock_model = MagicMock()
-        mock_model.ckpt_path = "/path/to/yolov8n.pt"
+        storage = "/tmp/test_storage"
+        model_path = os.path.join(storage, "yolo_models", "yolov8n.pt")
+        mock_model.ckpt_path = model_path
         mock_yolo_cls.return_value = mock_model
+        config = {"DETECTION_MODEL": "yolov8n.pt", "STORAGE_PATH": storage}
         with patch(
             "frigate_buffer.services.video.os.path.isfile",
-            side_effect=lambda p: p == "/path/to/yolov8n.pt" or p == "yolov8n.pt",
+            side_effect=lambda p: p == model_path,
         ):
-            result = ensure_detection_model_ready({"DETECTION_MODEL": "yolov8n.pt"})
+            result = ensure_detection_model_ready(config)
         self.assertTrue(result)
-        mock_yolo_cls.assert_called_once_with("yolov8n.pt")
+        mock_yolo_cls.assert_called_once_with(model_path)
+
+    def test_get_detection_model_path_under_storage(self):
+        """get_detection_model_path returns a path under STORAGE_PATH with yolo_models and model basename."""
+        config = {"STORAGE_PATH": "/app/storage", "DETECTION_MODEL": "yolo26m.pt"}
+        path = get_detection_model_path(config)
+        self.assertEqual(path, "/app/storage/yolo_models/yolo26m.pt")
+
+    def test_get_detection_model_path_default_model_when_empty(self):
+        """When DETECTION_MODEL is empty, basename falls back to yolov8n.pt."""
+        config = {"STORAGE_PATH": "/data"}
+        path = get_detection_model_path(config)
+        self.assertEqual(path, "/data/yolo_models/yolov8n.pt")
 
 
 if __name__ == "__main__":

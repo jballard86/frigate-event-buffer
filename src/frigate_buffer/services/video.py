@@ -43,19 +43,33 @@ def log_gpu_status() -> None:
         logger.info("nvidia-smi not found; NVDEC decode may fall back to CPU.")
 
 
+def get_detection_model_path(config: dict) -> str:
+    """
+    Return the absolute path where the detection model should be stored/loaded.
+
+    Uses STORAGE_PATH so the model persists across container restarts (e.g. in Docker).
+    Ultralytics will download to this path if the file does not exist.
+    """
+    storage = config.get("STORAGE_PATH", "/app/storage")
+    model_name = (config.get("DETECTION_MODEL") or "").strip() or "yolov8n.pt"
+    return os.path.join(storage, "yolo_models", os.path.basename(model_name))
+
+
 def ensure_detection_model_ready(config: dict) -> bool:
     """
     At startup: check if the multi-cam detection model is downloaded; download if not; log result.
     Call after config is loaded. Returns True if model is ready, False if skipped or failed.
+    Uses a path under STORAGE_PATH so the model persists across restarts.
     """
     model_name = (config.get("DETECTION_MODEL") or "").strip()
     if not model_name:
         logger.info("Multi-cam detection model not configured (DETECTION_MODEL empty), skipping preload")
         return False
+    model_path = get_detection_model_path(config)
     try:
-        existed = os.path.isfile(model_name)
+        existed = os.path.isfile(model_path)
         from ultralytics import YOLO
-        model = YOLO(model_name)
+        model = YOLO(model_path)
         ckpt = getattr(model, "ckpt_path", None)
         path_str = f" at {ckpt}" if (ckpt and isinstance(ckpt, str) and os.path.isfile(ckpt)) else ""
         if existed or (ckpt and os.path.isfile(ckpt)):
@@ -239,7 +253,8 @@ class VideoService:
                 return []
             try:
                 from ultralytics import YOLO
-                model = YOLO(detection_model)
+                model_path = get_detection_model_path(config)
+                model = YOLO(model_path)
             except Exception as e:
                 logger.warning("Could not load YOLO for run_detection_on_image: %s", e)
                 return []
@@ -312,7 +327,8 @@ class VideoService:
                 if model_to_use is None and detection_model:
                     try:
                         from ultralytics import YOLO
-                        model_to_use = YOLO(detection_model)
+                        model_path = get_detection_model_path(config)
+                        model_to_use = YOLO(model_path)
                         logger.debug("YOLO loaded for detection sidecar: %s", clip_path)
                     except Exception as e:
                         logger.warning("Could not load YOLO for detection sidecar: %s", e)
@@ -401,7 +417,8 @@ class VideoService:
             if model_to_use is None and detection_model:
                 try:
                     from ultralytics import YOLO
-                    model_to_use = YOLO(detection_model)
+                    model_path = get_detection_model_path(config)
+                    model_to_use = YOLO(model_path)
                     logger.debug("YOLO loaded for detection sidecar: %s", clip_path)
                 except Exception as e:
                     logger.warning("Could not load YOLO for detection sidecar: %s", e)
@@ -482,7 +499,8 @@ class VideoService:
             if detection_model:
                 try:
                     from ultralytics import YOLO
-                    yolo_model = YOLO(detection_model)
+                    model_path = get_detection_model_path(config)
+                    yolo_model = YOLO(model_path)
                 except Exception as e:
                     logger.warning("Could not load shared YOLO for sidecar: %s", e)
             results: list[tuple[str, bool]] = []

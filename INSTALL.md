@@ -114,10 +114,11 @@ docker run -d --name frigate_buffer --restart unless-stopped \
   -e LOG_LEVEL=INFO \
   -e NVIDIA_VISIBLE_DEVICES=all \
   -e NVIDIA_DRIVER_CAPABILITIES=compute,video,utility \
-  -e YOLO_CONFIG_DIR=/tmp/Ultralytics \
   --gpus all \
   frigate-buffer:latest
 ```
+
+The app uses the storage volume for Ultralytics config and the YOLO model cache: `storage/ultralytics/` (settings) and `storage/yolo_models/` (downloaded weights). These persist across restarts so you won’t see the config-directory warning or re-download the model each boot. You do not need to set `YOLO_CONFIG_DIR` unless you want to override this.
 ## 6. Update (after code changes)
 
 From repo root:
