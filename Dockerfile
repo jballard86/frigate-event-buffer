@@ -21,6 +21,7 @@ RUN echo '/usr/local/lib' > /etc/ld.so.conf.d/local.conf && ldconfig
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     ca-certificates \
+    libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
