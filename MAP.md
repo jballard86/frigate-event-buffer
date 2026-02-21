@@ -39,7 +39,7 @@
 
 ## 2. Architectural Pattern
 
-- **Design:** **Orchestrator-centric service layer.** One central coordinator (`StateAwareOrchestrator`) owns MQTT routing, event/CE handling, and scheduling; it delegates to managers (state, file, consolidation, zone filter, reviews), services (lifecycle, download, notifier, timeline, AI analyzer, daily reporter, export watchdog), and the Flask app.
+- **Design:** **Orchestrator-centric service layer.** One central coordinator (`StateAwareOrchestrator`) owns MQTT routing, event/CE handling, and scheduling; it delegates to managers (state, file, consolidation, zone filter), services (lifecycle, download, notifier, timeline, AI analyzer, daily reporter, export watchdog), and the Flask app.
 - **Separation of concerns:**
   - **Logic in `src/`:** Core package is `src/frigate_buffer/` (orchestrator, managers, services, config, models). Only `main.py` is the library entry point; run with `python -m frigate_buffer.main`.
   - **Web:** Flask app, templates, and static assets live under `src/frigate_buffer/web/`. The server is created by `create_app(orchestrator)` and closes over the orchestrator; it does not own business logic.
@@ -87,7 +87,6 @@ frigate-event-buffer/
 │       │   ├── __init__.py
 │       │   ├── file.py
 │       │   ├── state.py
-│       │   ├── reviews.py
 │       │   ├── consolidation.py
 │       │   └── zone_filter.py
 │       ├── services/
@@ -203,7 +202,6 @@ frigate-event-buffer/
 | `src/frigate_buffer/managers/file.py` | **FileManager:** storage paths, clip/snapshot download (via DownloadService), export coordination (no transcode), cleanup, path validation (realpath/commonpath). `cleanup_old_events`, `rename_event_folder`, `write_canceled_summary`, `compute_storage_stats`, `resolve_clip_in_folder`. | Used by orchestrator, lifecycle, query, download, timeline, event_test. |
 | `src/frigate_buffer/managers/state.py` | **EventStateManager:** in-memory event state (phase, metadata), active event tracking. | Orchestrator, lifecycle. |
 | `src/frigate_buffer/managers/consolidation.py` | **ConsolidatedEventManager:** CE grouping, `closing` state, `mark_closing`, on_close callback. `schedule_close_timer(ce_id, delay_seconds=None)` — when delay_seconds is set (e.g. 0 for single-camera CE), uses it instead of event_gap_seconds so CE can close immediately. | Orchestrator, lifecycle, timeline_logger, query. |
-| `src/frigate_buffer/managers/reviews.py` | **DailyReviewManager:** Frigate daily review fetch/cache. | Orchestrator, web. |
 | `src/frigate_buffer/managers/zone_filter.py` | **SmartZoneFilter:** per-camera zone/exception filters; `should_start_event`. | Orchestrator (event creation). |
 
 ### Services
@@ -217,8 +215,8 @@ frigate-event-buffer/
 | `src/frigate_buffer/services/lifecycle.py` | **EventLifecycleService:** event creation, event end (discard short, cancel long). All finalized events are CEs; at CE close: export clips per camera, generate detection sidecars for all (including single-cam), then `on_ce_ready_for_analysis`. | Orchestrator delegates; calls download, file_manager, video_service, orchestrator callback. |
 | `src/frigate_buffer/services/download.py` | **DownloadService:** Frigate snapshot, export/clip download (dynamic clip names), `post_event_description`. | FileManager, lifecycle, orchestrator. |
 | `src/frigate_buffer/services/notifier.py` | **NotificationPublisher:** publish to `frigate/custom/notifications`; `clear_tag` for updates; timeline_callback = TimelineLogger.log_ha. | Orchestrator, lifecycle. |
-| `src/frigate_buffer/services/query.py` | **EventQueryService:** read event data from filesystem with TTL and per-folder caching; `resolve_clip_in_folder`; list events, timeline merge. | Flask server (events, stats, daily-review, player). |
-| `src/frigate_buffer/services/daily_reporter.py` | **DailyReporterService:** scheduled; aggregate analysis_result (or daily_reports aggregate JSONL), report prompt, send_text_prompt, write `daily_reports/YYYY-MM-DD_report.md`. | Scheduled by orchestrator. |
+| `src/frigate_buffer/services/query.py` | **EventQueryService:** read event data from filesystem with TTL and per-folder caching; `resolve_clip_in_folder`; list events, timeline merge. | Flask server (events, stats, player). |
+| `src/frigate_buffer/services/daily_reporter.py` | **DailyReporterService:** scheduled; aggregate analysis_result (or daily_reports aggregate JSONL), report prompt, send_text_prompt, write `daily_reports/YYYY-MM-DD_report.md`; `cleanup_old_reports(retention_days)`. Single source for daily report UI. | Scheduled by orchestrator; web server reads markdown from daily_reports/. |
 | `src/frigate_buffer/services/frigate_export_watchdog.py` | Parse timeline for export_id, verify clip exists, DELETE Frigate `/api/export/{id}`; 404/422 = already removed. | Scheduled by orchestrator. |
 | `src/frigate_buffer/services/timeline.py` | **TimelineLogger:** append HA/MQTT/Frigate API entries to `notification_timeline.json` via FileManager. | Orchestrator, notifier (timeline_callback). |
 | `src/frigate_buffer/services/mqtt_client.py` | **MqttClientWrapper:** connect, subscribe, message callback to orchestrator. | Orchestrator provides `_on_mqtt_message`. |
@@ -237,8 +235,8 @@ frigate-event-buffer/
 
 | Path/Name | Purpose | Dependencies/Interactions |
 |-----------|---------|---------------------------|
-| `src/frigate_buffer/web/server.py` | **create_app(orchestrator):** routes `/player`, `/stats-page`, `/daily-review`, `/test-multi-cam`, `/api/test-multi-cam/*`, `/api/events`, `/api/files`, `/api/daily-review`, `/api/stats`, `/status`, timeline page/download. Uses EventQueryService, path safety via file_manager. | Closes over orchestrator; uses query service, file_manager. |
-| `src/frigate_buffer/web/templates/*.html` | Jinja2 templates for player, stats, daily review, timeline, test run. | Rendered by Flask. |
+| `src/frigate_buffer/web/server.py` | **create_app(orchestrator):** routes `/player`, `/stats-page`, `/daily-review`, `/test-multi-cam`, `/api/test-multi-cam/*`, `/api/events`, `/api/files`, `/api/daily-review/dates`, `/api/daily-review/<date>`, `/api/daily-review/current`, `/api/daily-review/generate` (POST), `/api/stats`, `/status`, timeline page/download. Daily report UI served from `daily_reports/*_report.md`; no Frigate API. Uses EventQueryService, path safety via file_manager. | Closes over orchestrator; uses query service, file_manager. |
+| `src/frigate_buffer/web/templates/*.html` | Jinja2 templates for player, stats, daily report, timeline, test run. | Rendered by Flask. |
 | `src/frigate_buffer/web/static/*.js` | DOMPurify, Marked (min). | Served by Flask. |
 
 ### Scripts
@@ -265,9 +263,9 @@ frigate-event-buffer/
 3. **Event end (short):** Lifecycle checks duration &lt; `minimum_event_seconds` → discard: delete folder, remove from state/CE, publish MQTT `status: "discarded"` with same tag for HA clear.
 4. **Event end (long/canceled):** Duration ≥ `max_event_length_seconds` → no clip export/AI; write canceled summary, notify HA, rename folder `-canceled`; cleanup later by retention.
 5. **Consolidated event (all events):** Every event is a CE (single- or multi-camera). At CE close: Lifecycle exports each camera clip, **VideoService.generate_detection_sidecars_for_cameras** (all cameras, including single) → `on_ce_ready_for_analysis` → **analyze_multi_clip_ce** (multi_clip_extractor, optional timeline_ema) → `_handle_ce_analysis_result` → write summary/metadata at CE root, notify HA. Single-camera CE uses same pipeline (camera count 1).
-6. **Frigate review path:** `_handle_review` / `_handle_analysis_result` still used when GenAI data arrives via frigate/reviews (update state, write files, notify).
-7. **Web:** Flask uses **EventQueryService** to list events, stats, timeline; `resolve_clip_in_folder` for dynamic clip URLs; path safety via FileManager.
-8. **Scheduled:** Cleanup (retention), export watchdog (DELETE completed exports), daily reporter (aggregate + report prompt → proxy → markdown).
+6. **Frigate review path (per-event only):** `_handle_review` used when GenAI data arrives via MQTT `frigate/reviews` (update state, write files, notify). Daily summary is no longer fetched from Frigate; the daily report page is fed only from **DailyReporterService** output (`daily_reports/YYYY-MM-DD_report.md`).
+7. **Web:** Flask uses **EventQueryService** to list events, stats, timeline; `resolve_clip_in_folder` for dynamic clip URLs; path safety via FileManager. Daily report UI reads markdown from `daily_reports/`; POST `/api/daily-review/generate` triggers on-demand report generation.
+8. **Scheduled:** Cleanup (retention), export watchdog (DELETE completed exports), daily reporter (aggregate + report prompt → proxy → markdown; then `cleanup_old_reports`).
 
 **Files touched in primary flow:** `orchestrator.py`, `services/lifecycle.py`, `services/ai_analyzer.py`, `services/mqtt_client.py`, `managers/state.py`, `managers/file.py`, `managers/consolidation.py`, `services/notifier.py`, `services/download.py`, `services/query.py`, `web/server.py`.
 

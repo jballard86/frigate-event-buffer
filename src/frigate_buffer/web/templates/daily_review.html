@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Daily Review - Frigate Event Buffer</title>
+<title>Daily Report - Frigate Event Buffer</title>
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -76,6 +76,12 @@
   }
   .btn-fetch:hover { background: #2d7a2d; }
 
+  .btn-generate {
+    background: #1a3a4a;
+    border-color: #2d5a7a;
+  }
+  .btn-generate:hover { background: #2d5a7a; }
+
   .loading {
     text-align: center;
     padding: 40px;
@@ -130,7 +136,7 @@
 <body>
 
 <div class="header">
-  <h1>Daily Review</h1>
+  <h1>Daily Report</h1>
   <div class="header-controls">
     <a href="/player"><button>Back to Events</button></a>
   </div>
@@ -142,12 +148,13 @@
     <select id="dateSelect">
       <option value="">Loading...</option>
     </select>
-    <button id="btnLoad">Load Review</button>
-    <button class="btn-fetch" id="btnCurrentDay">Current Day Review</button>
+    <button id="btnLoad">Load Report</button>
+    <button class="btn-fetch" id="btnCurrentDay">Today's Report</button>
+    <button class="btn-generate" id="btnGenerate">Generate Today's Report</button>
   </div>
 
   <div id="errorMsg" class="error" style="display:none;"></div>
-  <div id="loading" class="loading" style="display:none;">Fetching review...</div>
+  <div id="loading" class="loading" style="display:none;">Loading report...</div>
   <div id="reviewContent" class="review-content"></div>
 </div>
 
@@ -158,6 +165,7 @@
   const dateSelect = document.getElementById('dateSelect');
   const btnLoad = document.getElementById('btnLoad');
   const btnCurrentDay = document.getElementById('btnCurrentDay');
+  const btnGenerate = document.getElementById('btnGenerate');
   const errorMsg = document.getElementById('errorMsg');
   const loading = document.getElementById('loading');
   const reviewContent = document.getElementById('reviewContent');
@@ -171,8 +179,9 @@
     errorMsg.style.display = 'block';
   }
 
-  function setLoading(on) {
+  function setLoading(on, text) {
     loading.style.display = on ? 'block' : 'none';
+    if (on && text) loading.textContent = text;
   }
 
   function formatDateLabel(d) {
@@ -223,16 +232,16 @@
       return;
     }
     hideError();
-    if (showLoading) setLoading(true);
+    if (showLoading) setLoading(true, 'Loading report...');
     try {
       const resp = await fetch(`/api/daily-review/${dateStr}`);
       const data = await resp.json();
       if (!resp.ok) {
-        throw new Error(data.error || 'Failed to load review');
+        throw new Error(data.error || 'Failed to load report');
       }
       renderReview(data);
     } catch (e) {
-      showError(e.message || 'Failed to load review.');
+      showError(e.message || 'Failed to load report.');
       reviewContent.innerHTML = '';
     } finally {
       setLoading(false);
@@ -241,20 +250,40 @@
 
   async function fetchCurrentDay() {
     hideError();
-    setLoading(true);
+    setLoading(true, 'Loading report...');
     try {
       const resp = await fetch('/api/daily-review/current');
       const data = await resp.json();
       if (!resp.ok) {
-        throw new Error(data.error || 'Failed to fetch current day review');
+        throw new Error(data.error || 'No report for today yet');
       }
       renderReview(data);
       await loadDates();
       const today = new Date().toISOString().slice(0, 10);
       dateSelect.value = today;
     } catch (e) {
-      showError(e.message || 'Failed to fetch current day review.');
+      showError(e.message || 'No report for today yet.');
       reviewContent.innerHTML = '';
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function generateTodayReport() {
+    hideError();
+    setLoading(true, 'Generating report...');
+    try {
+      const resp = await fetch('/api/daily-review/generate', { method: 'POST' });
+      const data = await resp.json();
+      if (!resp.ok) {
+        throw new Error(data.error || 'Generation failed');
+      }
+      await loadDates();
+      const today = new Date().toISOString().slice(0, 10);
+      dateSelect.value = today;
+      await loadReview(today, true);
+    } catch (e) {
+      showError(e.message || 'Failed to generate report.');
     } finally {
       setLoading(false);
     }
@@ -275,12 +304,13 @@
 
   btnLoad.addEventListener('click', () => loadReview(dateSelect.value));
   btnCurrentDay.addEventListener('click', fetchCurrentDay);
+  btnGenerate.addEventListener('click', generateTodayReport);
   dateSelect.addEventListener('change', () => loadReview(dateSelect.value));
 
   loadDates().then((defaultDate) => {
     const sel = dateSelect.value || defaultDate;
     if (sel) loadReview(sel, false);
-  });
+  }).catch(() => setLoading(false));
 })();
 </script>
 </body>

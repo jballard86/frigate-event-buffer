@@ -26,7 +26,6 @@ from frigate_buffer.services.download import (
     DEFAULT_EVENTS_CLIP_TIMEOUT,
 )
 from frigate_buffer.managers.consolidation import ConsolidatedEventManager
-from frigate_buffer.managers.reviews import DailyReviewManager
 from frigate_buffer.managers.zone_filter import SmartZoneFilter
 from frigate_buffer.services.notifier import NotificationPublisher
 from frigate_buffer.services.timeline import TimelineLogger
@@ -137,13 +136,6 @@ class StateAwareOrchestrator:
 
         # Update callback after lifecycle service creation
         self.consolidated_manager.on_close_callback = self.lifecycle_service.finalize_consolidated_event
-
-        # Daily review manager (Frigate review summarize API)
-        self.daily_review_manager = DailyReviewManager(
-            config['STORAGE_PATH'],
-            config['FRIGATE_URL'],
-            config.get('DAILY_REVIEW_RETENTION_DAYS', 90)
-        )
 
         # Daily reporter (AI report from analysis_result.json) - only when AI analyzer enabled
         if self.ai_analyzer:
@@ -696,9 +688,6 @@ class StateAwareOrchestrator:
         schedule.every(watchdog_minutes).minutes.do(self._run_export_watchdog)
         logger.info(f"Scheduled export watchdog every {watchdog_minutes} minute(s)")
 
-        review_hour = self.config.get('DAILY_REVIEW_SCHEDULE_HOUR', 1)
-        schedule.every().day.at(f"{review_hour:02d}:00").do(self._daily_review_job)
-        logger.info(f"Scheduled daily review at {review_hour:02d}:00")
         report_hour = self.config.get('DAILY_REPORT_SCHEDULE_HOUR', 1)
         schedule.every().day.at(f"{report_hour:02d}:00").do(self._daily_report_job)
         logger.info(f"Scheduled daily report at {report_hour:02d}:00")
@@ -730,19 +719,6 @@ class StateAwareOrchestrator:
         except Exception as e:
             logger.error(f"Failed to update storage stats: {e}")
 
-    def _daily_review_job(self):
-        """Fetch yesterday's review from Frigate and save. Runs at configured hour (default 1am)."""
-        yesterday = date.today() - timedelta(days=1)
-        logger.info(f"Running daily review job for {yesterday}")
-        result = self.daily_review_manager.fetch_and_save(yesterday)
-        if result:
-            logger.info("Daily review saved successfully")
-        else:
-            logger.warning("Daily review fetch failed or returned no data")
-        deleted = self.daily_review_manager.cleanup_old()
-        if deleted > 0:
-            logger.info(f"Cleaned up {deleted} old daily reviews")
-
     def _daily_report_job(self):
         """Generate yesterday's AI daily report from analysis_result.json. Runs at configured hour (default 1am)."""
         yesterday = date.today() - timedelta(days=1)
@@ -754,6 +730,10 @@ class StateAwareOrchestrator:
             logger.info("Daily report generated successfully")
         else:
             logger.warning("Daily report generation failed or no response from proxy")
+        retention_days = self.config.get("DAILY_REPORT_RETENTION_DAYS", 90)
+        deleted = self.daily_reporter.cleanup_old_reports(retention_days)
+        if deleted > 0:
+            logger.info("Cleaned up %d old daily report(s)", deleted)
 
     def _hourly_cleanup(self):
         """Hourly cleanup task. Delegates to lifecycle service."""

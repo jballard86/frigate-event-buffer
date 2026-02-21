@@ -10,7 +10,7 @@ and deletes the aggregate file on success.
 import json
 import logging
 import os
-from datetime import date, datetime, time as dt_time
+from datetime import date, datetime, timedelta, time as dt_time
 from typing import Any
 
 from frigate_buffer.services.ai_analyzer import GeminiAnalysisService
@@ -310,3 +310,30 @@ class DailyReporterService:
         except OSError as e:
             logger.error("Could not write daily report to %s: %s", out_path, e)
             return False
+
+    def cleanup_old_reports(self, retention_days: int) -> int:
+        """
+        Remove report files older than retention_days. Returns count deleted.
+        Only deletes files matching YYYY-MM-DD_report.md.
+        """
+        out_dir = os.path.join(self.storage_path, "daily_reports")
+        if not os.path.isdir(out_dir):
+            return 0
+        cutoff = date.today() - timedelta(days=retention_days)
+        deleted = 0
+        for name in os.listdir(out_dir):
+            if not name.endswith("_report.md"):
+                continue
+            date_str = name.replace("_report.md", "")
+            if len(date_str) != 10 or date_str[4] != "-" or date_str[7] != "-":
+                continue
+            try:
+                d = datetime.strptime(date_str, "%Y-%m-%d").date()
+                if d < cutoff:
+                    path = os.path.join(out_dir, name)
+                    os.remove(path)
+                    deleted += 1
+                    logger.info("Cleaned up old daily report: %s", name)
+            except ValueError:
+                pass
+        return deleted

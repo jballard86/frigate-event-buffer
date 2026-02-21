@@ -49,9 +49,8 @@ CONFIG_SCHEMA = Schema({
         Optional('summary_padding_before'): int,                # Seconds before event start for Frigate review summary window.
         Optional('summary_padding_after'): int,                 # Seconds after event end for Frigate review summary window.
         Optional('stats_refresh_seconds'): int,                 # Stats page auto-refresh interval (seconds).
-        Optional('daily_review_retention_days'): int,           # How long to keep saved daily reviews (days).
-        Optional('daily_review_schedule_hour'): int,            # Hour (0-23) to run daily review fetch for previous day.
-        Optional('daily_report_schedule_hour'): int,             # Hour (0-23) to generate AI daily report from analysis results.
+        Optional('daily_report_retention_days'): int,          # How long to keep saved daily reports (days).
+        Optional('daily_report_schedule_hour'): int,            # Hour (0-23) to generate AI daily report from analysis results.
         Optional('report_prompt_file'): str,                    # Path to prompt file for daily report; empty = use default.
         Optional('report_known_person_name'): str,              # Placeholder value for {known_person_name} in report prompt.
         Optional('event_gap_seconds'): int,                     # Seconds of inactivity before next event starts a new consolidated group.
@@ -161,8 +160,7 @@ def load_config() -> dict:
         'SUMMARY_PADDING_BEFORE': 15,
         'SUMMARY_PADDING_AFTER': 15,
         'STATS_REFRESH_SECONDS': 60,
-        'DAILY_REVIEW_RETENTION_DAYS': 90,
-        'DAILY_REVIEW_SCHEDULE_HOUR': 1,
+        'DAILY_REPORT_RETENTION_DAYS': 90,
         'DAILY_REPORT_SCHEDULE_HOUR': 1,
         'REPORT_PROMPT_FILE': '',
         'REPORT_KNOWN_PERSON_NAME': '',
@@ -289,8 +287,7 @@ def load_config() -> dict:
                     config['SUMMARY_PADDING_BEFORE'] = settings.get('summary_padding_before', config['SUMMARY_PADDING_BEFORE'])
                     config['SUMMARY_PADDING_AFTER'] = settings.get('summary_padding_after', config['SUMMARY_PADDING_AFTER'])
                     config['STATS_REFRESH_SECONDS'] = settings.get('stats_refresh_seconds', config['STATS_REFRESH_SECONDS'])
-                    config['DAILY_REVIEW_RETENTION_DAYS'] = settings.get('daily_review_retention_days', config['DAILY_REVIEW_RETENTION_DAYS'])
-                    config['DAILY_REVIEW_SCHEDULE_HOUR'] = settings.get('daily_review_schedule_hour', config['DAILY_REVIEW_SCHEDULE_HOUR'])
+                    config['DAILY_REPORT_RETENTION_DAYS'] = settings.get('daily_report_retention_days', config['DAILY_REPORT_RETENTION_DAYS'])
                     config['DAILY_REPORT_SCHEDULE_HOUR'] = settings.get('daily_report_schedule_hour', config['DAILY_REPORT_SCHEDULE_HOUR'])
                     config['REPORT_PROMPT_FILE'] = (settings.get('report_prompt_file') or config['REPORT_PROMPT_FILE']) or ''
                     config['REPORT_KNOWN_PERSON_NAME'] = (settings.get('report_known_person_name') or config['REPORT_KNOWN_PERSON_NAME']) or ''
@@ -404,8 +401,7 @@ def load_config() -> dict:
     config['RETENTION_DAYS'] = int(os.getenv('RETENTION_DAYS', str(config['RETENTION_DAYS'])))
     config['LOG_LEVEL'] = os.getenv('LOG_LEVEL', config['LOG_LEVEL'])
     config['STATS_REFRESH_SECONDS'] = int(os.getenv('STATS_REFRESH_SECONDS', str(config['STATS_REFRESH_SECONDS'])))
-    config['DAILY_REVIEW_RETENTION_DAYS'] = int(os.getenv('DAILY_REVIEW_RETENTION_DAYS', str(config['DAILY_REVIEW_RETENTION_DAYS'])))
-    config['DAILY_REVIEW_SCHEDULE_HOUR'] = int(os.getenv('DAILY_REVIEW_SCHEDULE_HOUR', str(config['DAILY_REVIEW_SCHEDULE_HOUR'])))
+    config['DAILY_REPORT_RETENTION_DAYS'] = int(os.getenv('DAILY_REPORT_RETENTION_DAYS', str(config['DAILY_REPORT_RETENTION_DAYS'])))
     config['DAILY_REPORT_SCHEDULE_HOUR'] = int(os.getenv('DAILY_REPORT_SCHEDULE_HOUR', str(config['DAILY_REPORT_SCHEDULE_HOUR'])))
     config['REPORT_KNOWN_PERSON_NAME'] = (os.getenv('REPORT_KNOWN_PERSON_NAME') or config['REPORT_KNOWN_PERSON_NAME']) or ''
     config['EVENT_GAP_SECONDS'] = int(os.getenv('EVENT_GAP_SECONDS', str(config['EVENT_GAP_SECONDS'])))

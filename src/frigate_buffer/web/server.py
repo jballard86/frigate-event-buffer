@@ -70,38 +70,93 @@ def create_app(orchestrator):
         return render_template('stats.html',
             stats_refresh_seconds=orchestrator.config.get('STATS_REFRESH_SECONDS', 60))
 
+    def _daily_reports_dir():
+        return os.path.join(storage_path, 'daily_reports')
+
+    def _list_report_dates():
+        """Return sorted list of YYYY-MM-DD for which we have a report file, newest first."""
+        reports_dir = _daily_reports_dir()
+        if not os.path.isdir(reports_dir):
+            return []
+        dates = []
+        for name in os.listdir(reports_dir):
+            if not name.endswith('_report.md'):
+                continue
+            date_str = name.replace('_report.md', '')
+            if len(date_str) == 10 and date_str[4] == '-' and date_str[7] == '-':
+                try:
+                    datetime.strptime(date_str, '%Y-%m-%d')
+                    dates.append(date_str)
+                except ValueError:
+                    pass
+        return sorted(dates, reverse=True)
+
+    def _get_report_for_date(d: date) -> dict | None:
+        """Read report markdown for date. Returns {'summary': str} or None if missing."""
+        reports_dir = _daily_reports_dir()
+        base = os.path.realpath(reports_dir)
+        path = os.path.realpath(os.path.join(reports_dir, f"{d.isoformat()}_report.md"))
+        if not path.startswith(base) or path == base:
+            return None
+        if not os.path.isfile(path):
+            return None
+        try:
+            with open(path, 'r', encoding='utf-8') as f:
+                return {"summary": f.read()}
+        except OSError:
+            return None
+
     @app.route('/daily-review')
     def daily_review_page():
-        """Serve the daily review page."""
+        """Serve the daily review page (reports from daily_reports/*.md)."""
         return render_template('daily_review.html')
 
     @app.route('/api/daily-review/dates')
     def daily_review_dates():
-        """List available daily review dates."""
-        dates = orchestrator.daily_review_manager.list_dates()
+        """List available daily report dates (from daily_reports/*_report.md)."""
+        dates = _list_report_dates()
         return jsonify({"dates": dates})
 
     @app.route('/api/daily-review/current')
     def daily_review_current():
-        """Fetch current day review (midnight to now)."""
+        """Return today's report if it exists (no external fetch)."""
         today = date.today()
-        data = orchestrator.daily_review_manager.fetch_and_save(today, end_now=True)
+        data = _get_report_for_date(today)
         if data:
             return jsonify(data)
-        return jsonify({"error": "Failed to fetch current day review"}), 503
+        return jsonify({"error": "No report for today yet"}), 404
 
     @app.route('/api/daily-review/<date_str>')
     def daily_review_get(date_str):
-        """Get cached review for date, or fetch if missing. date_str: YYYY-MM-DD."""
+        """Get report for date from daily_reports/YYYY-MM-DD_report.md. date_str: YYYY-MM-DD."""
         try:
             d = datetime.strptime(date_str, '%Y-%m-%d').date()
         except ValueError:
             return jsonify({"error": "Invalid date format"}), 400
-        force = request.args.get('force') == '1'
-        data = orchestrator.daily_review_manager.get_or_fetch(d, force_refresh=force)
+        data = _get_report_for_date(d)
         if data:
             return jsonify(data)
-        return jsonify({"error": "Failed to fetch review"}), 503
+        return jsonify({"error": "Report not found for this date"}), 404
+
+    @app.route('/api/daily-review/generate', methods=['POST'])
+    def daily_review_generate():
+        """On-demand: generate daily report for a date (default today). Requires AI analyzer enabled."""
+        date_str = (request.args.get('date') or '').strip()
+        if not date_str:
+            body = request.get_json(silent=True)
+            if isinstance(body, dict) and body.get('date'):
+                date_str = str(body.get('date', '')).strip()
+        if not date_str:
+            date_str = date.today().isoformat()
+        try:
+            d = datetime.strptime(date_str, '%Y-%m-%d').date()
+        except ValueError:
+            return jsonify({"error": "Invalid date format"}), 400
+        if orchestrator.daily_reporter is None:
+            return jsonify({"error": "Daily reporter disabled (AI not enabled)"}), 503
+        if orchestrator.daily_reporter.generate_report(d):
+            return jsonify({"success": True, "date": d.isoformat()}), 200
+        return jsonify({"error": "Report generation failed"}), 503
 
     @app.route('/cameras')
     def list_cameras():

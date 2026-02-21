@@ -72,13 +72,10 @@ settings:
   # How often the Stats view refreshes when displayed
   stats_refresh_seconds: 60
 
-  # Daily Review (Frigate review summarize API)
-  # How long to keep saved daily reviews (days)
-  daily_review_retention_days: 90
-  # Hour (0-23) to run daily review fetch for previous day
-  daily_review_schedule_hour: 1
-
   # Daily Report (AI-generated from analysis_result.json)
+  # How long to keep saved daily reports (days)
+  daily_report_retention_days: 90
+  # Hour (0-23) to generate AI daily report for previous day
   # daily_report_schedule_hour: 1
   # report_prompt_file: ""
   # report_known_person_name: ""   # Placeholder {known_person_name} in report prompt; default "Unspecified"

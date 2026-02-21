@@ -99,7 +99,6 @@ class TestOpt4StorageStatsSkipWhenFresh(unittest.TestCase):
              patch("frigate_buffer.orchestrator.NotificationPublisher"), \
              patch("frigate_buffer.orchestrator.SmartZoneFilter"), \
              patch("frigate_buffer.orchestrator.EventLifecycleService"), \
-             patch("frigate_buffer.orchestrator.DailyReviewManager"), \
              patch("frigate_buffer.web.server.create_app"):
             pfm.return_value.compute_storage_stats.return_value = {}
             orch = StateAwareOrchestrator(config)

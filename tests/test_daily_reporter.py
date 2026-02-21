@@ -400,3 +400,31 @@ class TestDailyReporterServiceAggregateEdgeCases(unittest.TestCase):
             self.assertEqual(len(lines), 1)
         except ValueError:
             self.fail("_aggregate_event_lines should not raise for non-int potential_threat_level")
+
+
+class TestDailyReporterServiceCleanupOldReports(unittest.TestCase):
+    """Test cleanup_old_reports deletes reports older than retention_days."""
+
+    def test_cleanup_old_reports_deletes_old_keeps_recent(self):
+        storage = tempfile.mkdtemp()
+        self.addCleanup(lambda: shutil.rmtree(storage, ignore_errors=True))
+        reports_dir = os.path.join(storage, "daily_reports")
+        os.makedirs(reports_dir, exist_ok=True)
+        # Old: 100 days ago
+        old_date = date(2020, 1, 1)
+        old_path = os.path.join(reports_dir, f"{old_date.isoformat()}_report.md")
+        with open(old_path, "w", encoding="utf-8") as f:
+            f.write("# Old report\n")
+        # Recent: 5 days ago (we'll use retention_days=10 so this is kept)
+        from datetime import timedelta
+        recent = date.today() - timedelta(days=5)
+        recent_path = os.path.join(reports_dir, f"{recent.isoformat()}_report.md")
+        with open(recent_path, "w", encoding="utf-8") as f:
+            f.write("# Recent report\n")
+        config = {}
+        mock_analyzer = MagicMock()
+        service = DailyReporterService(config, storage, mock_analyzer)
+        deleted = service.cleanup_old_reports(retention_days=10)
+        self.assertEqual(deleted, 1)
+        self.assertFalse(os.path.isfile(old_path))
+        self.assertTrue(os.path.isfile(recent_path))
