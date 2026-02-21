@@ -68,34 +68,43 @@ def calculate_segment_crop(
     start_sec = segment["start_sec"]
     end_sec = segment["end_sec"]
 
-    # Prevent target from being larger than source
-    target_w = min(target_w, source_width)
-    target_h = min(target_h, source_height)
+    # Prevent target from being larger than source; simulate letterbox or scale down
+    if source_width < target_w or source_height < target_h:
+        scale = min(source_width / target_w, source_height / target_h)
+        target_w = int(target_w * scale)
+        target_h = int(target_h * scale)
 
-    cx_list = []
-    cy_list = []
+    weighted_cx_sum: float = 0.0
+    weighted_cy_sum: float = 0.0
+    total_area: float = 0.0
 
     for entry in sidecar_data.get("entries", []):
         t = entry.get("timestamp_sec", 0.0)
         # We consider inclusive start, exclusive end for frame gathering typically
         if start_sec <= t < end_sec:
             for det in entry.get("detections", []):
+                area = float(det.get("area", 1.0))
+                if area <= 0:
+                    area = 1.0
+                    
                 cp = det.get("centerpoint")
                 if isinstance(cp, (list, tuple)) and len(cp) >= 2:
-                    cx_list.append(cp[0])
-                    cy_list.append(cp[1])
+                    weighted_cx_sum += float(cp[0]) * area
+                    weighted_cy_sum += float(cp[1]) * area
+                    total_area += area
                 else:
                     box = det.get("box") or det.get("bbox")
                     if isinstance(box, (list, tuple)) and len(box) >= 4:
-                        cx = (box[0] + box[2]) / 2.0
-                        cy = (box[1] + box[3]) / 2.0
-                        cx_list.append(cx)
-                        cy_list.append(cy)
+                        cx = (float(box[0]) + float(box[2])) / 2.0
+                        cy = (float(box[1]) + float(box[3])) / 2.0
+                        weighted_cx_sum += cx * area
+                        weighted_cy_sum += cy * area
+                        total_area += area
 
-    if cx_list and cy_list:
-        # EMA simulation using simple average for the "locked" pan
-        avg_cx = sum(cx_list) / len(cx_list)
-        avg_cy = sum(cy_list) / len(cy_list)
+    if total_area > 0:
+        # EMA simulation using area-weighted generic mass tracker
+        avg_cx = weighted_cx_sum / total_area
+        avg_cy = weighted_cy_sum / total_area
     else:
         # Fallback to center if no detections
         avg_cx = source_width / 2.0
@@ -129,6 +138,8 @@ def generate_compilation_video(
     inputs = []
     filter_complex = []
     
+    tmp_output_path = output_path + ".tmp"
+    
     # Calculate crop logic, load sidecars, gather inputs
     for i, seg in enumerate(segments):
         cam = seg["camera"]
@@ -139,7 +150,9 @@ def generate_compilation_video(
         clip_path = os.path.join(cam_dir, clip_name)
         sidecar_path = os.path.join(cam_dir, "detection.json")
         
-        inputs.extend(["-hwaccel", "cuda", "-i", clip_path])
+        # Omit hardware acceleration prefix to prevent context-overflow memory issues.
+        # We instead configure it globally on the wrapper command or format.
+        inputs.extend(["-i", clip_path])
             
         sidecar_data = {}
         if os.path.isfile(sidecar_path):
@@ -176,7 +189,7 @@ def generate_compilation_video(
     fg_str = ";".join(filter_complex)
     logger.debug(f"Compilation FFmpeg filter_complex:\n{fg_str}")
     
-    cmd = ["ffmpeg", "-y"]
+    cmd = ["ffmpeg", "-y", "-hwaccel", "cuda", "-hwaccel_output_format", "cuda"]
     cmd.extend(inputs)
     cmd.extend([
         "-filter_complex", fg_str,
@@ -184,16 +197,26 @@ def generate_compilation_video(
         "-an",
         "-c:v", "h264_nvenc",
         "-pix_fmt", "yuv420p",
-        output_path
+        tmp_output_path
     ])
     
     logger.debug(f"Compilation raw FFmpeg command: {' '.join(cmd)}")
     
     try:
         subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-        logger.info(f"Compilation finished successfully. Output saved to: {output_path}")
+        if os.path.isfile(tmp_output_path) and os.path.getsize(tmp_output_path) > 0:
+            os.rename(tmp_output_path, output_path)
+            logger.info(f"Compilation finished successfully. Output saved to: {output_path}")
+        else:
+            raise FileNotFoundError(f"Compiler terminated effectively, but tmp result file was empty or missing: {tmp_output_path}")
     except subprocess.CalledProcessError as e:
-        logger.error(f"Compilation FFmpeg failed:\n{e.stderr}")
+        ffmpeg_log_path = os.path.join(ce_dir, "ffmpeg_compilation_error.log")
+        with open(ffmpeg_log_path, "w", encoding="utf-8") as f:
+            f.write(e.stderr or "")
+        logger.error(f"Compilation FFmpeg failed! Check {ffmpeg_log_path} for raw output. Process error:\n{e.stderr}")
+        raise
+    except Exception as general_error:
+        logger.error(f"Compilation failed unexpectedly: {general_error}")
         raise
 
 def compile_ce_video(ce_dir: str, global_end: float, config: dict, primary_camera: str | None = None) -> str | None:
@@ -254,7 +277,7 @@ def compile_ce_video(ce_dir: str, global_end: float, config: dict, primary_camer
             return 0.0
         # Find nearest
         nearest = min(entries, key=lambda e: abs((e.get("timestamp_sec") or 0) - t_sec))
-        area = 0.0
+        area: float = 0.0
         for d in nearest.get("detections") or []:
             if (d.get("label") or "").lower() in ("person", "people", "pedestrian"):
                 area += float(d.get("area") or 0)
