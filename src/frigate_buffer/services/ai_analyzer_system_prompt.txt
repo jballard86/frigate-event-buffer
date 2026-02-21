@@ -1,4 +1,4 @@
-Your task is to analyze the sequence of images ({image_count} total) taken in chronological order from the perspective of the {global_event_camera_list} security camera(s).
+Your task is to analyze the sequence of images ({image_count} total) taken in chronological order from the perspective of the {global_event_camera_list} security camera(s). You may receive frames from a single angle (one camera) or from multiple angles (multiple cameras); treat both the same and describe what you observe.
 
 ## Normal Activity Patterns for This Property
 

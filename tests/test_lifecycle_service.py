@@ -101,7 +101,7 @@ class TestEventLifecycleService(unittest.TestCase):
         self.file_manager.delete_event_folder.assert_not_called()
         # CE path: update_activity, schedule_close_timer, write_summary, cleanup
         self.consolidated_manager.update_activity.assert_called()
-        self.consolidated_manager.schedule_close_timer.assert_called_with("ce1")
+        self.consolidated_manager.schedule_close_timer.assert_called_with("ce1", delay_seconds=None)
         self.file_manager.cleanup_old_events.assert_called()
         self.assertIsNotNone(self.service.last_cleanup_time)
 
@@ -177,9 +177,7 @@ class TestEventLifecycleService(unittest.TestCase):
         self.notifier.mark_last_event_ended.assert_called_once()
 
     def test_process_event_end_max_length_does_not_call_clip_ready_or_export(self):
-        """When duration >= max_event_length_seconds, no export and no on_clip_ready_for_analysis (API never sent)."""
-        on_clip_ready_mock = MagicMock()
-        self.service.on_clip_ready_for_analysis = on_clip_ready_mock
+        """When duration >= max_event_length_seconds, no export (event canceled, API never sent)."""
         self.config['MAX_EVENT_LENGTH_SECONDS'] = 120
 
         event = EventState("evt1", "cam1", "person", created_at=100.0)
@@ -198,12 +196,9 @@ class TestEventLifecycleService(unittest.TestCase):
         self.assertEqual(call_args[1].get("message"), "Event canceled see event viewer for details")
         self.file_manager.rename_event_folder.assert_called_once()
         self.download_service.export_and_download_clip.assert_not_called()
-        on_clip_ready_mock.assert_not_called()
 
     def test_process_event_end_duration_exactly_max_is_canceled(self):
         """Duration exactly equal to max_event_length_seconds is treated as canceled (>=)."""
-        on_clip_ready_mock = MagicMock()
-        self.service.on_clip_ready_for_analysis = on_clip_ready_mock
         self.config['MAX_EVENT_LENGTH_SECONDS'] = 120
 
         event = EventState("evt1", "cam1", "person", created_at=100.0)
@@ -218,13 +213,10 @@ class TestEventLifecycleService(unittest.TestCase):
         self.file_manager.write_canceled_summary.assert_called_once()
         self.notifier.publish_notification.assert_called_once()
         self.assertEqual(self.notifier.publish_notification.call_args[0][1], "canceled")
-        on_clip_ready_mock.assert_not_called()
 
     def test_finalize_consolidated_event_max_length_does_not_call_analysis(self):
-        """When any event in CE has duration >= max, no export and no on_ce_ready/on_clip_ready (API never sent)."""
-        on_clip_ready_mock = MagicMock()
+        """When any event in CE has duration >= max, no export and no on_ce_ready_for_analysis (API never sent)."""
         on_ce_ready_mock = MagicMock()
-        self.service.on_clip_ready_for_analysis = on_clip_ready_mock
         self.service.on_ce_ready_for_analysis = on_ce_ready_mock
         self.config['MAX_EVENT_LENGTH_SECONDS'] = 120
 
@@ -253,7 +245,6 @@ class TestEventLifecycleService(unittest.TestCase):
         self.notifier.publish_notification.assert_called_once()
         self.assertEqual(self.notifier.publish_notification.call_args[0][1], "canceled")
         self.download_service.export_and_download_clip.assert_not_called()
-        on_clip_ready_mock.assert_not_called()
         on_ce_ready_mock.assert_not_called()
         self.consolidated_manager.remove.assert_called_with(ce_id)
 

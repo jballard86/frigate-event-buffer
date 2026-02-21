@@ -54,31 +54,6 @@ class TestOpt1TimelineJsonlAppendAndMerge(unittest.TestCase):
         self.assertEqual(data["entries"][1]["label"], "append")
 
 
-class TestOpt2FrameMetadataBisect(unittest.TestCase):
-    """Expectation: Frame metadata lookup uses pre-sorted list + bisect (no O(n) min per frame)."""
-
-    def test_extract_frames_with_many_metadata_uses_bisect_path(self):
-        # We can't easily assert bisect is called without invasive mocks; instead verify that
-        # with frame_metadata the extraction still returns correct behavior (closest match used).
-        from frigate_buffer.services.ai_analyzer import GeminiAnalysisService
-        from frigate_buffer.models import FrameMetadata
-
-        config = {"GEMINI": {"enabled": False}, "FINAL_REVIEW_IMAGE_COUNT": 5}
-        svc = GeminiAnalysisService(config)
-        # Build many metadata entries (would be O(n) per frame with min(); with bisect O(log n))
-        meta = [FrameMetadata(frame_time=float(i), box=(0.1, 0.1, 0.9, 0.9), area=0.1, score=0.9) for i in range(100)]
-        # _extract_frames with frame_metadata should not raise and should complete quickly
-        # We test that with metadata the code path runs (bisect path is used when sorted_meta/times exist)
-        self.assertTrue(len(meta) == 100)
-        # Sanity: sorted by frame_time for bisect
-        sorted_meta = sorted(meta, key=lambda m: m.frame_time)
-        times = [m.frame_time for m in sorted_meta]
-        import bisect
-        idx = bisect.bisect_left(times, 50.5)
-        self.assertGreater(idx, 0)
-        self.assertLess(idx, len(times))
-
-
 class TestOpt3CleanupThrottle(unittest.TestCase):
     """Expectation: Cleanup runs at most once per 60s from list endpoints."""
 

@@ -20,25 +20,27 @@ from frigate_buffer.services.ai_analyzer import GeminiAnalysisService
 # --- Test Case 1: Persistence ---
 
 
+def _make_mock_extracted_frame():
+    """One frame for analyze_multi_clip_ce: object with .frame, .timestamp_sec, .camera, .metadata."""
+    class _EF:
+        __slots__ = ("frame", "timestamp_sec", "camera", "metadata")
+        def __init__(self):
+            self.frame = np.zeros((100, 100, 3), dtype=np.uint8)
+            self.timestamp_sec = 0.0
+            self.camera = "cam1"
+            self.metadata = {}
+    return _EF()
+
+
 class TestIntegrationStep5Persistence(unittest.TestCase):
-    """Verify analysis_result.json is created in the event folder with expected content."""
+    """Verify analysis_result.json is created in the CE folder with expected content."""
 
     @patch("frigate_buffer.services.ai_analyzer.requests.post")
-    @patch("frigate_buffer.services.ai_analyzer.ffmpegcv.VideoCaptureNV")
-    def test_analysis_result_json_created_with_expected_fields(self, mock_vc, mock_post):
-        event_dir = tempfile.mkdtemp()
-        self.addCleanup(lambda: os.path.exists(event_dir) and shutil.rmtree(event_dir))
-        clip_path = os.path.join(event_dir, "clip.mp4")
-        with open(clip_path, "wb") as f:
-            f.write(b"fake mp4")
-        mock_cap = MagicMock()
-        mock_cap.isOpened.return_value = True
-        mock_cap.fps = 1.0
-        mock_cap.__len__ = MagicMock(return_value=3)
-        mock_cap.get.side_effect = lambda k: 1.0 if k == 5 else (3 if k == 7 else 0)  # FPS, frame count
-        mock_cap.read.return_value = (True, np.zeros((100, 100, 3), dtype=np.uint8))
-        mock_cap.release = MagicMock()
-        mock_vc.return_value = mock_cap
+    @patch("frigate_buffer.services.ai_analyzer.extract_target_centric_frames")
+    def test_analysis_result_json_created_with_expected_fields(self, mock_extract, mock_post):
+        ce_dir = tempfile.mkdtemp()
+        self.addCleanup(lambda: os.path.exists(ce_dir) and shutil.rmtree(ce_dir))
+        mock_extract.return_value = [_make_mock_extracted_frame()]
 
         payload = {
             "title": "Person at door",
@@ -54,14 +56,14 @@ class TestIntegrationStep5Persistence(unittest.TestCase):
 
         config = {"GEMINI": {"enabled": True, "proxy_url": "http://proxy", "api_key": "key"}}
         service = GeminiAnalysisService(config)
-        result = service.analyze_clip("evt-123", clip_path)
+        result = service.analyze_multi_clip_ce("ce_123", ce_dir, ce_start_time=0.0)
 
         self.assertIsNotNone(result)
         self.assertEqual(result.get("title"), "Person at door")
         self.assertEqual(result.get("shortSummary"), "A person approached the front door.")
         self.assertEqual(result.get("potential_threat_level"), 1)
 
-        out_path = os.path.join(event_dir, "analysis_result.json")
+        out_path = os.path.join(ce_dir, "analysis_result.json")
         self.assertTrue(os.path.isfile(out_path), f"Expected {out_path} to exist")
         with open(out_path, "r", encoding="utf-8") as f:
             saved = json.load(f)
@@ -73,22 +75,12 @@ class TestIntegrationStep5Persistence(unittest.TestCase):
         self.assertEqual(saved["potential_threat_level"], payload["potential_threat_level"])
 
     @patch("frigate_buffer.services.ai_analyzer.requests.post")
-    @patch("frigate_buffer.services.ai_analyzer.ffmpegcv.VideoCaptureNV")
-    def test_analysis_result_saved_even_when_required_fields_missing(self, mock_vc, mock_post):
+    @patch("frigate_buffer.services.ai_analyzer.extract_target_centric_frames")
+    def test_analysis_result_saved_even_when_required_fields_missing(self, mock_extract, mock_post):
         """When proxy returns partial result (e.g. missing potential_threat_level), we still save the dict."""
-        event_dir = tempfile.mkdtemp()
-        self.addCleanup(lambda: os.path.exists(event_dir) and shutil.rmtree(event_dir))
-        clip_path = os.path.join(event_dir, "clip.mp4")
-        with open(clip_path, "wb") as f:
-            f.write(b"fake mp4")
-        mock_cap = MagicMock()
-        mock_cap.isOpened.return_value = True
-        mock_cap.fps = 1.0
-        mock_cap.__len__ = MagicMock(return_value=2)
-        mock_cap.get.side_effect = lambda k: 1.0 if k == 5 else (2 if k == 7 else 0)
-        mock_cap.read.return_value = (True, np.zeros((100, 100, 3), dtype=np.uint8))
-        mock_cap.release = MagicMock()
-        mock_vc.return_value = mock_cap
+        ce_dir = tempfile.mkdtemp()
+        self.addCleanup(lambda: os.path.exists(ce_dir) and shutil.rmtree(ce_dir))
+        mock_extract.return_value = [_make_mock_extracted_frame()]
 
         partial_payload = {"title": "Partial", "shortSummary": "No threat level in response."}
         mock_post.return_value.status_code = 200
@@ -98,10 +90,10 @@ class TestIntegrationStep5Persistence(unittest.TestCase):
 
         config = {"GEMINI": {"enabled": True, "proxy_url": "http://proxy", "api_key": "key"}}
         service = GeminiAnalysisService(config)
-        result = service.analyze_clip("evt-partial", clip_path)
+        result = service.analyze_multi_clip_ce("ce_partial", ce_dir, ce_start_time=0.0)
 
         self.assertIsNotNone(result)
-        out_path = os.path.join(event_dir, "analysis_result.json")
+        out_path = os.path.join(ce_dir, "analysis_result.json")
         self.assertTrue(os.path.isfile(out_path), "Should save analysis_result.json even when fields missing")
         with open(out_path, "r", encoding="utf-8") as f:
             saved = json.load(f)
@@ -177,21 +169,11 @@ class TestIntegrationStep5ErrorHandling(unittest.TestCase):
     """Verify invalid JSON or 5xx does not create analysis_result.json or crash."""
 
     @patch("frigate_buffer.services.ai_analyzer.requests.post")
-    @patch("frigate_buffer.services.ai_analyzer.ffmpegcv.VideoCaptureNV")
-    def test_invalid_json_does_not_create_analysis_result_file(self, mock_vc, mock_post):
-        event_dir = tempfile.mkdtemp()
-        self.addCleanup(lambda: os.path.exists(event_dir) and shutil.rmtree(event_dir))
-        clip_path = os.path.join(event_dir, "clip.mp4")
-        with open(clip_path, "wb") as f:
-            f.write(b"fake")
-        mock_cap = MagicMock()
-        mock_cap.isOpened.return_value = True
-        mock_cap.fps = 1.0
-        mock_cap.__len__ = MagicMock(return_value=2)
-        mock_cap.get.side_effect = lambda k: 1.0 if k == 5 else (2 if k == 7 else 0)
-        mock_cap.read.return_value = (True, np.zeros((50, 50, 3), dtype=np.uint8))
-        mock_cap.release = MagicMock()
-        mock_vc.return_value = mock_cap
+    @patch("frigate_buffer.services.ai_analyzer.extract_target_centric_frames")
+    def test_invalid_json_does_not_create_analysis_result_file(self, mock_extract, mock_post):
+        ce_dir = tempfile.mkdtemp()
+        self.addCleanup(lambda: os.path.exists(ce_dir) and shutil.rmtree(ce_dir))
+        mock_extract.return_value = [_make_mock_extracted_frame()]
 
         mock_post.return_value.status_code = 200
         mock_post.return_value.json.return_value = {
@@ -200,10 +182,10 @@ class TestIntegrationStep5ErrorHandling(unittest.TestCase):
 
         config = {"GEMINI": {"enabled": True, "proxy_url": "http://p", "api_key": "k"}}
         service = GeminiAnalysisService(config)
-        result = service.analyze_clip("evt-err", clip_path)
+        result = service.analyze_multi_clip_ce("ce_err", ce_dir, ce_start_time=0.0)
 
         self.assertIsNone(result)
-        out_path = os.path.join(event_dir, "analysis_result.json")
+        out_path = os.path.join(ce_dir, "analysis_result.json")
         self.assertFalse(os.path.isfile(out_path), "Should not create analysis_result.json on invalid JSON")
 
     @patch("frigate_buffer.services.ai_analyzer.requests.post")
@@ -214,33 +196,25 @@ class TestIntegrationStep5ErrorHandling(unittest.TestCase):
 
         config = {"GEMINI": {"enabled": True, "proxy_url": "http://p", "api_key": "k"}}
         service = GeminiAnalysisService(config)
+        # Must be a real numpy array so _frame_to_base64_url can read .shape
         frame = np.zeros((50, 50, 3), dtype=np.uint8)
         result = service.send_to_proxy("Prompt", [frame])
         self.assertIsNone(result)
 
     @patch("frigate_buffer.services.ai_analyzer.requests.post")
-    @patch("frigate_buffer.services.ai_analyzer.ffmpegcv.VideoCaptureNV")
-    def test_proxy_500_analyze_clip_does_not_create_analysis_result(self, mock_vc, mock_post):
+    @patch("frigate_buffer.services.ai_analyzer.extract_target_centric_frames")
+    def test_proxy_500_analyze_multi_clip_ce_does_not_create_analysis_result(self, mock_extract, mock_post):
         import requests as req
-        event_dir = tempfile.mkdtemp()
-        self.addCleanup(lambda: os.path.exists(event_dir) and shutil.rmtree(event_dir))
-        clip_path = os.path.join(event_dir, "clip.mp4")
-        with open(clip_path, "wb") as f:
-            f.write(b"fake")
-        mock_cap = MagicMock()
-        mock_cap.isOpened.return_value = True
-        mock_cap.fps = 1.0
-        mock_cap.__len__ = MagicMock(return_value=2)
-        mock_cap.get.side_effect = lambda k: 1.0 if k == 5 else (2 if k == 7 else 0)
-        mock_cap.read.return_value = (True, np.zeros((50, 50, 3), dtype=np.uint8))
-        mock_cap.release = MagicMock()
-        mock_vc.return_value = mock_cap
+        ce_dir = tempfile.mkdtemp()
+        self.addCleanup(lambda: os.path.exists(ce_dir) and shutil.rmtree(ce_dir))
+        mock_extract.return_value = [_make_mock_extracted_frame()]
+
         mock_post.return_value.status_code = 500
         mock_post.return_value.raise_for_status.side_effect = req.exceptions.HTTPError("500 Server Error")
 
         config = {"GEMINI": {"enabled": True, "proxy_url": "http://p", "api_key": "k"}}
         service = GeminiAnalysisService(config)
-        result = service.analyze_clip("evt-500", clip_path)
+        result = service.analyze_multi_clip_ce("ce_500", ce_dir, ce_start_time=0.0)
         self.assertIsNone(result)
-        out_path = os.path.join(event_dir, "analysis_result.json")
+        out_path = os.path.join(ce_dir, "analysis_result.json")
         self.assertFalse(os.path.isfile(out_path), "Should not create analysis_result.json on proxy 500")

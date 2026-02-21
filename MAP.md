@@ -70,6 +70,7 @@ frigate-event-buffer/
 ├── BUILD_NVENC.md
 ├── COMPOSE_ENTRYPOINT.md
 ├── MULTI_CAM_PLAN.md
+├── PHASE1_REFACTOR_CATALOG.md
 │
 ├── scripts/
 │   └── multi_cam_recap.py
@@ -182,13 +183,14 @@ frigate-event-buffer/
 | `docker-compose.yaml` / `docker-compose.example.yaml` | Compose for local run; GPU, env, mounts. | Deployment. |
 | `entrypoint.sh` | Container entrypoint. | Docker run. |
 | `MAP.md` | This file—architecture and context for AI. | Must be updated when structure or flows change. |
+| `PHASE1_REFACTOR_CATALOG.md` | Phase 1 discovery catalog for "Everything is a CE" refactor: removals and changes list. | Reference only; delete or archive after refactor is complete. |
 
 ### Entry & config
 
 | Path/Name | Purpose | Dependencies/Interactions |
 |-----------|---------|---------------------------|
 | `src/frigate_buffer/main.py` | Entry point: load config, setup logging/signals, GPU check, ensure detection model, create and start `StateAwareOrchestrator`. | Calls `config.load_config()`, `orchestrator.start()`. |
-| `src/frigate_buffer/config.py` | Load/validate YAML + env via Voluptuous `CONFIG_SCHEMA`; flat keys (e.g. `MQTT_BROKER`, `GEMINI_PROXY_URL`, `MAX_EVENT_LENGTH_SECONDS`). Invalid config exits 1. | Used by `main.py`, `multi_cam_recap.py`. |
+| `src/frigate_buffer/config.py` | Load/validate YAML + env via Voluptuous `CONFIG_SCHEMA`; flat keys (e.g. `MQTT_BROKER`, `GEMINI_PROXY_URL`, `MAX_EVENT_LENGTH_SECONDS`). Frame limits for AI: `multi_cam.max_multi_cam_frames_*` only. `single_camera_ce_close_delay_seconds` (0 = close single-cam CE as soon as event ends). Invalid config exits 1. | Used by `main.py`, `multi_cam_recap.py`. |
 | `src/frigate_buffer/version.txt` | Version string read at startup; logged in main. | Package data; included by `COPY src/` in Dockerfile. |
 | `src/frigate_buffer/logging_utils.py` | `setup_logging()`, `ErrorBuffer` for stats dashboard. | Called from main; ErrorBuffer used by web/server and orchestrator. |
 
@@ -196,7 +198,7 @@ frigate-event-buffer/
 
 | Path/Name | Purpose | Dependencies/Interactions |
 |-----------|---------|---------------------------|
-| `src/frigate_buffer/orchestrator.py` | **StateAwareOrchestrator:** MQTT routing (`_on_mqtt_message`), event/CE handling, lifecycle callbacks, `on_clip_ready` → ai_analyzer, `_handle_analysis_result` / `_handle_ce_analysis_result`, scheduler (cleanup, export watchdog, daily reporter), `create_app(orchestrator)`. | Wires MqttClientWrapper, SmartZoneFilter, TimelineLogger, all managers, lifecycle, ai_analyzer, Flask. |
+| `src/frigate_buffer/orchestrator.py` | **StateAwareOrchestrator:** MQTT routing (`_on_mqtt_message`), event/CE handling, lifecycle callbacks, `on_ce_ready_for_analysis` → ai_analyzer.analyze_multi_clip_ce, `_handle_analysis_result` (review path) / `_handle_ce_analysis_result`, scheduler (cleanup, export watchdog, daily reporter), `create_app(orchestrator)`. | Wires MqttClientWrapper, SmartZoneFilter, TimelineLogger, all managers, lifecycle, ai_analyzer, Flask. |
 | `src/frigate_buffer/models.py` | Pydantic/data models: `EventPhase`, `EventState`, `ConsolidatedEvent`, `FrameMetadata`, `NotificationEvent` protocol; helpers for CE IDs and "no concerns". | Used by orchestrator, managers, notifier, query. |
 
 ### Managers
@@ -205,7 +207,7 @@ frigate-event-buffer/
 |-----------|---------|---------------------------|
 | `src/frigate_buffer/managers/file.py` | **FileManager:** storage paths, clip/snapshot download (via DownloadService), export coordination (no transcode), cleanup, path validation (realpath/commonpath). `cleanup_old_events`, `rename_event_folder`, `write_canceled_summary`, `compute_storage_stats`, `resolve_clip_in_folder`. | Used by orchestrator, lifecycle, query, download, timeline, event_test. |
 | `src/frigate_buffer/managers/state.py` | **EventStateManager:** in-memory event state (phase, metadata), active event tracking. | Orchestrator, lifecycle. |
-| `src/frigate_buffer/managers/consolidation.py` | **ConsolidatedEventManager:** CE grouping, `closing` state, `mark_closing`, on_close callback. | Orchestrator, lifecycle, timeline_logger, query. |
+| `src/frigate_buffer/managers/consolidation.py` | **ConsolidatedEventManager:** CE grouping, `closing` state, `mark_closing`, on_close callback. `schedule_close_timer(ce_id, delay_seconds=None)` — when delay_seconds is set (e.g. 0 for single-camera CE), uses it instead of event_gap_seconds so CE can close immediately. | Orchestrator, lifecycle, timeline_logger, query. |
 | `src/frigate_buffer/managers/reviews.py` | **DailyReviewManager:** Frigate daily review fetch/cache. | Orchestrator, web. |
 | `src/frigate_buffer/managers/zone_filter.py` | **SmartZoneFilter:** per-camera zone/exception filters; `should_start_event`. | Orchestrator (event creation). |
 
@@ -213,11 +215,11 @@ frigate-event-buffer/
 
 | Path/Name | Purpose | Dependencies/Interactions |
 |-----------|---------|---------------------------|
-| `src/frigate_buffer/services/ai_analyzer.py` | **GeminiAnalysisService:** frame extraction, optional crop, system prompt from file; POST to OpenAI-compatible proxy; returns analysis dict; writes `analysis_result.json`; rolling frame cap. Multi-cam: `analyze_multi_clip_ce` uses multi_clip_extractor. Sends to proxy before writing ai_frame_analysis to disk (deferred write). | Called by orchestrator (`on_clip_ready`, `on_ce_ready_for_analysis`); uses VideoService, FileManager helpers. |
+| `src/frigate_buffer/services/ai_analyzer.py` | **GeminiAnalysisService:** system prompt from file; POST to OpenAI-compatible proxy; returns analysis dict; writes `analysis_result.json`; rolling frame cap. All analysis via `analyze_multi_clip_ce` (single- or multi-camera CE); uses multi_clip_extractor. Sends to proxy before writing ai_frame_analysis to disk (deferred write). | Called by orchestrator (`on_ce_ready_for_analysis`); uses VideoService, FileManager (write_ai_frame_analysis_multi_cam). |
 | `src/frigate_buffer/services/multi_clip_extractor.py` | Target-centric frame extraction for CE; requires detection sidecars (no HOG fallback when any camera lacks sidecar). Uses single ffprobe per path for fps/duration (no double-open); parallel sidecar JSON load; parallel per-camera advance to sample time. | Used by ai_analyzer, event_test_orchestrator. |
 | `src/frigate_buffer/services/timeline_ema.py` | EMA-based camera timeline (segment assignment, hysteresis) for multi-cam when `camera_timeline_use_ema_pipeline` true. | Used by multi_clip_extractor / pipeline. |
 | `src/frigate_buffer/services/video.py` | **VideoService:** NVDEC decode (ffmpegcv), `generate_detection_sidecar`, `generate_detection_sidecars_for_cameras` (shared YOLO + lock), `generate_gif_from_clip`. Single `_get_video_metadata` ffprobe per clip (width, height, fps, duration). App-level sidecar lock injected by orchestrator. | Used by lifecycle, ai_analyzer, event_test. |
-| `src/frigate_buffer/services/lifecycle.py` | **EventLifecycleService:** event creation, event end (discard short, cancel long, clip export/download), CE pipeline (download per camera, sidecars, then `on_ce_ready_for_analysis`). | Orchestrator delegates; calls download, file_manager, video_service, orchestrator callbacks. |
+| `src/frigate_buffer/services/lifecycle.py` | **EventLifecycleService:** event creation, event end (discard short, cancel long). All finalized events are CEs; at CE close: export clips per camera, generate detection sidecars for all (including single-cam), then `on_ce_ready_for_analysis`. | Orchestrator delegates; calls download, file_manager, video_service, orchestrator callback. |
 | `src/frigate_buffer/services/download.py` | **DownloadService:** Frigate snapshot, export/clip download (dynamic clip names), `post_event_description`. | FileManager, lifecycle, orchestrator. |
 | `src/frigate_buffer/services/notifier.py` | **NotificationPublisher:** publish to `frigate/custom/notifications`; `clear_tag` for updates; timeline_callback = TimelineLogger.log_ha. | Orchestrator, lifecycle. |
 | `src/frigate_buffer/services/query.py` | **EventQueryService:** read event data from filesystem with TTL and per-folder caching; `resolve_clip_in_folder`; list events, timeline merge. | Flask server (events, stats, daily-review, player). |
@@ -267,8 +269,8 @@ frigate-event-buffer/
 2. **MQTT → Event creation/updates:** MQTT → `MqttClientWrapper` → `StateAwareOrchestrator._on_mqtt_message` → SmartZoneFilter (should_start) → EventStateManager / ConsolidatedEventManager → **EventLifecycleService** (event creation, event end).
 3. **Event end (short):** Lifecycle checks duration &lt; `minimum_event_seconds` → discard: delete folder, remove from state/CE, publish MQTT `status: "discarded"` with same tag for HA clear.
 4. **Event end (long/canceled):** Duration ≥ `max_event_length_seconds` → no clip export/AI; write canceled summary, notify HA, rename folder `-canceled`; cleanup later by retention.
-5. **Clip ready (single-cam):** Lifecycle → orchestrator `on_clip_ready` → **GeminiAnalysisService.analyze_clip** (frame extraction, proxy) → `_handle_analysis_result` → update state, write files, POST description to Frigate, notify HA.
-6. **Consolidated event (multi-cam):** Lifecycle downloads each clip to `{camera}-{5_digits}.mp4`, **VideoService.generate_detection_sidecars_for_cameras** (parallel, shared YOLO + lock) → when all sidecars ready → `on_ce_ready_for_analysis` → **analyze_multi_clip_ce** (multi_clip_extractor, optional timeline_ema) → `_handle_ce_analysis_result` → write summary/metadata at CE root, notify HA.
+5. **Consolidated event (all events):** Every event is a CE (single- or multi-camera). At CE close: Lifecycle exports each camera clip, **VideoService.generate_detection_sidecars_for_cameras** (all cameras, including single) → `on_ce_ready_for_analysis` → **analyze_multi_clip_ce** (multi_clip_extractor, optional timeline_ema) → `_handle_ce_analysis_result` → write summary/metadata at CE root, notify HA. Single-camera CE uses same pipeline (camera count 1).
+6. **Frigate review path:** `_handle_review` / `_handle_analysis_result` still used when GenAI data arrives via frigate/reviews (update state, write files, notify).
 7. **Web:** Flask uses **EventQueryService** to list events, stats, timeline; `resolve_clip_in_folder` for dynamic clip URLs; path safety via FileManager.
 8. **Scheduled:** Cleanup (retention), export watchdog (DELETE completed exports), daily reporter (aggregate + report prompt → proxy → markdown).
 

@@ -10,7 +10,6 @@ import cv2
 import numpy as np
 import requests
 
-from frigate_buffer.models import FrameMetadata
 from frigate_buffer.services.ai_analyzer import GeminiAnalysisService
 
 
@@ -20,19 +19,19 @@ class TestGeminiAnalysisServiceConfig(unittest.TestCase):
     def test_config_validation_missing_gemini_no_crash(self):
         config = {"GEMINI": None}
         service = GeminiAnalysisService(config)
-        result = service.analyze_clip("evt1", "/nonexistent/clip.mp4")
+        result = service.analyze_multi_clip_ce("ce1", "/nonexistent/ce_folder", 0.0)
         self.assertIsNone(result)
 
     def test_config_validation_disabled_no_crash(self):
         config = {"GEMINI": {"enabled": False, "proxy_url": "http://x", "api_key": "k"}}
         service = GeminiAnalysisService(config)
-        result = service.analyze_clip("evt1", "/nonexistent/clip.mp4")
+        result = service.analyze_multi_clip_ce("ce1", "/nonexistent/ce_folder", 0.0)
         self.assertIsNone(result)
 
     def test_config_validation_missing_proxy_url_no_crash(self):
         config = {"GEMINI": {"enabled": True, "proxy_url": "", "api_key": "k"}}
         service = GeminiAnalysisService(config)
-        result = service.analyze_clip("evt1", "/nonexistent/clip.mp4")
+        result = service.analyze_multi_clip_ce("ce1", "/nonexistent/ce_folder", 0.0)
         self.assertIsNone(result)
 
 
@@ -240,38 +239,6 @@ class TestGeminiAnalysisServiceProxyFailure(unittest.TestCase):
         self.assertIsNone(result)
 
 
-class TestGeminiAnalysisServiceReturnValue(unittest.TestCase):
-    """Test that analyze_clip returns the parsed metadata dict (no MQTT publish)."""
-
-    @patch("frigate_buffer.services.ai_analyzer.requests.post")
-    @patch("frigate_buffer.services.ai_analyzer.ffmpegcv.VideoCaptureNV")
-    def test_analyze_clip_returns_result_on_success(self, mock_vc, mock_post):
-        with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as f:
-            clip_path = f.name
-        self.addCleanup(lambda: os.path.exists(clip_path) and os.unlink(clip_path))
-        mock_cap = MagicMock()
-        mock_cap.isOpened.return_value = True
-        mock_cap.fps = 1.0
-        mock_cap.__len__ = MagicMock(return_value=1)
-        mock_cap.get.side_effect = [1.0, 1]
-        mock_cap.read.return_value = (True, np.zeros((100, 100, 3), dtype=np.uint8))
-        mock_cap.release = MagicMock()
-        mock_vc.return_value = mock_cap
-        mock_post.return_value.status_code = 200
-        mock_post.return_value.json.return_value = {
-            "choices": [{"message": {"content": json.dumps({
-                "title": "T", "shortSummary": "S", "scene": "Sc", "confidence": 0.8, "potential_threat_level": 0
-            })}}]
-        }
-        config = {"GEMINI": {"enabled": True, "proxy_url": "http://p", "api_key": "k", "model": "m"}}
-        service = GeminiAnalysisService(config)
-        result = service.analyze_clip("evt1", clip_path)
-        self.assertIsNotNone(result)
-        self.assertEqual(result.get("title"), "T")
-        self.assertEqual(result.get("shortSummary"), "S")
-        self.assertEqual(result.get("potential_threat_level"), 0)
-
-
 class TestGeminiAnalysisServiceFlatConfig(unittest.TestCase):
     """Test that flat config keys (GEMINI_PROXY_*, multi_cam) are used when set."""
 
@@ -401,180 +368,6 @@ class TestGeminiAnalysisServiceCenterCrop(unittest.TestCase):
         self.assertIs(out, frame)
 
 
-class TestGeminiAnalysisServiceFirstLastFrames(unittest.TestCase):
-    """Test that first and last frame of segment are always kept when over max_frames."""
-
-    @patch("frigate_buffer.services.ai_analyzer.ffmpegcv.VideoCaptureNV")
-    def test_first_and_last_frame_kept_when_candidates_exceed_max(self, mock_vc):
-        with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as f:
-            clip_path = f.name
-        self.addCleanup(lambda: os.path.exists(clip_path) and os.unlink(clip_path))
-        # Sequential read: first 2 frames are pre-buffer (discarded), next 5 are segment. max_frames=3 -> first, 1 middle, last.
-        dummy = np.zeros((60, 80, 3), dtype=np.uint8)
-        frames_data = [
-            dummy.copy(),
-            dummy.copy(),
-            np.full((60, 80, 3), 10, dtype=np.uint8),   # first candidate
-            np.full((60, 80, 3), 20, dtype=np.uint8),
-            np.full((60, 80, 3), 30, dtype=np.uint8),
-            np.full((60, 80, 3), 40, dtype=np.uint8),
-            np.full((60, 80, 3), 50, dtype=np.uint8),   # last candidate
-        ]
-        def read_side_effect():
-            for fr in frames_data:
-                yield (True, fr.copy())
-            while True:
-                yield (False, None)
-        mock_cap = MagicMock()
-        mock_cap.isOpened.return_value = True
-        mock_cap.fps = 2.0
-        mock_cap.__len__ = MagicMock(return_value=10)
-        mock_cap.get.side_effect = lambda key: 2.0 if key == cv2.CAP_PROP_FPS else (10 if key == cv2.CAP_PROP_FRAME_COUNT else 0)
-        mock_cap.read.side_effect = read_side_effect()
-        mock_cap.release = MagicMock()
-        mock_vc.return_value = mock_cap
-
-        config = {
-            "GEMINI": {"enabled": True, "proxy_url": "http://p", "api_key": "k"},
-            "EXPORT_BUFFER_BEFORE": 1,
-            "MAX_MULTI_CAM_FRAMES_SEC": 2,
-            "MAX_MULTI_CAM_FRAMES_MIN": 45,
-            "FINAL_REVIEW_IMAGE_COUNT": 3,
-        }
-        service = GeminiAnalysisService(config)
-        # event_start_ts > 0 → event-segment branch. buffer_offset=1s → start_frame=2; segment 2s → frames 2..6 (5 candidates).
-        result = service._extract_frames(clip_path, event_start_ts=1.0, event_end_ts=3.0)
-        self.assertEqual(len(result), 3, "Should cap at max_frames=3 (first + one middle + last)")
-        # result is list of (frame, frame_time_sec)
-        self.assertEqual(int(result[0][0][0, 0, 0]), 10, "First frame should be segment start")
-        self.assertEqual(int(result[-1][0][0, 0, 0]), 50, "Last frame should be segment end")
-
-
-class TestExtractFramesNoSeek(unittest.TestCase):
-    """_extract_frames must not call cap.set(); ffmpegcv readers (e.g. FFmpegReaderNV) do not support it."""
-
-    def test_extract_frames_event_segment_without_set(self):
-        """Reader without .set (like FFmpegReaderNV): event-segment branch completes via sequential read."""
-        with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as f:
-            clip_path = f.name
-        self.addCleanup(lambda: os.path.exists(clip_path) and os.unlink(clip_path))
-        frames = [np.full((60, 80, 3), i, dtype=np.uint8) for i in (0, 0, 10, 20, 30, 40, 50)]
-
-        class NoSetReader:
-            def __init__(self, _path):
-                self._idx = 0
-                self._frames = frames
-
-            def isOpened(self):
-                return True
-
-            def read(self):
-                if self._idx >= len(self._frames):
-                    return (False, None)
-                ret = (True, self._frames[self._idx].copy())
-                self._idx += 1
-                return ret
-
-            def release(self):
-                pass
-
-            @property
-            def fps(self):
-                return 2.0
-
-            def __len__(self):
-                return 10
-
-            def get(self, key):
-                return 2.0 if key == cv2.CAP_PROP_FPS else (10 if key == cv2.CAP_PROP_FRAME_COUNT else 0)
-
-        with patch("frigate_buffer.services.ai_analyzer.ffmpegcv.VideoCaptureNV", NoSetReader):
-            config = {
-                "GEMINI": {"enabled": True, "proxy_url": "http://p", "api_key": "k"},
-                "EXPORT_BUFFER_BEFORE": 1,
-                "MAX_MULTI_CAM_FRAMES_SEC": 2,
-                "FINAL_REVIEW_IMAGE_COUNT": 3,
-            }
-            service = GeminiAnalysisService(config)
-            result = service._extract_frames(clip_path, event_start_ts=1.0, event_end_ts=3.0)
-        self.assertEqual(len(result), 3)
-        self.assertEqual(int(result[0][0][0, 0, 0]), 10)
-        self.assertEqual(int(result[-1][0][0, 0, 0]), 50)
-
-    def test_extract_frames_uniform_sampling_without_set(self):
-        """Reader without .set: uniform-sampling branch (event_start_ts=0) completes via sequential read."""
-        with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as f:
-            clip_path = f.name
-        self.addCleanup(lambda: os.path.exists(clip_path) and os.unlink(clip_path))
-        frames = [np.zeros((60, 80, 3), dtype=np.uint8) for _ in range(5)]
-
-        class NoSetReader:
-            def __init__(self, _path):
-                self._idx = 0
-                self._frames = frames
-
-            def isOpened(self):
-                return True
-
-            def read(self):
-                if self._idx >= len(self._frames):
-                    return (False, None)
-                ret = (True, self._frames[self._idx].copy())
-                self._idx += 1
-                return ret
-
-            def release(self):
-                pass
-
-            @property
-            def fps(self):
-                return 1.0
-
-            def __len__(self):
-                return 5
-
-            def get(self, key):
-                return 1.0 if key == cv2.CAP_PROP_FPS else (5 if key == cv2.CAP_PROP_FRAME_COUNT else 0)
-
-        with patch("frigate_buffer.services.ai_analyzer.ffmpegcv.VideoCaptureNV", NoSetReader):
-            config = {"GEMINI": {"enabled": True, "proxy_url": "http://p", "api_key": "k"}, "FINAL_REVIEW_IMAGE_COUNT": 10}
-            service = GeminiAnalysisService(config)
-            result = service._extract_frames(clip_path, event_start_ts=0, event_end_ts=1.0)
-        self.assertGreater(len(result), 0)
-        self.assertLessEqual(len(result), 5)
-
-
-class TestGeminiAnalysisServiceCropAppliedDuringExtraction(unittest.TestCase):
-    """Test that when CROP_WIDTH/CROP_HEIGHT are set, extracted frames are cropped."""
-
-    @patch("frigate_buffer.services.ai_analyzer.ffmpegcv.VideoCaptureNV")
-    def test_extracted_frames_have_crop_dimensions(self, mock_vc):
-        with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as f:
-            clip_path = f.name
-        self.addCleanup(lambda: os.path.exists(clip_path) and os.unlink(clip_path))
-        mock_cap = MagicMock()
-        mock_cap.isOpened.return_value = True
-        mock_cap.fps = 1.0
-        mock_cap.__len__ = MagicMock(return_value=5)
-        mock_cap.get.side_effect = [1.0, 5]
-        mock_cap.read.return_value = (True, np.zeros((480, 640, 3), dtype=np.uint8))
-        mock_cap.release = MagicMock()
-        mock_vc.return_value = mock_cap
-
-        config = {
-            "GEMINI": {"enabled": True, "proxy_url": "http://p", "api_key": "k"},
-            "EXPORT_BUFFER_BEFORE": 0,
-            "MAX_MULTI_CAM_FRAMES_SEC": 1,
-            "CROP_WIDTH": 320,
-            "CROP_HEIGHT": 240,
-        }
-        service = GeminiAnalysisService(config)
-        result = service._extract_frames(clip_path, event_start_ts=0, event_end_ts=1.0)
-        self.assertGreater(len(result), 0)
-        for frame, _ in result:
-            self.assertEqual(frame.shape, (240, 320, 3), "Each frame should be center-cropped to 320x240")
-
-
 class TestGeminiAnalysisServiceSmartCrop(unittest.TestCase):
     """Test _smart_crop with normalized box and padding."""
 
@@ -606,60 +399,13 @@ class TestGeminiAnalysisServiceSmartCrop(unittest.TestCase):
         self.assertEqual(crop_no_pad.shape, (50, 50, 3))
 
 
-class TestGeminiAnalysisServiceFrameMetadata(unittest.TestCase):
-    """Test analyze_clip and _extract_frames with frame_metadata."""
+class TestGeminiAnalysisServiceConfigMisc(unittest.TestCase):
+    """Misc config tests (e.g. smart_crop_padding)."""
 
     def test_smart_crop_padding_from_config(self):
         config = {"GEMINI": {"enabled": True, "proxy_url": "http://p", "api_key": "k"}, "SMART_CROP_PADDING": 0.25}
         service = GeminiAnalysisService(config)
         self.assertEqual(service.smart_crop_padding, 0.25)
-
-    @patch("frigate_buffer.services.ai_analyzer.requests.post")
-    @patch("frigate_buffer.services.ai_analyzer.ffmpegcv.VideoCaptureNV")
-    def test_analyze_clip_with_frame_metadata_empty_does_not_crash(self, mock_vc, mock_post):
-        with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as f:
-            clip_path = f.name
-        self.addCleanup(lambda: os.path.exists(clip_path) and os.unlink(clip_path))
-        mock_cap = MagicMock()
-        mock_cap.isOpened.return_value = True
-        mock_cap.fps = 1.0
-        mock_cap.__len__ = MagicMock(return_value=5)
-        mock_cap.get.side_effect = lambda key: 1.0 if key == cv2.CAP_PROP_FPS else (5 if key == cv2.CAP_PROP_FRAME_COUNT else 0)
-        mock_cap.read.return_value = (True, np.zeros((100, 100, 3), dtype=np.uint8))
-        mock_cap.release = MagicMock()
-        mock_vc.return_value = mock_cap
-        mock_post.return_value.status_code = 200
-        mock_post.return_value.json.return_value = {
-            "choices": [{"message": {"content": json.dumps({
-                "title": "T", "shortSummary": "S", "scene": "Sc", "confidence": 0.8, "potential_threat_level": 0
-            })}}]
-        }
-        config = {"GEMINI": {"enabled": True, "proxy_url": "http://p", "api_key": "k"}}
-        service = GeminiAnalysisService(config)
-        result = service.analyze_clip("evt1", clip_path, event_start_ts=0, event_end_ts=1.0, frame_metadata=[])
-        self.assertIsNotNone(result)
-
-
-class TestGeminiAnalysisServiceSaveAnalysisResult(unittest.TestCase):
-    """Test _save_analysis_result: path handling and OSError does not crash."""
-
-    def test_save_analysis_result_oserror_does_not_raise(self):
-        """When writing analysis_result.json raises OSError (e.g. read-only fs), we log and do not raise."""
-        event_dir = tempfile.mkdtemp()
-        self.addCleanup(lambda: os.path.exists(event_dir) and __import__("shutil").rmtree(event_dir, ignore_errors=True))
-        clip_path = os.path.join(event_dir, "clip.mp4")
-        with open(clip_path, "wb") as f:
-            f.write(b"fake")
-        config = {"GEMINI": {"enabled": True, "proxy_url": "http://p", "api_key": "k"}}
-        service = GeminiAnalysisService(config)
-        result = {"title": "T", "shortSummary": "S", "potential_threat_level": 0}
-        out_path = os.path.join(event_dir, "analysis_result.json")
-        with patch("frigate_buffer.services.ai_analyzer.open", side_effect=OSError(13, "Permission denied")):
-            try:
-                service._save_analysis_result("evt1", clip_path, result)
-            except OSError:
-                self.fail("_save_analysis_result should catch OSError and not re-raise")
-        self.assertFalse(os.path.isfile(out_path), "File should not be created when open raises OSError")
 
 
 class TestGeminiAnalysisServiceAnalyzeMultiClipCe(unittest.TestCase):

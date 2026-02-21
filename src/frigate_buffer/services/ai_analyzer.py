@@ -6,7 +6,6 @@ OpenAI-compatible Gemini proxy, and returns the analysis metadata to the caller.
 Does NOT publish to MQTT; the orchestrator persists results and notifies HA.
 """
 
-import bisect
 import os
 import json
 import base64
@@ -19,14 +18,12 @@ from typing import Any, Sequence
 # Relative path under CE folder for detection sidecar (must match multi_clip_extractor)
 _DETECTION_SIDECAR_FILENAME = "detection.json"
 
-from frigate_buffer.models import FrameMetadata
-from frigate_buffer.managers.file import write_ai_frame_analysis_single_cam, write_ai_frame_analysis_multi_cam
+from frigate_buffer.managers.file import write_ai_frame_analysis_multi_cam
 
 from frigate_buffer.services import crop_utils
 from frigate_buffer.services.multi_clip_extractor import extract_target_centric_frames
 
 import cv2
-import ffmpegcv
 import requests
 import urllib3.exceptions
 
@@ -75,10 +72,6 @@ def _log_proxy_failure(proxy_url: str, attempt: int, exc: Exception) -> None:
 # Max chars to log for proxy response body
 LOG_MAX_RESPONSE_BODY = 2000
 
-# Default max frames to send to proxy (cap token/image cost)
-DEFAULT_MAX_FRAMES = 20
-# Frame sampling interval in seconds when extracting from video
-FRAME_SAMPLE_INTERVAL_SEC = 0.5
 # Resize frame width for API (preserve aspect or fixed width)
 FRAME_MAX_WIDTH = 1280
 
@@ -94,7 +87,6 @@ class GeminiAnalysisService:
         self._api_key = gemini.get('api_key') or ''
         self._model = config.get('GEMINI_PROXY_MODEL') or gemini.get('model') or 'gemini-2.5-flash-lite'
         self._enabled = bool(gemini.get('enabled', False))
-        self._max_frames = int(config.get('FINAL_REVIEW_IMAGE_COUNT', DEFAULT_MAX_FRAMES) or DEFAULT_MAX_FRAMES)
         self._prompt_template: str | None = None
         # Proxy tuning (flat keys)
         self._temperature = float(config.get('GEMINI_PROXY_TEMPERATURE', 0.3))
@@ -163,16 +155,6 @@ class GeminiAnalysisService:
             .replace('{list of zones in global event, dont repeat zones}', zones_str)
             .replace('{list of labels and sub_labels tracked in scene}', labels_str)
         )
-
-    def _camera_from_clip_path(self, clip_path: str) -> str:
-        """Derive camera name from clip path (e.g. .../Doorbell/doorbell-12345.mp4 -> Doorbell)."""
-        try:
-            parent = os.path.basename(os.path.dirname(os.path.abspath(clip_path)))
-            if parent and not parent.endswith(".mp4"):
-                return parent
-        except Exception:
-            pass
-        return "unknown"
 
     def _center_crop(self, frame: Any, target_w: int, target_h: int) -> Any:
         """Crop frame to target_w x target_h centered. Resize if crop larger than frame."""
@@ -244,157 +226,6 @@ class GeminiAnalysisService:
         if crop.shape[1] != target_w or crop.shape[0] != target_h:
             crop = cv2.resize(crop, (target_w, target_h))
         return crop
-
-    def _extract_frames(
-        self,
-        clip_path: str,
-        event_start_ts: float = 0,
-        event_end_ts: float = 0,
-        frame_metadata: Sequence[FrameMetadata] | None = None,
-    ) -> list[tuple]:
-        """Extract frames from video via a single sequential read (ffmpegcv readers do not support set(CAP_PROP_POS_FRAMES)).
-        With event_start_ts > 0, skips pre-capture buffer and limits to event segment. Uses CV-based motion crop
-        (crop_utils.motion_crop) when CROP_WIDTH/CROP_HEIGHT set; otherwise center crop. Uses grayscale frame
-        differencing for motion-aware selection when MOTION_THRESHOLD_PX > 0; first and last frame are always kept.
-        When frame_metadata is provided, prioritizes by score*area. Returns list of (frame, frame_time_sec) for overlay."""
-        result: list[tuple] = []
-        cap = ffmpegcv.VideoCaptureNV(clip_path)
-        if not cap.isOpened():
-            logger.warning("Could not open video: %s", clip_path)
-            return result
-        try:
-            # ffmpegcv exposes .fps and .count / __len__; do NOT use cap.get()—ffmpegcv readers have no OpenCV .get()
-            fps = getattr(cap, "fps", None) or 1.0
-            try:
-                total_frames = int(len(cap)) if hasattr(cap, "__len__") else int(getattr(cap, "count", 0) or 0)
-            except (TypeError, ValueError):
-                total_frames = int(getattr(cap, "count", 0) or 0)
-            use_meta = bool(frame_metadata)
-            use_cv_crop = self.crop_width > 0 and self.crop_height > 0
-
-            if event_start_ts > 0 and total_frames > 0:
-                start_frame = int(fps * self.buffer_offset)
-                event_duration_sec = (event_end_ts - event_start_ts) if event_end_ts > event_start_ts else 0
-                end_frame = (
-                    start_frame + int(fps * event_duration_sec)
-                    if event_duration_sec > 0
-                    else total_frames
-                )
-                end_frame = min(end_frame, total_frames)
-                start_frame = min(start_frame, end_frame)
-                step = max(1, int(fps / self.max_frames_sec)) if self.max_frames_sec > 0 else 1
-
-                use_motion = self.motion_threshold_px > 0
-                candidates: list[tuple] = []
-                prev_gray = None
-                sorted_meta: list[Any] = []
-                times: list[float] = []
-                if use_meta and frame_metadata:
-                    sorted_meta = sorted(frame_metadata, key=lambda m: m.frame_time)
-                    times = [m.frame_time for m in sorted_meta]
-
-                current_index = 0
-                while True:
-                    ret, frame = cap.read()
-                    if not ret:
-                        break
-                    if current_index < start_frame:
-                        current_index += 1
-                        continue
-                    if current_index > end_frame:
-                        break
-                    if (current_index - start_frame) % step != 0:
-                        current_index += 1
-                        continue
-                    frame_time_approx = event_start_ts + (current_index - start_frame) / fps if fps else event_start_ts
-                    meta = None
-                    if sorted_meta and times:
-                        idx = bisect.bisect_left(times, frame_time_approx)
-                        closest = sorted_meta[min(idx, len(sorted_meta) - 1)]
-                        if idx > 0 and abs(sorted_meta[idx - 1].frame_time - frame_time_approx) < abs(closest.frame_time - frame_time_approx):
-                            closest = sorted_meta[idx - 1]
-                        if abs(closest.frame_time - frame_time_approx) < 2.0:
-                            meta = closest
-
-                    motion_score = 0.0
-                    if use_cv_crop:
-                        frame, next_gray = crop_utils.motion_crop(
-                            frame,
-                            prev_gray,
-                            self.crop_width,
-                            self.crop_height,
-                            min_area_fraction=self.motion_crop_min_area_fraction,
-                            min_area_px=self.motion_crop_min_px,
-                        )
-                        if use_motion and prev_gray is not None:
-                            motion_score = float(cv2.sumElems(cv2.absdiff(prev_gray, next_gray))[0])
-                        prev_gray = next_gray
-                    else:
-                        if self.crop_width > 0 and self.crop_height > 0:
-                            frame = self._center_crop(frame, self.crop_width, self.crop_height)
-                        if use_motion:
-                            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-                            if prev_gray is not None:
-                                motion_score = float(cv2.sumElems(cv2.absdiff(prev_gray, gray))[0])
-                            prev_gray = gray
-
-                    priority = (meta.score * meta.area) if meta else motion_score
-                    candidates.append((current_index, frame, frame_time_approx, motion_score, meta, priority))
-                    current_index += 1
-
-                if not candidates:
-                    return result
-                if len(candidates) <= self._max_frames:
-                    result = [(c[1], c[2]) for c in candidates]
-                else:
-                    middle = candidates[1:-1]
-                    n_keep = self._max_frames - 2
-                    middle_sorted = sorted(middle, key=lambda c: c[5], reverse=True)[:n_keep]
-                    middle_sorted.sort(key=lambda c: c[0])
-                    result = [(candidates[0][1], candidates[0][2])] + [(c[1], c[2]) for c in middle_sorted] + [(candidates[-1][1], candidates[-1][2])]
-                return result
-
-            if total_frames <= 0:
-                idx = 0
-                while len(result) < self._max_frames:
-                    ret, frame = cap.read()
-                    if not ret:
-                        break
-                    if use_cv_crop:
-                        frame, _ = crop_utils.motion_crop(
-                            frame, None, self.crop_width, self.crop_height,
-                            min_area_fraction=self.motion_crop_min_area_fraction,
-                            min_area_px=self.motion_crop_min_px,
-                        )
-                    elif self.crop_width > 0 and self.crop_height > 0:
-                        frame = self._center_crop(frame, self.crop_width, self.crop_height)
-                    if len(result) % max(1, int(fps * FRAME_SAMPLE_INTERVAL_SEC)) == 0:
-                        result.append((frame, event_start_ts + idx / fps if fps else event_start_ts))
-                    if len(result) >= self._max_frames:
-                        break
-                    idx += 1
-                return result
-            step = max(1, int(fps * FRAME_SAMPLE_INTERVAL_SEC))
-            current_index = 0
-            while current_index < total_frames and len(result) < self._max_frames:
-                ret, frame = cap.read()
-                if not ret:
-                    break
-                if current_index % step == 0:
-                    if use_cv_crop:
-                        frame, _ = crop_utils.motion_crop(
-                            frame, None, self.crop_width, self.crop_height,
-                            min_area_fraction=self.motion_crop_min_area_fraction,
-                            min_area_px=self.motion_crop_min_px,
-                        )
-                    elif self.crop_width > 0 and self.crop_height > 0:
-                        frame = self._center_crop(frame, self.crop_width, self.crop_height)
-                    frame_time = (event_start_ts + current_index / fps) if (event_start_ts > 0 and fps) else (current_index / fps if fps else 0)
-                    result.append((frame, frame_time))
-                current_index += 1
-        finally:
-            cap.release()
-        return result
 
     def _frame_to_base64_url(self, frame: Any) -> str:
         """Encode a BGR frame as JPEG base64 data URL."""
@@ -593,100 +424,6 @@ class GeminiAnalysisService:
                 continue
         return None
 
-    def _save_analysis_result(self, event_id: str, clip_path: str, result: dict[str, Any]) -> None:
-        """
-        Save the analysis result as analysis_result.json in the same directory as the clip.
-        Required for Step 7 (Daily Reporter). Logs a warning if shortSummary, title, or
-        potential_threat_level are missing but still saves the full dict.
-        """
-        required = ("shortSummary", "title", "potential_threat_level")
-        missing = [k for k in required if k not in result]
-        if missing:
-            logger.warning("Analysis result for %s missing fields %s; saving anyway", event_id, missing)
-        event_dir = os.path.dirname(os.path.abspath(clip_path))
-        out_path = os.path.join(event_dir, "analysis_result.json")
-        try:
-            with open(out_path, "w", encoding="utf-8") as f:
-                json.dump(result, f, indent=2, ensure_ascii=False)
-            logger.debug("Saved analysis_result.json for %s to %s", event_id, out_path)
-        except OSError as e:
-            logger.warning("Failed to write analysis_result.json for %s: %s", event_id, e)
-
-    def analyze_clip(
-        self,
-        event_id: str,
-        clip_path: str,
-        event_start_ts: float = 0,
-        event_end_ts: float = 0,
-        frame_metadata: Sequence[FrameMetadata] | None = None,
-    ) -> dict[str, Any] | None:
-        """
-        Extract frames from clip_path, call proxy, return analysis metadata.
-        When event_start_ts > 0, seeks past pre-capture buffer and limits to event segment.
-        When frame_metadata is provided, uses smart crop and score*area prioritization.
-        Called from orchestrator (e.g. in a background thread). Returns None if disabled, path missing, or proxy failure.
-        Does NOT publish to MQTT; caller is responsible for persisting and notifying.
-        """
-        if not self._enabled:
-            logger.debug("Gemini analysis disabled, skipping %s", event_id)
-            return None
-        if not self._proxy_url or not self._api_key:
-            logger.debug("Gemini proxy not configured, skipping %s", event_id)
-            return None
-        if not os.path.isfile(clip_path):
-            logger.warning("Clip not found: %s", clip_path)
-            return None
-        try:
-            frames_with_time = self._extract_frames(
-                clip_path, event_start_ts, event_end_ts,
-                frame_metadata=frame_metadata,
-            )
-            if not frames_with_time:
-                logger.warning("No frames extracted from %s", clip_path)
-                return None
-            camera = self._camera_from_clip_path(clip_path)
-            image_count = len(frames_with_time)
-            for i, (frame, frame_time_sec) in enumerate(frames_with_time):
-                time_str = datetime.fromtimestamp(frame_time_sec).strftime("%Y-%m-%d %H:%M:%S")
-                frame = crop_utils.draw_timestamp_overlay(
-                    frame, time_str, camera, i + 1, image_count
-                )
-                frames_with_time[i] = (frame, frame_time_sec)
-            frames = [f for f, _ in frames_with_time]
-            activity_start_str = (
-                datetime.fromtimestamp(frames_with_time[0][1]).strftime("%Y-%m-%d %H:%M:%S")
-                if frames_with_time else datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            )
-            duration_str = "unknown"
-            system_prompt = self._build_system_prompt(
-                image_count=image_count,
-                camera_list=camera,
-                first_image_number=1,
-                last_image_number=image_count,
-                activity_start_str=activity_start_str,
-                duration_str=duration_str,
-                zones_str="none recorded",
-                labels_str="(none recorded)",
-            )
-            result = self.send_to_proxy(system_prompt, frames)
-            if result and isinstance(result, dict):
-                self._save_analysis_result(event_id, clip_path, result)
-                event_dir = os.path.dirname(os.path.abspath(clip_path))
-                save_frames = bool(self.config.get("SAVE_AI_FRAMES", True))
-                create_zip = bool(self.config.get("CREATE_AI_ANALYSIS_ZIP", True))
-                write_ai_frame_analysis_single_cam(
-                    event_dir,
-                    frames_with_time,
-                    camera,
-                    write_manifest=True,
-                    create_zip_flag=create_zip,
-                    save_frames=save_frames,
-                )
-            return result
-        except Exception as e:
-            logger.exception("Analyze clip failed for %s: %s", event_id, e)
-            return None
-
     def analyze_multi_clip_ce(
         self,
         ce_id: str,
@@ -697,6 +434,7 @@ class GeminiAnalysisService:
         """
         Target-centric multi-clip analysis for consolidated events.
         Extracts frames from full clips via object detection, sends to Gemini, saves to CE root.
+        Handles both single-camera and multi-camera CEs (len(cameras) == 1 or more); same pipeline.
         primary_camera: optional camera that initiated the event (first-camera bias in selection).
         """
         if not self._enabled:

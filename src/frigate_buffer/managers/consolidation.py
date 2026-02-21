@@ -127,8 +127,12 @@ class ConsolidatedEventManager:
                 if end_time is not None and end_time > ce.end_time_max:
                     ce.end_time_max = end_time
 
-    def schedule_close_timer(self, ce_id: str) -> None:
-        """Schedule or reschedule the close timer for this CE. When it fires, CE is closed."""
+    def schedule_close_timer(self, ce_id: str, delay_seconds: float | None = None) -> None:
+        """Schedule or reschedule the close timer for this CE. When it fires, CE is closed.
+
+        delay_seconds: If set, use this delay instead of event_gap_seconds (e.g. 0 for
+        single-camera CE to close as soon as the event ends). None = use event_gap_seconds.
+        """
         with self._lock:
             if ce_id not in self._events:
                 return
@@ -139,14 +143,16 @@ class ConsolidatedEventManager:
             if ce_id in self._close_timers:
                 self._close_timers[ce_id].cancel()
                 del self._close_timers[ce_id]
+            delay = float(delay_seconds) if delay_seconds is not None else float(self.event_gap_seconds)
+            delay = max(0.0, delay)
             # Schedule new timer
             def _fire():
                 self._on_close_timer(ce_id)
-            t = threading.Timer(float(self.event_gap_seconds), _fire)
+            t = threading.Timer(delay, _fire)
             t.daemon = True
             self._close_timers[ce_id] = t
             t.start()
-            logger.debug(f"Scheduled CE close timer for {ce_id} in {self.event_gap_seconds}s")
+            logger.debug(f"Scheduled CE close timer for {ce_id} in {delay}s")
 
     def mark_closing(self, ce_id: str) -> bool:
         """

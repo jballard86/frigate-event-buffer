@@ -99,26 +99,6 @@ def _write_ai_analysis_internal(
         create_ai_analysis_zip(event_dir)
 
 
-def write_ai_frame_analysis_single_cam(
-    event_dir: str,
-    frames_with_time: list[tuple[Any, float]],
-    camera: str,
-    write_manifest: bool = True,
-    create_zip_flag: bool = True,
-    save_frames: bool = True,
-) -> None:
-    """Write ai_frame_analysis/frames (stitched color+B/W per frame), optional manifest, and optional zip."""
-    _write_ai_analysis_internal(
-        event_dir,
-        frames_with_time,
-        camera_override=camera,
-        write_manifest=write_manifest,
-        create_zip_flag=create_zip_flag,
-        save_frames=save_frames,
-        include_camera_in_filename=False
-    )
-
-
 def write_ai_frame_analysis_multi_cam(
     event_dir: str,
     frames_with_time_and_camera: list[Any],

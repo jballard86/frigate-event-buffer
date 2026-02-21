@@ -59,7 +59,7 @@ CONFIG_SCHEMA = Schema({
         Optional('max_event_length_seconds'): int,             # Events with duration >= this are canceled: no AI/decode, folder renamed with "-canceled", notification sent; default 120 (2 min).
         Optional('export_buffer_before'): int,                  # Seconds to include before event start in exported clip.
         Optional('export_buffer_after'): int,                    # Seconds to include after event end in exported clip.
-        Optional('final_review_image_count'): int,              # Max number of images to send to Frigate final review summary.
+        Optional('single_camera_ce_close_delay_seconds'): int,  # When CE has one camera, delay (s) before close; 0 = close as soon as event ends. Multi-cam uses event_gap_seconds.
         Optional('gemini_max_concurrent_analyses'): int,        # Max concurrent Gemini clip analyses (throttling).
         Optional('save_ai_frames'): bool,                        # Whether to save extracted AI analysis frames to disk.
         Optional('create_ai_analysis_zip'): bool,               # Whether to create a zip of AI analysis assets (e.g. for multi-cam).
@@ -171,7 +171,7 @@ def load_config() -> dict:
         'MAX_EVENT_LENGTH_SECONDS': 120,
         'EXPORT_BUFFER_BEFORE': 5,
         'EXPORT_BUFFER_AFTER': 30,
-        'FINAL_REVIEW_IMAGE_COUNT': 20,
+        'SINGLE_CAMERA_CE_CLOSE_DELAY_SECONDS': 0,
         'GEMINI_MAX_CONCURRENT_ANALYSES': 3,
         'SAVE_AI_FRAMES': True,
         'CREATE_AI_ANALYSIS_ZIP': True,
@@ -299,7 +299,7 @@ def load_config() -> dict:
                     config['MAX_EVENT_LENGTH_SECONDS'] = settings.get('max_event_length_seconds', config['MAX_EVENT_LENGTH_SECONDS'])
                     config['EXPORT_BUFFER_BEFORE'] = settings.get('export_buffer_before', config['EXPORT_BUFFER_BEFORE'])
                     config['EXPORT_BUFFER_AFTER'] = settings.get('export_buffer_after', config['EXPORT_BUFFER_AFTER'])
-                    config['FINAL_REVIEW_IMAGE_COUNT'] = settings.get('final_review_image_count', config.get('FINAL_REVIEW_IMAGE_COUNT', 20))
+                    config['SINGLE_CAMERA_CE_CLOSE_DELAY_SECONDS'] = settings.get('single_camera_ce_close_delay_seconds', config.get('SINGLE_CAMERA_CE_CLOSE_DELAY_SECONDS', 0))
                     config['GEMINI_MAX_CONCURRENT_ANALYSES'] = settings.get('gemini_max_concurrent_analyses', config.get('GEMINI_MAX_CONCURRENT_ANALYSES', 3))
                     config['SAVE_AI_FRAMES'] = settings.get('save_ai_frames', config.get('SAVE_AI_FRAMES', True))
                     config['CREATE_AI_ANALYSIS_ZIP'] = settings.get('create_ai_analysis_zip', config.get('CREATE_AI_ANALYSIS_ZIP', True))
