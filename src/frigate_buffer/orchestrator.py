@@ -34,6 +34,10 @@ from frigate_buffer.services.lifecycle import EventLifecycleService
 from frigate_buffer.services.ai_analyzer import GeminiAnalysisService
 from frigate_buffer.services.daily_reporter import DailyReporterService
 from frigate_buffer.services.frigate_export_watchdog import run_once as export_watchdog_run_once
+from frigate_buffer.services import crop_utils
+
+import cv2
+import numpy as np
 
 logger = logging.getLogger('frigate-buffer')
 
@@ -122,6 +126,10 @@ class StateAwareOrchestrator:
                 threading.Thread(target=_run, daemon=True).start()
             on_ce_ready = _on_ce_ready_for_analysis
 
+        on_quick_title = None
+        if self.ai_analyzer and config.get('QUICK_TITLE_ENABLED', True):
+            on_quick_title = self._on_quick_title_trigger
+
         self.lifecycle_service = EventLifecycleService(
             config,
             self.state_manager,
@@ -132,6 +140,7 @@ class StateAwareOrchestrator:
             self.notifier,
             self.timeline_logger,
             on_ce_ready_for_analysis=on_ce_ready,
+            on_quick_title_trigger=on_quick_title,
         )
 
         # Update callback after lifecycle service creation
@@ -330,6 +339,87 @@ class StateAwareOrchestrator:
     def _process_event_end(self, event: EventState):
         """Background processing when event ends. Delegates to lifecycle service."""
         self.lifecycle_service.process_event_end(event)
+
+    def _on_quick_title_trigger(self, event_id: str, camera: str, label: str,
+                                ce_id: str, camera_folder_path: str,
+                                tag_override: str | None = None) -> None:
+        """Fetch live frame, run YOLO, crop around all detections with 10%% padding, get AI title, update state and notify."""
+        if not self.ai_analyzer:
+            return
+        frigate_url = (self.config.get('FRIGATE_URL') or '').rstrip('/')
+        if not frigate_url:
+            logger.debug("Quick title skipped: no Frigate URL")
+            return
+        url = f"{frigate_url}/api/{camera}/latest.jpg"
+        try:
+            resp = requests.get(url, timeout=10)
+            resp.raise_for_status()
+            arr = np.frombuffer(resp.content, dtype=np.uint8)
+            image_bgr = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+            if image_bgr is None:
+                logger.warning("Quick title: failed to decode latest.jpg for %s", camera)
+                return
+        except requests.RequestException as e:
+            logger.warning("Quick title: failed to fetch latest.jpg for %s: %s", camera, e)
+            return
+        detections = self.video_service.run_detection_on_image(image_bgr, self.config)
+        if detections:
+            image_to_send = crop_utils.crop_around_detections_with_padding(
+                image_bgr, detections, padding_fraction=0.1
+            )
+        else:
+            image_to_send = image_bgr
+        title = self.ai_analyzer.generate_quick_title(image_to_send, camera, label)
+        if not title or not title.strip():
+            logger.debug("Quick title: no title returned for %s", event_id)
+            return
+        event = self.state_manager.get_event(event_id)
+        if not event:
+            logger.debug("Quick title: event %s no longer in state", event_id)
+            return
+        self.state_manager.set_genai_metadata(
+            event_id,
+            title,
+            event.genai_description or "",
+            event.severity or "detection",
+            event.threat_level,
+            scene=event.genai_scene,
+        )
+        event = self.state_manager.get_event(event_id)
+        if event and event.folder_path:
+            self.file_manager.write_metadata_json(event.folder_path, event)
+        self.consolidated_manager.update_best(event_id, title=title)
+        ce = self.consolidated_manager.get_by_frigate_event(event_id)
+        primary = self.state_manager.get_event(ce.primary_event_id) if ce and ce.primary_event_id else event
+        media_folder = (
+            os.path.join(ce.folder_path, self.file_manager.sanitize_camera_name(ce.primary_camera or ""))
+            if ce and ce.primary_camera else (camera_folder_path if ce else camera_folder_path)
+        )
+        if not ce:
+            media_folder = camera_folder_path
+        notify_target = type('NotifyTarget', (), {
+            'event_id': ce_id if ce else event_id,
+            'camera': ce.camera if ce else camera,
+            'label': ce.label if ce else label,
+            'folder_path': media_folder,
+            'created_at': ce.start_time if ce else event.created_at,
+            'end_time': ce.end_time if ce else event.end_time,
+            'phase': EventPhase.FINALIZED,
+            'genai_title': title,
+            'genai_description': ce.best_description if ce else (event.genai_description or ""),
+            'ai_description': None,
+            'review_summary': None,
+            'threat_level': ce.best_threat_level if ce else event.threat_level,
+            'severity': ce.severity if ce else (event.severity or "detection"),
+            'snapshot_downloaded': getattr(primary, 'snapshot_downloaded', False) if primary else False,
+            'clip_downloaded': getattr(primary, 'clip_downloaded', False) if primary else False,
+            'image_url_override': getattr(primary, 'image_url_override', None) if primary else None,
+        })()
+        self.notifier.publish_notification(
+            notify_target, "snapshot_ready",
+            tag_override=tag_override or f"frigate_{ce_id if ce else event_id}"
+        )
+        logger.info("Quick title applied for %s: %s", event_id, title[:50])
 
     def _handle_analysis_result(self, event_id: str, result: dict):
         """Handle returned analysis from GeminiAnalysisService: update state, write files, POST to Frigate, notify HA."""

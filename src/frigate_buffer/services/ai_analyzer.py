@@ -130,6 +130,104 @@ class GeminiAnalysisService:
             )
         return self._prompt_template
 
+    def _load_quick_title_prompt(self) -> str:
+        """Load system prompt for quick-title (single image, 3–6 word title only)."""
+        default_path = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)),
+            'quick_title_prompt.txt'
+        )
+        if os.path.isfile(default_path):
+            try:
+                with open(default_path, 'r', encoding='utf-8') as f:
+                    return f.read()
+            except Exception as e:
+                logger.warning("Could not read quick_title_prompt.txt: %s", e)
+        return (
+            "You are a security camera alert titler. Respond with ONLY a short title of 3 to 6 words. "
+            "No quotes, no markdown, no JSON, no explanation."
+        )
+
+    def _send_single_image_get_text(self, system_prompt: str, image_bgr: Any) -> str | None:
+        """POST one image to proxy and return raw message content (plain text). Used for quick-title."""
+        url = f"{self._proxy_url}/v1/chat/completions"
+        user_content = [
+            {"type": "text", "text": "Describe this image with the requested short title only."},
+            {"type": "image_url", "image_url": {"url": self._frame_to_base64_url(image_bgr)}},
+        ]
+        payload = {
+            "model": self._model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_content},
+            ],
+            "temperature": self._temperature,
+            "top_p": self._top_p,
+            "frequency_penalty": self._frequency_penalty,
+            "presence_penalty": self._presence_penalty,
+        }
+        base_headers = {
+            "Authorization": f"Bearer {self._api_key}",
+            "Content-Type": "application/json",
+        }
+        for attempt in range(2):
+            headers = dict(base_headers)
+            if attempt == 1:
+                headers["Accept-Encoding"] = "identity"
+                headers["Connection"] = "close"
+            try:
+                resp = requests.post(url, json=payload, headers=headers, timeout=30)
+                resp.raise_for_status()
+                data = resp.json()
+                content = None
+                candidates = data.get("candidates") or []
+                if candidates:
+                    first = candidates[0]
+                    if isinstance(first, dict):
+                        content_obj = first.get("content")
+                        if isinstance(content_obj, dict):
+                            for part in (content_obj.get("parts") or []):
+                                if isinstance(part, dict) and "text" in part:
+                                    content = part.get("text")
+                                    break
+                                if content is not None:
+                                    break
+                if content is None:
+                    content = (data.get("choices") or [{}])[0].get("message", {}).get("content")
+                if not content or not str(content).strip():
+                    return None
+                return str(content).strip()
+            except (requests.exceptions.ChunkedEncodingError, urllib3.exceptions.ProtocolError) as e:
+                logger.warning("Quick title proxy attempt %s/2 ChunkedEncodingError: %s", attempt + 1, e)
+                continue
+            except Exception as e:
+                _log_proxy_failure(url, attempt + 1, e)
+                if attempt == 1:
+                    return None
+                continue
+        return None
+
+    def generate_quick_title(self, image_bgr: Any, camera: str, label: str) -> str | None:
+        """
+        Send a single cropped/live frame to the Gemini proxy and return a short title (3–6 words).
+        Used for the quick-title pipeline shortly after event start. Returns None on failure or empty.
+        """
+        if not self._proxy_url or not self._api_key:
+            logger.warning("Gemini proxy_url or api_key not configured for quick title")
+            return None
+        system_prompt = self._load_quick_title_prompt()
+        raw = self._send_single_image_get_text(system_prompt, image_bgr)
+        if not raw:
+            return None
+        # Strip markdown code blocks if present
+        if raw.startswith("```"):
+            lines = raw.split("\n")
+            if lines[0].startswith("```"):
+                lines = lines[1:]
+            if lines and lines[-1].strip() == "```":
+                lines = lines[:-1]
+            raw = "\n".join(lines)
+        return raw.strip()[:200] or None
+
     def _build_system_prompt(
         self,
         image_count: int,

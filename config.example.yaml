@@ -83,6 +83,11 @@ settings:
   # Frame limits for AI analysis: use multi_cam.max_multi_cam_frames_sec and max_multi_cam_frames_min (all events).
   # Rolling cap: max frames sent to Gemini API per hour; 0 = disabled. Logs rate/blocked each call.
   gemini_frames_per_hour_cap: 200
+
+  # Quick AI title: delay (seconds) after event start before fetching live frame and generating short title (3–5 typical).
+  # quick_title_delay_seconds: 4
+  # quick_title_enabled: true  # When true and Gemini enabled, run quick-title pipeline; initial notification uses latest.jpg.
+
   # When a consolidated event has one camera, delay (seconds) before closing; 0 = close as soon as event ends.
   # single_camera_ce_close_delay_seconds: 0
 

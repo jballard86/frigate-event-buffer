@@ -64,6 +64,29 @@ def create_app(orchestrator):
             logger.debug(f"Snapshot proxy error for {event_id}: {e}")
             return "Snapshot unavailable", 502
 
+    @app.route('/api/cameras/<camera_name>/latest.jpg')
+    def proxy_camera_latest(camera_name):
+        """Proxy Frigate live frame (latest.jpg) for a camera so initial notification image is buffer-based."""
+        if not camera_name or camera_name != re.sub(r'[^a-zA-Z0-9_-]', '', camera_name):
+            return "Invalid camera name", 400
+        if allowed_cameras and camera_name not in allowed_cameras:
+            return "Camera not configured", 404
+        frigate_url = orchestrator.config.get('FRIGATE_URL', '').rstrip('/')
+        if not frigate_url:
+            return "Frigate URL not configured", 503
+        url = f"{frigate_url}/api/{camera_name}/latest.jpg"
+        try:
+            resp = requests.get(url, timeout=10, stream=True)
+            resp.raise_for_status()
+            return Response(
+                resp.iter_content(chunk_size=8192),
+                content_type=resp.headers.get('Content-Type', 'image/jpeg'),
+                status=resp.status_code
+            )
+        except requests.RequestException as e:
+            logger.debug(f"Latest frame proxy error for {camera_name}: {e}")
+            return "Live frame unavailable", 502
+
     @app.route('/stats-page')
     def stats_page():
         """Serve the standalone stats dashboard page."""

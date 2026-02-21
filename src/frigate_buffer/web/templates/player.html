@@ -425,14 +425,16 @@
     }
   }
 
-  // Renders the AI Analysis tile: placeholder, title, and scene from the event object.
+  // Renders the AI Analysis tile: first line = title (canned or AI) or "future screenshot analysis"; then scene.
   function renderAiAnalysisBlocks(ev) {
-    const placeholder = '<p class="ai-placeholder">future screenshot analysis</p>';
-    const titleText = ev.title != null && ev.title !== '' ? escapeHtml(ev.title) : 'No AI Title Available';
-    const titleHtml = '<h3 class="ai-title">' + titleText + '</h3>';
+    const placeholderText = 'future screenshot analysis';
+    const firstLineText = (ev.title != null && ev.title !== '') ? ev.title : placeholderText;
+    const firstLineHtml = firstLineText === placeholderText
+      ? '<p class="ai-placeholder">' + escapeHtml(firstLineText) + '</p>'
+      : '<h3 class="ai-title">' + escapeHtml(firstLineText) + '</h3>';
     const sceneText = ev.scene != null && ev.scene !== '' ? escapeHtml(ev.scene) : 'No scene description.';
     const sceneHtml = '<p class="ai-scene">' + sceneText + '</p>';
-    return placeholder + titleHtml + sceneHtml;
+    return firstLineHtml + sceneHtml;
   }
 
   // --- Render ---

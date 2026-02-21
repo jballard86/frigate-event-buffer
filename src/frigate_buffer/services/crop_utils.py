@@ -90,6 +90,59 @@ def _crop_around_center(
     return crop
 
 
+def crop_around_detections_with_padding(
+    frame: Any,
+    detections: list[dict[str, Any]],
+    padding_fraction: float = 0.1,
+) -> Any:
+    """
+    Crop the frame to a region that encompasses ALL detections plus padding.
+
+    Builds a single "master" bounding box as the union of every detection bbox,
+    expands it by padding_fraction (e.g. 0.1 = 10%) on each side, clamps to frame
+    bounds, and returns the cropped region. Ensures the AI sees full context when
+    multiple people (or objects) are in the frame.
+    If detections is empty, returns the full frame unchanged.
+    Each detection must have "bbox" as [x1, y1, x2, y2] in pixel coordinates.
+    """
+    if not detections:
+        return frame
+    h, w = frame.shape[:2]
+    if w <= 0 or h <= 0:
+        return frame
+    x1_min = w
+    y1_min = h
+    x2_max = 0
+    y2_max = 0
+    for d in detections:
+        bbox = d.get("bbox")
+        if not isinstance(bbox, (list, tuple)) or len(bbox) < 4:
+            continue
+        x1, y1, x2, y2 = float(bbox[0]), float(bbox[1]), float(bbox[2]), float(bbox[3])
+        x1_min = min(x1_min, x1)
+        y1_min = min(y1_min, y1)
+        x2_max = max(x2_max, x2)
+        y2_max = max(y2_max, y2)
+    if x1_min >= x2_max or y1_min >= y2_max:
+        return frame
+    bw = x2_max - x1_min
+    bh = y2_max - y1_min
+    pad_w = max(bw * padding_fraction, 1)
+    pad_h = max(bh * padding_fraction, 1)
+    x1 = int(x1_min - pad_w)
+    y1 = int(y1_min - pad_h)
+    x2 = int(x2_max + pad_w)
+    y2 = int(y2_max + pad_h)
+    x1 = max(0, x1)
+    y1 = max(0, y1)
+    x2 = min(w, x2)
+    y2 = min(h, y2)
+    if x2 <= x1 or y2 <= y1:
+        return frame
+    crop = frame[y1:y2, x1:x2]
+    return crop if crop.size > 0 else frame
+
+
 def full_frame_resize_to_target(frame: Any, target_w: int, target_h: int) -> Any:
     """
     Scale the entire frame to fit inside target_w x target_h preserving aspect ratio, then pad with black to exactly target_w x target_h.

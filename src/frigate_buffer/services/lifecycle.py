@@ -18,7 +18,8 @@ class EventLifecycleService:
 
     def __init__(self, config, state_manager, file_manager, consolidated_manager,
                  video_service, download_service, notifier, timeline_logger,
-                 on_ce_ready_for_analysis: Callable[[str, str, float, dict], None] | None = None):
+                 on_ce_ready_for_analysis: Callable[[str, str, float, dict], None] | None = None,
+                 on_quick_title_trigger: Callable[..., None] | None = None):
         self.config = config
         self.state_manager = state_manager
         self.file_manager = file_manager
@@ -28,6 +29,7 @@ class EventLifecycleService:
         self.notifier = notifier
         self.timeline_logger = timeline_logger
         self.on_ce_ready_for_analysis = on_ce_ready_for_analysis
+        self.on_quick_title_trigger = on_quick_title_trigger
 
         self.last_cleanup_time: float | None = None
         self.last_cleanup_deleted: int = 0
@@ -58,29 +60,56 @@ class EventLifecycleService:
             threading.Thread(target=_download_grouped_snapshot, daemon=True).start()
             return
 
-        delay = self.config.get('NOTIFICATION_DELAY', 5)
+        # Phase 1: canned title and live frame for initial alert (replaces snapshot-based initial notification)
+        camera_display = camera.replace('_', ' ').title()
+        event.genai_title = f"Motion Detected on {camera_display}"
+        if event.folder_path:
+            self.file_manager.write_metadata_json(event.folder_path, event)
+        buffer_base = f"http://{self.config['BUFFER_IP']}:{self.config['FLASK_PORT']}"
+        event.image_url_override = f"{buffer_base}/api/cameras/{camera}/latest.jpg"
+
         ce_tag = f"frigate_{ce.consolidated_id}" if ce else None
         threading.Thread(
             target=self._send_initial_notification,
-            args=(event, delay, ce_tag),
+            args=(event, ce_tag),
             daemon=True
         ).start()
 
-    def _send_initial_notification(self, event: EventState, delay: float,
+        # Quick-title: after delay, run AI title pipeline (single image from latest.jpg)
+        if self.on_quick_title_trigger and self.config.get('QUICK_TITLE_ENABLED', True):
+            delay_sec = max(0, int(self.config.get('QUICK_TITLE_DELAY_SECONDS', 4)))
+            if delay_sec > 0:
+                threading.Thread(
+                    target=self._run_quick_title_after_delay,
+                    args=(event_id, camera, label, ce.consolidated_id, camera_folder, ce_tag),
+                    daemon=True
+                ).start()
+
+    def _run_quick_title_after_delay(self, event_id: str, camera: str, label: str,
+                                     ce_id: str, camera_folder_path: str,
+                                     tag_override: str | None) -> None:
+        """Sleep then invoke orchestrator callback for quick AI title (non-blocking)."""
+        delay_sec = max(0, int(self.config.get('QUICK_TITLE_DELAY_SECONDS', 4)))
+        if delay_sec > 0:
+            time.sleep(delay_sec)
+        try:
+            if self.on_quick_title_trigger:
+                self.on_quick_title_trigger(
+                    event_id=event_id,
+                    camera=camera,
+                    label=label,
+                    ce_id=ce_id,
+                    camera_folder_path=camera_folder_path,
+                    tag_override=tag_override,
+                )
+        except Exception as e:
+            logger.error(f"Quick title trigger failed for {event_id}: {e}")
+
+    def _send_initial_notification(self, event: EventState,
                                    tag_override: str | None = None):
-        """Send notification immediately, then fetch snapshot and silently update."""
+        """Send initial notification with canned title and live frame (latest.jpg proxy). No snapshot download."""
         try:
             self.notifier.publish_notification(event, "new", tag_override=tag_override)
-
-            if delay > 0:
-                time.sleep(delay)
-
-            if event.folder_path:
-                event.snapshot_downloaded = self.download_service.download_snapshot(
-                    event.event_id, event.folder_path
-                )
-                if event.snapshot_downloaded:
-                    self.notifier.publish_notification(event, "snapshot_ready", tag_override=tag_override)
         except Exception as e:
             logger.error(f"Error in initial notification flow for {event.event_id}: {e}")
 

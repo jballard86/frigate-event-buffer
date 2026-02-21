@@ -222,6 +222,34 @@ class VideoService:
         """Set app-level lock so only one sidecar batch (TEST or lifecycle) runs at a time. Called by orchestrator at startup."""
         self._sidecar_app_lock = lock
 
+    def run_detection_on_image(self, image_bgr: Any, config: dict[str, Any]) -> list[dict[str, Any]]:
+        """
+        Run YOLO person detection on a single image (e.g. from latest.jpg). Uses the app-level
+        sidecar lock so inference does not run concurrently with sidecar generation (GPU safety).
+        Returns list of {label, bbox, centerpoint, area}; empty if no model or no detections.
+        """
+        lock = self._sidecar_app_lock
+        if lock is not None:
+            lock.acquire()
+        try:
+            detection_model = (config.get("DETECTION_MODEL") or "").strip()
+            detection_device = (config.get("DETECTION_DEVICE") or "").strip() or None
+            detection_imgsz = max(320, int(config.get("DETECTION_IMGSZ", 640)))
+            if not detection_model:
+                return []
+            try:
+                from ultralytics import YOLO
+                model = YOLO(detection_model)
+            except Exception as e:
+                logger.warning("Could not load YOLO for run_detection_on_image: %s", e)
+                return []
+            return _run_detection_on_frame(
+                model, image_bgr, detection_device, imgsz=detection_imgsz
+            )
+        finally:
+            if lock is not None:
+                lock.release()
+
     def generate_detection_sidecar(
         self,
         clip_path: str,

@@ -63,6 +63,8 @@ CONFIG_SCHEMA = Schema({
         Optional('save_ai_frames'): bool,                        # Whether to save extracted AI analysis frames to disk.
         Optional('create_ai_analysis_zip'): bool,               # Whether to create a zip of AI analysis assets (e.g. for multi-cam).
         Optional('gemini_frames_per_hour_cap'): int,             # Rolling cap: max frames sent to proxy per hour; 0 = disabled.
+        Optional('quick_title_delay_seconds'): int,              # Delay (3–5s) before running quick AI title on live frame; 0 = disabled.
+        Optional('quick_title_enabled'): bool,                  # When true (and Gemini enabled), run quick-title pipeline after delay.
     },
     # Home Assistant REST API; used for stats page to display Gemini cost/token entities.
     Optional('ha'): {
@@ -162,6 +164,8 @@ def load_config() -> dict:
         'SAVE_AI_FRAMES': True,
         'CREATE_AI_ANALYSIS_ZIP': True,
         'GEMINI_FRAMES_PER_HOUR_CAP': 200,
+        'QUICK_TITLE_DELAY_SECONDS': 4,
+        'QUICK_TITLE_ENABLED': True,
 
         # Optional HA REST API (for stats page token/cost display)
         'HA_URL': None,
@@ -277,6 +281,8 @@ def load_config() -> dict:
                     config['SAVE_AI_FRAMES'] = settings.get('save_ai_frames', config.get('SAVE_AI_FRAMES', True))
                     config['CREATE_AI_ANALYSIS_ZIP'] = settings.get('create_ai_analysis_zip', config.get('CREATE_AI_ANALYSIS_ZIP', True))
                     config['GEMINI_FRAMES_PER_HOUR_CAP'] = settings.get('gemini_frames_per_hour_cap', config.get('GEMINI_FRAMES_PER_HOUR_CAP', 200))
+                    config['QUICK_TITLE_DELAY_SECONDS'] = settings.get('quick_title_delay_seconds', config.get('QUICK_TITLE_DELAY_SECONDS', 4))
+                    config['QUICK_TITLE_ENABLED'] = settings.get('quick_title_enabled', config.get('QUICK_TITLE_ENABLED', True))
 
                 if 'network' in yaml_config:
                     network = yaml_config['network']

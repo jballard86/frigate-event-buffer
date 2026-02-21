@@ -143,6 +143,31 @@ class TestConfigSchema(unittest.TestCase):
     @patch('builtins.open', new_callable=mock_open)
     @patch('os.path.exists')
     @patch('frigate_buffer.config.yaml.safe_load')
+    def test_quick_title_config_from_settings(self, mock_yaml_load, mock_exists, mock_file):
+        """quick_title_delay_seconds and quick_title_enabled from settings are merged."""
+        valid_yaml = {
+            'cameras': [{'name': 'cam1'}],
+            'network': {
+                'mqtt_broker': 'localhost',
+                'frigate_url': 'http://frigate',
+                'buffer_ip': 'localhost',
+                'storage_path': '/tmp',
+            },
+            'settings': {
+                'quick_title_delay_seconds': 5,
+                'quick_title_enabled': False,
+            },
+        }
+        mock_exists.return_value = True
+        mock_yaml_load.return_value = valid_yaml
+
+        config = load_config()
+        self.assertEqual(config['QUICK_TITLE_DELAY_SECONDS'], 5)
+        self.assertFalse(config['QUICK_TITLE_ENABLED'])
+
+    @patch('builtins.open', new_callable=mock_open)
+    @patch('os.path.exists')
+    @patch('frigate_buffer.config.yaml.safe_load')
     def test_mqtt_auth_config(self, mock_yaml_load, mock_exists, mock_file):
         # Mock config with MQTT auth
         auth_yaml = {

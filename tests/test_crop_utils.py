@@ -80,3 +80,40 @@ class TestFullFrameResizeToTarget(unittest.TestCase):
         # Scaled 640->1280, 480->960; then pad (720-960)/2 = -120 so we scale to fit: scale = min(1280/640, 720/480)=1.5 -> 960x720, pad 0,160,0,160
         # So center 960px width in 1280 -> left/right padding 160 each. Black borders.
         self.assertTrue(np.all(result[0, :] == 0) or np.all(result[:, 0] == 0))
+
+
+class TestCropAroundDetectionsWithPadding(unittest.TestCase):
+    """Tests for crop_around_detections_with_padding (master bbox over all detections + padding)."""
+
+    def test_empty_detections_returns_full_frame(self):
+        """When detections is empty, return the frame unchanged."""
+        frame = np.zeros((100, 200, 3), dtype=np.uint8)
+        result = crop_utils.crop_around_detections_with_padding(frame, [], padding_fraction=0.1)
+        self.assertIs(result, frame)
+        self.assertEqual(result.shape, (100, 200, 3))
+
+    def test_single_detection_crops_with_padding(self):
+        """One bbox yields a crop that contains the bbox region plus padding."""
+        frame = np.zeros((100, 200, 3), dtype=np.uint8)
+        detections = [{"bbox": [50, 20, 90, 80], "label": "person"}]
+        result = crop_utils.crop_around_detections_with_padding(frame, detections, padding_fraction=0.1)
+        self.assertIsNotNone(result)
+        # bbox width=40, height=60; pad 10% = 4 and 6. So x1=46, y1=14, x2=94, y2=86. Clamped to [0,200] and [0,100].
+        self.assertEqual(result.shape[0], 72)  # 86-14
+        self.assertEqual(result.shape[1], 48)  # 94-46
+        self.assertEqual(result.shape[2], 3)
+
+    def test_multiple_detections_master_bbox_encompasses_all(self):
+        """Multiple detections produce one master bbox (union) then padding."""
+        frame = np.zeros((200, 300, 3), dtype=np.uint8)
+        # Two people: left and right
+        detections = [
+            {"bbox": [10, 50, 60, 120], "label": "person"},
+            {"bbox": [200, 80, 280, 180], "label": "person"},
+        ]
+        result = crop_utils.crop_around_detections_with_padding(frame, detections, padding_fraction=0.1)
+        self.assertIsNotNone(result)
+        # Master: x1_min=10, y1_min=50, x2_max=280, y2_max=180. bw=270, bh=130. pad 27, 13. x1=-17->0, y1=37, x2=307->300, y2=193->200.
+        self.assertGreaterEqual(result.shape[0], 100)
+        self.assertGreaterEqual(result.shape[1], 200)
+        self.assertEqual(result.shape[2], 3)
