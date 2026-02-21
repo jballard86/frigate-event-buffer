@@ -55,7 +55,7 @@ DETECTION_SIDECAR_FILENAME = "detection.json"
 
 def _is_gpu_not_configured(exc: BaseException) -> bool:
     """
-    True if the exception indicates GPU was never configured (no GPU, ffmpeg without NVENC),
+    True if the exception indicates GPU was never configured (no GPU, ffmpeg without NVDEC),
     vs GPU decode was attempted but failed at runtime.
     """
     msg = str(exc).lower()

@@ -59,16 +59,12 @@ frigate-event-buffer/
 ├── docker-compose.yaml
 ├── docker-compose.example.yaml
 ├── Dockerfile
-├── entrypoint.sh
 ├── pyproject.toml
 ├── requirements.txt
 ├── MAP.md
 ├── README.md
 ├── INSTALL.md
-├── INSTALL_READABLE.md
 ├── USER_GUIDE.md
-├── BUILD_NVENC.md
-├── COMPOSE_ENTRYPOINT.md
 ├── MULTI_CAM_PLAN.md
 ├── PHASE1_REFACTOR_CATALOG.md
 │
@@ -179,9 +175,8 @@ frigate-event-buffer/
 | `config.example.yaml` | Example config with all keys and comments. | Reference only. |
 | `pyproject.toml` | Package metadata, deps, `where = ["src"]`, pytest `pythonpath = ["src"]`, `requires-python = ">=3.12"`. | Used by `pip install -e .` and pytest. |
 | `requirements.txt` | Pip install list. | Referenced by Dockerfile. |
-| `Dockerfile` | Multi-stage build; FFmpeg/NVDEC; runs `python -m frigate_buffer.main`. | Build from repo root. |
+| `Dockerfile` | Multi-stage build: lean Python base + FFmpeg/NVDEC from donor; no entrypoint; runs `python -m frigate_buffer.main`. | Build from repo root. |
 | `docker-compose.yaml` / `docker-compose.example.yaml` | Compose for local run; GPU, env, mounts. | Deployment. |
-| `entrypoint.sh` | Container entrypoint. | Docker run. |
 | `MAP.md` | This file—architecture and context for AI. | Must be updated when structure or flows change. |
 | `PHASE1_REFACTOR_CATALOG.md` | Phase 1 discovery catalog for "Everything is a CE" refactor: removals and changes list. | Reference only; delete or archive after refactor is complete. |
 

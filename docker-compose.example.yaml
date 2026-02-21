@@ -46,9 +46,9 @@ services:
       - MQTT_PORT=1883
       - RETENTION_DAYS=3
       - LOG_LEVEL=INFO
-      # GPU: NVDEC/NVENC for transcoding and multi-cam detection. Requires:
-      # (1) NVIDIA Container Toolkit installed on host, (2) deploy.reservations.devices below.
-      # "video" in capabilities is required for NVENC; some hosts (e.g. Unraid) need this explicit list.
+      # GPU: NVDEC for hardware decode (multi-cam detection). Requires:
+      # (1) NVIDIA Container Toolkit on host, (2) deploy.reservations.devices below.
+      # "video" capability is required for NVDEC; some hosts (e.g. Unraid) need this explicit list.
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=compute,video,utility
     deploy:

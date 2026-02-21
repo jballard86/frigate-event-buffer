@@ -91,7 +91,7 @@ docker build -t frigate-buffer:latest .
 
 ## 5. Run
 
-Run from repo root so `$(pwd)/entrypoint.sh` resolves correctly. **Use the same env vars and volume paths as in your `docker-compose.yaml`**; the command below mirrors that file. The only value you must change is **`HA_IP`** — replace `YOUR_HOME_ASSISTANT_IP` with your Home Assistant IP (or leave it if you set it in the compose). If you use different paths or IPs in `docker-compose.yaml`, use those here instead.
+Run from repo root. **Use the same env vars and volume paths as in your `docker-compose.yaml`**; the command below mirrors that file. The only value you must change is **`HA_IP`** — replace `YOUR_HOME_ASSISTANT_IP` with your Home Assistant IP (or leave it if you set it in the compose). If you use different paths or IPs in `docker-compose.yaml`, use those here instead.
 
 If a container named `frigate_buffer` already exists, stop and remove it first: `docker stop frigate_buffer` then `docker rm frigate_buffer`. The commands below do that automatically.
 
@@ -99,12 +99,10 @@ If a container named `frigate_buffer` already exists, stop and remove it first: 
 
 ```bash
 cd /mnt/user/appdata/frigate-buffer
-chmod +x entrypoint.sh
 docker stop frigate_buffer 2>/dev/null; docker rm frigate_buffer 2>/dev/null || true
 docker run -d --name frigate_buffer --restart unless-stopped \
   --network bridge \
   -p 5055:5055 \
-  -v "$(pwd)/entrypoint.sh:/entrypoint.sh:ro" \
   -v /mnt/user/appdata/frigate_buffer:/app/storage \
   -v /mnt/user/appdata/frigate_buffer/config.yaml:/app/config.yaml:ro \
   -v /etc/localtime:/etc/localtime:ro \
@@ -118,8 +116,7 @@ docker run -d --name frigate_buffer --restart unless-stopped \
   -e NVIDIA_DRIVER_CAPABILITIES=compute,video,utility \
   -e YOLO_CONFIG_DIR=/tmp/Ultralytics \
   --gpus all \
-  --entrypoint /entrypoint.sh \
-  frigate-buffer:latest python -m frigate_buffer.main
+  frigate-buffer:latest
 ```
 ## 6. Update (after code changes)
 
@@ -160,6 +157,4 @@ If `git pull` reports that local changes would be overwritten by merge (e.g. to 
 
 - **FFmpeg / NVDEC decode issues** — The image uses FFmpeg for decode only (no encoding). Rebuild from this repo (`docker build -t frigate-buffer:latest .`) and run with GPU access (`--gpus all` and NVIDIA env vars). Set **`NVIDIA_DRIVER_CAPABILITIES=compute,video,utility`** (the `video` capability is required for NVDEC). Check startup logs for decode-related errors; inside the container you can run `nvidia-smi` to confirm the GPU is visible.
 - **Build fails with "frigate_buffer" or "config.example" not found** — You are not in the repo root. `cd` to the directory that contains `Dockerfile` and `src/frigate_buffer/`.
-- **`exec: "/entrypoint.sh": permission denied`** — The mounted entrypoint script must be executable on the host. From repo root run: `chmod +x entrypoint.sh`, then start the container again (remove it first: `docker rm frigate_buffer`).
-- **Entrypoint or OpenCV errors at runtime** — Ensure `entrypoint.sh` exists in repo root and is executable: `chmod +x entrypoint.sh`. See [COMPOSE_ENTRYPOINT.md](COMPOSE_ENTRYPOINT.md) if you need the optional entrypoint for fixing libs without rebuilding.
 - **"Reader process died for camera … read of closed file"** — If multiple NVDEC readers fail, check GPU memory and driver; CPU decode is used only as fallback. You can set `multi_cam.decode_second_camera_cpu_only: true` to force 2nd+ cameras to CPU decode if needed (legacy workaround).
