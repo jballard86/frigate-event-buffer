@@ -252,7 +252,6 @@ class TestConfigSchema(unittest.TestCase):
             'multi_cam': {
                 'max_multi_cam_frames_min': 60,
                 'max_multi_cam_frames_sec': 3,
-                'motion_threshold_px': 80,
                 'crop_width': 1920,
                 'crop_height': 1080,
                 'multi_cam_system_prompt_file': '/path/to/prompt.txt',
@@ -274,7 +273,6 @@ class TestConfigSchema(unittest.TestCase):
         config = load_config()
         self.assertEqual(config['MAX_MULTI_CAM_FRAMES_MIN'], 60)
         self.assertEqual(config['MAX_MULTI_CAM_FRAMES_SEC'], 3)
-        self.assertEqual(config['MOTION_THRESHOLD_PX'], 80)
         self.assertEqual(config['CROP_WIDTH'], 1920)
         self.assertEqual(config['CROP_HEIGHT'], 1080)
         self.assertEqual(config['MULTI_CAM_SYSTEM_PROMPT_FILE'], '/path/to/prompt.txt')
@@ -286,65 +284,6 @@ class TestConfigSchema(unittest.TestCase):
         self.assertEqual(config['GEMINI_PROXY_TOP_P'], 0.9)
         self.assertEqual(config['GEMINI_PROXY_FREQUENCY_PENALTY'], 0.1)
         self.assertEqual(config['GEMINI_PROXY_PRESENCE_PENALTY'], 0.1)
-
-    @patch('builtins.open', new_callable=mock_open)
-    @patch('os.path.exists')
-    @patch('frigate_buffer.config.yaml.safe_load')
-    def test_camera_switch_bias_from_yaml_and_default(self, mock_yaml_load, mock_exists, mock_file):
-        """camera_switch_bias from multi_cam is flattened to CAMERA_SWITCH_BIAS; default when omitted is 1.2."""
-        yaml_with_bias = {
-            'cameras': [{'name': 'cam1'}],
-            'network': {
-                'mqtt_broker': 'localhost',
-                'frigate_url': 'http://frigate',
-                'buffer_ip': 'localhost',
-                'storage_path': '/tmp',
-            },
-            'multi_cam': {
-                'max_multi_cam_frames_min': 45,
-                'camera_switch_bias': 1.5,
-            },
-        }
-        mock_exists.return_value = True
-        mock_yaml_load.return_value = yaml_with_bias
-        config = load_config()
-        self.assertEqual(config['CAMERA_SWITCH_BIAS'], 1.5)
-
-        yaml_no_bias = {
-            'cameras': [{'name': 'cam1'}],
-            'network': {
-                'mqtt_broker': 'localhost',
-                'frigate_url': 'http://frigate',
-                'buffer_ip': 'localhost',
-                'storage_path': '/tmp',
-            },
-        }
-        mock_yaml_load.return_value = yaml_no_bias
-        config = load_config()
-        self.assertEqual(config['CAMERA_SWITCH_BIAS'], 1.2)
-
-    @patch('builtins.open', new_callable=mock_open)
-    @patch('os.path.exists')
-    @patch('frigate_buffer.config.yaml.safe_load')
-    def test_camera_switch_min_hold_frames_from_yaml(self, mock_yaml_load, mock_exists, mock_file):
-        """camera_switch_min_hold_frames from multi_cam is flattened to CAMERA_SWITCH_MIN_HOLD_FRAMES; default 5."""
-        yaml_with_hold = {
-            'cameras': [{'name': 'cam1'}],
-            'network': {
-                'mqtt_broker': 'localhost',
-                'frigate_url': 'http://frigate',
-                'buffer_ip': 'localhost',
-                'storage_path': '/tmp',
-            },
-            'multi_cam': {
-                'max_multi_cam_frames_min': 45,
-                'camera_switch_min_hold_frames': 10,
-            },
-        }
-        mock_exists.return_value = True
-        mock_yaml_load.return_value = yaml_with_hold
-        config = load_config()
-        self.assertEqual(config['CAMERA_SWITCH_MIN_HOLD_FRAMES'], 10)
 
     @patch('builtins.open', new_callable=mock_open)
     @patch('os.path.exists')
@@ -390,13 +329,10 @@ class TestConfigSchema(unittest.TestCase):
         config = load_config()
         self.assertEqual(config['MAX_MULTI_CAM_FRAMES_MIN'], 45)
         self.assertEqual(config['MAX_MULTI_CAM_FRAMES_SEC'], 2)
-        self.assertEqual(config['MOTION_THRESHOLD_PX'], 50)
         self.assertEqual(config['CROP_WIDTH'], 1280)
         self.assertEqual(config['CROP_HEIGHT'], 720)
         self.assertEqual(config['MULTI_CAM_SYSTEM_PROMPT_FILE'], '')
         self.assertFalse(config['PERSON_AREA_DEBUG'])
-        self.assertEqual(config['CAMERA_SWITCH_BIAS'], 1.2)
-        self.assertEqual(config['CAMERA_SWITCH_MIN_HOLD_FRAMES'], 5)
         self.assertEqual(config['DECODE_SECOND_CAMERA_CPU_ONLY'], False)
         self.assertEqual(config['GEMINI_PROXY_URL'], '')
         self.assertEqual(config['GEMINI_PROXY_MODEL'], 'gemini-2.5-flash-lite')

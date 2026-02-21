@@ -106,7 +106,6 @@ The application uses a **src layout**: the package lives in `src/frigate_buffer/
 | `web/server.py` | Flask app factory `create_app(orchestrator)`. Routes for player, events, files, stats, daily review, API, and test pipelines (`/test-multi-cam`, `/api/test-multi-cam/...`). |
 | `web/templates/` | Jinja2 templates (player, stats, daily review, timeline). Used by Flask at runtime. |
 | `web/static/` | Static assets (marked.min.js, purify.min.js). |
-| `scripts/multi_cam_recap.py` | **Standalone entrypoint**: Optional multi-cam frame extraction and MQTT-driven processing. Run with the package installed (`pip install -e .` then `python scripts/multi_cam_recap.py`). Not invoked by the main orchestrator. |
 | `Dockerfile` | Builds from Python 3.12 slim; copies `src/` and `pyproject.toml`, runs `pip install -e .`, then `python -m frigate_buffer.main`. |
 | `docker-compose.example.yaml` | Template for Docker Compose — local build or token pull from private GitHub. |
 | `config.example.yaml` | Example configuration for cameras, event_filters (Smart Zone Filtering), settings, network, optional HA integration. |

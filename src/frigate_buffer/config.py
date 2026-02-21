@@ -79,38 +79,26 @@ CONFIG_SCHEMA = Schema({
         Optional('model'): str,      # Model name sent to the proxy (e.g. gemini-2.5-flash-lite).
         Optional('enabled'): bool,   # Whether clip analysis via Gemini is enabled.
     },
-    # Multi-cam frame extraction (main app AI analyzer + standalone multi_cam_recap); frame limits and crop options.
+    # Multi-cam frame extraction (main app AI analyzer); frame limits and crop options.
     Optional('multi_cam'): {
         Optional('max_multi_cam_frames_min'): int,              # Maximum frames to extract per clip (cap).
         Optional('max_multi_cam_frames_sec'): Any(int, float),  # Target interval in seconds between captured frames (e.g. 1, 0.5, 1.5).
-        Optional('motion_threshold_px'): int,                   # Minimum pixel change to trigger high-rate capture.
         Optional('crop_width'): int,                            # Width of output crop for stitched/multi-cam frames.
         Optional('crop_height'): int,                            # Height of output crop for stitched/multi-cam frames.
         Optional('multi_cam_system_prompt_file'): str,          # Path to system prompt file for multi-cam Gemini; empty = built-in.
         Optional('smart_crop_padding'): Any(int, float),        # Padding fraction around motion-based crop (e.g. 0.15).
-        Optional('motion_crop_min_area_fraction'): Any(int, float),  # Minimum motion region area as fraction of frame to consider for crop.
-        Optional('motion_crop_min_px'): int,                    # Minimum motion region area in pixels for crop.
         Optional('detection_model'): str,                         # Ultralytics model for detection sidecar (e.g. yolov8n.pt).
         Optional('detection_device'): str,                       # Device for detection (e.g. cuda:0, cpu).
         Optional('detection_frame_interval'): int,               # Run YOLO every N frames; default 5.
         Optional('detection_imgsz'): int,                        # YOLO inference size (higher = better small objects, slower); default 640.
-        # Timeline / EMA (Trust-the-EMA pipeline)
-        Optional('camera_timeline_use_ema_pipeline'): bool,     # Use Phase 1 EMA + hysteresis + merge; default True.
+        # Timeline / EMA (Phase 1 dense grid + EMA + hysteresis + merge; sole assignment path)
         Optional('camera_timeline_analysis_multiplier'): Any(int, float),  # Denser analysis grid vs base step (2 or 3); default 2.
         Optional('camera_timeline_ema_alpha'): Any(int, float),            # EMA smoothing factor 0–1; default 0.4.
         Optional('camera_timeline_primary_bias_multiplier'): Any(int, float),  # Weight on primary camera area curve; default 1.2.
         Optional('camera_switch_min_segment_frames'): int,                # Min frames per segment; short runs merged into previous; default 5.
         Optional('camera_switch_hysteresis_margin'): Any(int, float),     # New camera must exceed current by this factor to switch (e.g. 1.15 = 15%); default 1.15.
         Optional('camera_timeline_final_yolo_drop_no_person'): bool,     # If true drop frames with no person after Phase 2 YOLO; default False (keep all, tag).
-        # Legacy (deprecated; kept for backward compat until new pipeline is default)
-        Optional('first_camera_bias_decay_seconds'): Any(int, float),
-        Optional('first_camera_bias_initial'): Any(int, float),
-        Optional('first_camera_bias_cap_seconds'): Any(int, float),
-        Optional('person_area_switch_threshold'): int,
-        Optional('camera_switch_ratio'): Any(int, float),
-        Optional('camera_switch_bias'): Any(int, float),
-        Optional('camera_switch_min_hold_frames'): int,
-        Optional('decode_second_camera_cpu_only'): bool,                # If true, use CPU decode for 2nd+ cameras (legacy/contention workaround). Default false: NVDEC for all; CPU only when NVDEC fails.
+        Optional('decode_second_camera_cpu_only'): bool,                # If true, use CPU decode for 2nd+ cameras (contention workaround). Default false: NVDEC for all; CPU only when NVDEC fails.
         Optional('log_extraction_phase_timing'): bool,                  # Log elapsed time per extraction phase (e.g. "Opening clips: 0.5s") for debugging; default false.
         Optional('merge_frame_timeout_sec'): int,                       # Timeout (seconds) when merge waits for a camera frame; on timeout camera is dropped from active pool; default 10.
         Optional('tracking_target_frame_percent'): int,                 # When person area >= this % of reference area, use full-frame resize; default 40.
@@ -194,33 +182,21 @@ def load_config() -> dict:
         # Multi-cam frame extractor (optional). No Google fallback: proxy URL default "".
         'MAX_MULTI_CAM_FRAMES_MIN': 45,
         'MAX_MULTI_CAM_FRAMES_SEC': 2,
-        'MOTION_THRESHOLD_PX': 50,
         'CROP_WIDTH': 1280,
         'CROP_HEIGHT': 720,
         'MULTI_CAM_SYSTEM_PROMPT_FILE': '',
         'SMART_CROP_PADDING': 0.15,
-        'MOTION_CROP_MIN_AREA_FRACTION': 0.001,
-        'MOTION_CROP_MIN_PX': 500,
         'DETECTION_MODEL': 'yolov8n.pt',
         'DETECTION_DEVICE': '',  # Empty = auto (CUDA if available else CPU)
         'DETECTION_FRAME_INTERVAL': 5,
         'DETECTION_IMGSZ': 640,
-        # Timeline / EMA (Trust-the-EMA pipeline)
-        'CAMERA_TIMELINE_USE_EMA_PIPELINE': True,
+        # Timeline / EMA (Phase 1 dense grid + EMA + hysteresis + merge; sole path)
         'CAMERA_TIMELINE_ANALYSIS_MULTIPLIER': 2,
         'CAMERA_TIMELINE_EMA_ALPHA': 0.4,
         'CAMERA_TIMELINE_PRIMARY_BIAS_MULTIPLIER': 1.2,
         'CAMERA_SWITCH_MIN_SEGMENT_FRAMES': 5,
         'CAMERA_SWITCH_HYSTERESIS_MARGIN': 1.15,
         'CAMERA_TIMELINE_FINAL_YOLO_DROP_NO_PERSON': False,
-        # Legacy (used by current extractor until new pipeline)
-        'FIRST_CAMERA_BIAS_DECAY_SECONDS': 1.0,
-        'FIRST_CAMERA_BIAS_INITIAL': 1.5,
-        'FIRST_CAMERA_BIAS_CAP_SECONDS': 0,
-        'PERSON_AREA_SWITCH_THRESHOLD': 200,
-        'CAMERA_SWITCH_RATIO': 1.2,
-        'CAMERA_SWITCH_BIAS': 1.2,
-        'CAMERA_SWITCH_MIN_HOLD_FRAMES': 5,
         'DECODE_SECOND_CAMERA_CPU_ONLY': False,
         'LOG_EXTRACTION_PHASE_TIMING': False,
         'MERGE_FRAME_TIMEOUT_SEC': 10,
@@ -333,32 +309,20 @@ def load_config() -> dict:
                     mc = yaml_config['multi_cam']
                     config['MAX_MULTI_CAM_FRAMES_MIN'] = mc.get('max_multi_cam_frames_min', config['MAX_MULTI_CAM_FRAMES_MIN'])
                     config['MAX_MULTI_CAM_FRAMES_SEC'] = float(mc.get('max_multi_cam_frames_sec', config['MAX_MULTI_CAM_FRAMES_SEC']))
-                    config['MOTION_THRESHOLD_PX'] = mc.get('motion_threshold_px', config['MOTION_THRESHOLD_PX'])
                     config['CROP_WIDTH'] = mc.get('crop_width', config['CROP_WIDTH'])
                     config['CROP_HEIGHT'] = mc.get('crop_height', config['CROP_HEIGHT'])
                     config['MULTI_CAM_SYSTEM_PROMPT_FILE'] = mc.get('multi_cam_system_prompt_file', config['MULTI_CAM_SYSTEM_PROMPT_FILE']) or ''
                     config['SMART_CROP_PADDING'] = float(mc.get('smart_crop_padding', config.get('SMART_CROP_PADDING', 0.15)))
-                    config['MOTION_CROP_MIN_AREA_FRACTION'] = float(mc.get('motion_crop_min_area_fraction', config.get('MOTION_CROP_MIN_AREA_FRACTION', 0.001)))
-                    config['MOTION_CROP_MIN_PX'] = int(mc.get('motion_crop_min_px', config.get('MOTION_CROP_MIN_PX', 500)))
                     config['DETECTION_MODEL'] = (mc.get('detection_model') or config.get('DETECTION_MODEL', 'yolov8n.pt')) or 'yolov8n.pt'
                     config['DETECTION_DEVICE'] = (mc.get('detection_device') or config.get('DETECTION_DEVICE', '')) or ''
                     config['DETECTION_FRAME_INTERVAL'] = mc.get('detection_frame_interval', config['DETECTION_FRAME_INTERVAL'])
                     config['DETECTION_IMGSZ'] = int(mc.get('detection_imgsz', config['DETECTION_IMGSZ']))
-                    config['CAMERA_TIMELINE_USE_EMA_PIPELINE'] = bool(mc.get('camera_timeline_use_ema_pipeline', config['CAMERA_TIMELINE_USE_EMA_PIPELINE']))
                     config['CAMERA_TIMELINE_ANALYSIS_MULTIPLIER'] = float(mc.get('camera_timeline_analysis_multiplier', config['CAMERA_TIMELINE_ANALYSIS_MULTIPLIER']))
                     config['CAMERA_TIMELINE_EMA_ALPHA'] = float(mc.get('camera_timeline_ema_alpha', config['CAMERA_TIMELINE_EMA_ALPHA']))
                     config['CAMERA_TIMELINE_PRIMARY_BIAS_MULTIPLIER'] = float(mc.get('camera_timeline_primary_bias_multiplier', config['CAMERA_TIMELINE_PRIMARY_BIAS_MULTIPLIER']))
                     config['CAMERA_SWITCH_MIN_SEGMENT_FRAMES'] = int(mc.get('camera_switch_min_segment_frames', config['CAMERA_SWITCH_MIN_SEGMENT_FRAMES']))
                     config['CAMERA_SWITCH_HYSTERESIS_MARGIN'] = float(mc.get('camera_switch_hysteresis_margin', config['CAMERA_SWITCH_HYSTERESIS_MARGIN']))
                     config['CAMERA_TIMELINE_FINAL_YOLO_DROP_NO_PERSON'] = bool(mc.get('camera_timeline_final_yolo_drop_no_person', config['CAMERA_TIMELINE_FINAL_YOLO_DROP_NO_PERSON']))
-                    # Legacy
-                    config['FIRST_CAMERA_BIAS_DECAY_SECONDS'] = float(mc.get('first_camera_bias_decay_seconds', config['FIRST_CAMERA_BIAS_DECAY_SECONDS']))
-                    config['FIRST_CAMERA_BIAS_INITIAL'] = float(mc.get('first_camera_bias_initial', config['FIRST_CAMERA_BIAS_INITIAL']))
-                    config['FIRST_CAMERA_BIAS_CAP_SECONDS'] = float(mc.get('first_camera_bias_cap_seconds', config['FIRST_CAMERA_BIAS_CAP_SECONDS']))
-                    config['PERSON_AREA_SWITCH_THRESHOLD'] = int(mc.get('person_area_switch_threshold', config['PERSON_AREA_SWITCH_THRESHOLD']))
-                    config['CAMERA_SWITCH_RATIO'] = float(mc.get('camera_switch_ratio', config['CAMERA_SWITCH_RATIO']))
-                    config['CAMERA_SWITCH_BIAS'] = float(mc.get('camera_switch_bias', config['CAMERA_SWITCH_BIAS']))
-                    config['CAMERA_SWITCH_MIN_HOLD_FRAMES'] = int(mc.get('camera_switch_min_hold_frames', config['CAMERA_SWITCH_MIN_HOLD_FRAMES']))
                     config['DECODE_SECOND_CAMERA_CPU_ONLY'] = bool(mc.get('decode_second_camera_cpu_only', config['DECODE_SECOND_CAMERA_CPU_ONLY']))
                     config['LOG_EXTRACTION_PHASE_TIMING'] = bool(mc.get('log_extraction_phase_timing', config['LOG_EXTRACTION_PHASE_TIMING']))
                     config['MERGE_FRAME_TIMEOUT_SEC'] = int(mc.get('merge_frame_timeout_sec', config['MERGE_FRAME_TIMEOUT_SEC']))

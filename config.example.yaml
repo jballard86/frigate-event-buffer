@@ -124,27 +124,22 @@ network:
 #   model: "gemini-2.5-flash-lite"
 #   enabled: true
 
-# Optional: Multi-cam frame extractor (main app AI analyzer + standalone multi_cam_recap.py)
-# All frame-limit and crop options below are configurable; same config is used by both.
+# Optional: Multi-cam frame extractor (main app AI analyzer)
 # multi_cam:
 #   max_multi_cam_frames_min: 45   # max frames per clip (cap)
 #   max_multi_cam_frames_sec: 2    # target capture interval (seconds, float can be a decimal)
 #   detection_model: yolov8n.pt   # Ultralytics model for detection sidecar
 #   detection_device: ""          # e.g. cuda:0 or cpu; empty = auto
-#   motion_threshold_px: 50       # min pixels movement for high-rate capture
 #   crop_width: 1280
 #   crop_height: 720
 #   multi_cam_system_prompt_file: ""   # path to prompt file; empty = use built-in
 #   tracking_target_frame_percent: 40   # when person area >= this % of reference area, use full-frame resize
 #   smart_crop_padding: 0.15
-#   motion_crop_min_area_fraction: 0.001
-#   motion_crop_min_px: 500
 #   detection_frame_interval: 5   # run YOLO every N frames; increase for more accuracy
 #   detection_imgsz: 640          # YOLO inference size; higher = better small objects, slower
 #   person_area_debug: false      # draw person area (px²) on frame when true
 #
-#   # --- Timeline / EMA (Trust-the-EMA pipeline) ---
-#   camera_timeline_use_ema_pipeline: true   # true = Phase 1 EMA + hysteresis + merge; false = legacy in-loop selection
+#   # --- Timeline / EMA (Phase 1 dense grid + EMA + hysteresis + merge; sole path) ---
 #   # Core smoothing & grid
 #   camera_timeline_analysis_multiplier: 2   # denser analysis grid vs base step (2 or 3 = smoother curve)
 #   camera_timeline_ema_alpha: 0.4           # EMA smoothing 0–1; lower = hold focus during dropouts, higher = faster reaction
