@@ -7,6 +7,14 @@ services:
     # This is used when you have cloned the repository to your machine.
     build: .
 
+    # Option 1b (fast build for development): Use GUI OpenCV for ~1-2 min builds
+    # instead of 15+ min headless builds. Trade-off: ~100-150 MB larger image.
+    # Uncomment the block below and comment out "build: ." above to use.
+    # build:
+    #   context: .
+    #   args:
+    #     USE_GUI_OPENCV: "true"
+
     # Option 2: Build from private GitHub using token pull (Dockge/Portainer).
     # Comment out "build: ." above, uncomment the block below, and replace
     # placeholders with your GitHub username and PAT (repo scope).

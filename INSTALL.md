@@ -87,6 +87,15 @@ cd /mnt/user/appdata/frigate-buffer
 docker build -t frigate-buffer:latest .
 ```
 
+**Fast build option (development only):** The default build swaps opencv-python for opencv-python-headless to avoid X11 dependencies, which takes 15+ minutes. For faster iteration during development, use the GUI version (accepts the opencv that ultralytics pulls in):
+
+```bash
+cd /mnt/user/appdata/frigate-buffer
+docker build -t frigate-buffer:latest --build-arg USE_GUI_OPENCV=true .
+```
+
+Trade-off: Fast builds complete in ~1-2 minutes but produce an image ~100-150 MB larger with X11 dependencies. Use the default (headless) for production deployments.
+
 ---
 
 ## 5. Run

@@ -2,6 +2,9 @@
 # FFmpeg from multi-stage build provides NVDEC (decode) for ffmpegcv; encoding is not used (clips are stored as-is).
 # Final stage is python:3.12-slim-bookworm. FFmpeg + CUDA/NPP libs copied from donor for hardware decode only.
 ARG FFMPEG_DONOR_IMAGE=jrottenberg/ffmpeg:7.0-nvidia2204
+# Set USE_GUI_OPENCV=true for faster builds (~1-2 min vs 15+ min) during development.
+# Trade-off: GUI version adds ~100-150 MB to image size and includes X11 dependencies.
+ARG USE_GUI_OPENCV=false
 FROM ${FFMPEG_DONOR_IMAGE} AS ffmpeg_donor
 
 # Gather all FFmpeg/CUDA/NPP libs from donor into one tree (libnppig etc. may live in lib64 or cuda/lib64).
@@ -31,11 +34,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt && \
-    pip uninstall -y opencv-python opencv-python-headless 2>/dev/null || true && \
-    pip install --no-cache-dir --force-reinstall opencv-python-headless
+# Install requirements; conditionally skip opencv swap for faster GUI builds during development.
+RUN if [ "$USE_GUI_OPENCV" = "true" ]; then \
+        pip install --no-cache-dir -r requirements.txt; \
+    else \
+        pip install --no-cache-dir -r requirements.txt && \
+        pip uninstall -y opencv-python opencv-python-headless 2>/dev/null || true && \
+        pip install --no-cache-dir --force-reinstall opencv-python-headless; \
+    fi
 
-# (Opencv fix above: Ultralytics pulls in opencv-python (GUI); we keep only headless so no libxcb/X11. Runs only when requirements.txt changes.)
+# (Opencv fix above: When USE_GUI_OPENCV=false, uninstalls opencv-python (GUI) from ultralytics
+# and reinstalls headless only so the container has no X11/libxcb dependency. Set USE_GUI_OPENCV=true
+# for faster builds (~1-2 min vs 15+ min) during development; trade-off is ~100-150 MB larger image.)
 
 COPY pyproject.toml ./
 COPY src/frigate_buffer/ ./src/frigate_buffer/
