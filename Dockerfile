@@ -35,6 +35,10 @@ RUN mkdir -p /app/storage
 
 RUN pip install --no-cache-dir --no-deps .
 
+# Ultralytics pulls in opencv-python (GUI); ensure only headless is present so no libxcb/X11 in container.
+RUN pip uninstall -y opencv-python 2>/dev/null || true && \
+    pip install --no-cache-dir opencv-python-headless
+
 EXPOSE 5055
 
 HEALTHCHECK --interval=60s --timeout=10s --start-period=5s --retries=3 \
