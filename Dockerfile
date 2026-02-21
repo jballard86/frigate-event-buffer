@@ -36,8 +36,9 @@ RUN mkdir -p /app/storage
 RUN pip install --no-cache-dir --no-deps .
 
 # Ultralytics pulls in opencv-python (GUI); ensure only headless is present so no libxcb/X11 in container.
-RUN pip uninstall -y opencv-python 2>/dev/null || true && \
-    pip install --no-cache-dir opencv-python-headless
+# Uninstall both variants then force-reinstall headless so cv2 is always present.
+RUN pip uninstall -y opencv-python opencv-python-headless 2>/dev/null || true && \
+    pip install --no-cache-dir --force-reinstall opencv-python-headless
 
 EXPOSE 5055
 
