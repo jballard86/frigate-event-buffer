@@ -753,19 +753,7 @@ class GeminiAnalysisService:
                     ef.frame, time_str, ef.camera, i + 1, image_count, person_area=person_area
                 )
 
-            # Write ai_frame_analysis at CE root (pass ExtractedFrame list)
-            logger.info("Writing frames to disk")
-            save_frames = bool(self.config.get("SAVE_AI_FRAMES", True))
-            create_zip = bool(self.config.get("CREATE_AI_ANALYSIS_ZIP", True))
-            write_ai_frame_analysis_multi_cam(
-                ce_folder_path,
-                frames_raw,
-                write_manifest=True,
-                create_zip_flag=create_zip,
-                save_frames=save_frames,
-            )
-
-            # Send to Gemini proxy
+            # Build payload and send to proxy first (disk write deferred so API call starts earlier).
             frames = [ef.frame for ef in frames_raw]
             first_ts = frames_raw[0].timestamp_sec if frames_raw else 0
             activity_start_str = (
@@ -793,6 +781,17 @@ class GeminiAnalysisService:
                     logger.debug("Saved analysis_result.json for CE %s to %s", ce_id, out_path)
                 except OSError as e:
                     logger.warning("Failed to write analysis_result.json for CE %s: %s", ce_id, e)
+                # Write ai_frame_analysis after API return (moves disk I/O off critical path).
+                logger.info("Writing frames to disk")
+                save_frames = bool(self.config.get("SAVE_AI_FRAMES", True))
+                create_zip = bool(self.config.get("CREATE_AI_ANALYSIS_ZIP", True))
+                write_ai_frame_analysis_multi_cam(
+                    ce_folder_path,
+                    frames_raw,
+                    write_manifest=True,
+                    create_zip_flag=create_zip,
+                    save_frames=save_frames,
+                )
             return result
         except Exception as e:
             logger.exception(

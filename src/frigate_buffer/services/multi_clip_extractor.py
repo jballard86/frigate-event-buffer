@@ -16,6 +16,7 @@ import logging
 import math
 import os
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Callable
 
 logger = logging.getLogger("frigate-buffer")
@@ -158,10 +159,7 @@ def _subsample_with_min_gap(timestamps: list[float], step_sec: float, max_count:
 def _get_fps_and_duration(cap: Any, path: str) -> tuple[float, float, bool]:
     """
     Get (fps, duration_sec, used_read_to_eof) from a video capture.
-
-    Uses only ffmpegcv-compatible APIs or ffprobe to avoid full frame decodes.
-    If frame count is unknown, attempts ffprobe to get duration.
-    If ffprobe fails, falls back to reading until EOF (caller must reopen).
+    Prefer _get_fps_duration_from_path(path) when caps are not yet opened to avoid double-open.
     """
     fps = getattr(cap, "fps", None) or 1.0
     count: int = 0
@@ -174,7 +172,10 @@ def _get_fps_and_duration(cap: Any, path: str) -> tuple[float, float, bool]:
         count = int(getattr(cap, "count", 0) or 0)
     if count > 0 and fps > 0:
         return (fps, count / fps, False)
-        
+    # Try ffprobe before consuming stream
+    path_meta = _get_fps_duration_from_path(path)
+    if path_meta is not None:
+        return (path_meta[0], path_meta[1], False)
     import subprocess
     try:
         out = subprocess.run(
@@ -207,6 +208,57 @@ def _get_fps_and_duration(cap: Any, path: str) -> tuple[float, float, bool]:
         frame_idx += 1
     duration = (frame_idx / fps) if fps > 0 and frame_idx > 0 else 0.0
     return (fps, duration, True)
+
+
+def _get_fps_duration_from_path(path: str) -> tuple[float, float] | None:
+    """
+    Get (fps, duration_sec) from clip path via a single ffprobe call.
+    Avoids opening the video capture for metadata so caps can be opened once and not reopened.
+    """
+    try:
+        from frigate_buffer.services.video import _get_video_metadata
+        meta = _get_video_metadata(path)
+        if meta is not None:
+            _, _, fps, duration = meta
+            if fps > 0 and duration >= 0:
+                return (fps, duration)
+    except Exception as e:
+        logger.debug("_get_fps_duration_from_path failed for %s: %s", path, e)
+    return None
+
+
+def _advance_one_camera_to_T(
+    cam: str,
+    cap: Any,
+    state_tuple: tuple[Any, float, Any, float],
+    T: float,
+    fps: float,
+    frame_idx: int,
+    duration_cam: float,
+) -> tuple[tuple[Any, float, Any, float] | None, int | None]:
+    """
+    Advance one camera's reader until curr_t >= T.
+    Returns (new_state, new_frame_idx). On read error returns (None, None) to signal drop.
+    Used by parallel decode: one call per camera per sample time.
+    """
+    _errs = (ValueError, OSError, BrokenPipeError, RuntimeError)
+    prev_f, prev_t, curr_f, curr_t = state_tuple
+    if T >= duration_cam or duration_cam <= 0:
+        return (state_tuple, frame_idx)
+    try:
+        while curr_t < T:
+            ret, frame = cap.read()
+            if not ret or frame is None:
+                if curr_f is not None:
+                    return ((curr_f, curr_t, curr_f, curr_t), frame_idx)
+                return (state_tuple, frame_idx)
+            frame_idx += 1
+            new_t = frame_idx / fps if fps > 0 else curr_t
+            state_tuple = (curr_f, curr_t, frame, new_t)
+            prev_f, prev_t, curr_f, curr_t = state_tuple
+        return (state_tuple, frame_idx)
+    except _errs:
+        return (None, None)
 
 
 def extract_target_centric_frames(
@@ -262,18 +314,20 @@ def extract_target_centric_frames(
         logger.warning("cv2/ffmpegcv or ExtractedFrame not available, skipping multi-clip extraction")
         return []
 
-    # Discover camera clips: ce_folder/CameraName/*.mp4 (dynamic clip names)
+    # Single scan: discover camera clips ce_folder/CameraName/*.mp4 (dynamic clip names)
     from frigate_buffer.services.query import resolve_clip_in_folder
     clip_paths: list[tuple[str, str]] = []  # (camera_name, path)
     try:
-        for name in os.listdir(ce_folder_path):
-            sub = os.path.join(ce_folder_path, name)
-            if os.path.isdir(sub) and not name.startswith("."):
-                clip_basename = resolve_clip_in_folder(sub)
-                if clip_basename:
-                    clip_path = os.path.join(sub, clip_basename)
-                    if os.path.isfile(clip_path):
-                        clip_paths.append((name, clip_path))
+        with os.scandir(ce_folder_path) as it:
+            for entry in it:
+                if entry.is_dir() and not entry.name.startswith("."):
+                    sub = entry.path
+                    name = entry.name
+                    clip_basename = resolve_clip_in_folder(sub)
+                    if clip_basename:
+                        clip_path = os.path.join(sub, clip_basename)
+                        if os.path.isfile(clip_path):
+                            clip_paths.append((name, clip_path))
     except OSError as e:
         logger.warning("Could not scan CE folder %s: %s", ce_folder_path, e)
         return []
@@ -291,19 +345,30 @@ def extract_target_centric_frames(
     path_per_cam = {cam: path for cam, path in clip_paths}
     target_crop_area = (crop_width * crop_height) if (crop_width > 0 and crop_height > 0) else 0
 
-    # Sidecar-based selection when every camera has detection.json.
+    # Load sidecars in parallel (one JSON read per camera).
     camera_folders = {cam: os.path.dirname(path) for cam, path in clip_paths}
     sidecars: dict[str, list[dict[str, Any]]] = {}
     native_size_per_cam: dict[str, tuple[int, int]] = {}
     all_have_sidecar = True
-    for cam, folder in camera_folders.items():
-        loaded = _load_sidecar_for_camera(folder)
-        if loaded is not None:
-            entries, nw, nh = loaded
-            sidecars[cam] = entries
-            native_size_per_cam[cam] = (nw, nh)
-        else:
-            all_have_sidecar = False
+    max_workers = min(len(camera_folders), 8)
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_to_cam = {
+            executor.submit(_load_sidecar_for_camera, folder): cam
+            for cam, folder in camera_folders.items()
+        }
+        for future in as_completed(future_to_cam):
+            cam = future_to_cam[future]
+            try:
+                loaded = future.result()
+                if loaded is not None:
+                    entries, nw, nh = loaded
+                    sidecars[cam] = entries
+                    native_size_per_cam[cam] = (nw, nh)
+                else:
+                    all_have_sidecar = False
+            except Exception as e:
+                logger.debug("Sidecar load failed for %s: %s", cam, e)
+                all_have_sidecar = False
 
     if log_callback:
         log_callback(f"Loaded sidecars for {len(sidecars)} camera(s).")
@@ -313,14 +378,28 @@ def extract_target_centric_frames(
         _log_phase_timing = True
 
     _t0_open = time.monotonic() if _log_phase_timing else None
+    # Pre-probe fps/duration from path (single ffprobe per clip) to avoid opening caps for metadata and double-open.
+    durations: dict[str, float] = {}
+    fps_per_cam: dict[str, float] = {}
+    for cam, path in clip_paths:
+        path_meta = _get_fps_duration_from_path(path)
+        if path_meta is not None:
+            fps_per_cam[cam] = path_meta[0]
+            durations[cam] = path_meta[1]
+        else:
+            fps_per_cam[cam] = 1.0
+            durations[cam] = 1.0  # Fallback so we do not early-return when ffprobe fails (e.g. placeholder clip)
+
     if log_callback:
         log_callback("Opening clips for fps/duration.")
-    def open_caps() -> dict[str, Any]:
+    def open_caps() -> tuple[dict[str, Any], dict[str, str]]:
         caps_out: dict[str, Any] = {}
+        backends_out: dict[str, str] = {}
         for cam, path in clip_paths:
             try:
                 cap = ffmpegcv.VideoCaptureNV(path)
                 caps_out[cam] = cap
+                backends_out[cam] = "GPU"
             except Exception as e:
                 if _is_gpu_not_configured(e):
                     logger.debug(
@@ -336,132 +415,34 @@ def extract_target_centric_frames(
                 try:
                     cap = ffmpegcv.VideoCapture(path)
                     caps_out[cam] = cap
+                    backends_out[cam] = "CPU"
                 except Exception as e2:
                     logger.warning("Could not open clip %s: %s", path, e2)
-        return caps_out
+        return (caps_out, backends_out)
 
-    caps = open_caps()
+    caps, decode_backends = open_caps()
     if not caps:
         return []
 
     if _log_phase_timing and _t0_open is not None and log_callback:
         log_callback(f"Opening clips for fps/duration: {time.monotonic() - _t0_open:.1f}s")
 
-    # Get fps and duration per camera (ffmpegcv-safe; may consume stream if count unknown).
-    durations: dict[str, float] = {}
-    fps_per_cam: dict[str, float] = {}
-    caps_to_reopen: list[str] = []
-    for cam, path in clip_paths:
-        cap = caps[cam]
-        fps, duration, used_read_to_eof = _get_fps_and_duration(cap, path)
-        durations[cam] = duration
-        fps_per_cam[cam] = fps
-        if used_read_to_eof:
-            caps_to_reopen.append(cam)
-        cap.release()
-    caps.clear()
-
-    # Reopen all caps (we released them above). GPU-first for every camera; CPU only when NVDEC fails (fallback).
-    _t0_reopen = time.monotonic() if _log_phase_timing else None
-    decode_backends: dict[str, str] = {}
-    for idx, (cam, path) in enumerate(clip_paths):
-        cap = None
-
-        def _try_cpu() -> Any:
-            try:
-                return ffmpegcv.VideoCapture(path)
-            except Exception as e2:
-                logger.warning(
-                    "CPU decode failed for camera %s (%s): %s: %s. Retrying GPU (NVDEC) then CPU.",
-                    cam,
-                    path,
-                    type(e2).__name__,
-                    e2,
-                )
-                return None
-
-        def _try_nvdec() -> tuple[Any, str | None]:
-            try:
-                c = ffmpegcv.VideoCaptureNV(path)
-                return (c, "GPU")
-            except Exception as e:
-                if _is_gpu_not_configured(e):
-                    logger.debug(
-                        "VideoCaptureNV skipped for %s (GPU not configured/available), using CPU decode.",
-                        path,
-                    )
-                else:
-                    logger.warning(
-                        "VideoCaptureNV failed for camera %s (%s): %s: %s. Falling back to CPU decode.",
-                        cam,
-                        path,
-                        type(e).__name__,
-                        e,
-                    )
-                return (None, None)
-
-        # GPU-first for all cameras; CPU only when NVDEC fails (avoids accidental CPU use).
-        cap, backend = _try_nvdec()
-        if cap is not None:
-            decode_backends[cam] = backend or "GPU"
-        else:
-            cap = _try_cpu()
-            if cap is not None:
-                decode_backends[cam] = "CPU"
-                logger.warning(
-                    "Camera %s using CPU decode; this will throttle parallel extraction for the entire group.",
-                    cam,
-                )
-            else:
-                cap, _ = _try_nvdec()
-                if cap is not None:
-                    decode_backends[cam] = "GPU"
-                else:
-                    logger.warning(
-                        "GPU retry failed for camera %s (%s); trying CPU again.",
-                        cam,
-                        path,
-                    )
-                    try:
-                        cap = ffmpegcv.VideoCapture(path)
-                        decode_backends[cam] = "CPU"
-                        logger.warning(
-                            "Camera %s using CPU decode; this will throttle parallel extraction for the entire group.",
-                            cam,
-                        )
-                    except Exception as e3:
-                        logger.error(
-                            "Camera %s (%s): GPU and CPU decode both failed (last error: %s: %s). Skipping camera for extraction.",
-                            cam,
-                            path,
-                            type(e3).__name__,
-                            e3,
-                        )
-                        cap = None
-
-        if cap is not None and getattr(cap, "isOpened", lambda: True)():
-            caps[cam] = cap
-        else:
-            if cap is not None:
-                try:
-                    cap.release()
-                except Exception:
-                    pass
-            durations[cam] = 0.0
+    # Single open: caps already opened; use pre-probed durations/fps (no release/reopen).
 
     for cam in list(caps.keys()):
-        if caps.get(cam) is not None and cam in decode_backends and cam in durations:
+        if caps.get(cam) is not None and cam in durations:
             logger.info(
                 "Multi-clip open: camera=%s backend=%s path=%s duration_sec=%.2f fps=%.2f",
                 cam,
-                decode_backends[cam],
+                decode_backends.get(cam, "?"),
                 path_per_cam.get(cam, ""),
                 durations[cam],
                 fps_per_cam.get(cam, 0),
             )
 
-    if _log_phase_timing and _t0_reopen is not None and log_callback:
-        log_callback(f"Reopened clips: {time.monotonic() - _t0_reopen:.1f}s")
+    if _log_phase_timing and _t0_open is not None and log_callback:
+        log_callback(f"Clips opened once (no reopen): {time.monotonic() - _t0_open:.1f}s")
+
     if log_callback and decode_backends:
         cams = ", ".join(sorted(decode_backends.keys()))
         backends_set = set(decode_backends.values())
@@ -589,86 +570,77 @@ def extract_target_centric_frames(
     _t0_read = time.monotonic() if _log_phase_timing else None
     _num_sample_times = len(sample_times_list)
     _progress_interval = max(1, _num_sample_times // 10)
-    for _step_idx, T in enumerate(sample_times_list, start=1):
-        if len(collected) >= max_frames_min:
-            break
-        if log_callback and _step_idx % _progress_interval == 1:
-            log_callback(f"Reading frames ({_step_idx}/{_num_sample_times}).")
-        best_camera: str | None = None
-        best_frame: Any = None
-        best_area = 0.0
-
-        # Advance any camera whose curr_t < T until we have curr_t >= T (or EOF).
-        for cam in list(state.keys()):
-            prev_f, prev_t, curr_f, curr_t = state[cam]
-            while curr_t < T:
-                cap = caps.get(cam)
-                if cap is None:
-                    break
-                try:
-                    ret, frame = cap.read()
-                except _READ_ERRORS as e:
-                    remaining = [c for c in caps if caps.get(c) is not None and c != cam]
-                    logger.warning(
-                        "Reader process died for camera %s (%s); dropping camera for rest of extraction: %s (sample_time_sec=%.2f frame_index=%s remaining_cameras=%s). Check GPU memory and driver if multiple NVDEC readers fail.",
-                        cam,
-                        path_per_cam.get(cam, ""),
-                        e,
-                        T,
-                        frame_index.get(cam, 0),
-                        remaining,
-                    )
-                    try:
-                        cap.release()
-                    except Exception:
-                        pass
-                    caps[cam] = None
-                    if curr_f is not None:
-                        state[cam] = (curr_f, curr_t, curr_f, curr_t)
-                    else:
-                        state[cam] = (None, -1.0, None, -1.0)
-                    break
-                if not ret or frame is None:
-                    # EOF: use last frame as final state
-                    if curr_f is not None:
-                        state[cam] = (curr_f, curr_t, curr_f, curr_t)
-                    break
-                fps = fps_per_cam.get(cam, 1.0)
-                idx = frame_index.get(cam, 0)
-                new_t = idx / fps if fps > 0 else curr_t
-                frame_index[cam] = idx + 1
-                state[cam] = (curr_f, curr_t, frame, new_t)
-                prev_f, prev_t, curr_f, curr_t = state[cam]
-
-        # If no cameras left, return what we have so far.
-        if not any(c is not None for c in caps.values()):
-            break
-
-        if assignment_list is not None:
-            # EMA pipeline: camera comes from Phase 1 assignment; get frame for that camera only.
-            idx = _step_idx - 1
-            if idx >= len(assignment_list):
+    _num_cams = len([c for c in caps if caps.get(c) is not None])
+    _max_workers = min(_num_cams, 8) if _num_cams else 1
+    with ThreadPoolExecutor(max_workers=_max_workers) as exec_advance:
+        for _step_idx, T in enumerate(sample_times_list, start=1):
+            if len(collected) >= max_frames_min:
                 break
-            best_camera = assignment_list[idx]
-            prev_f, prev_t, curr_f, curr_t = state.get(best_camera, (None, -1.0, None, -1.0))
-            if T >= durations.get(best_camera, 0):
-                continue
-            if prev_t <= T < curr_t and prev_f is not None:
-                candidate = prev_f
-            elif curr_t <= T and curr_f is not None:
-                candidate = curr_f
-            elif prev_f is not None:
-                candidate = prev_f
-            else:
-                candidate = curr_f
-            best_frame = candidate.copy() if (candidate is not None and hasattr(candidate, "copy")) else candidate
-            best_area = _person_area_at_time(sidecars.get(best_camera) or [], T) if best_frame is not None else 0.0
-        else:
-            # Legacy: for each camera get frame at T and person area (with first-camera bias).
-            cam_candidates: dict[str, tuple[Any, float]] = {}  # cam -> (frame, area_with_bias)
-            for cam in state:
-                prev_f, prev_t, curr_f, curr_t = state[cam]
-                if T >= durations.get(cam, 0):
+            if log_callback and _step_idx % _progress_interval == 1:
+                log_callback(f"Reading frames ({_step_idx}/{_num_sample_times}).")
+            best_camera: str | None = None
+            best_frame: Any = None
+            best_area = 0.0
+
+            # Advance each camera to T in parallel (each camera has its own cap).
+            cameras_to_advance = [c for c in state if caps.get(c) is not None]
+            if cameras_to_advance:
+                future_to_cam = {
+                    exec_advance.submit(
+                        _advance_one_camera_to_T,
+                        cam,
+                        caps[cam],
+                        state[cam],
+                        T,
+                        fps_per_cam.get(cam, 1.0),
+                        frame_index.get(cam, 0),
+                        durations.get(cam, 0.0),
+                    ): cam
+                    for cam in cameras_to_advance
+                }
+                for future in as_completed(future_to_cam):
+                    cam = future_to_cam[future]
+                    try:
+                        new_state, new_idx = future.result()
+                        if new_state is None and new_idx is None:
+                            try:
+                                caps[cam].release()
+                            except Exception:
+                                pass
+                            caps[cam] = None
+                            state[cam] = (None, -1.0, None, -1.0)
+                            remaining = [c for c in caps if caps.get(c) is not None and c != cam]
+                            logger.warning(
+                                "Reader process died for camera %s (%s); dropping camera (sample_time_sec=%.2f remaining_cameras=%s).",
+                                cam,
+                                path_per_cam.get(cam, ""),
+                                T,
+                                remaining,
+                            )
+                        else:
+                            state[cam] = new_state
+                            frame_index[cam] = new_idx
+                    except Exception as e:
+                        logger.warning("Advance camera %s failed: %s", cam, e)
+                        try:
+                            caps[cam].release()
+                        except Exception:
+                            pass
+                        caps[cam] = None
+                        state[cam] = (None, -1.0, None, -1.0)
+
+            # If no cameras left, return what we have so far.
+            if not any(c is not None for c in caps.values()):
+                break
+
+            if assignment_list is not None:
+                # EMA pipeline: camera comes from Phase 1 assignment; get frame for that camera only.
+                idx = _step_idx - 1
+                if idx >= len(assignment_list):
+                    break
+                best_camera = assignment_list[idx]
+                prev_f, prev_t, curr_f, curr_t = state.get(best_camera, (None, -1.0, None, -1.0))
+                if T >= durations.get(best_camera, 0):
                     continue
                 if prev_t <= T < curr_t and prev_f is not None:
                     candidate = prev_f
@@ -678,117 +650,134 @@ def extract_target_centric_frames(
                     candidate = prev_f
                 else:
                     candidate = curr_f
-                if candidate is None:
-                    continue
-                area = _person_area_at_time(sidecars.get(cam) or [], T)
-                area *= _bias_multiplier(cam, T)
-                cam_candidates[cam] = (candidate.copy() if hasattr(candidate, "copy") else candidate, area)
+                best_frame = candidate.copy() if (candidate is not None and hasattr(candidate, "copy")) else candidate
+                best_area = _person_area_at_time(sidecars.get(best_camera) or [], T) if best_frame is not None else 0.0
+            else:
+                # Legacy: for each camera get frame at T and person area (with first-camera bias).
+                cam_candidates: dict[str, tuple[Any, float]] = {}  # cam -> (frame, area_with_bias)
+                for cam in state:
+                    prev_f, prev_t, curr_f, curr_t = state[cam]
+                    if T >= durations.get(cam, 0):
+                        continue
+                    if prev_t <= T < curr_t and prev_f is not None:
+                        candidate = prev_f
+                    elif curr_t <= T and curr_f is not None:
+                        candidate = curr_f
+                    elif prev_f is not None:
+                        candidate = prev_f
+                    else:
+                        candidate = curr_f
+                    if candidate is None:
+                        continue
+                    area = _person_area_at_time(sidecars.get(cam) or [], T)
+                    area *= _bias_multiplier(cam, T)
+                    cam_candidates[cam] = (candidate.copy() if hasattr(candidate, "copy") else candidate, area)
 
-            # Hysteresis: stay on current camera for min 3 frames unless area is 0 or below threshold (escape).
-            if current_camera is not None and frames_on_current < 3:
-                curr_area = cam_candidates.get(current_camera, (None, 0.0))[1]
-                below_threshold = person_area_switch_threshold > 0 and curr_area < person_area_switch_threshold
-                if curr_area > 0 and not below_threshold:
-                    best_camera = current_camera
-                    best_frame, best_area = cam_candidates.get(current_camera, (None, 0.0))
+                # Hysteresis: stay on current camera for min 3 frames unless area is 0 or below threshold (escape).
+                if current_camera is not None and frames_on_current < 3:
+                    curr_area = cam_candidates.get(current_camera, (None, 0.0))[1]
+                    below_threshold = person_area_switch_threshold > 0 and curr_area < person_area_switch_threshold
+                    if curr_area > 0 and not below_threshold:
+                        best_camera = current_camera
+                        best_frame, best_area = cam_candidates.get(current_camera, (None, 0.0))
+                    else:
+                        # Escape: person left or area below threshold; pick camera with largest area.
+                        best_camera = max(cam_candidates, key=lambda c: cam_candidates[c][1]) if cam_candidates else None
+                        best_frame, best_area = (cam_candidates.get(best_camera, (None, 0.0))) if best_camera else (None, 0.0)
                 else:
-                    # Escape: person left or area below threshold; pick camera with largest area.
                     best_camera = max(cam_candidates, key=lambda c: cam_candidates[c][1]) if cam_candidates else None
                     best_frame, best_area = (cam_candidates.get(best_camera, (None, 0.0))) if best_camera else (None, 0.0)
-            else:
-                best_camera = max(cam_candidates, key=lambda c: cam_candidates[c][1]) if cam_candidates else None
-                best_frame, best_area = (cam_candidates.get(best_camera, (None, 0.0))) if best_camera else (None, 0.0)
-                if best_camera and current_camera and best_camera != current_camera:
-                    current_area = cam_candidates.get(current_camera, (None, 0.0))[1]
-                    # Stickiness for non-initial cameras: use same decay/cap as first camera; 0 clamped to 0.1.
-                    if first_camera_bias is not None and current_camera == first_camera_bias:
-                        effective_current = current_area
-                    else:
-                        bias_val = max(0.1, camera_switch_bias)
-                        t_since_switch = (T - T_switch) if T_switch is not None else 0.0
-                        if first_camera_bias_cap_seconds > 0 and t_since_switch >= first_camera_bias_cap_seconds:
-                            stickiness = 1.0
-                        elif first_camera_bias_decay_seconds <= 0:
-                            stickiness = bias_val
+                    if best_camera and current_camera and best_camera != current_camera:
+                        current_area = cam_candidates.get(current_camera, (None, 0.0))[1]
+                        # Stickiness for non-initial cameras: use same decay/cap as first camera; 0 clamped to 0.1.
+                        if first_camera_bias is not None and current_camera == first_camera_bias:
+                            effective_current = current_area
                         else:
-                            stickiness = bias_val * math.exp(-t_since_switch / first_camera_bias_decay_seconds)
-                        effective_current = current_area * stickiness
-                    allow_switch = (
-                        (person_area_switch_threshold > 0 and current_area < person_area_switch_threshold and best_area > current_area)
-                        or (best_area >= camera_switch_ratio * effective_current)
-                    )
-                    if not allow_switch:
+                            bias_val = max(0.1, camera_switch_bias)
+                            t_since_switch = (T - T_switch) if T_switch is not None else 0.0
+                            if first_camera_bias_cap_seconds > 0 and t_since_switch >= first_camera_bias_cap_seconds:
+                                stickiness = 1.0
+                            elif first_camera_bias_decay_seconds <= 0:
+                                stickiness = bias_val
+                            else:
+                                stickiness = bias_val * math.exp(-t_since_switch / first_camera_bias_decay_seconds)
+                            effective_current = current_area * stickiness
+                        allow_switch = (
+                            (person_area_switch_threshold > 0 and current_area < person_area_switch_threshold and best_area > current_area)
+                            or (best_area >= camera_switch_ratio * effective_current)
+                        )
+                        if not allow_switch:
+                            best_camera = current_camera
+                            best_frame, best_area = cam_candidates.get(current_camera, (None, 0.0))
+
+                # Minimum hold: after a switch, stay on current camera for at least this many frames unless person left (area 0).
+                if (
+                    best_camera is not None
+                    and current_camera is not None
+                    and best_camera != current_camera
+                    and camera_switch_min_hold_frames > 0
+                    and frames_on_current < camera_switch_min_hold_frames
+                ):
+                    current_raw = _person_area_at_time(sidecars.get(current_camera) or [], T)
+                    if current_raw > 0:
                         best_camera = current_camera
                         best_frame, best_area = cam_candidates.get(current_camera, (None, 0.0))
 
-            # Minimum hold: after a switch, stay on current camera for at least this many frames unless person left (area 0).
-            if (
-                best_camera is not None
-                and current_camera is not None
-                and best_camera != current_camera
-                and camera_switch_min_hold_frames > 0
-                and frames_on_current < camera_switch_min_hold_frames
-            ):
-                current_raw = _person_area_at_time(sidecars.get(current_camera) or [], T)
-                if current_raw > 0:
-                    best_camera = current_camera
-                    best_frame, best_area = cam_candidates.get(current_camera, (None, 0.0))
-
-        if best_camera is not None and best_frame is not None:
-            meta: dict[str, Any] = {}
-            if crop_width > 0 and crop_height > 0 and _CROP_AVAILABLE:
-                entry = _nearest_sidecar_entry(sidecars.get(best_camera) or [], T)
-                detections = (entry.get("detections") or []) if entry else []
-                frame_h, frame_w = best_frame.shape[:2]
-                frame_area = frame_w * frame_h
-                native_w, native_h = native_size_per_cam.get(best_camera, (0, 0))
-                if native_w > 0 and native_h > 0:
-                    frame_area = native_w * native_h
-                reference_area = min(target_crop_area, frame_area) if target_crop_area > 0 else frame_area
-                if not detections:
-                    best_frame = _crop_utils.center_crop(best_frame, crop_width, crop_height)
-                else:
-                    person_dets = [d for d in detections if (d.get("label") or "").lower() in PREFERRED_LABELS]
-                    if not person_dets:
+            if best_camera is not None and best_frame is not None:
+                meta: dict[str, Any] = {}
+                if crop_width > 0 and crop_height > 0 and _CROP_AVAILABLE:
+                    entry = _nearest_sidecar_entry(sidecars.get(best_camera) or [], T)
+                    detections = (entry.get("detections") or []) if entry else []
+                    frame_h, frame_w = best_frame.shape[:2]
+                    frame_area = frame_w * frame_h
+                    native_w, native_h = native_size_per_cam.get(best_camera, (0, 0))
+                    if native_w > 0 and native_h > 0:
+                        frame_area = native_w * native_h
+                    reference_area = min(target_crop_area, frame_area) if target_crop_area > 0 else frame_area
+                    if not detections:
                         best_frame = _crop_utils.center_crop(best_frame, crop_width, crop_height)
                     else:
-                        largest = max(person_dets, key=lambda d: float(d.get("area") or 0))
-                        person_area_val = float(largest.get("area") or 0)
-                        if (
-                            reference_area > 0
-                            and tracking_target_frame_percent > 0
-                            and (person_area_val / reference_area) >= (tracking_target_frame_percent / 100.0)
-                        ):
-                            best_frame = _crop_utils.full_frame_resize_to_target(
-                                best_frame, crop_width, crop_height
-                            )
-                            meta["is_full_frame_resize"] = True
+                        person_dets = [d for d in detections if (d.get("label") or "").lower() in PREFERRED_LABELS]
+                        if not person_dets:
+                            best_frame = _crop_utils.center_crop(best_frame, crop_width, crop_height)
                         else:
-                            cp = largest.get("centerpoint")
-                            if cp and len(cp) >= 2:
-                                best_frame = _crop_utils.crop_around_center(
-                                    best_frame, cp[0], cp[1], crop_width, crop_height
+                            largest = max(person_dets, key=lambda d: float(d.get("area") or 0))
+                            person_area_val = float(largest.get("area") or 0)
+                            if (
+                                reference_area > 0
+                                and tracking_target_frame_percent > 0
+                                and (person_area_val / reference_area) >= (tracking_target_frame_percent / 100.0)
+                            ):
+                                best_frame = _crop_utils.full_frame_resize_to_target(
+                                    best_frame, crop_width, crop_height
                                 )
+                                meta["is_full_frame_resize"] = True
                             else:
-                                best_frame = _crop_utils.center_crop(best_frame, crop_width, crop_height)
-                            meta["is_full_frame_resize"] = False
-            raw_person_area = _person_area_at_time(sidecars.get(best_camera) or [], T)
-            meta["person_area"] = int(raw_person_area)
-            # Legacy: skip frames with no person when sidecar in use. EMA: drop when config says so.
-            if not use_ema_pipeline:
-                skip_append = bool(use_sidecar and sidecars and raw_person_area <= 0)
-            else:
-                skip_append = (
-                    (raw_person_area <= 0) if camera_timeline_final_yolo_drop_no_person else False
-                )
-            if not skip_append:
-                collected.append(ExtractedFrame(frame=best_frame, timestamp_sec=T, camera=best_camera, metadata=meta))
-            if best_camera == current_camera:
-                frames_on_current += 1
-            else:
-                current_camera = best_camera
-                frames_on_current = 1
-                T_switch = T
+                                cp = largest.get("centerpoint")
+                                if cp and len(cp) >= 2:
+                                    best_frame = _crop_utils.crop_around_center(
+                                        best_frame, cp[0], cp[1], crop_width, crop_height
+                                    )
+                                else:
+                                    best_frame = _crop_utils.center_crop(best_frame, crop_width, crop_height)
+                                meta["is_full_frame_resize"] = False
+                raw_person_area = _person_area_at_time(sidecars.get(best_camera) or [], T)
+                meta["person_area"] = int(raw_person_area)
+                # Legacy: skip frames with no person when sidecar in use. EMA: drop when config says so.
+                if not use_ema_pipeline:
+                    skip_append = bool(use_sidecar and sidecars and raw_person_area <= 0)
+                else:
+                    skip_append = (
+                        (raw_person_area <= 0) if camera_timeline_final_yolo_drop_no_person else False
+                    )
+                if not skip_append:
+                    collected.append(ExtractedFrame(frame=best_frame, timestamp_sec=T, camera=best_camera, metadata=meta))
+                if best_camera == current_camera:
+                    frames_on_current += 1
+                else:
+                    current_camera = best_camera
+                    frames_on_current = 1
+                    T_switch = T
 
     if _log_phase_timing and _t0_read is not None and log_callback:
         log_callback(f"Reading frames: {time.monotonic() - _t0_read:.1f}s")

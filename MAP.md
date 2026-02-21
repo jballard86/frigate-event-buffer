@@ -157,6 +157,7 @@ frigate-event-buffer/
 │   ├── test_query_caching.py
 │   ├── test_main_version.py
 │   ├── test_optimization_expectations_temp.py
+│   ├── bench_post_download_pre_api.py
 │   └── verify_gemini_proxy.py
 │
 └── examples/
@@ -212,10 +213,10 @@ frigate-event-buffer/
 
 | Path/Name | Purpose | Dependencies/Interactions |
 |-----------|---------|---------------------------|
-| `src/frigate_buffer/services/ai_analyzer.py` | **GeminiAnalysisService:** frame extraction, optional crop, system prompt from file; POST to OpenAI-compatible proxy; returns analysis dict; writes `analysis_result.json`; rolling frame cap. Multi-cam: `analyze_multi_clip_ce` uses multi_clip_extractor. | Called by orchestrator (`on_clip_ready`, `on_ce_ready_for_analysis`); uses VideoService, FileManager helpers. |
-| `src/frigate_buffer/services/multi_clip_extractor.py` | Target-centric frame extraction for CE; requires detection sidecars (no HOG fallback when any camera lacks sidecar). | Used by ai_analyzer, event_test_orchestrator. |
+| `src/frigate_buffer/services/ai_analyzer.py` | **GeminiAnalysisService:** frame extraction, optional crop, system prompt from file; POST to OpenAI-compatible proxy; returns analysis dict; writes `analysis_result.json`; rolling frame cap. Multi-cam: `analyze_multi_clip_ce` uses multi_clip_extractor. Sends to proxy before writing ai_frame_analysis to disk (deferred write). | Called by orchestrator (`on_clip_ready`, `on_ce_ready_for_analysis`); uses VideoService, FileManager helpers. |
+| `src/frigate_buffer/services/multi_clip_extractor.py` | Target-centric frame extraction for CE; requires detection sidecars (no HOG fallback when any camera lacks sidecar). Uses single ffprobe per path for fps/duration (no double-open); parallel sidecar JSON load; parallel per-camera advance to sample time. | Used by ai_analyzer, event_test_orchestrator. |
 | `src/frigate_buffer/services/timeline_ema.py` | EMA-based camera timeline (segment assignment, hysteresis) for multi-cam when `camera_timeline_use_ema_pipeline` true. | Used by multi_clip_extractor / pipeline. |
-| `src/frigate_buffer/services/video.py` | **VideoService:** NVDEC decode (ffmpegcv), `generate_detection_sidecar`, `generate_detection_sidecars_for_cameras` (shared YOLO + lock), `generate_gif_from_clip`. App-level sidecar lock injected by orchestrator. | Used by lifecycle, ai_analyzer, event_test. |
+| `src/frigate_buffer/services/video.py` | **VideoService:** NVDEC decode (ffmpegcv), `generate_detection_sidecar`, `generate_detection_sidecars_for_cameras` (shared YOLO + lock), `generate_gif_from_clip`. Single `_get_video_metadata` ffprobe per clip (width, height, fps, duration). App-level sidecar lock injected by orchestrator. | Used by lifecycle, ai_analyzer, event_test. |
 | `src/frigate_buffer/services/lifecycle.py` | **EventLifecycleService:** event creation, event end (discard short, cancel long, clip export/download), CE pipeline (download per camera, sidecars, then `on_ce_ready_for_analysis`). | Orchestrator delegates; calls download, file_manager, video_service, orchestrator callbacks. |
 | `src/frigate_buffer/services/download.py` | **DownloadService:** Frigate snapshot, export/clip download (dynamic clip names), `post_event_description`. | FileManager, lifecycle, orchestrator. |
 | `src/frigate_buffer/services/notifier.py` | **NotificationPublisher:** publish to `frigate/custom/notifications`; `clear_tag` for updates; timeline_callback = TimelineLogger.log_ha. | Orchestrator, lifecycle. |

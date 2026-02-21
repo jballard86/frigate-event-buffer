@@ -35,3 +35,7 @@ where = ["src"]
 pythonpath = ["src"]
 testpaths = ["tests"]
 addopts = "-v"
+
+[tool.pyright]
+include = ["src"]
+extraPaths = ["src"]

@@ -77,11 +77,26 @@ def _get_native_resolution(clip_path: str) -> tuple[int, int] | None:
     Return (width, height) of the video stream from the clip file using ffprobe.
     Used so we can scale YOLO bbox from decoded (resized) frame coords back to native for the sidecar.
     """
+    meta = _get_video_metadata(clip_path)
+    if meta is None:
+        return None
+    w, h, _, _ = meta
+    return (w, h) if (w > 0 and h > 0) else None
+
+
+def _get_video_metadata(clip_path: str) -> tuple[int, int, float, float] | None:
+    """
+    Single ffprobe call returning (width, height, fps, duration_sec).
+    Used to avoid multiple subprocess invocations for sidecar and extractor.
+    Returns None on failure or missing stream.
+    """
     try:
         out = subprocess.run(
             [
                 "ffprobe", "-v", "error", "-select_streams", "v:0",
-                "-show_entries", "stream=width,height", "-of", "csv=p=0",
+                "-show_entries", "stream=width,height,r_frame_rate",
+                "-show_entries", "format=duration",
+                "-of", "json",
                 clip_path,
             ],
             capture_output=True,
@@ -90,12 +105,25 @@ def _get_native_resolution(clip_path: str) -> tuple[int, int] | None:
         )
         if out.returncode != 0 or not out.stdout:
             return None
-        line = out.stdout.decode("utf-8", errors="replace").strip().split("\n")[0]
-        parts = line.split(",")
-        if len(parts) >= 2:
-            return int(parts[0].strip()), int(parts[1].strip())
-    except (FileNotFoundError, subprocess.TimeoutExpired, ValueError, OSError) as e:
-        logger.debug("ffprobe native resolution failed for %s: %s", clip_path, e)
+        data = json.loads(out.stdout.decode("utf-8", errors="replace"))
+        streams = (data.get("streams") or [])
+        fmt = data.get("format") or {}
+        if not streams:
+            return None
+        s = streams[0]
+        w = int(s.get("width") or 0)
+        h = int(s.get("height") or 0)
+        fps_str = (s.get("r_frame_rate") or "").strip()
+        if "/" in fps_str:
+            num, den = fps_str.split("/", 1)
+            fps = float(num) / float(den) if float(den) else 30.0
+        else:
+            fps = float(fps_str) if fps_str else 30.0
+        dur_str = fmt.get("duration")
+        duration = float(dur_str) if dur_str else 0.0
+        return (w, h, fps, duration)
+    except (FileNotFoundError, subprocess.TimeoutExpired, ValueError, OSError, json.JSONDecodeError) as e:
+        logger.debug("ffprobe metadata failed for %s: %s", clip_path, e)
     return None
 
 
@@ -218,31 +246,16 @@ class VideoService:
         crop_w = max(1, int(config.get("CROP_WIDTH", 1280)))
         crop_h = max(1, int(config.get("CROP_HEIGHT", 720)))
 
-        native_res = _get_native_resolution(clip_path)
-        native_w = native_res[0] if native_res else 0
-        native_h = native_res[1] if native_res else 0
+        meta = _get_video_metadata(clip_path)
+        if meta:
+            native_w, native_h, fps_val, _ = meta
+        else:
+            native_w, native_h, fps_val = 0, 0, 30.0
         use_resize = native_w > 0 and native_h > 0 and (native_w != crop_w or native_h != crop_h)
         interval = detection_frame_interval
 
         # Attempt FFmpeg native frame skipping first via subprocess
-        import subprocess
         import numpy as np
-
-        fps_val = 30.0
-        try:
-            out = subprocess.run(
-                ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=r_frame_rate", "-of", "csv=p=0", clip_path],
-                capture_output=True, timeout=5, check=False
-            )
-            if out.returncode == 0 and out.stdout:
-                fps_str = out.stdout.decode("utf-8").strip()
-                if "/" in fps_str:
-                    num, den = fps_str.split("/")
-                    fps_val = float(num) / float(den)
-                else:
-                    fps_val = float(fps_str)
-        except Exception:
-            pass
 
         read_w = crop_w if use_resize else native_w
         read_h = crop_h if use_resize else native_h
