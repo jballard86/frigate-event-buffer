@@ -192,6 +192,27 @@ def run_test_pipeline(
         results = video_service.generate_detection_sidecars_for_cameras(sidecar_tasks, config)
         for cam, ok in results:
             yield _yield_log(f"Sidecar {cam}: {'OK' if ok else 'failed'}.")
+            
+    # Video Compilation
+    yield _yield_log("Generating hardware-accelerated compilation video...")
+    try:
+        from frigate_buffer.services.video_compilation import compile_ce_video
+        prev_level = logging.getLogger("frigate-buffer").level
+        logging.getLogger("frigate-buffer").setLevel(logging.DEBUG)
+        
+        # We estimate global_end from timeline
+        events_end_ts_list = [e.get("data", {}).get("after", {}).get("end_time") for e in entries if e.get("data", {}).get("after", {}).get("end_time")]
+        fallback_end = (max(events_end_ts_list) - ce_start_time) if events_end_ts_list and ce_start_time else 60.0
+        
+        comp_output = compile_ce_video(test_folder_path, fallback_end, config)
+        if comp_output:
+            yield _yield_log(f"Compilation finished at: {comp_output}")
+        else:
+            yield _yield_log("Compilation failed (see generic console logs).")
+            
+        logging.getLogger("frigate-buffer").setLevel(prev_level)
+    except Exception as e:
+        yield _yield_log(f"Compilation hook error: {e}")
 
     # 7. Build payload (delegate to analyzer; writes frames and returns prompt + paths)
     payload_logs: list[str] = []
