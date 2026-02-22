@@ -10,7 +10,6 @@ import bisect
 import json
 import logging
 import os
-import subprocess
 
 from frigate_buffer.services import timeline_ema
 
@@ -274,6 +273,113 @@ def calculate_segment_crop(
 
     return (x, y, target_w, target_h)
 
+
+def _resolve_clip_path(ce_dir: str, camera: str, resolve_clip_in_folder: object) -> str:
+    """Resolve clip path for a camera under ce_dir; raise FileNotFoundError if missing."""
+    cam_dir = os.path.join(ce_dir, camera)
+    clip_name = resolve_clip_in_folder(cam_dir) if callable(resolve_clip_in_folder) else None
+    if not clip_name:
+        clip_name = f"{camera}.mp4"
+    clip_path = os.path.join(cam_dir, clip_name)
+    if not os.path.isfile(clip_path):
+        raise FileNotFoundError(f"Clip not found: {clip_path}")
+    return clip_path
+
+
+def _run_nelux_compilation(
+    slices: list[dict],
+    ce_dir: str,
+    tmp_output_path: str,
+    target_w: int,
+    target_h: int,
+    resolve_clip_in_folder: object,
+    cuda_device_index: int = 0,
+) -> None:
+    """
+    Decode each slice with NeLux (NVDEC), crop with smooth panning in tensor space, encode (NVENC).
+    Frames stay on GPU (zero-copy). Output 20fps, no audio. Encoder created from first slice's reader.
+    """
+    from nelux import VideoReader
+
+    if not slices:
+        return
+
+    # Resolve first slice clip and open reader for encoder creation (NeLux API requires reader.create_encoder).
+    first_clip = _resolve_clip_path(ce_dir, slices[0]["camera"], resolve_clip_in_folder)
+    first_reader: VideoReader | None = VideoReader(
+        first_clip,
+        decode_accelerator="nvdec",
+        cuda_device_index=cuda_device_index,
+    )
+
+    with first_reader.create_encoder(tmp_output_path) as enc:
+        # Do not encode audio; output is -an equivalent.
+        for slice_idx, sl in enumerate(slices):
+            cam = sl["camera"]
+            clip_path = _resolve_clip_path(ce_dir, cam, resolve_clip_in_folder)
+            if slice_idx == 0:
+                reader = first_reader
+            else:
+                reader = VideoReader(
+                    clip_path,
+                    decode_accelerator="nvdec",
+                    cuda_device_index=cuda_device_index,
+                )
+
+            try:
+                fps = float(reader.fps)
+                if fps <= 0:
+                    fps = 20.0
+                frame_count = len(reader)
+                t0 = sl["start_sec"]
+                t1 = sl["end_sec"]
+                duration = t1 - t0
+                # At least one frame for very short slices (match FFmpeg behavior).
+                n_frames = max(1, round(duration * 20.0))
+                xs, ys, w, h = sl["crop_start"]
+                xe, ye, we, he = sl["crop_end"]
+
+                # Output frame times at 20fps; map to source frame indices.
+                output_times = [t0 + i / 20.0 for i in range(n_frames)]
+                start_f = int(t0 * fps)
+                end_f = int(t1 * fps)
+                start_f = max(0, min(start_f, frame_count - 1))
+                end_f = max(0, min(end_f, frame_count))
+                if end_f <= start_f:
+                    end_f = start_f + 1
+                src_indices = [
+                    max(start_f, min(int(t * fps), end_f - 1)) for t in output_times
+                ]
+
+                if not src_indices:
+                    continue
+
+                # NeLux decode: get_batch returns BCHW (N, 3, H, W). Decode in one batch when possible.
+                batch = reader.get_batch(src_indices)
+                # batch may be (N, 3, H, W); single frame from slice is batch[i].
+                _, _, ih, iw = batch.shape
+                for i in range(n_frames):
+                    frame = batch[i : i + 1]
+                    t = output_times[i]
+                    t_rel = t - t0
+                    # Smooth pan: same as FFmpeg t/duration interpolation; clamp to bounds.
+                    if duration <= 1e-6:
+                        x, y = xs, ys
+                    else:
+                        x = xs + (xe - xs) * (t_rel / duration)
+                        y = ys + (ye - ys) * (t_rel / duration)
+                    x = int(min(max(0, x), iw - w))
+                    y = int(min(max(0, y), ih - h))
+                    # BCHW: channel dim 1, spatial dims 2 (H), 3 (W). Crop via slicing.
+                    cropped = frame[:, :, y : y + h, x : x + w]
+                    enc.encode_frame(cropped)
+            finally:
+                if slice_idx != 0 and reader is not None:
+                    del reader
+
+    first_reader = None
+
+
 def generate_compilation_video(
     slices: list[dict],
     ce_dir: str,
@@ -283,9 +389,9 @@ def generate_compilation_video(
     crop_smooth_alpha: float = 0.0,
 ) -> None:
     """
-    Concatenates slices into a final 20fps cropped video. One -i input per slice (no deduplication)
-    to avoid FFmpeg "Output pad already connected" crashes. Crop uses 0-based t (after setpts)
-    for smooth panning: x/y interpolated as t/duration. Optional EMA smoothing of crop centers.
+    Concatenates slices into a final 20fps cropped video using NeLux (NVDEC decode, NVENC encode).
+    Decode and crop happen on GPU via PyTorch tensors; smooth panning uses t/duration interpolation.
+    Optional EMA smoothing of crop centers. No audio (-an equivalent).
     """
     logger.info(f"Starting compilation of {len(slices)} slices to {output_path}")
 
@@ -314,17 +420,6 @@ def generate_compilation_video(
         timestamps = sorted(float(e.get("timestamp_sec") or 0) for e in entries)
         sidecar_timestamps[cam] = timestamps
 
-    inputs: list[str] = []
-    # One -i per slice (Constraint 1: do not deduplicate by camera)
-    for i, sl in enumerate(slices):
-        cam = sl["camera"]
-        cam_dir = os.path.join(ce_dir, cam)
-        clip_name = resolve_clip_in_folder(cam_dir)
-        if not clip_name:
-            clip_name = f"{cam}.mp4"
-        clip_path = os.path.join(cam_dir, clip_name)
-        inputs.extend(["-i", clip_path])
-
     for i, sl in enumerate(slices):
         cam = sl["camera"]
         sidecar_data = sidecar_cache.get(cam) or {}
@@ -349,58 +444,30 @@ def generate_compilation_video(
         smooth_crop_centers_ema(slices, crop_smooth_alpha)
 
     tmp_output_path = output_path + ".tmp"
-    filter_parts: list[str] = []
-    for i, sl in enumerate(slices):
-        t0 = sl["start_sec"]
-        t1 = sl["end_sec"]
-        duration = t1 - t0
-        xs, ys, w, h = sl["crop_start"]
-        xe, ye, we, he = sl["crop_end"]
-        # Constraint 2: after setpts=PTS-STARTPTS, t is 0-based; use t/duration
-        if duration <= 1e-6:
-            fg = f"[{i}:v]trim=start={t0}:end={t1},setpts=PTS-STARTPTS,fps=20,crop={w}:{h}:{xs}:{ys},format=yuv420p[v{i}]"
-        else:
-            x_expr = f"min(max(0,{xs}+({xe}-{xs})*(t/{duration})),iw-{w})"
-            y_expr = f"min(max(0,{ys}+({ye}-{ys})*(t/{duration})),ih-{h})"
-            fg = f"[{i}:v]trim=start={t0}:end={t1},setpts=PTS-STARTPTS,fps=20,crop={w}:{h}:'{x_expr}':'{y_expr}',format=yuv420p[v{i}]"
-        filter_parts.append(fg)
-    concat_inputs = "".join(f"[v{i}]" for i in range(len(slices)))
-    filter_parts.append(concat_inputs + f"concat=n={len(slices)}:v=1:a=0[outv]")
-    fg_str = ";".join(filter_parts)
-    logger.debug(f"Compilation FFmpeg filter_complex:\n{fg_str}")
-
-    cmd = ["ffmpeg", "-y"]
-    cmd.extend(inputs)
-    cmd.extend([
-        "-filter_complex", fg_str,
-        "-map", "[outv]",
-        "-an",
-        "-c:v", "h264_nvenc",
-        "-pix_fmt", "yuv420p",
-        "-f", "mp4",
-        tmp_output_path,
-    ])
-    logger.debug(f"Compilation raw FFmpeg command: {' '.join(cmd)}")
-
     try:
-        subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        _run_nelux_compilation(
+            slices=slices,
+            ce_dir=ce_dir,
+            tmp_output_path=tmp_output_path,
+            target_w=target_w,
+            target_h=target_h,
+            resolve_clip_in_folder=resolve_clip_in_folder,
+        )
         if os.path.isfile(tmp_output_path) and os.path.getsize(tmp_output_path) > 0:
             os.rename(tmp_output_path, output_path)
             logger.info(f"Compilation finished successfully. Output saved to: {output_path}")
         else:
             raise FileNotFoundError(
-                f"Compiler terminated effectively, but tmp result file was empty or missing: {tmp_output_path}"
+                f"Compiler finished but tmp result file was empty or missing: {tmp_output_path}"
             )
-    except subprocess.CalledProcessError as e:
-        ffmpeg_log_path = os.path.join(ce_dir, "ffmpeg_compilation_error.log")
-        with open(ffmpeg_log_path, "w", encoding="utf-8") as f:
-            f.write(e.stderr or "")
-        logger.error(
-            f"Compilation FFmpeg failed! Check {ffmpeg_log_path} for raw output. Process error:\n{e.stderr}"
-        )
-        raise
-    except Exception as general_error:
-        logger.error(f"Compilation failed unexpectedly: {general_error}")
+    except Exception as e:
+        log_path = os.path.join(ce_dir, "compilation_error.log")
+        try:
+            with open(log_path, "w", encoding="utf-8") as f:
+                f.write(str(e))
+        except OSError:
+            pass
+        logger.error(f"Compilation failed: {e}")
         raise
 
 def compile_ce_video(ce_dir: str, global_end: float, config: dict, primary_camera: str | None = None) -> str | None:

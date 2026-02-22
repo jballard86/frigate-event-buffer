@@ -8,6 +8,7 @@ Install and run via the command line only (no Dockge). Clone the repo so the **r
 
 - Docker (no compose required; we use `docker build` and `docker run` only).
 - For GPU decode (NVDEC): The image includes FFmpeg with NVDEC support for hardware-accelerated frame reading. At runtime you need an NVIDIA GPU, driver, and [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html) (e.g. `docker run --gpus all`). Set `NVIDIA_DRIVER_CAPABILITIES=compute,video,utility` so the container can use the GPU for decoding.
+- **Summary video compilation** uses the **NeLux** library (NVDEC decode, NVENC encode) for a zero-copy GPU pipeline. NeLux requires PyTorch with CUDA, which is already installed for Ultralytics YOLO. Ensure the same GPU/driver and `NVIDIA_DRIVER_CAPABILITIES=compute,video,utility` are available so compilation can run on the GPU.
 
 ---
 
@@ -130,9 +131,15 @@ docker run -d --name frigate_buffer --restart unless-stopped \
 The app uses the storage volume for Ultralytics config and the YOLO model cache: `storage/ultralytics/` (settings) and `storage/yolo_models/` (downloaded weights). These persist across restarts so you won’t see the config-directory warning or re-download the model each boot. You do not need to set `YOLO_CONFIG_DIR` unless you want to override this.
 ## 6. Update (after code changes)
 
-From repo root:
+Pull and Build:
 
 ```bash
+**Fast pull and build option (development only):**
+cd /mnt/user/appdata/frigate-buffer
+git pull
+docker build -t frigate-buffer:latest --build-arg USE_GUI_OPENCV=true .
+
+**Slow pull and build option
 cd /mnt/user/appdata/frigate-buffer
 git pull
 docker build -t frigate-buffer:latest .

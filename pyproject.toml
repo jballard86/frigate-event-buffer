@@ -18,6 +18,7 @@ dependencies = [
     "opencv-python-headless",
     "ffmpegcv",
     "ultralytics>=8.0.0",
+    "nelux",
 ]
 
 [project.optional-dependencies]

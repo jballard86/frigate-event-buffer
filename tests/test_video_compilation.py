@@ -261,223 +261,128 @@ class TestCalculateSegmentCrop(unittest.TestCase):
 
 
 class TestGenerateCompilationVideo(unittest.TestCase):
-    """Tests for generate_compilation_video function."""
+    """Tests for generate_compilation_video function (NeLux GPU pipeline)."""
 
-    @patch("frigate_buffer.services.video_compilation.subprocess.run")
+    def _sidecar_mock(self):
+        return {
+            "native_width": 2560,
+            "native_height": 1920,
+            "entries": [],
+        }
+
+    @patch("frigate_buffer.services.video_compilation._run_nelux_compilation")
     @patch("frigate_buffer.services.video_compilation.os.path.isfile")
     @patch("frigate_buffer.services.video_compilation.os.rename")
     @patch("frigate_buffer.services.video_compilation.os.path.getsize")
     @patch("frigate_buffer.services.query.resolve_clip_in_folder")
     @patch("builtins.open", new_callable=mock_open)
-    def test_ffmpeg_command_includes_format_flag(
-        self, mock_file, mock_resolve, mock_getsize, mock_rename, mock_isfile, mock_run
+    def test_nelux_pipeline_writes_to_tmp_then_renames(
+        self, mock_file, mock_resolve, mock_getsize, mock_rename, mock_isfile, mock_run_nelux
     ):
-        """FFmpeg command must include -f mp4 to handle .tmp extension output."""
+        """NeLux pipeline is called with tmp path; on success temp file is renamed to final output."""
         mock_resolve.return_value = "doorbell-123.mp4"
         mock_isfile.return_value = True
         mock_getsize.return_value = 1000
+        mock_file.return_value.read.return_value = json.dumps(self._sidecar_mock())
 
-        sidecar_data = {
-            "native_width": 2560,
-            "native_height": 1920,
-            "entries": []
-        }
-        mock_file.return_value.read.return_value = json.dumps(sidecar_data)
-
-        segments = [
-            {"camera": "doorbell", "start_sec": 0.0, "end_sec": 10.0}
-        ]
+        segments = [{"camera": "doorbell", "start_sec": 0.0, "end_sec": 10.0}]
         ce_dir = "/app/storage/events/test36"
         output_path = "/app/storage/events/test36/test36_summary.mp4"
 
-        mock_run.return_value = MagicMock(returncode=0)
-
         generate_compilation_video(segments, ce_dir, output_path)
 
-        # Verify subprocess.run was called
-        self.assertTrue(mock_run.called)
+        mock_run_nelux.assert_called_once()
+        call_kw = mock_run_nelux.call_args[1]
+        self.assertEqual(call_kw["tmp_output_path"], output_path + ".tmp")
+        self.assertEqual(call_kw["target_w"], 1440)
+        self.assertEqual(call_kw["target_h"], 1080)
+        mock_rename.assert_called_once_with(output_path + ".tmp", output_path)
 
-        # Get the command passed to subprocess.run
-        call_args = mock_run.call_args
-        cmd = call_args[0][0]
-
-        # Verify -f mp4 is in the command
-        self.assertIn("-f", cmd)
-        mp4_index = cmd.index("-f")
-        self.assertEqual(cmd[mp4_index + 1], "mp4")
-
-        # Verify -f mp4 comes before the output path
-        tmp_output_path = output_path + ".tmp"
-        tmp_path_index = cmd.index(tmp_output_path)
-        self.assertLess(mp4_index, tmp_path_index)
-
-    @patch("frigate_buffer.services.video_compilation.subprocess.run")
+    @patch("frigate_buffer.services.video_compilation._run_nelux_compilation")
     @patch("frigate_buffer.services.video_compilation.os.path.isfile")
     @patch("frigate_buffer.services.video_compilation.os.rename")
     @patch("frigate_buffer.services.video_compilation.os.path.getsize")
     @patch("frigate_buffer.services.query.resolve_clip_in_folder")
     @patch("builtins.open", new_callable=mock_open)
-    def test_ffmpeg_filter_includes_format_standardization(
-        self, mock_file, mock_resolve, mock_getsize, mock_rename, mock_isfile, mock_run
+    def test_nelux_pipeline_receives_slices_and_target_resolution(
+        self, mock_file, mock_resolve, mock_getsize, mock_rename, mock_isfile, mock_run_nelux
     ):
-        """Filter chain must include format=yuv420p to standardize pixel formats before concat."""
+        """_run_nelux_compilation is invoked with correct slices and target dimensions."""
         mock_resolve.return_value = "doorbell-123.mp4"
         mock_isfile.return_value = True
         mock_getsize.return_value = 1000
+        mock_file.return_value.read.return_value = json.dumps(self._sidecar_mock())
 
-        sidecar_data = {
-            "native_width": 2560,
-            "native_height": 1920,
-            "entries": []
-        }
-        mock_file.return_value.read.return_value = json.dumps(sidecar_data)
-
-        segments = [
-            {"camera": "doorbell", "start_sec": 0.0, "end_sec": 10.0}
-        ]
+        segments = [{"camera": "doorbell", "start_sec": 0.0, "end_sec": 10.0}]
         ce_dir = "/app/storage/events/test36"
         output_path = "/app/storage/events/test36/test36_summary.mp4"
 
-        mock_run.return_value = MagicMock(returncode=0)
+        generate_compilation_video(
+            segments, ce_dir, output_path, target_w=1280, target_h=720
+        )
 
-        generate_compilation_video(segments, ce_dir, output_path)
+        call_kw = mock_run_nelux.call_args[1]
+        self.assertEqual(call_kw["target_w"], 1280)
+        self.assertEqual(call_kw["target_h"], 720)
+        self.assertEqual(len(call_kw["slices"]), 1)
+        self.assertIn("crop_start", call_kw["slices"][0])
+        self.assertIn("crop_end", call_kw["slices"][0])
 
-        cmd = mock_run.call_args[0][0]
-
-        # Get the filter_complex value
-        filter_complex_idx = cmd.index("-filter_complex")
-        filter_complex = cmd[filter_complex_idx + 1]
-
-        # Verify format=yuv420p is in the filter chain
-        self.assertIn("format=yuv420p", filter_complex)
-
-        # Verify it appears before the stream label [v0]
-        format_idx = filter_complex.index("format=yuv420p")
-        label_idx = filter_complex.index("[v0]")
-        self.assertLess(format_idx, label_idx)
-
-    @patch("frigate_buffer.services.video_compilation.subprocess.run")
-    @patch("frigate_buffer.services.video_compilation.os.path.isfile")
-    @patch("frigate_buffer.services.video_compilation.os.rename")
-    @patch("frigate_buffer.services.video_compilation.os.path.getsize")
-    @patch("frigate_buffer.services.query.resolve_clip_in_folder")
-    @patch("builtins.open", new_callable=mock_open)
-    def test_ffmpeg_command_structure(
-        self, mock_file, mock_resolve, mock_getsize, mock_rename, mock_isfile, mock_run
-    ):
-        """FFmpeg command has correct structure with expected flags."""
-        mock_resolve.return_value = "doorbell-123.mp4"
-        mock_isfile.return_value = True
-        mock_getsize.return_value = 1000
-
-        sidecar_data = {
-            "native_width": 2560,
-            "native_height": 1920,
-            "entries": []
-        }
-        mock_file.return_value.read.return_value = json.dumps(sidecar_data)
-
-        segments = [
-            {"camera": "doorbell", "start_sec": 0.0, "end_sec": 10.0}
-        ]
-        ce_dir = "/app/storage/events/test36"
-        output_path = "/app/storage/events/test36/test36_summary.mp4"
-
-        mock_run.return_value = MagicMock(returncode=0)
-
-        generate_compilation_video(segments, ce_dir, output_path)
-
-        cmd = mock_run.call_args[0][0]
-
-        # Check expected flags are present (software decode, GPU encode)
-        self.assertEqual(cmd[0], "ffmpeg")
-        self.assertIn("-y", cmd)
-        self.assertIn("-filter_complex", cmd)
-        self.assertIn("-map", cmd)
-        self.assertIn("[outv]", cmd)
-        self.assertIn("-an", cmd)
-        self.assertIn("-c:v", cmd)
-        self.assertIn("h264_nvenc", cmd)
-        self.assertIn("-pix_fmt", cmd)
-        self.assertIn("yuv420p", cmd)
-        self.assertIn("-f", cmd)
-        self.assertIn("mp4", cmd)
-
-    @patch("frigate_buffer.services.video_compilation.subprocess.run")
+    @patch("frigate_buffer.services.video_compilation._run_nelux_compilation")
     @patch("frigate_buffer.services.video_compilation.os.path.isfile")
     @patch("frigate_buffer.services.video_compilation.os.rename")
     @patch("frigate_buffer.services.video_compilation.os.path.getsize")
     @patch("frigate_buffer.services.query.resolve_clip_in_folder")
     @patch("builtins.open", new_callable=mock_open)
     def test_successful_completion_renames_temp_file(
-        self, mock_file, mock_resolve, mock_getsize, mock_rename, mock_isfile, mock_run
+        self, mock_file, mock_resolve, mock_getsize, mock_rename, mock_isfile, mock_run_nelux
     ):
         """On success, temp file is renamed to final output path."""
         mock_resolve.return_value = "doorbell-123.mp4"
         mock_isfile.return_value = True
         mock_getsize.return_value = 1000
+        mock_file.return_value.read.return_value = json.dumps(self._sidecar_mock())
 
-        sidecar_data = {
-            "native_width": 2560,
-            "native_height": 1920,
-            "entries": []
-        }
-        mock_file.return_value.read.return_value = json.dumps(sidecar_data)
-
-        segments = [
-            {"camera": "doorbell", "start_sec": 0.0, "end_sec": 10.0}
-        ]
+        segments = [{"camera": "doorbell", "start_sec": 0.0, "end_sec": 10.0}]
         ce_dir = "/app/storage/events/test36"
         output_path = "/app/storage/events/test36/test36_summary.mp4"
-
-        mock_run.return_value = MagicMock(returncode=0)
 
         generate_compilation_video(segments, ce_dir, output_path)
 
-        # Verify rename was called with temp -> final
         tmp_output_path = output_path + ".tmp"
         mock_rename.assert_called_once_with(tmp_output_path, output_path)
 
-    @patch("frigate_buffer.services.video_compilation.subprocess.run")
+    @patch("frigate_buffer.services.video_compilation._run_nelux_compilation")
     @patch("frigate_buffer.services.video_compilation.os.path.isfile")
     @patch("frigate_buffer.services.query.resolve_clip_in_folder")
     @patch("builtins.open", new_callable=mock_open)
-    def test_ffmpeg_failure_raises_exception(
-        self, mock_file, mock_resolve, mock_isfile, mock_run
+    def test_compilation_failure_raises(
+        self, mock_file, mock_resolve, mock_isfile, mock_run_nelux
     ):
-        """FFmpeg failure should raise CalledProcessError."""
+        """When NeLux pipeline raises, generate_compilation_video re-raises."""
         mock_resolve.return_value = "doorbell-123.mp4"
         mock_isfile.return_value = True
+        mock_file.return_value.read.return_value = json.dumps(self._sidecar_mock())
 
-        sidecar_data = {
-            "native_width": 2560,
-            "native_height": 1920,
-            "entries": []
-        }
-        mock_file.return_value.read.return_value = json.dumps(sidecar_data)
-
-        segments = [
-            {"camera": "doorbell", "start_sec": 0.0, "end_sec": 10.0}
-        ]
+        segments = [{"camera": "doorbell", "start_sec": 0.0, "end_sec": 10.0}]
         ce_dir = "/app/storage/events/test36"
         output_path = "/app/storage/events/test36/test36_summary.mp4"
 
-        from subprocess import CalledProcessError
-        mock_run.side_effect = CalledProcessError(1, cmd="ffmpeg", stderr="FFmpeg error")
+        mock_run_nelux.side_effect = RuntimeError("NeLux encode failed")
 
-        with self.assertRaises(CalledProcessError):
+        with self.assertRaises(RuntimeError):
             generate_compilation_video(segments, ce_dir, output_path)
 
-    @patch("frigate_buffer.services.video_compilation.subprocess.run")
+    @patch("frigate_buffer.services.video_compilation._run_nelux_compilation")
     @patch("frigate_buffer.services.video_compilation.os.path.isfile")
     @patch("frigate_buffer.services.video_compilation.os.rename")
     @patch("frigate_buffer.services.video_compilation.os.path.getsize")
     @patch("frigate_buffer.services.query.resolve_clip_in_folder")
     @patch("builtins.open", new_callable=mock_open)
-    def test_one_input_per_slice_and_zero_based_crop_expression(
-        self, mock_file, mock_resolve, mock_getsize, mock_rename, mock_isfile, mock_run
+    def test_multiple_slices_passed_to_nelux(
+        self, mock_file, mock_resolve, mock_getsize, mock_rename, mock_isfile, mock_run_nelux
     ):
-        """Filter must use one input index per slice and 0-based t/duration in crop."""
+        """Multiple slices are passed to _run_nelux_compilation (one segment per slice)."""
         mock_resolve.return_value = "doorbell.mp4"
         mock_isfile.return_value = True
         mock_getsize.return_value = 1000
@@ -493,26 +398,25 @@ class TestGenerateCompilationVideo(unittest.TestCase):
         ]
         ce_dir = "/app/storage/events/test"
         output_path = "/app/storage/events/test/test_summary.mp4"
-        mock_run.return_value = MagicMock(returncode=0)
-        generate_compilation_video(slices, ce_dir, output_path)
-        cmd = mock_run.call_args[0][0]
-        filter_complex_idx = cmd.index("-filter_complex")
-        filter_complex = cmd[filter_complex_idx + 1]
-        self.assertIn("[0:v]", filter_complex)
-        self.assertIn("[1:v]", filter_complex)
-        self.assertIn("(t/", filter_complex)
-        self.assertNotIn("(t-", filter_complex)
-        # Crop x/y expressions must be single-quoted so commas in min(max(...),...) are literal
-        self.assertIn("'min(max(0,", filter_complex)
 
-    @patch("frigate_buffer.services.video_compilation.subprocess.run")
+        generate_compilation_video(slices, ce_dir, output_path)
+
+        call_kw = mock_run_nelux.call_args[1]
+        self.assertEqual(len(call_kw["slices"]), 2)
+        self.assertEqual(call_kw["slices"][0]["camera"], "doorbell")
+        self.assertEqual(call_kw["slices"][0]["start_sec"], 0.0)
+        self.assertEqual(call_kw["slices"][0]["end_sec"], 5.0)
+        self.assertEqual(call_kw["slices"][1]["start_sec"], 5.0)
+        self.assertEqual(call_kw["slices"][1]["end_sec"], 10.0)
+
+    @patch("frigate_buffer.services.video_compilation._run_nelux_compilation")
     @patch("frigate_buffer.services.video_compilation.os.path.isfile")
     @patch("frigate_buffer.services.video_compilation.os.rename")
     @patch("frigate_buffer.services.video_compilation.os.path.getsize")
     @patch("frigate_buffer.services.query.resolve_clip_in_folder")
     @patch("builtins.open", new_callable=mock_open)
     def test_last_slice_of_camera_run_holds_crop(
-        self, mock_file, mock_resolve, mock_getsize, mock_rename, mock_isfile, mock_run
+        self, mock_file, mock_resolve, mock_getsize, mock_rename, mock_isfile, mock_run_nelux
     ):
         """Last slice before a camera switch must have crop_end == crop_start (smooth hold)."""
         mock_resolve.return_value = "cam.mp4"
@@ -530,7 +434,6 @@ class TestGenerateCompilationVideo(unittest.TestCase):
         ]
         ce_dir = "/app/storage/events/test"
         output_path = "/app/storage/events/test/test_summary.mp4"
-        mock_run.return_value = MagicMock(returncode=0)
         generate_compilation_video(slices, ce_dir, output_path)
         self.assertEqual(slices[0]["crop_start"], slices[0]["crop_end"])
 
