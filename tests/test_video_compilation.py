@@ -2,10 +2,16 @@
 
 import json
 import os
+import sys
 import unittest
 from unittest.mock import MagicMock, patch, mock_open
 
+# Fake nelux so we can patch VideoReader when the real wheel is not installed.
+if "nelux" not in sys.modules:
+    sys.modules["nelux"] = MagicMock()
+
 from frigate_buffer.services.video_compilation import (
+    _run_nelux_compilation,
     assignments_to_slices,
     calculate_crop_at_time,
     calculate_segment_crop,
@@ -436,6 +442,56 @@ class TestGenerateCompilationVideo(unittest.TestCase):
         output_path = "/app/storage/events/test/test_summary.mp4"
         generate_compilation_video(slices, ce_dir, output_path)
         self.assertEqual(slices[0]["crop_start"], slices[0]["crop_end"])
+
+    @patch("frigate_buffer.services.video_compilation.os.path.isfile")
+    @patch("frigate_buffer.services.video_compilation._get_video_metadata")
+    @patch.object(sys.modules["nelux"], "VideoReader")
+    def test_run_nelux_compilation_uses_metadata_fallback_when_len_raises(
+        self, mock_video_reader_cls, mock_get_metadata, mock_isfile
+    ):
+        """When NeLux reader raises on len() (e.g. missing _decoder), frame count comes from _get_video_metadata and _run_nelux_compilation completes without crashing."""
+        try:
+            import torch
+        except ImportError:
+            self.skipTest("torch not available")
+        mock_isfile.return_value = True
+        mock_get_metadata.return_value = (640, 480, 20.0, 10.0)
+        mock_encoder = MagicMock()
+        mock_reader = MagicMock()
+        mock_reader.fps = 20.0
+        mock_reader.__len__ = MagicMock(side_effect=AttributeError("'VideoReader' object has no attribute '_decoder'"))
+
+        def get_batch(indices):
+            return torch.zeros((len(indices), 3, 480, 640), dtype=torch.uint8)
+
+        mock_reader.get_batch.side_effect = get_batch
+        mock_reader.create_encoder.return_value.__enter__ = MagicMock(return_value=mock_encoder)
+        mock_reader.create_encoder.return_value.__exit__ = MagicMock(return_value=False)
+        mock_video_reader_cls.return_value = mock_reader
+
+        slices = [
+            {
+                "camera": "doorbell",
+                "start_sec": 0.0,
+                "end_sec": 2.0,
+                "crop_start": (0, 0, 320, 240),
+                "crop_end": (0, 0, 320, 240),
+            },
+        ]
+        resolve_clip = MagicMock(return_value="doorbell-1.mp4")
+
+        _run_nelux_compilation(
+            slices=slices,
+            ce_dir="/ce",
+            tmp_output_path="/out.mp4.tmp",
+            target_w=1440,
+            target_h=1080,
+            resolve_clip_in_folder=resolve_clip,
+            cuda_device_index=0,
+        )
+
+        mock_get_metadata.assert_called()
+        mock_encoder.encode_frame.assert_called()
 
 
 class TestCompileCeVideoConfig(unittest.TestCase):

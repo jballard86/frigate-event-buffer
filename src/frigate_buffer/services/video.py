@@ -151,6 +151,31 @@ def _get_video_metadata(clip_path: str) -> tuple[int, int, float, float] | None:
     return None
 
 
+def _nelux_frame_count(
+    reader: Any,
+    fallback_fps: float,
+    fallback_duration_sec: float,
+) -> int:
+    """
+    Get frame count from a NeLux VideoReader, falling back to ffprobe-derived duration * fps.
+
+    Some NeLux wheel builds expose __len__ via a Batch base that expects _decoder;
+    when that attribute is missing, len(reader) raises. We try len(reader), then
+    reader.shape[0], then fall back to duration * fps so decode/get_batch still work.
+    """
+    try:
+        return len(reader)
+    except (AttributeError, TypeError, Exception):
+        pass
+    try:
+        shape = getattr(reader, "shape", None)
+        if shape is not None and len(shape) >= 1:
+            return int(shape[0])
+    except (AttributeError, TypeError, IndexError, Exception):
+        pass
+    return max(0, int(fallback_duration_sec * fallback_fps))
+
+
 def _scale_detections_to_native(
     detections: list[dict[str, Any]],
     read_w: int,
@@ -405,7 +430,7 @@ class VideoService:
             return False
 
         try:
-            frame_count = len(reader)
+            frame_count = _nelux_frame_count(reader, fps_val, duration_sec)
             fps = float(reader.fps) if getattr(reader, "fps", None) else fps_val
             if fps <= 0:
                 fps = 30.0

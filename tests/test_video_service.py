@@ -12,6 +12,7 @@ if "nelux" not in sys.modules:
 from frigate_buffer.services.video import (
     VideoService,
     BATCH_SIZE,
+    _nelux_frame_count,
     ensure_detection_model_ready,
     get_detection_model_path,
 )
@@ -137,6 +138,66 @@ class TestVideoService(unittest.TestCase):
                     except OSError:
                         pass
 
+    @patch("frigate_buffer.services.video._run_detection_on_batch")
+    @patch("frigate_buffer.services.video._get_video_metadata")
+    def test_generate_detection_sidecar_uses_metadata_fallback_when_len_reader_raises(
+        self, mock_get_metadata, mock_run_batch
+    ):
+        """When NeLux reader raises AttributeError on len() (e.g. missing _decoder), frame count comes from ffprobe metadata and sidecar still succeeds."""
+        try:
+            import torch
+        except ImportError:
+            self.skipTest("torch not available")
+        mock_get_metadata.return_value = (640, 480, 30.0, 10.0)
+        mock_reader = MagicMock()
+        mock_reader.fps = 30.0
+        mock_reader.__len__ = MagicMock(side_effect=AttributeError("'VideoReader' object has no attribute '_decoder'"))
+
+        def get_batch(indices):
+            return torch.zeros((len(indices), 3, 480, 640), dtype=torch.uint8)
+
+        mock_reader.get_batch.side_effect = get_batch
+        mock_run_batch.side_effect = lambda model, batch, device, imgsz=640: [[] for _ in range(batch.shape[0])]
+
+        config = {
+            "DETECTION_MODEL": "yolov8n.pt",
+            "DETECTION_DEVICE": "",
+            "DETECTION_FRAME_INTERVAL": 5,
+            "STORAGE_PATH": "/tmp",
+        }
+        tmp = tempfile.mkdtemp(prefix="tmp_video_sidecar_fallback_")
+        clip_path = os.path.join(tmp, "clip.mp4")
+        sidecar_path = os.path.join(tmp, "detection.json")
+        try:
+            with open(clip_path, "wb"):
+                pass
+            with patch.object(sys.modules["nelux"], "VideoReader", return_value=mock_reader):
+                with patch("frigate_buffer.services.video.get_detection_model_path", return_value=os.path.join("/tmp", "yolo_models", "yolov8n.pt")):
+                    with patch("ultralytics.YOLO") as mock_yolo:
+                        mock_yolo.return_value = MagicMock()
+                        result = self.video_service.generate_detection_sidecar(
+                            clip_path, sidecar_path, config
+                        )
+            self.assertTrue(result, "generate_detection_sidecar should succeed using metadata fallback")
+            self.assertTrue(os.path.isfile(sidecar_path))
+            with open(sidecar_path, encoding="utf-8") as f:
+                data = json.load(f)
+            self.assertIn("entries", data)
+            entries = data["entries"]
+            self.assertGreater(len(entries), 0)
+        finally:
+            for f in (sidecar_path, clip_path):
+                if os.path.exists(f):
+                    try:
+                        os.remove(f)
+                    except OSError:
+                        pass
+            if os.path.isdir(tmp):
+                try:
+                    os.rmdir(tmp)
+                except OSError:
+                    pass
+
     def test_generate_detection_sidecars_for_cameras_acquires_and_releases_app_lock(self):
         mock_lock = MagicMock()
         self.video_service.set_sidecar_app_lock(mock_lock)
@@ -188,6 +249,40 @@ class TestEnsureDetectionModelReady(unittest.TestCase):
         config = {"STORAGE_PATH": "/data"}
         path = get_detection_model_path(config)
         self.assertEqual(path, os.path.join("/data", "yolo_models", "yolov8n.pt"))
+
+
+class TestNeluxFrameCount(unittest.TestCase):
+    """Tests for _nelux_frame_count fallback when NeLux reader lacks _decoder."""
+
+    def test_nelux_frame_count_uses_len_when_available(self):
+        """When len(reader) works, _nelux_frame_count returns it."""
+        reader = MagicMock()
+        reader.__len__ = MagicMock(return_value=42)
+        result = _nelux_frame_count(reader, 30.0, 10.0)
+        self.assertEqual(result, 42)
+
+    def test_nelux_frame_count_fallback_when_len_raises(self):
+        """When len(reader) raises (e.g. missing _decoder), _nelux_frame_count returns duration * fps."""
+        reader = MagicMock()
+        reader.__len__ = MagicMock(side_effect=AttributeError("_decoder"))
+        result = _nelux_frame_count(reader, 30.0, 10.0)
+        self.assertEqual(result, 300)
+
+    def test_nelux_frame_count_uses_shape_when_len_raises(self):
+        """When len(reader) raises but reader.shape is (N, ...), _nelux_frame_count returns N."""
+        reader = MagicMock()
+        reader.__len__ = MagicMock(side_effect=AttributeError("_decoder"))
+        reader.shape = (100, 3, 480, 640)
+        result = _nelux_frame_count(reader, 30.0, 10.0)
+        self.assertEqual(result, 100)
+
+    def test_nelux_frame_count_fallback_zero_duration_returns_zero(self):
+        """When both len and shape fail and duration is 0, _nelux_frame_count returns 0."""
+        reader = MagicMock()
+        reader.__len__ = MagicMock(side_effect=AttributeError("_decoder"))
+        reader.shape = ()
+        result = _nelux_frame_count(reader, 30.0, 0.0)
+        self.assertEqual(result, 0)
 
 
 if __name__ == "__main__":

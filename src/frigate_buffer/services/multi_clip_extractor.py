@@ -272,7 +272,10 @@ def extract_target_centric_frames(
             fps = float(reader.fps) if getattr(reader, "fps", None) else 1.0
             if fps <= 0:
                 fps = 1.0
-            count = int(len(reader)) if hasattr(reader, "__len__") else 0
+            try:
+                count = int(len(reader))
+            except (AttributeError, TypeError, Exception):
+                count = 0
             if count <= 0:
                 path_meta = _get_fps_duration_from_path(path)
                 if path_meta is not None:

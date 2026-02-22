@@ -12,6 +12,7 @@ import logging
 import os
 
 from frigate_buffer.services import timeline_ema
+from frigate_buffer.services.video import _get_video_metadata, _nelux_frame_count
 
 logger = logging.getLogger("frigate-buffer")
 
@@ -333,10 +334,14 @@ def _run_nelux_compilation(
                 fps = float(reader.fps)
                 if fps <= 0:
                     fps = 20.0
-                frame_count = len(reader)
+                meta = _get_video_metadata(clip_path)
+                fallback_duration = meta[3] if meta else 0.0
+                frame_count = _nelux_frame_count(reader, fps, fallback_duration)
                 t0 = sl["start_sec"]
                 t1 = sl["end_sec"]
                 duration = t1 - t0
+                if frame_count <= 0 and duration > 0:
+                    frame_count = max(1, int(duration * fps))
                 # At least one frame for very short slices.
                 n_frames = max(1, round(duration * 20.0))
                 xs, ys, w, h = sl["crop_start"]

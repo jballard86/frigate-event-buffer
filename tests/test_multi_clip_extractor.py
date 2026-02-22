@@ -264,6 +264,34 @@ class TestMultiClipExtractor(unittest.TestCase):
             self.assertIsNotNone(item.frame)
             self.assertEqual(item.camera, "cam1", "Failed camera should be dropped; only cam1 should appear")
 
+    @patch("frigate_buffer.services.multi_clip_extractor._get_fps_duration_from_path")
+    @patch.object(sys.modules["nelux"], "VideoReader")
+    def test_extract_uses_metadata_fallback_when_len_reader_raises(
+        self, mock_video_reader_cls, mock_get_fps_duration
+    ):
+        """When NeLux reader raises on len() (e.g. missing _decoder), frame count comes from _get_fps_duration_from_path and extraction does not crash."""
+        os.makedirs(os.path.join(self.tmp, "cam1"))
+        with open(os.path.join(self.tmp, "cam1", "clip.mp4"), "wb"):
+            pass
+        sidecar_path = os.path.join(self.tmp, "cam1", DETECTION_SIDECAR_FILENAME)
+        with open(sidecar_path, "w", encoding="utf-8") as f:
+            json.dump(
+                {"native_width": 100, "native_height": 100, "entries": [{"timestamp_sec": t, "detections": [{"label": "person", "area": 100}]} for t in range(11)]},
+                f,
+            )
+        mock_get_fps_duration.return_value = (1.0, 10.0)
+        mock_reader = self._make_nelux_reader_mock(fps=1.0, frame_count=10)
+        mock_reader.__len__ = MagicMock(side_effect=AttributeError("'VideoReader' object has no attribute '_decoder'"))
+        mock_video_reader_cls.return_value = mock_reader
+
+        result = extract_target_centric_frames(self.tmp, max_frames_sec=1.0, max_frames_min=5)
+
+        self.assertGreaterEqual(len(result), 1)
+        for item in result:
+            self.assertIsInstance(item, ExtractedFrame)
+            self.assertIsNotNone(item.frame)
+        mock_get_fps_duration.assert_called()
+
     @patch.object(sys.modules["nelux"], "VideoReader")
     def test_extract_logs_nelux_nvdec(self, mock_video_reader_cls):
         """With NeLux, log_callback receives Decoding clips ... NeLux NVDEC."""
