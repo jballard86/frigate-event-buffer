@@ -216,5 +216,25 @@ class TestEventQueryService(unittest.TestCase):
         self.assertIn("front_door", cameras)
         self.assertIn("events", cameras)
 
+    def test_get_all_events_excludes_ultralytics_folder(self):
+        """get_all_events() must not include any events from the ultralytics directory."""
+        # Create ultralytics at storage root with a subdir (simulates Ultralytics lib creating e.g. Ultralytics/runs)
+        ultralytics_dir = os.path.join(self.test_dir, "ultralytics")
+        os.makedirs(ultralytics_dir, exist_ok=True)
+        subdir = os.path.join(ultralytics_dir, "Ultralytics")
+        os.makedirs(subdir, exist_ok=True)
+        with open(os.path.join(subdir, "settings.json"), "w") as f:
+            json.dump({"settings_version": "0.0.6"}, f)
+
+        all_events, cameras_found = self.service.get_all_events()
+
+        # ultralytics must not be in cameras_found
+        self.assertNotIn("ultralytics", cameras_found)
+        # No event may have camera == "ultralytics"
+        for ev in all_events:
+            self.assertNotEqual(ev.get("camera"), "ultralytics", f"Ghost event from ultralytics: {ev.get('event_id')}")
+        # We should still have our real events (1 camera event + 1 consolidated)
+        self.assertGreaterEqual(len(all_events), 2)
+
 if __name__ == '__main__':
     unittest.main()

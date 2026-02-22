@@ -251,6 +251,9 @@ def run_once(config: dict[str, Any]) -> None:
                 first_part = camera_dir.split("_", 1)[0] if camera_dir else ""
                 if first_part.isdigit():
                     continue
+                # Skip non-camera directories (ultralytics, yolo_models, etc.)
+                if camera_dir in ("ultralytics", "yolo_models", "daily_reports", "daily_reviews"):
+                    continue
 
                 try:
                     with os.scandir(camera_path) as it_events:

@@ -311,6 +311,8 @@ def create_app(orchestrator):
             os.remove(viewed_path)
         return jsonify({"status": "success"}), 200
 
+    _NON_CAMERA_DIRS = {"ultralytics", "yolo_models", "daily_reports", "daily_reviews"}
+
     @app.route('/viewed/all', methods=['POST'])
     def mark_all_viewed():
         """Mark ALL events across all cameras as viewed."""
@@ -322,6 +324,8 @@ def create_app(orchestrator):
                         continue
                     camera_dir = camera_entry.name
                     if camera_dir.split('_')[0].isdigit():
+                        continue
+                    if camera_dir in _NON_CAMERA_DIRS:
                         continue
 
                     with os.scandir(camera_entry.path) as it_events:

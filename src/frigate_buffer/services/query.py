@@ -12,6 +12,9 @@ from typing import Any
 
 logger = logging.getLogger('frigate-buffer')
 
+# Directories under storage root that are not cameras; exclude from event/camera listing.
+NON_CAMERA_DIRS = frozenset({"ultralytics", "yolo_models", "daily_reports", "daily_reviews"})
+
 
 def resolve_clip_in_folder(folder_path: str) -> str | None:
     """
@@ -533,6 +536,8 @@ class EventQueryService:
                     continue
                 if camera_dir.split('_')[0].isdigit():
                     continue
+                if camera_dir in NON_CAMERA_DIRS:
+                    continue
 
                 cameras_found.append(camera_dir)
                 events = self.get_events(camera_dir)
@@ -555,9 +560,6 @@ class EventQueryService:
         if cached is not None:
             return cached
 
-        # Non-camera directories to exclude from camera listing
-        _NON_CAMERA_DIRS = {"ultralytics", "yolo_models", "daily_reports", "daily_reviews"}
-
         active_cameras = []
         try:
             for item in os.listdir(self.storage_path):
@@ -567,7 +569,7 @@ class EventQueryService:
                     if item.split('_')[0].isdigit():
                         continue
                     # Skip known non-camera directories
-                    if item in _NON_CAMERA_DIRS:
+                    if item in NON_CAMERA_DIRS:
                         continue
                     active_cameras.append(item)
         except Exception as e:

@@ -14,6 +14,9 @@ from frigate_buffer.models import EventState
 
 logger = logging.getLogger('frigate-buffer')
 
+# Directories under storage root that are not cameras; skip in cleanup and storage stats.
+_NON_CAMERA_DIRS = frozenset({"ultralytics", "yolo_models", "daily_reports", "daily_reviews"})
+
 # Optional imports for AI frame stitched write (color + B/W)
 try:
     import cv2
@@ -461,6 +464,9 @@ class FileManager:
                             pass
                         continue
 
+                    if camera_dir in _NON_CAMERA_DIRS:
+                        continue
+
                     # New structure: iterate through event folders in camera dir
                     with os.scandir(camera_path) as it_events:
                         for event_entry in it_events:
@@ -583,6 +589,8 @@ class FileManager:
                 camera_path = camera_entry.path
 
                 if camera_dir.split('_')[0].isdigit():
+                    continue
+                if camera_dir in _NON_CAMERA_DIRS:
                     continue
 
                 cam_clips = cam_snapshots = cam_descriptions = 0
