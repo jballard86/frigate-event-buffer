@@ -8,7 +8,7 @@ Install and run via the command line only (no Dockge). Clone the repo so the **r
 
 - Docker (no compose required; we use `docker build` and `docker run` only).
 - For GPU decode (NVDEC): The image is based on `nvidia/cuda:12.6.0-runtime-ubuntu24.04` with FFmpeg 6.1 for hardware-accelerated decode (and NeLux compilation). At runtime you need an NVIDIA GPU, driver, and [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html) (e.g. `docker run --gpus all`). Set `NVIDIA_DRIVER_CAPABILITIES=compute,video,utility` so the container can use the GPU for decoding.
-- **Summary video compilation** uses the **NeLux** library (NVDEC decode, NVENC encode) for a zero-copy GPU pipeline. NeLux is **vendored** in `wheels/nelux-0.8.9-cp312-cp312-linux_x86_64.whl` (do not use PyPI). The image is built on Ubuntu 24.04 with FFmpeg 6.1 and **libyuv** (distro package `libyuv0`) so the NeLux native extension can load at runtime. Ensure the same GPU/driver and `NVIDIA_DRIVER_CAPABILITIES=compute,video,utility` are available so compilation can run on the GPU.
+- **Summary video compilation** uses the **NeLux** library (NVDEC decode, NVENC encode) for a zero-copy GPU pipeline. NeLux is **vendored** in `wheels/nelux-0.8.9-cp312-cp312-linux_x86_64.whl` (do not use PyPI). The image is built on Ubuntu 24.04 with FFmpeg 6.1; **libyuv** and **libspdlog** are vendored in `wheels/` (e.g. `libyuv.so*`, `libspdlog.so*` from the NeLux builder) and copied into the container so the NeLux native extension loads with matching ABI. Ensure the same GPU/driver and `NVIDIA_DRIVER_CAPABILITIES=compute,video,utility` are available so compilation can run on the GPU.
 
 ---
 

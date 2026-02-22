@@ -35,6 +35,7 @@ NeLux does not publish pre-built Linux wheels on PyPI. This guide documents how 
 - NumPy
 - FFmpeg 6.1+ shared libraries: libavcodec60, libavformat60, libavutil58, libswscale7, libswresample4, libavfilter9, libavdevice60
 - NVIDIA GPU driver + CUDA runtime
+- **libyuv and libspdlog:** The app Dockerfile copies vendored `libyuv.so*` and `libspdlog.so*` from `wheels/` into the container so the runtime ABI matches the wheel (extract these from the NeLux builder and place them in `wheels/` alongside the `.whl`).
 
 ---
 
@@ -165,6 +166,40 @@ docker run --rm --gpus all \
 
 **Expected output:** `<module 'nelux' from '...'>` with no errors.
 
+
+## Step 4: Extracting Runtime Shared Libraries (Vendoring C++ Dependencies)
+
+**Crucial Step:** When compiling NeLux, the builder uses a custom-compiled `spdlog` (with a bundled `fmt` library to avoid PyTorch conflicts) and a custom `libyuv`. If your downstream app container tries to use the standard Ubuntu packages (e.g., `apt-get install libspdlog1.12 libyuv0`), NeLux will experience a fatal C++ ABI mismatch during initialization. This silently manifests in Python as the `AttributeError: 'VideoReader' object has no attribute '_decoder'` error.
+
+To ensure perfect compatibility and make your pipeline 100% portable, you must extract the exact compiled `.so` files from the builder image and vendor them alongside the `.whl` file.
+
+### 4.1 Extract the files to your host machine
+Run this command to temporarily spin up the builder and copy the shared libraries to a local directory (e.g., an Unraid array share like `/mnt/user/Drive`):
+
+```bash
+docker run --rm -v /mnt/user/Drive:/extract nelux-builder bash -c "cp -a /usr/local/lib/libyuv.so* /extract/ && cp -a /usr/local/lib/libspdlog.so* /extract/"
+```
+
+4.2 Move files to your project
+Move the extracted files into your project's wheels/ directory so they sit right next to your nelux-0.8.9...whl file. You should have:
+
+libyuv.so
+
+libspdlog.so
+
+libspdlog.so.1.14
+
+libspdlog.so.1.14.1
+
+4.3 Update your App's Dockerfile
+In your downstream application's Dockerfile, do not install libspdlog or libyuv via apt-get. Instead, use the COPY command to push these vendored C++ libraries directly into the container's library path before running pip install:
+
+Dockerfile
+# Copy vendored C++ shared libraries for NeLux to prevent ABI mismatch
+
+COPY wheels/libyuv.so* /usr/lib/x86_64-linux-gnu/
+COPY wheels/libspdlog.so* /usr/lib/x86_64-linux-gnu/
+
 ---
 
 ## Troubleshooting
@@ -220,3 +255,5 @@ The wheel file itself can be vendored into your project (e.g. `wheels/` director
 ```bash
 pip install wheels/nelux-0.8.9-cp312-cp312-linux_x86_64.whl
 ```
+
+

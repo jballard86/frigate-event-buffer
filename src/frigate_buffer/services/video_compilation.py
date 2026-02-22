@@ -316,7 +316,12 @@ def _run_nelux_compilation(
     )
     assert first_reader is not None  # NeLux VideoReader does not return None; narrows for type checker.
 
-    with first_reader.create_encoder(tmp_output_path) as enc:
+    # Request h264_nvenc so Linux containers use NVENC; avoid h264_mf (Windows-only).
+    try:
+        enc_ctx = first_reader.create_encoder(tmp_output_path, encoder="h264_nvenc")
+    except TypeError:
+        enc_ctx = first_reader.create_encoder(tmp_output_path)
+    with enc_ctx as enc:
         # Do not encode audio; output is -an equivalent.
         for slice_idx, sl in enumerate(slices):
             cam = sl["camera"]
