@@ -197,6 +197,7 @@ def generate_compilation_video(
         "-an",
         "-c:v", "h264_nvenc",
         "-pix_fmt", "yuv420p",
+        "-f", "mp4",
         tmp_output_path
     ])
     

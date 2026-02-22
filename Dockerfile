@@ -1,5 +1,5 @@
 # Build from repo root: docker build -t frigate-buffer:latest .
-# FFmpeg from multi-stage build provides NVDEC (decode) for ffmpegcv; encoding is not used (clips are stored as-is).
+# FFmpeg from multi-stage build provides NVDEC (decode) for ffmpegcv.
 # Final stage is python:3.12-slim-bookworm. FFmpeg + CUDA/NPP libs copied from donor for hardware decode only.
 ARG FFMPEG_DONOR_IMAGE=jrottenberg/ffmpeg:7.0-nvidia2204
 # Set USE_GUI_OPENCV=true for faster builds (~1-2 min vs 15+ min) during development.
