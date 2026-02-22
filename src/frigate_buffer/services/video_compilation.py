@@ -178,8 +178,8 @@ def generate_compilation_video(
         end = seg["end_sec"]
         x, y, w, h = seg["crop"]
         
-        # filter chain: trim -> setpts -> fps -> crop
-        fg = f"[{idx}:v]trim=start={start}:end={end},setpts=PTS-STARTPTS,fps=20,crop={w}:{h}:{x}:{y}[v{i}]"
+        # filter chain: trim -> setpts -> fps -> crop -> format (standardize pixel format for concat)
+        fg = f"[{idx}:v]trim=start={start}:end={end},setpts=PTS-STARTPTS,fps=20,crop={w}:{h}:{x}:{y},format=yuv420p[v{i}]"
         filter_complex.append(fg)
         concat_inputs.append(f"[v{i}]")
         

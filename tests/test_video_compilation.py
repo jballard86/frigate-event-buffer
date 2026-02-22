@@ -218,6 +218,51 @@ class TestGenerateCompilationVideo(unittest.TestCase):
     @patch("frigate_buffer.services.video_compilation.os.path.getsize")
     @patch("frigate_buffer.services.query.resolve_clip_in_folder")
     @patch("builtins.open", new_callable=mock_open)
+    def test_ffmpeg_filter_includes_format_standardization(
+        self, mock_file, mock_resolve, mock_getsize, mock_rename, mock_isfile, mock_run
+    ):
+        """Filter chain must include format=yuv420p to standardize pixel formats before concat."""
+        mock_resolve.return_value = "doorbell-123.mp4"
+        mock_isfile.return_value = True
+        mock_getsize.return_value = 1000
+
+        sidecar_data = {
+            "native_width": 2560,
+            "native_height": 1920,
+            "entries": []
+        }
+        mock_file.return_value.read.return_value = json.dumps(sidecar_data)
+
+        segments = [
+            {"camera": "doorbell", "start_sec": 0.0, "end_sec": 10.0}
+        ]
+        ce_dir = "/app/storage/events/test36"
+        output_path = "/app/storage/events/test36/test36_summary.mp4"
+
+        mock_run.return_value = MagicMock(returncode=0)
+
+        generate_compilation_video(segments, ce_dir, output_path)
+
+        cmd = mock_run.call_args[0][0]
+
+        # Get the filter_complex value
+        filter_complex_idx = cmd.index("-filter_complex")
+        filter_complex = cmd[filter_complex_idx + 1]
+
+        # Verify format=yuv420p is in the filter chain
+        self.assertIn("format=yuv420p", filter_complex)
+
+        # Verify it appears before the stream label [v0]
+        format_idx = filter_complex.index("format=yuv420p")
+        label_idx = filter_complex.index("[v0]")
+        self.assertLess(format_idx, label_idx)
+
+    @patch("frigate_buffer.services.video_compilation.subprocess.run")
+    @patch("frigate_buffer.services.video_compilation.os.path.isfile")
+    @patch("frigate_buffer.services.video_compilation.os.rename")
+    @patch("frigate_buffer.services.video_compilation.os.path.getsize")
+    @patch("frigate_buffer.services.query.resolve_clip_in_folder")
+    @patch("builtins.open", new_callable=mock_open)
     def test_ffmpeg_command_structure(
         self, mock_file, mock_resolve, mock_getsize, mock_rename, mock_isfile, mock_run
     ):
