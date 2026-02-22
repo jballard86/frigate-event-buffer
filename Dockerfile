@@ -24,6 +24,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends software-proper
 COPY wheels/libyuv.so* /usr/lib/x86_64-linux-gnu/
 COPY wheels/libspdlog.so* /usr/lib/x86_64-linux-gnu/
 
+# Refresh the Linux dynamic linker cache so it sees the new files
+RUN ldconfig
+
 # Prefer python3.12 for the rest of the build and runtime.
 RUN update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.12 1 \
     && ln -sf /usr/bin/python3.12 /usr/bin/python3
