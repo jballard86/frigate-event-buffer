@@ -75,3 +75,47 @@ class TestAiFrameAnalysisWriting(unittest.TestCase):
             self.assertEqual(manifest[1]["filename"], "frame_002_cam_2.jpg")
             self.assertEqual(manifest[1]["camera"], "cam 2")
             self.assertNotIn("is_full_frame_resize", manifest[1])
+
+    def test_multi_cam_writing_tensor_frames(self):
+        """Phase 5: write_ai_frame_analysis_multi_cam accepts ExtractedFrame with tensor .frame (BCHW RGB)."""
+        try:
+            import torch
+        except ImportError:
+            self.skipTest("torch not available")
+        with patch("frigate_buffer.managers.file._CV2_AVAILABLE", True):
+            event_dir = os.path.join(self.test_dir, "event_tensor")
+            os.makedirs(event_dir)
+
+            class MockExtractedFrame:
+                def __init__(self, frame, timestamp_sec, camera, metadata=None):
+                    self.frame = frame
+                    self.timestamp_sec = timestamp_sec
+                    self.camera = camera
+                    self.metadata = metadata or {}
+
+            # BCHW RGB uint8 (Phase 3 extractor output)
+            t1 = torch.zeros((1, 3, 100, 100), dtype=torch.uint8)
+            t2 = torch.zeros((1, 3, 100, 100), dtype=torch.uint8)
+            frames = [
+                MockExtractedFrame(t1, 2000.0, "cam1", {"is_full_frame_resize": True}),
+                MockExtractedFrame(t2, 2001.0, "cam2", {}),
+            ]
+
+            write_ai_frame_analysis_multi_cam(
+                event_dir,
+                frames,
+                write_manifest=True,
+                create_zip_flag=False,
+                save_frames=True,
+            )
+
+            frames_dir = os.path.join(event_dir, "ai_frame_analysis", "frames")
+            self.assertTrue(os.path.exists(os.path.join(frames_dir, "frame_001_cam1.jpg")))
+            self.assertTrue(os.path.exists(os.path.join(frames_dir, "frame_002_cam2.jpg")))
+            manifest_path = os.path.join(event_dir, "ai_frame_analysis", "manifest.json")
+            self.assertTrue(os.path.exists(manifest_path))
+            with open(manifest_path, "r", encoding="utf-8") as f:
+                manifest = json.load(f)
+            self.assertEqual(len(manifest), 2)
+            self.assertEqual(manifest[0]["camera"], "cam1")
+            self.assertEqual(manifest[0]["is_full_frame_resize"], True)

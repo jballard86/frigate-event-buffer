@@ -32,8 +32,23 @@
 | **Frameworks** | Flask (web), paho-mqtt (MQTT), schedule (cron-like jobs) |
 | **Config** | YAML + env, validated with Voluptuous |
 | **Data / state** | In-memory (EventStateManager, ConsolidatedEventManager); filesystem for events, clips, timelines, daily reports |
-| **Video / AI** | ffmpegcv (NVDEC decode), Ultralytics YOLO (detection sidecars), **NeLux** (vendored wheel: NVDEC/NVENC for compilation), OpenAI-compatible Gemini proxy (HTTP) |
+| **Video / AI** | **NeLux** (vendored wheel: NVDEC decode for sidecars + NVDEC/NVENC for compilation), Ultralytics YOLO (detection sidecars), subprocess FFmpeg for GIF only; OpenAI-compatible Gemini proxy (HTTP) |
 | **Testing** | pytest (`pythonpath = ["src"]`) |
+
+### Video & AI pipeline: zero-copy NeLux/PyTorch (mandatory)
+
+The project uses a **zero-copy GPU pipeline** for all video decode and frame processing in the main path:
+
+- **Decode:** **NeLux** (NVDEC) only. Frames are decoded directly into PyTorch CUDA tensors (BCHW). There is **no CPU decode fallback** and **no ffmpegcv** anywhere in the codebase.
+- **Detection sidecars:** NeLux decode → batched frames → float32 [0,1] normalization → YOLO → `del` batch + `torch.cuda.empty_cache()` after each batch. No ffmpegcv or subprocess FFmpeg for decode.
+- **Frame crops/resize:** All production frame manipulation uses **`crop_utils`** with **PyTorch tensors in BCHW**. NumPy/OpenCV (e.g. `cv2.resize`, `np.ndarray`) are allowed **only at boundaries** (e.g. decoding a single image from the network, or encoding tensor → JPEG for API/disk).
+- **Output encoding:** Tensor frames are encoded via `torchvision.io.encode_jpeg` for API (base64) and file writes; no CPU round-trip for the main pipeline.
+
+**Explicit prohibitions (do not reintroduce):**
+
+- **ffmpegcv** — Forbidden. Do not add it to dependencies or use it for decode/capture.
+- **CPU-decoding fallbacks** — Forbidden. Do not add fallback paths that decode video on CPU (e.g. OpenCV `VideoCapture`, FFmpeg subprocess for decode, or ffmpegcv) when NeLux is used for the main pipeline. The only remaining FFmpeg use is **GIF generation** (subprocess) and **ffprobe** for metadata.
+- **Production frame processing on NumPy in the core path** — Forbidden. New crop/resize logic in the GPU pipeline must use `crop_utils` (BCHW tensors). Legacy NumPy helpers in ai_analyzer (`_center_crop`, `_smart_crop`) are deprecated; production must use `crop_utils`.
 
 ---
 
@@ -176,7 +191,7 @@ frigate-event-buffer/
 | `config.yaml` | User config: cameras, network, settings, HA, Gemini, multi_cam. | Read by `config.load_config()` at startup. |
 | `config.example.yaml` | Example config with all keys and comments. | Reference only. |
 | `pyproject.toml` | Package metadata, deps, `where = ["src"]`, pytest `pythonpath = ["src"]`, `requires-python = ">=3.12"`. | Used by `pip install -e .` and pytest. |
-| `requirements.txt` | Pip install list; includes vendored NeLux wheel from `wheels/` (do not use PyPI). | Referenced by Dockerfile. |
+| `requirements.txt` | Pip install list; **no ffmpegcv** (forbidden). Includes vendored NeLux wheel from `wheels/` (do not use PyPI). Zero-copy GPU pipeline only. | Referenced by Dockerfile. |
 | `wheels/` | Vendored NeLux wheel (`nelux-0.8.9-cp312-cp312-linux_x86_64.whl`) for zero-copy GPU compilation; built against FFmpeg 6.1 / Ubuntu 24.04. Python 3.12; torch must be imported before nelux at runtime. **For wheel build/update issues:** see `wheels/Create_NeLux_Wheel.md` (build from source), `wheels/Update_NeLux_Wheel.md` (update to new NeLux version), `wheels/Dockerfile.nelux` (builder image). | Copied into image; installed via requirements.txt. |
 | `Dockerfile` | Single-stage: base `nvidia/cuda:12.6.0-runtime-ubuntu24.04`; installs Python 3.12, FFmpeg 6.1 and libyuv (distro packages) and app. NeLux wheel from `wheels/`; FFmpeg 6.1 and libyuv required for NeLux at runtime. Build arg `USE_GUI_OPENCV` (default `false`): when `false`, uninstalls opencv-python and reinstalls opencv-python-headless (no X11); when `true`, keeps GUI opencv for faster builds. Runs `python3 -m frigate_buffer.main`. | Build from repo root. |
 | `docker-compose.yaml` / `docker-compose.example.yaml` | Compose for local run; GPU, env, mounts. No `YOLO_CONFIG_DIR` needed—app uses storage for Ultralytics config and model cache. | Deployment. |
@@ -203,7 +218,7 @@ frigate-event-buffer/
 
 | Path/Name | Purpose | Dependencies/Interactions |
 |-----------|---------|---------------------------|
-| `src/frigate_buffer/managers/file.py` | **FileManager:** storage paths, clip/snapshot download (via DownloadService), export coordination (no transcode), cleanup, path validation (realpath/commonpath). `cleanup_old_events`, `rename_event_folder`, `write_canceled_summary`, `compute_storage_stats`, `resolve_clip_in_folder`. | Used by orchestrator, lifecycle, query, download, timeline, event_test. |
+| `src/frigate_buffer/managers/file.py` | **FileManager:** storage paths, clip/snapshot download (via DownloadService), export coordination (no transcode), cleanup, path validation (realpath/commonpath). `cleanup_old_events`, `rename_event_folder`, `write_canceled_summary`, `compute_storage_stats`, `resolve_clip_in_folder`. **`write_stitched_frame`** accepts numpy HWC BGR or torch.Tensor BCHW/CHW RGB; for tensor uses `torchvision.io.encode_jpeg` and writes bytes (Phase 1 GPU pipeline). | Used by orchestrator, lifecycle, query, download, timeline, event_test. |
 | `src/frigate_buffer/managers/state.py` | **EventStateManager:** in-memory event state (phase, metadata), active event tracking. | Orchestrator, lifecycle. |
 | `src/frigate_buffer/managers/consolidation.py` | **ConsolidatedEventManager:** CE grouping, `closing` state, `mark_closing`, on_close callback. `schedule_close_timer(ce_id, delay_seconds=None)` — when delay_seconds is set (e.g. 0 for single-camera CE), uses it instead of event_gap_seconds so CE can close immediately. | Orchestrator, lifecycle, timeline_logger, query. |
 | `src/frigate_buffer/managers/zone_filter.py` | **SmartZoneFilter:** per-camera zone/exception filters; `should_start_event` uses both **entered_zones** and **current_zones** so events start as soon as the object is in a tracked zone (avoids delayed first notification when Frigate populates zone only in later messages). | Orchestrator (event creation). |
@@ -212,10 +227,10 @@ frigate-event-buffer/
 
 | Path/Name | Purpose | Dependencies/Interactions |
 |-----------|---------|---------------------------|
-| `src/frigate_buffer/services/ai_analyzer.py` | **GeminiAnalysisService:** system prompt from file; POST to OpenAI-compatible proxy; parses both **native Gemini** and OpenAI-shaped responses; returns analysis dict; writes `analysis_result.json`; rolling frame cap. All analysis via `analyze_multi_clip_ce`; **generate_quick_title** (single image, quick_title_prompt.txt) for 3–6 word title shortly after event start. | Called by orchestrator (`on_ce_ready_for_analysis`, `_on_quick_title_trigger`); uses VideoService, FileManager. |
-| `src/frigate_buffer/services/multi_clip_extractor.py` | Target-centric frame extraction for CE; requires detection sidecars (no HOG fallback when any camera lacks sidecar). Camera assignment uses **timeline_ema** (Phase 1 dense grid + EMA + hysteresis + segment merge) as the sole logic. Single ffprobe per path for fps/duration; parallel sidecar JSON load; parallel per-camera advance to sample time. | Used by ai_analyzer, event_test_orchestrator. |
+| `src/frigate_buffer/services/ai_analyzer.py` | **GeminiAnalysisService:** system prompt from file; POST to OpenAI-compatible proxy; parses both **native Gemini** and OpenAI-shaped responses; returns analysis dict; writes `analysis_result.json`; rolling frame cap. **Phase 4:** `_frame_to_base64_url` and `send_to_proxy` accept numpy HWC BGR or torch.Tensor BCHW RGB; `generate_quick_title` accepts numpy or tensor. **Legacy NumPy helpers** `_center_crop` and `_smart_crop` are deprecated (logger.warning); production must use crop_utils (BCHW). All analysis via `analyze_multi_clip_ce`; **generate_quick_title** (single image, quick_title_prompt.txt) for 3–6 word title shortly after event start. | Called by orchestrator (`on_ce_ready_for_analysis`, `_on_quick_title_trigger`); uses VideoService, FileManager. |
+| `src/frigate_buffer/services/multi_clip_extractor.py` | Target-centric frame extraction for CE; requires detection sidecars (no HOG fallback when any camera lacks sidecar). Camera assignment uses **timeline_ema** (dense grid + EMA + hysteresis + segment merge). **NeLux** decode: one VideoReader per camera, single-threaded **get_batch** per sample time; **ExtractedFrame.frame** is torch.Tensor BCHW RGB; `del` + `torch.cuda.empty_cache()` after each frame. No ffmpegcv/CPU fallback; parallel sidecar JSON load only. Config: CUDA_DEVICE_INDEX, LOG_EXTRACTION_PHASE_TIMING. | Used by ai_analyzer, event_test_orchestrator. |
 | `src/frigate_buffer/services/timeline_ema.py` | Core camera-assignment logic for multi-cam: dense time grid, EMA smoothing, hysteresis, and segment merge (including first-segment roll-forward). Sole path for which camera is chosen per sample time. | Used by multi_clip_extractor. |
-| `src/frigate_buffer/services/video.py` | **VideoService:** NVDEC decode (ffmpegcv), `get_detection_model_path(config)` (model under `STORAGE_PATH/yolo_models/` for persistence), `generate_detection_sidecar`, `generate_detection_sidecars_for_cameras` (shared YOLO + lock), `run_detection_on_image` (single image under same lock for quick-title), `generate_gif_from_clip`. Single `_get_video_metadata` ffprobe per clip. App-level sidecar lock injected by orchestrator. | Used by lifecycle, ai_analyzer, event_test. |
+| `src/frigate_buffer/services/video.py` | **VideoService:** **NeLux** NVDEC decode for detection sidecars (one `VideoReader` per clip, batched `get_batch` with **BATCH_SIZE=16**, float32/255 normalization for YOLO; `del` + `torch.cuda.empty_cache()` after each batch). No ffmpegcv/CPU decode; NeLux open/get_batch failures log and return False. `get_detection_model_path(config)` (model under `STORAGE_PATH/yolo_models/`), `generate_detection_sidecar`, `generate_detection_sidecars_for_cameras` (shared YOLO + lock), `run_detection_on_image` (numpy or tensor, normalized for YOLO; quick-title), `generate_gif_from_clip` (subprocess FFmpeg—only remaining FFmpeg use). Single `_get_video_metadata` ffprobe per clip. App-level sidecar lock injected by orchestrator. | Used by lifecycle, ai_analyzer, event_test. |
 | `src/frigate_buffer/services/lifecycle.py` | **EventLifecycleService:** event creation, event end (discard short, cancel long). On **new** event (is_new): Phase 1 canned title + `write_metadata_json`, initial notification with live frame via **latest.jpg** proxy (no snapshot download); starts quick-title delay thread. At CE close: export clips, sidecars, then `on_ce_ready_for_analysis`. | Orchestrator delegates; calls download, file_manager, video_service, orchestrator callbacks (`on_ce_ready_for_analysis`, `on_quick_title_trigger`). |
 | `src/frigate_buffer/services/download.py` | **DownloadService:** Frigate snapshot, export/clip download (dynamic clip names), `post_event_description`. | FileManager, lifecycle, orchestrator. |
 | `src/frigate_buffer/services/notifier.py` | **NotificationPublisher:** publish to `frigate/custom/notifications`; `clear_tag` for updates; timeline_callback = TimelineLogger.log_ha. | Orchestrator, lifecycle. |
@@ -224,7 +239,7 @@ frigate-event-buffer/
 | `src/frigate_buffer/services/frigate_export_watchdog.py` | Parse timeline for export_id, verify clip exists, DELETE Frigate `/api/export/{id}`; 404/422 = already removed. | Scheduled by orchestrator. |
 | `src/frigate_buffer/services/timeline.py` | **TimelineLogger:** append HA/MQTT/Frigate API entries to `notification_timeline.json` via FileManager. | Orchestrator, notifier (timeline_callback). |
 | `src/frigate_buffer/services/mqtt_client.py` | **MqttClientWrapper:** connect, subscribe, message callback to orchestrator. | Orchestrator provides `_on_mqtt_message`. |
-| `src/frigate_buffer/services/crop_utils.py` | Crop/resize and motion-related image helpers; `crop_around_detections_with_padding` (master bbox over all detections + padding) for quick-title. | ai_analyzer, orchestrator (quick-title). |
+| `src/frigate_buffer/services/crop_utils.py` | Crop/resize and motion helpers: accept **PyTorch tensor BCHW only** (GPU pipeline). `center_crop`, `crop_around_center`, `full_frame_resize_to_target`, `crop_around_detections_with_padding`, `motion_crop` use tensor slicing and `torch.nn.functional.interpolate`; motion_crop casts to int16 before subtraction to avoid uint8 underflow; only the 1-bit mask is transferred to CPU for `cv2.findContours`. `draw_timestamp_overlay` accepts tensor or numpy, converts RGB→BGR at OpenCV boundary, returns numpy HWC BGR. | ai_analyzer, orchestrator (quick-title), multi_clip_extractor. |
 | `src/frigate_buffer/services/video_compilation.py` | Video compilation service. Generates a stitched, cropped, 20fps summary video for a CE lifecycle; uses the **same timeline config** as the frame timeline (MAX_MULTI_CAM_FRAMES_SEC, MAX_MULTI_CAM_FRAMES_MIN) and **one slice per assignment** so camera swapping matches the AI prompt timeline. Crop follows the tracked object with **smooth panning** (tensor crop with 0-based `t/duration` interpolation; optional EMA on crop center). On the **last slice of a camera run** (slice before a camera switch), crop is **held** (`crop_end = crop_start`) so there is no pan toward the switch-time position at the cut. **NeLux** (vendored wheel): NVDEC decode per slice into PyTorch CUDA tensors, tensor crop (smooth pan), NVENC encode; 20fps, no audio, output MP4. **Import order:** `import torch` before `from nelux import VideoReader` (required by NeLux). | Used by lifecycle, orchestrator. |
 | `src/frigate_buffer/services/report_prompt.txt` | Default prompt for daily report. | daily_reporter. |
 | `src/frigate_buffer/services/ai_analyzer_system_prompt.txt` | System prompt for Gemini proxy (multi-clip CE analysis). | ai_analyzer. |
@@ -250,7 +265,7 @@ frigate-event-buffer/
 | Path/Name | Purpose | Dependencies/Interactions |
 |-----------|---------|---------------------------|
 | `tests/conftest.py` | Pytest fixtures. | All tests. |
-| `tests/test_*.py` | Unit tests for config, orchestrator, lifecycle, ai_analyzer, video, query, notifier, download, file manager, cleanup, etc. | Run with `pytest tests/`; `pythonpath = ["src"]`. |
+| `tests/test_*.py` | Unit tests for config, orchestrator, lifecycle, ai_analyzer, video, query, notifier, download, file manager, cleanup, etc. **Phase 5:** tensor mocks in test_ai_frame_analysis_writing (write_ai_frame_analysis_multi_cam with tensor frames), test_integration_step_5_6 (analyze_multi_clip_ce with tensor ExtractedFrame), test_multi_clip_extractor (sequential get_batch: one call per extracted frame). | Run with `pytest tests/`; `pythonpath = ["src"]`. |
 
 ---
 
@@ -273,6 +288,12 @@ frigate-event-buffer/
 ---
 
 ## 6. AI Agent Directives (Rules & Conventions)
+
+### Zero-copy GPU pipeline (mandatory)
+
+- **Do not** add or use **ffmpegcv** for video decode or capture.
+- **Do not** add **CPU-decoding fallbacks** (e.g. OpenCV VideoCapture or FFmpeg subprocess for decode) for the main pipeline; NeLux (NVDEC) is the only decode path. FFmpeg is allowed only for GIF generation and ffprobe metadata.
+- **Production frame crops/resize** must use **`crop_utils`** with **BCHW tensors**. Do not add new NumPy/OpenCV-based crop or resize logic in the core frame path; use the existing tensor helpers in `crop_utils.py`. Legacy NumPy helpers in ai_analyzer (`_center_crop`, `_smart_crop`) are deprecated and must not be used for new production code.
 
 ### Wheel build and update
 

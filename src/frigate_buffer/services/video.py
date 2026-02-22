@@ -1,3 +1,10 @@
+"""
+Video service: NeLux NVDEC decode, YOLO detection, sidecar writing, GIF via FFmpeg.
+
+Decode is GPU-only via NeLux VideoReader; no CPU/ffmpegcv fallback. Frames are normalized
+to float32 [0,1] before YOLO. VRAM is released after each chunk (del + torch.cuda.empty_cache).
+"""
+
 from __future__ import annotations
 
 import json
@@ -8,17 +15,25 @@ import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
-import ffmpegcv
+logger = logging.getLogger("frigate-buffer")
 
-logger = logging.getLogger('frigate-buffer')
+# Chunk size for NeLux get_batch to protect 8GB VRAM when running YOLO.
+BATCH_SIZE = 16
+
+# COCO class 0 = person; we restrict YOLO to this class only for sidecar.
+_PERSON_CLASS_ID = 0
+
+
+def _is_tensor(x: Any) -> bool:
+    """True if x is a torch.Tensor."""
+    return type(x).__name__ == "Tensor"
 
 
 def log_gpu_status() -> None:
     """
     At startup: log GPU diagnostic info for decode (NVDEC) troubleshooting.
 
-    Runs nvidia-smi to confirm GPU visibility. Hardware decode (NVDEC) is used
-    by ffmpegcv for frame reading; encoding is not used.
+    Runs nvidia-smi to confirm GPU visibility. NeLux uses NVDEC for decode.
     """
     nvidia_smi = __import__("shutil").which("nvidia-smi")
     if nvidia_smi:
@@ -36,11 +51,15 @@ def log_gpu_status() -> None:
                 timeout=5,
             )
             driver = (proc2.stdout or b"").decode("utf-8", errors="replace").strip().split("\n")[0] or "?"
-            logger.info("GPU status: nvidia-smi OK, GPUs=%s, driver=%s (NVDEC used for decode)", gpu_count, driver)
+            logger.info(
+                "GPU status: nvidia-smi OK, GPUs=%s, driver=%s (NeLux NVDEC used for decode)",
+                gpu_count,
+                driver,
+            )
         except (subprocess.TimeoutExpired, OSError) as e:
             logger.warning("nvidia-smi found but failed: %s; container may not have GPU access.", e)
     else:
-        logger.info("nvidia-smi not found; NVDEC decode may fall back to CPU.")
+        logger.info("nvidia-smi not found; NeLux NVDEC requires GPU.")
 
 
 def get_detection_model_path(config: dict) -> str:
@@ -59,7 +78,6 @@ def ensure_detection_model_ready(config: dict) -> bool:
     """
     At startup: check if the multi-cam detection model is downloaded; download if not; log result.
     Call after config is loaded. Returns True if model is ready, False if skipped or failed.
-    Uses a path under STORAGE_PATH so the model persists across restarts.
     """
     model_name = (config.get("DETECTION_MODEL") or "").strip()
     if not model_name:
@@ -82,15 +100,8 @@ def ensure_detection_model_ready(config: dict) -> bool:
         return False
 
 
-# COCO class 0 = person; we restrict YOLO to this class only for sidecar.
-_PERSON_CLASS_ID = 0
-
-
 def _get_native_resolution(clip_path: str) -> tuple[int, int] | None:
-    """
-    Return (width, height) of the video stream from the clip file using ffprobe.
-    Used so we can scale YOLO bbox from decoded (resized) frame coords back to native for the sidecar.
-    """
+    """Return (width, height) of the video stream from the clip file using ffprobe."""
     meta = _get_video_metadata(clip_path)
     if meta is None:
         return None
@@ -101,7 +112,6 @@ def _get_native_resolution(clip_path: str) -> tuple[int, int] | None:
 def _get_video_metadata(clip_path: str) -> tuple[int, int, float, float] | None:
     """
     Single ffprobe call returning (width, height, fps, duration_sec).
-    Used to avoid multiple subprocess invocations for sidecar and extractor.
     Returns None on failure or missing stream.
     """
     try:
@@ -185,12 +195,39 @@ def _run_detection_on_frame(
     device: str | None,
     imgsz: int = 640,
 ) -> list[dict[str, Any]]:
-    """Run YOLO on one frame (person class only); return list of {label, bbox, centerpoint, area} for sidecar."""
+    """
+    Run YOLO on one frame (person class only); return list of {label, bbox, centerpoint, area}.
+
+    frame: numpy HWC BGR or torch.Tensor BCHW. If uint8, normalized to float32 [0,1] before YOLO.
+    """
+    import torch
+
     detections: list[dict[str, Any]] = []
     try:
-        # classes=[0]: COCO person; hardcoded for robustness across models
+        if _is_tensor(frame):
+            t = frame
+            if t.dim() == 3:
+                t = t.unsqueeze(0)
+            if t.dtype == torch.uint8:
+                t = t.float() / 255.0
+            elif t.dtype != torch.float32 and t.dtype != torch.float64:
+                t = t.float()
+        else:
+            import numpy as np
+            arr = np.asarray(frame, dtype=np.uint8)
+            if arr.ndim == 2:
+                arr = np.expand_dims(arr, axis=-1)
+            if arr.ndim == 3:
+                arr = np.expand_dims(arr, axis=0)
+            if arr.shape[-1] == 3:
+                arr = arr[:, :, :, [2, 1, 0]]
+            t = torch.from_numpy(arr.copy()).float() / 255.0
+            if t.dim() == 4 and t.shape[-1] == 3:
+                t = t.permute(0, 3, 1, 2)
+            if torch.cuda.is_available():
+                t = t.cuda()
         results = model(
-            frame, device=device, verbose=False, classes=[_PERSON_CLASS_ID], imgsz=imgsz
+            t, device=device, verbose=False, classes=[_PERSON_CLASS_ID], imgsz=imgsz
         )
         if not results:
             return detections
@@ -222,25 +259,76 @@ def _run_detection_on_frame(
     return detections
 
 
+def _run_detection_on_batch(
+    model: Any,
+    batch: Any,
+    device: str | None,
+    imgsz: int = 640,
+) -> list[list[dict[str, Any]]]:
+    """
+    Run YOLO on a batch of frames (BCHW float32 [0,1]); return list of detection lists (one per frame).
+    """
+    import torch
+
+    out: list[list[dict[str, Any]]] = []
+    try:
+        if batch.dtype == torch.uint8:
+            batch = batch.float() / 255.0
+        results = model(
+            batch, device=device, verbose=False, classes=[_PERSON_CLASS_ID], imgsz=imgsz
+        )
+        if not results:
+            return [[] for _ in range(batch.shape[0])]
+        for r in results:
+            detections: list[dict[str, Any]] = []
+            if r.boxes is not None and r.boxes.xyxy is not None:
+                xyxy = r.boxes.xyxy
+                try:
+                    xyxy = xyxy.cpu().numpy() if hasattr(xyxy, "cpu") else xyxy
+                except Exception:
+                    pass
+                for i in range(len(xyxy)):
+                    if len(xyxy[i]) < 4:
+                        continue
+                    x1, y1, x2, y2 = float(xyxy[i][0]), float(xyxy[i][1]), float(xyxy[i][2]), float(xyxy[i][3])
+                    area = int((x2 - x1) * (y2 - y1))
+                    cx = (x1 + x2) / 2.0
+                    cy = (y1 + y2) / 2.0
+                    detections.append({
+                        "label": "person",
+                        "bbox": [x1, y1, x2, y2],
+                        "centerpoint": [cx, cy],
+                        "area": area,
+                    })
+            out.append(detections)
+        while len(out) < batch.shape[0]:
+            out.append([])
+    except Exception as e:
+        logger.debug("Detection on batch failed: %s", e)
+        out = [[] for _ in range(batch.shape[0])]
+    return out
+
+
 class VideoService:
-    """Handles video decode (frame reading) and GIF generation. No encoding; clips are used as-is."""
+    """Handles video decode (NeLux NVDEC), YOLO detection, sidecar writing, GIF via FFmpeg subprocess."""
 
     DEFAULT_FFMPEG_TIMEOUT = 60
 
     def __init__(self, ffmpeg_timeout: int = DEFAULT_FFMPEG_TIMEOUT):
         self.ffmpeg_timeout = ffmpeg_timeout
         self._sidecar_app_lock: threading.Lock | None = None
-        logger.debug("VideoService initialized with FFmpeg timeout: %ss", ffmpeg_timeout)
+        logger.debug("VideoService initialized with FFmpeg timeout=%ss (GIF only)", ffmpeg_timeout)
 
     def set_sidecar_app_lock(self, lock: threading.Lock) -> None:
-        """Set app-level lock so only one sidecar batch (TEST or lifecycle) runs at a time. Called by orchestrator at startup."""
+        """Set app-level lock so only one sidecar batch (TEST or lifecycle) runs at a time."""
         self._sidecar_app_lock = lock
 
     def run_detection_on_image(self, image_bgr: Any, config: dict[str, Any]) -> list[dict[str, Any]]:
         """
-        Run YOLO person detection on a single image (e.g. from latest.jpg). Uses the app-level
-        sidecar lock so inference does not run concurrently with sidecar generation (GPU safety).
-        Returns list of {label, bbox, centerpoint, area}; empty if no model or no detections.
+        Run YOLO person detection on a single image (e.g. from latest.jpg).
+
+        Accepts numpy HWC BGR or torch.Tensor BCHW; normalizes to float32 [0,1] before YOLO.
+        Uses the app-level sidecar lock. Returns list of {label, bbox, centerpoint, area}.
         """
         lock = self._sidecar_app_lock
         if lock is not None:
@@ -275,144 +363,63 @@ class VideoService:
         yolo_lock: threading.Lock | None = None,
     ) -> bool:
         """
-        Decode-only pass: read clip with ffmpegcv (optionally resized for GPU efficiency), run YOLO every N frames, write detection.json.
+        Decode clip with NeLux (NVDEC), run YOLO every N frames in batches of BATCH_SIZE, write detection.json.
 
-        Uses NVDEC (VideoCaptureNV) when available, else CPU (VideoCapture). May resize during decode to crop target size (CROP_WIDTH x CROP_HEIGHT); all bbox/centerpoint/area in the sidecar are scaled to **native** resolution so Phase 3 crop logic is correct. Writes native_width and native_height in the sidecar. Does not re-encode.
-        Returns True if sidecar was written (even if empty); False on open/read failure.
-
-        When yolo_model and yolo_lock are both provided (e.g. by event_test or lifecycle for parallel sidecar), inference is run under the lock to allow a single shared model across threads. When either is omitted, YOLO is loaded inside this call (legacy/single-camera behavior).
+        No CPU/ffmpegcv fallback; on NeLux or YOLO failure logs context and returns False.
+        Frames are normalized to float32 [0,1] before YOLO. After each chunk, del batch and torch.cuda.empty_cache().
         """
+        import torch  # required before nelux
+        from nelux import VideoReader  # type: ignore[import-untyped]
+
         detection_model = (config.get("DETECTION_MODEL") or "").strip()
         detection_device = (config.get("DETECTION_DEVICE") or "").strip() or None
         detection_frame_interval = max(1, int(config.get("DETECTION_FRAME_INTERVAL", 5)))
         detection_imgsz = max(320, int(config.get("DETECTION_IMGSZ", 640)))
-        crop_w = max(1, int(config.get("CROP_WIDTH", 1280)))
-        crop_h = max(1, int(config.get("CROP_HEIGHT", 720)))
+        cuda_device_index = int(config.get("CUDA_DEVICE_INDEX", 0))
 
         meta = _get_video_metadata(clip_path)
         if meta:
-            native_w, native_h, fps_val, _ = meta
+            native_w, native_h, fps_val, duration_sec = meta
         else:
-            native_w, native_h, fps_val = 0, 0, 30.0
-        use_resize = native_w > 0 and native_h > 0 and (native_w != crop_w or native_h != crop_h)
-        interval = detection_frame_interval
+            native_w, native_h, fps_val, duration_sec = 0, 0, 30.0, 0.0
 
-        # Attempt FFmpeg native frame skipping first via subprocess
-        import numpy as np
-
-        read_w = crop_w if use_resize else native_w
-        read_h = crop_h if use_resize else native_h
-        
-        if read_w > 0 and read_h > 0:
-            proc = None
-            try:
-                cmd = [
-                    "ffmpeg", "-v", "error",
-                    "-hwaccel", "nvdec",
-                    "-i", clip_path
-                ]
-                vf_opts = f"framestep={interval}"
-                if use_resize:
-                    vf_opts += f",scale={crop_w}:{crop_h}"
-                cmd.extend([
-                    "-vf", vf_opts,
-                    "-f", "image2pipe",
-                    "-pix_fmt", "bgr24",
-                    "-vcodec", "rawvideo",
-                    "-"
-                ])
-                proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=10**8)
-                
-                model_to_use = yolo_model
-                if model_to_use is None and detection_model:
-                    try:
-                        from ultralytics import YOLO
-                        model_path = get_detection_model_path(config)
-                        model_to_use = YOLO(model_path)
-                        logger.debug("YOLO loaded for detection sidecar: %s", clip_path)
-                    except Exception as e:
-                        logger.warning("Could not load YOLO for detection sidecar: %s", e)
-                
-                sidecar_entries = []
-                decoded_idx = 0
-                frame_size = read_w * read_h * 3
-                
-                while True:
-                    in_bytes = proc.stdout.read(frame_size)
-                    if not in_bytes or len(in_bytes) < frame_size:
-                        break
-                    
-                    frame = np.frombuffer(in_bytes, dtype=np.uint8).reshape((read_h, read_w, 3))
-                    
-                    original_frame_idx = decoded_idx * interval
-                    if model_to_use is not None:
-                        if yolo_lock is not None:
-                            with yolo_lock:
-                                det = _run_detection_on_frame(model_to_use, frame, detection_device, imgsz=detection_imgsz)
-                        else:
-                            det = _run_detection_on_frame(model_to_use, frame, detection_device, imgsz=detection_imgsz)
-                            
-                        if use_resize and native_w > 0 and native_h > 0 and read_w > 0 and read_h > 0:
-                            det = _scale_detections_to_native(det, read_w, read_h, native_w, native_h)
-                            
-                        sidecar_entries.append({
-                            "frame_number": original_frame_idx,
-                            "timestamp_sec": original_frame_idx / fps_val if fps_val > 0 else 0,
-                            "detections": det,
-                        })
-                    decoded_idx += 1
-                
-                proc.stdout.close()
-                proc.wait()
-                
-                if proc.returncode == 0 or len(sidecar_entries) > 0:
-                    payload = {
-                        "native_width": native_w or read_w,
-                        "native_height": native_h or read_h,
-                        "entries": sidecar_entries,
-                    }
-                    with open(sidecar_path, "w", encoding="utf-8") as f:
-                        json.dump(payload, f, indent=None, separators=(",", ":"))
-                    logger.debug("Wrote detection sidecar (native FFmpeg) %s (%d frames)", sidecar_path, len(sidecar_entries))
-                    return True
-                else:
-                    err = proc.stderr.read().decode('utf-8')
-                    logger.debug("Native FFmpeg extraction failed or returned no frames (code %s): %s", proc.returncode, err)
-            except Exception as e:
-                logger.debug("Native FFmpeg extraction raised exception for %s: %s", clip_path, e)
-                if proc is not None:
-                    try:
-                        proc.kill()
-                    except:
-                        pass
-        
-        logger.info("Native FFmpeg frame skipping could not be completed for %s. Falling back to ffmpegcv loop.", clip_path)
-
-        cap = None
+        reader = None
         try:
-            try:
-                if use_resize:
-                    cap = ffmpegcv.VideoCaptureNV(
-                        clip_path, resize=(crop_w, crop_h), resize_keepratio=False
-                    )
-                else:
-                    cap = ffmpegcv.VideoCaptureNV(clip_path)
-            except Exception:
+            reader = VideoReader(
+                clip_path,
+                decode_accelerator="nvdec",
+                cuda_device_index=cuda_device_index,
+            )
+        except Exception as e:
+            logger.warning(
+                "NeLux failed to open clip for sidecar: path=%s error=%s",
+                clip_path,
+                e,
+                exc_info=True,
+            )
+            if torch.cuda.is_available():
                 try:
-                    if use_resize:
-                        cap = ffmpegcv.VideoCapture(
-                            clip_path, resize=(crop_w, crop_h), resize_keepratio=False
-                        )
-                    else:
-                        cap = ffmpegcv.VideoCapture(clip_path)
+                    logger.debug("VRAM summary: %s", torch.cuda.memory_summary())
                 except Exception:
-                    cap = ffmpegcv.VideoCapture(clip_path)
-            if not cap.isOpened():
-                logger.warning("Could not open clip for sidecar: %s", clip_path)
+                    pass
+            return False
+
+        try:
+            frame_count = len(reader)
+            fps = float(reader.fps) if getattr(reader, "fps", None) else fps_val
+            if fps <= 0:
+                fps = 30.0
+            if frame_count <= 0 and duration_sec > 0:
+                frame_count = int(duration_sec * fps)
+            if frame_count <= 0:
+                logger.warning("Could not determine frame count for %s", clip_path)
                 return False
 
-            read_h, read_w = 0, 0
-            fps = getattr(cap, "fps", None) or 30.0
+            interval = detection_frame_interval
+            indices = list(range(0, frame_count, interval))
+            if not indices:
+                indices = [0]
+
             model_to_use = yolo_model
             if model_to_use is None and detection_model:
                 try:
@@ -423,33 +430,64 @@ class VideoService:
                 except Exception as e:
                     logger.warning("Could not load YOLO for detection sidecar: %s", e)
 
-            sidecar_entries = []
-            frame_idx = 0
+            sidecar_entries: list[dict[str, Any]] = []
+            read_h, read_w = 0, 0
 
-            while True:
-                ret, frame = cap.read()
-                if not ret or frame is None:
+            for chunk_start in range(0, len(indices), BATCH_SIZE):
+                chunk_indices = indices[chunk_start : chunk_start + BATCH_SIZE]
+                try:
+                    batch = reader.get_batch(chunk_indices)
+                except Exception as e:
+                    logger.warning(
+                        "NeLux get_batch failed: clip_path=%s indices=%s error=%s",
+                        clip_path,
+                        chunk_indices,
+                        e,
+                        exc_info=True,
+                    )
+                    if torch.cuda.is_available():
+                        try:
+                            logger.debug("VRAM summary: %s", torch.cuda.memory_summary())
+                        except Exception:
+                            pass
                     break
-                if read_h == 0 and frame is not None:
-                    read_h, read_w = frame.shape[:2]
-                if model_to_use is not None and frame_idx % interval == 0:
+
+                if read_h == 0 and batch is not None and batch.numel() > 0:
+                    read_h = int(batch.shape[2])
+                    read_w = int(batch.shape[3])
+
+                batch = batch.float() / 255.0
+
+                if model_to_use is not None:
                     if yolo_lock is not None:
                         with yolo_lock:
-                            det = _run_detection_on_frame(
-                                model_to_use, frame, detection_device, imgsz=detection_imgsz
+                            det_lists = _run_detection_on_batch(
+                                model_to_use, batch, detection_device, imgsz=detection_imgsz
                             )
                     else:
-                        det = _run_detection_on_frame(
-                            model_to_use, frame, detection_device, imgsz=detection_imgsz
+                        det_lists = _run_detection_on_batch(
+                            model_to_use, batch, detection_device, imgsz=detection_imgsz
                         )
-                    if use_resize and native_w > 0 and native_h > 0 and read_w > 0 and read_h > 0:
-                        det = _scale_detections_to_native(det, read_w, read_h, native_w, native_h)
-                    sidecar_entries.append({
-                        "frame_number": frame_idx,
-                        "timestamp_sec": frame_idx / fps,
-                        "detections": det,
-                    })
-                frame_idx += 1
+                    for i, idx in enumerate(chunk_indices):
+                        det = det_lists[i] if i < len(det_lists) else []
+                        if native_w > 0 and native_h > 0 and read_w > 0 and read_h > 0:
+                            det = _scale_detections_to_native(det, read_w, read_h, native_w, native_h)
+                        sidecar_entries.append({
+                            "frame_number": idx,
+                            "timestamp_sec": idx / fps if fps > 0 else 0,
+                            "detections": det,
+                        })
+                else:
+                    for idx in chunk_indices:
+                        sidecar_entries.append({
+                            "frame_number": idx,
+                            "timestamp_sec": idx / fps if fps > 0 else 0,
+                            "detections": [],
+                        })
+
+                del batch
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
 
             if native_w <= 0 and read_w > 0:
                 native_w, native_h = read_w, read_h
@@ -460,19 +498,29 @@ class VideoService:
             }
             with open(sidecar_path, "w", encoding="utf-8") as f:
                 json.dump(payload, f, indent=None, separators=(",", ":"))
-            logger.debug("Wrote detection sidecar %s (%d frames)", sidecar_path, len(sidecar_entries))
+            logger.debug("Wrote detection sidecar (NeLux) %s (%d frames)", sidecar_path, len(sidecar_entries))
             return True
         except Exception as e:
-            logger.warning("Failed to generate detection sidecar for %s: %s", clip_path, e)
-            return False
-        finally:
-            if cap is not None:
+            logger.warning(
+                "Failed to generate detection sidecar for %s: %s",
+                clip_path,
+                e,
+                exc_info=True,
+            )
+            if torch.cuda.is_available():
                 try:
-                    cap.release()
+                    logger.debug("VRAM summary: %s", torch.cuda.memory_summary())
                 except Exception:
                     pass
-
-        return False
+            return False
+        finally:
+            if reader is not None:
+                try:
+                    del reader
+                except Exception:
+                    pass
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
 
     def generate_detection_sidecars_for_cameras(
         self,
@@ -483,9 +531,6 @@ class VideoService:
         Generate detection sidecars for multiple cameras in parallel with one shared YOLO model and lock.
 
         tasks: list of (camera_name, clip_path, sidecar_path). Returns list of (camera_name, ok) in same order.
-        Used by lifecycle (multi-cam) and event_test; keeps YOLO/threading logic in the core so event_test stays thin.
-        When _sidecar_app_lock is set (by main orchestrator), acquires it for the whole batch so only one
-        sidecar run (TEST or lifecycle) executes at a time.
         """
         if not tasks:
             return []
@@ -524,7 +569,6 @@ class VideoService:
                         logger.exception("Sidecar %s failed", camera_name)
                         ok = False
                     results.append((camera_name, ok))
-            # Preserve order of tasks for predictable log/output order
             order = {cam: i for i, (cam, _, _) in enumerate(tasks)}
             results.sort(key=lambda r: order.get(r[0], 0))
             return results
@@ -534,7 +578,12 @@ class VideoService:
 
     def generate_gif_from_clip(self, clip_path: str, output_path: str,
                                fps: int = 5, duration_sec: float = 5.0) -> bool:
-        """Generate animated GIF from video clip using FFmpeg. Returns True on success."""
+        """
+        Generate animated GIF from video clip using FFmpeg subprocess.
+
+        No GPU GIF encoder; this is the only remaining FFmpeg use (decode/encode for GIF).
+        Returns True on success.
+        """
         try:
             scale = "320:-1"
             cmd = [

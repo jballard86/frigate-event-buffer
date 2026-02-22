@@ -1,17 +1,21 @@
 """Tests for multi-clip target-centric frame extractor."""
 
 import json
-import unittest
 import os
-import tempfile
 import shutil
-import numpy as np
+import sys
+import unittest
 from unittest.mock import MagicMock, patch
+
+import numpy as np
+
+# Fake nelux so we can patch VideoReader when the real wheel is not installed (e.g. on Windows).
+if "nelux" not in sys.modules:
+    sys.modules["nelux"] = MagicMock()
 
 from frigate_buffer.models import ExtractedFrame
 from frigate_buffer.services.multi_clip_extractor import (
     extract_target_centric_frames,
-    _get_fps_and_duration,
     _nearest_sidecar_entry,
     _person_area_from_detections,
     _person_area_at_time,
@@ -173,271 +177,150 @@ class TestMultiClipExtractor(unittest.TestCase):
         result = extract_target_centric_frames(self.tmp, max_frames_sec=1, max_frames_min=60)
         self.assertEqual(result, [])
 
-    def test_get_fps_and_duration_from_len_and_fps(self):
-        """_get_fps_and_duration returns (fps, duration, False) when cap has fps and __len__ (no consume)."""
-        cap = MagicMock()
-        cap.fps = 10.0
-        cap.__len__ = MagicMock(return_value=100)
-        fps, duration, used = _get_fps_and_duration(cap, "/fake/path")
-        self.assertEqual(fps, 10.0)
-        self.assertEqual(duration, 10.0)
-        self.assertFalse(used)
-        cap.read.assert_not_called()
+    def _make_nelux_reader_mock(self, fps=1.0, frame_count=10, height=480, width=640):
+        """Create a mock NeLux VideoReader: fps, __len__, get_batch(indices) -> BCHW uint8 tensor."""
+        try:
+            import torch
+        except ImportError:
+            self.skipTest("torch not available")
+        mock_reader = MagicMock()
+        mock_reader.fps = fps
+        mock_reader.__len__ = MagicMock(return_value=frame_count)
 
-    def test_get_fps_and_duration_ffmpegcv_no_get(self):
-        """_get_fps_and_duration works with FFmpegReaderNV-like mock: .fps and __len__, no .get()."""
-        # FFmpegReaderNV has .fps, __len__ (via .count), but NO .get() - must never call cap.get()
-        class FFmpegReaderNVMock:
-            fps = 12.0
-            count = 120
+        def get_batch(indices):
+            return torch.zeros((len(indices), 3, height, width), dtype=torch.uint8)
 
-            def __len__(self):
-                return self.count
+        mock_reader.get_batch.side_effect = get_batch
+        return mock_reader
 
-            def read(self):
-                return False, None
-
-        cap = FFmpegReaderNVMock()
-        fps, duration, used = _get_fps_and_duration(cap, "/fake/path")
-        self.assertEqual(fps, 12.0)
-        self.assertEqual(duration, 10.0)
-        self.assertFalse(used)
-
-    def test_get_fps_and_duration_read_to_eof_when_no_count(self):
-        """_get_fps_and_duration uses read-to-EOF when cap has no __len__/count; returns used_read_to_eof=True."""
-        # Use simple object: fps, read, no __len__, no count (ffmpegcv-style when metadata unknown)
-        frame = np.zeros((10, 10, 3), dtype=np.uint8)
-        reads = iter([(True, frame), (True, frame), (False, None)])
-
-        class CapNoCount:
-            fps = 1.0
-
-            def read(self):
-                return next(reads)
-
-        cap = CapNoCount()
-        fps, duration, used = _get_fps_and_duration(cap, "/fake/path")
-        self.assertEqual(fps, 1.0)
-        self.assertEqual(duration, 2.0)
-        self.assertTrue(used)
-
-    @patch("frigate_buffer.services.multi_clip_extractor.ffmpegcv.VideoCapture")
-    @patch("frigate_buffer.services.multi_clip_extractor.ffmpegcv.VideoCaptureNV")
-    def test_extract_with_ffmpegcv_like_mock_sequential_read(self, mock_video_capture_nv, mock_video_capture):
-        """extract_target_centric_frames works with ffmpegcv-like readers (fps, read, no get/set)."""
+    @patch.object(sys.modules["nelux"], "VideoReader")
+    def test_extract_with_nelux_mock_returns_tensor_frames(self, mock_video_reader_cls):
+        """extract_target_centric_frames uses NeLux get_batch; returns ExtractedFrame with tensor .frame."""
         os.makedirs(os.path.join(self.tmp, "cam1"))
         os.makedirs(os.path.join(self.tmp, "cam2"))
-        clip1 = os.path.join(self.tmp, "cam1", "clip.mp4")
-        clip2 = os.path.join(self.tmp, "cam2", "clip.mp4")
-        with open(clip1, "wb"):
-            pass
-        with open(clip2, "wb"):
-            pass
-        # Sidecars so we pick by person area (no HOG on mock frame); gives area > 0 so we collect frames
-        for cam_name in ("cam1", "cam2"):
-            sidecar_path = os.path.join(self.tmp, cam_name, DETECTION_SIDECAR_FILENAME)
+        for c in ("cam1", "cam2"):
+            with open(os.path.join(self.tmp, c, "clip.mp4"), "wb"):
+                pass
+            sidecar_path = os.path.join(self.tmp, c, DETECTION_SIDECAR_FILENAME)
             with open(sidecar_path, "w", encoding="utf-8") as f:
                 json.dump(
                     [{"timestamp_sec": t, "detections": [{"label": "person", "area": 100}]} for t in range(11)],
                     f,
                 )
+        mock_reader = self._make_nelux_reader_mock()
+        mock_video_reader_cls.return_value = mock_reader
 
-        frame = np.zeros((100, 100, 3), dtype=np.uint8)
-        # Each mock: fps=1, __len__=10 so duration=10, no .get/.set. read yields 10 frames then EOF.
-        def make_mock():
-            m = MagicMock()
-            m.fps = 1.0
-            m.__len__ = MagicMock(return_value=10)
-            m.isOpened.return_value = True
-            m.read.side_effect = [(True, frame)] * 10 + [(False, None)]
-            m.release = MagicMock()
-            return m
-
-        mock_video_capture_nv.side_effect = Exception("no nv")
-        mock_video_capture.side_effect = lambda path: make_mock()
-
-        result = extract_target_centric_frames(
-            self.tmp, max_frames_sec=1.0, max_frames_min=5
-        )
+        result = extract_target_centric_frames(self.tmp, max_frames_sec=1.0, max_frames_min=5)
 
         self.assertGreaterEqual(len(result), 1)
         self.assertLessEqual(len(result), 5)
         for item in result:
             self.assertIsInstance(item, ExtractedFrame)
             self.assertIsNotNone(item.frame)
+            self.assertTrue(
+                hasattr(item.frame, "shape") or type(item.frame).__name__ == "Tensor",
+                "ExtractedFrame.frame should be tensor (BCHW)",
+            )
             self.assertIn(item.camera, ("cam1", "cam2"))
-            self.assertIn("person_area", item.metadata, "ExtractedFrame should have person_area in metadata")
+            self.assertIn("person_area", item.metadata)
             self.assertIsInstance(item.metadata["person_area"], int)
-            self.assertEqual(item.metadata["person_area"], 100, "Sidecar has area 100 per entry")
-        mock_video_capture.assert_called()
+            self.assertEqual(item.metadata["person_area"], 100)
+        mock_video_reader_cls.assert_called()
+        # Phase 5: sequential extractor — one get_batch per sample time that yields a frame
+        mock_reader.get_batch.assert_called()
+        self.assertEqual(mock_reader.get_batch.call_count, len(result))
 
-    @patch("frigate_buffer.services.multi_clip_extractor.ffmpegcv.VideoCapture")
-    @patch("frigate_buffer.services.multi_clip_extractor.ffmpegcv.VideoCaptureNV")
-    def test_extract_drops_camera_when_read_raises_closed_file(self, mock_video_capture_nv, mock_video_capture):
-        """When one camera's cap.read() raises ValueError (e.g. read of closed file), that camera is dropped and extraction continues with the other(s)."""
+    @patch.object(sys.modules["nelux"], "VideoReader")
+    def test_extract_drops_camera_when_get_batch_raises(self, mock_video_reader_cls):
+        """When one camera's get_batch raises, that camera is dropped and extraction continues with the other(s)."""
         os.makedirs(os.path.join(self.tmp, "cam1"))
         os.makedirs(os.path.join(self.tmp, "cam2"))
-        clip1 = os.path.join(self.tmp, "cam1", "clip.mp4")
-        clip2 = os.path.join(self.tmp, "cam2", "clip.mp4")
-        with open(clip1, "wb"):
-            pass
-        with open(clip2, "wb"):
-            pass
-        for cam_name in ("cam1", "cam2"):
-            sidecar_path = os.path.join(self.tmp, cam_name, DETECTION_SIDECAR_FILENAME)
+        for c in ("cam1", "cam2"):
+            with open(os.path.join(self.tmp, c, "clip.mp4"), "wb"):
+                pass
+            sidecar_path = os.path.join(self.tmp, c, DETECTION_SIDECAR_FILENAME)
             with open(sidecar_path, "w", encoding="utf-8") as f:
                 json.dump(
                     [{"timestamp_sec": t, "detections": [{"label": "person", "area": 100}]} for t in range(11)],
                     f,
                 )
 
-        frame = np.zeros((100, 100, 3), dtype=np.uint8)
-
-        def make_good_mock():
-            m = MagicMock()
-            m.fps = 1.0
-            m.__len__ = MagicMock(return_value=10)
-            m.isOpened.return_value = True
-            m.read.side_effect = [(True, frame)] * 10 + [(False, None)]
-            m.release = MagicMock()
-            return m
-
-        def make_bad_mock():
-            m = MagicMock()
-            m.fps = 1.0
-            m.__len__ = MagicMock(return_value=10)
-            m.isOpened.return_value = True
-            m.read.side_effect = ValueError("read of closed file")
-            m.release = MagicMock()
-            return m
-
-        def open_cap(path):
+        def make_reader(path):
             if "cam2" in path:
-                return make_bad_mock()
-            return make_good_mock()
+                m = MagicMock()
+                m.fps = 1.0
+                m.__len__ = MagicMock(return_value=10)
+                m.get_batch.side_effect = RuntimeError("NeLux get_batch failed")
+                return m
+            return self._make_nelux_reader_mock()
 
-        mock_video_capture_nv.side_effect = Exception("no nv")
-        mock_video_capture.side_effect = open_cap
+        mock_video_reader_cls.side_effect = make_reader
 
-        result = extract_target_centric_frames(
-            self.tmp, max_frames_sec=1.0, max_frames_min=5
-        )
+        result = extract_target_centric_frames(self.tmp, max_frames_sec=1.0, max_frames_min=5)
 
         self.assertIsInstance(result, list)
-        # Only cam1 should contribute (cam2 is dropped on first read failure).
         for item in result:
             self.assertIsInstance(item, ExtractedFrame)
             self.assertIsNotNone(item.frame)
             self.assertEqual(item.camera, "cam1", "Failed camera should be dropped; only cam1 should appear")
 
-    @patch("frigate_buffer.services.multi_clip_extractor.ffmpegcv.VideoCapture")
-    @patch("frigate_buffer.services.multi_clip_extractor.ffmpegcv.VideoCaptureNV")
-    def test_decode_second_camera_cpu_only_logs_mixed_backends(self, mock_video_capture_nv, mock_video_capture):
-        """When one camera falls back to CPU (NVDEC fails), log_callback receives mixed GPU/CPU message."""
+    @patch.object(sys.modules["nelux"], "VideoReader")
+    def test_extract_logs_nelux_nvdec(self, mock_video_reader_cls):
+        """With NeLux, log_callback receives Decoding clips ... NeLux NVDEC."""
         os.makedirs(os.path.join(self.tmp, "cam1"))
-        os.makedirs(os.path.join(self.tmp, "cam2"))
         with open(os.path.join(self.tmp, "cam1", "clip.mp4"), "wb"):
             pass
-        with open(os.path.join(self.tmp, "cam2", "clip.mp4"), "wb"):
-            pass
-        for cam_name in ("cam1", "cam2"):
-            sidecar_path = os.path.join(self.tmp, cam_name, DETECTION_SIDECAR_FILENAME)
-            with open(sidecar_path, "w", encoding="utf-8") as f:
-                json.dump(
-                    {"native_width": 100, "native_height": 100, "entries": [{"timestamp_sec": t, "detections": [{"label": "person", "area": 100}]} for t in range(11)]},
-                    f,
-                )
-
-        frame = np.zeros((100, 100, 3), dtype=np.uint8)
-
-        def make_mock():
-            m = MagicMock()
-            m.fps = 1.0
-            m.__len__ = MagicMock(return_value=10)
-            m.isOpened.return_value = True
-            m.read.side_effect = [(True, frame)] * 10 + [(False, None)]
-            m.release = MagicMock()
-            return m
-
-        # open_caps: NVDEC fails for both, CPU used for fps/duration. Reopen: cam1 NVDEC succeeds, cam2 NVDEC fails then CPU.
-        mock_video_capture_nv.side_effect = [
-            Exception("nv"),
-            Exception("nv"),
-            make_mock(),
-            Exception("nv"),
-        ]
-        mock_video_capture.side_effect = lambda path: make_mock()
-
+        sidecar_path = os.path.join(self.tmp, "cam1", DETECTION_SIDECAR_FILENAME)
+        with open(sidecar_path, "w", encoding="utf-8") as f:
+            json.dump(
+                {"native_width": 100, "native_height": 100, "entries": [{"timestamp_sec": t, "detections": [{"label": "person", "area": 100}]} for t in range(11)]},
+                f,
+            )
+        mock_video_reader_cls.return_value = self._make_nelux_reader_mock()
         logs = []
         result = extract_target_centric_frames(
-            self.tmp,
-            max_frames_sec=1.0,
-            max_frames_min=5,
-            decode_second_camera_cpu_only=False,
-            log_callback=logs.append,
+            self.tmp, max_frames_sec=1.0, max_frames_min=5, log_callback=logs.append
         )
-
         self.assertGreaterEqual(len(result), 1)
         decode_logs = [m for m in logs if "Decoding clips" in m]
         self.assertGreaterEqual(len(decode_logs), 1)
         self.assertTrue(
-            any("GPU" in m and "CPU" in m for m in decode_logs),
-            f"Expected a mixed GPU/CPU decode message in {decode_logs}",
+            any("NeLux" in m or "NVDEC" in m for m in decode_logs),
+            f"Expected NeLux/NVDEC in decode message: {decode_logs}",
         )
 
-    @patch("frigate_buffer.services.multi_clip_extractor.ffmpegcv.VideoCapture")
-    @patch("frigate_buffer.services.multi_clip_extractor.ffmpegcv.VideoCaptureNV")
-    def test_primary_camera_accepted(self, mock_video_capture_nv, mock_video_capture):
+    @patch.object(sys.modules["nelux"], "VideoReader")
+    def test_primary_camera_accepted(self, mock_video_reader_cls):
         """extract_target_centric_frames accepts primary_camera (EMA pipeline); returns frames without error."""
         os.makedirs(os.path.join(self.tmp, "cam1"))
         os.makedirs(os.path.join(self.tmp, "cam2"))
-        with open(os.path.join(self.tmp, "cam1", "clip.mp4"), "wb"):
-            pass
-        with open(os.path.join(self.tmp, "cam2", "clip.mp4"), "wb"):
-            pass
-        for cam_name in ("cam1", "cam2"):
-            sidecar_path = os.path.join(self.tmp, cam_name, DETECTION_SIDECAR_FILENAME)
+        for c in ("cam1", "cam2"):
+            with open(os.path.join(self.tmp, c, "clip.mp4"), "wb"):
+                pass
+            sidecar_path = os.path.join(self.tmp, c, DETECTION_SIDECAR_FILENAME)
             with open(sidecar_path, "w", encoding="utf-8") as f:
                 json.dump(
                     {"native_width": 100, "native_height": 100, "entries": [{"timestamp_sec": t, "detections": [{"label": "person", "area": 100}]} for t in range(11)]},
                     f,
                 )
-        frame = np.zeros((100, 100, 3), dtype=np.uint8)
-
-        def make_mock():
-            m = MagicMock()
-            m.fps = 1.0
-            m.__len__ = MagicMock(return_value=10)
-            m.isOpened.return_value = True
-            m.read.side_effect = [(True, frame)] * 10 + [(False, None)]
-            m.release = MagicMock()
-            return m
-
-        mock_video_capture_nv.side_effect = Exception("no nv")
-        mock_video_capture.side_effect = lambda path: make_mock()
+        mock_video_reader_cls.return_value = self._make_nelux_reader_mock()
 
         result = extract_target_centric_frames(
-            self.tmp,
-            max_frames_sec=1.0,
-            max_frames_min=5,
-            primary_camera="cam1",
+            self.tmp, max_frames_sec=1.0, max_frames_min=5, primary_camera="cam1"
         )
         self.assertGreaterEqual(len(result), 1)
         for item in result:
             self.assertIsInstance(item, ExtractedFrame)
             self.assertIn(item.camera, ("cam1", "cam2"))
 
-    @patch("frigate_buffer.services.multi_clip_extractor.ffmpegcv.VideoCapture")
-    @patch("frigate_buffer.services.multi_clip_extractor.ffmpegcv.VideoCaptureNV")
-    def test_ema_drop_no_person_excludes_zero_area_frames(self, mock_video_capture_nv, mock_video_capture):
+    @patch.object(sys.modules["nelux"], "VideoReader")
+    def test_ema_drop_no_person_excludes_zero_area_frames(self, mock_video_reader_cls):
         """With camera_timeline_final_yolo_drop_no_person=True, frames with person_area=0 are not in the result."""
         os.makedirs(os.path.join(self.tmp, "cam1"))
         os.makedirs(os.path.join(self.tmp, "cam2"))
-        with open(os.path.join(self.tmp, "cam1", "clip.mp4"), "wb"):
-            pass
-        with open(os.path.join(self.tmp, "cam2", "clip.mp4"), "wb"):
-            pass
-        # Sidecar: at t=0, 0.5 person area 0; at t>=1 person area 100. So first two sample times get 0.
+        for c in ("cam1", "cam2"):
+            with open(os.path.join(self.tmp, c, "clip.mp4"), "wb"):
+                pass
         times = [0.0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0]
         entries = [
             {"timestamp_sec": t, "detections": [{"label": "person", "area": 0 if t < 1.0 else 100}]}
@@ -447,19 +330,7 @@ class TestMultiClipExtractor(unittest.TestCase):
             sidecar_path = os.path.join(self.tmp, cam_name, DETECTION_SIDECAR_FILENAME)
             with open(sidecar_path, "w", encoding="utf-8") as f:
                 json.dump({"native_width": 100, "native_height": 100, "entries": entries}, f)
-        frame = np.zeros((100, 100, 3), dtype=np.uint8)
-
-        def make_mock():
-            m = MagicMock()
-            m.fps = 1.0
-            m.__len__ = MagicMock(return_value=10)
-            m.isOpened.return_value = True
-            m.read.side_effect = [(True, frame)] * 10 + [(False, None)]
-            m.release = MagicMock()
-            return m
-
-        mock_video_capture_nv.side_effect = Exception("no nv")
-        mock_video_capture.side_effect = lambda path: make_mock()
+        mock_video_reader_cls.return_value = self._make_nelux_reader_mock()
 
         result = extract_target_centric_frames(
             self.tmp,

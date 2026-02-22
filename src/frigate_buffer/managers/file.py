@@ -8,7 +8,7 @@ import shutil
 import zipfile
 import logging
 from datetime import datetime
-from typing import Any
+from typing import Any, Union
 
 from frigate_buffer.models import EventState
 
@@ -26,13 +26,60 @@ except ImportError:
     _CV2_AVAILABLE = False
 
 
-def write_stitched_frame(frame_bgr: Any, filepath: str) -> bool:
-    """Write a single color image (BGR) to filepath. No B/W or stacking."""
+def _is_tensor(x: Any) -> bool:
+    """True if x is a torch.Tensor."""
+    return type(x).__name__ == "Tensor"
+
+
+def write_stitched_frame(frame_bgr: Union[Any, np.ndarray], filepath: str) -> bool:
+    """
+    Write a single color image to filepath.
+
+    Accepts numpy ndarray HWC BGR (from overlay or legacy path) or torch.Tensor BCHW/CHW RGB.
+    For tensor: uses torchvision.io.encode_jpeg and writes bytes. For numpy: uses cv2.imwrite.
+    """
+    try:
+        os.makedirs(os.path.dirname(filepath), exist_ok=True)
+    except OSError as e:
+        logger.warning("Failed to create directory for %s: %s", filepath, e)
+        return False
+
+    if _is_tensor(frame_bgr):
+        try:
+            import torch
+            from torchvision.io import encode_jpeg
+        except ImportError as e:
+            logger.warning("torch/torchvision not available for tensor frame write: %s", e)
+            return False
+        t = frame_bgr
+        if t.dim() == 4:
+            t = t.squeeze(0)
+        if t.dim() != 3 or t.shape[0] not in (1, 3):
+            logger.warning("write_stitched_frame tensor expected CHW with 1 or 3 channels, got shape %s", t.shape)
+            return False
+        if t.dtype == torch.float32 or t.dtype == torch.float64:
+            t = (t.clamp(0.0, 1.0) * 255.0).round().to(torch.uint8)
+        elif t.dtype != torch.uint8:
+            t = t.to(torch.uint8)
+        # encode_jpeg expects CHW uint8 (RGB)
+        try:
+            jpeg_bytes = encode_jpeg(t, quality=90)
+        except Exception as e:
+            logger.warning("encode_jpeg failed for %s: %s", filepath, e)
+            return False
+        buf = jpeg_bytes.cpu().numpy().tobytes()
+        try:
+            with open(filepath, "wb") as f:
+                f.write(buf)
+            return True
+        except OSError as e:
+            logger.warning("Failed to write frame %s: %s", filepath, e)
+            return False
+
     if not _CV2_AVAILABLE:
         logger.warning("cv2/numpy not available, cannot write frame")
         return False
     try:
-        os.makedirs(os.path.dirname(filepath), exist_ok=True)
         return cv2.imwrite(filepath, frame_bgr)
     except Exception as e:
         logger.warning("Failed to write frame %s: %s", filepath, e)

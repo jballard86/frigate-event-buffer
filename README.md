@@ -44,7 +44,7 @@ The **StateAwareOrchestrator** is the central coordinator. It owns event-handlin
 
 ### Refactor Additions (This Fork)
 
-- **VideoService** (`services/video.py`) — Decode-only frame reading (ffmpegcv/NVDEC), detection sidecar generation (YOLO), and GIF generation; no encoding.
+- **VideoService** (`services/video.py`) — NeLux NVDEC decode for detection sidecars (YOLO), subprocess FFmpeg for GIF only; no CPU decode fallback.
 - **EventLifecycleService** (`services/lifecycle.py`) — Handles event creation, event end (clip export, cleanup), and consolidated-event finalization (export, review summary, notifications); orchestrator delegates to it instead of inlining logic.
 - **GeminiAnalysisService** (`services/ai_analyzer.py`) — Optional. When `gemini.enabled`, extracts frames (motion-aware selection, optional center/smart crop from per-frame metadata), sends them to an OpenAI-compatible Gemini proxy, and **returns** the analysis metadata to the orchestrator. Writes **analysis_result.json** in the event folder for the Daily Report. Does not publish to MQTT; the orchestrator persists the result (state, files, Frigate API, HA notification).
 - **DailyReporterService** (`services/daily_reporter.py`) — Optional. When the Gemini analyzer is enabled, runs at **DAILY_REPORT_SCHEDULE_HOUR** (default 1am) for the previous calendar day: scans storage for **analysis_result.json** in event folders, aggregates event lines, fills the report prompt template (e.g. `report_prompt.txt`), calls **send_text_prompt** on the analyzer (text-only, no images), and writes the proxy response to `{STORAGE_PATH}/daily_reports/{date}_report.md`.

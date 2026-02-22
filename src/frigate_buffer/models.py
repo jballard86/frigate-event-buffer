@@ -10,7 +10,7 @@ from typing import Any, Protocol, runtime_checkable
 @dataclass
 class ExtractedFrame:
     """Single frame from multi-clip extraction: image, timestamp, camera, and optional metadata (e.g. is_full_frame_resize)."""
-    frame: Any  # BGR numpy array (cv2/opencv)
+    frame: Any  # numpy HWC BGR or torch.Tensor BCHW RGB (Phase 3 extractor outputs tensor)
     timestamp_sec: float
     camera: str
     metadata: dict[str, Any] = field(default_factory=dict)

@@ -1,14 +1,16 @@
 """
 Shared crop and overlay helpers for AI analyzer and multi-cam frame extractor.
 
-Single source of truth for CV-based motion crop (absdiff, contours, minimum area)
-and timestamp overlay (time, camera name, photo sequence) with shadow/outline for contrast.
+All crop/resize/letterbox functions accept PyTorch tensors in BCHW (batch, channels, height, width).
+Motion crop uses GPU absdiff with int16 cast to avoid uint8 underflow; only the 1-bit mask is
+transferred to CPU for cv2.findContours. Timestamp overlay accepts tensor or numpy (Phase 1 compat);
+converts RGB→BGR only at the OpenCV boundary and returns numpy HWC BGR.
 """
 
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, Union
 
 import cv2
 import numpy as np
@@ -22,19 +24,47 @@ DEFAULT_MOTION_CROP_MIN_AREA_FRACTION = 0.001
 DEFAULT_MOTION_CROP_MIN_PX = 500
 
 
+def _is_tensor(x: Any) -> bool:
+    """True if x is a torch.Tensor (avoid importing torch at module level for tests)."""
+    cls = type(x).__name__
+    return cls == "Tensor"
+
+
+def _get_tensor_hw(tensor: Any) -> tuple[int, int]:
+    """Return (height, width) from BCHW tensor. Raises if not 4D."""
+    if tensor.dim() != 4:
+        raise ValueError(f"Expected BCHW tensor with 4 dims, got dim()={tensor.dim()}")
+    return int(tensor.shape[2]), int(tensor.shape[3])
+
+
 def center_crop(frame: Any, target_w: int, target_h: int) -> Any:
-    """Crop frame to target_w x target_h centered. Resize if crop larger than frame."""
-    logger.debug("Cropping frame (center)")
-    h, w = frame.shape[:2]
+    """
+    Crop frame to target_w x target_h centered. Resize if crop larger than frame.
+
+    frame: torch.Tensor BCHW (batch, channels, height, width). Returns BCHW tensor.
+    """
+    import torch
+    import torch.nn.functional as F
+
+    if not _is_tensor(frame):
+        raise TypeError("center_crop expects torch.Tensor BCHW")
+    h, w = _get_tensor_hw(frame)
     if target_w <= 0 or target_h <= 0:
         return frame
     x1 = max(0, (w - target_w) // 2)
     y1 = max(0, (h - target_h) // 2)
     x2 = min(w, x1 + target_w)
     y2 = min(h, y1 + target_h)
-    crop = frame[y1:y2, x1:x2]
-    if crop.shape[1] != target_w or crop.shape[0] != target_h:
-        crop = cv2.resize(crop, (target_w, target_h))
+    crop = frame[:, :, y1:y2, x1:x2]
+    if crop.shape[2] != target_h or crop.shape[3] != target_w:
+        crop = F.interpolate(
+            crop.float(),
+            size=(target_h, target_w),
+            mode="bilinear",
+            align_corners=False,
+        )
+        if frame.dtype == torch.uint8:
+            crop = crop.clamp(0, 255).round().to(torch.uint8)
     return crop
 
 
@@ -48,8 +78,7 @@ def crop_around_center(
     """
     Crop frame centered on (center_x, center_y), clamped to frame bounds, then resize to target.
 
-    YOLO/Ultralytics often return float centerpoints; we cast to int before slice bounds
-    so OpenCV/NumPy array indexing does not raise TypeError.
+    frame: torch.Tensor BCHW. Returns BCHW tensor.
     """
     cx = int(center_x)
     cy = int(center_y)
@@ -60,8 +89,13 @@ def crop_around_center(
 def _crop_around_center(
     frame: Any, center_x: int, center_y: int, target_w: int, target_h: int
 ) -> Any:
-    """Crop frame centered on (center_x, center_y), clamped to frame bounds, then resize to target."""
-    h, w = frame.shape[:2]
+    """Crop frame centered on (center_x, center_y), clamped to frame bounds, then resize to target. BCHW in/out."""
+    import torch
+    import torch.nn.functional as F
+
+    if not _is_tensor(frame):
+        raise TypeError("_crop_around_center expects torch.Tensor BCHW")
+    h, w = _get_tensor_hw(frame)
     if target_w <= 0 or target_h <= 0:
         return frame
     x1 = center_x - target_w // 2
@@ -82,11 +116,18 @@ def _crop_around_center(
         y2 = h
     x1, y1 = max(0, x1), max(0, y1)
     x2, y2 = min(w, x2), min(h, y2)
-    crop = frame[y1:y2, x1:x2]
-    if crop.size == 0:
+    crop = frame[:, :, y1:y2, x1:x2]
+    if crop.numel() == 0:
         return center_crop(frame, target_w, target_h)
-    if crop.shape[1] != target_w or crop.shape[0] != target_h:
-        crop = cv2.resize(crop, (target_w, target_h))
+    if crop.shape[2] != target_h or crop.shape[3] != target_w:
+        crop = F.interpolate(
+            crop.float(),
+            size=(target_h, target_w),
+            mode="bilinear",
+            align_corners=False,
+        )
+        if frame.dtype == torch.uint8:
+            crop = crop.clamp(0, 255).round().to(torch.uint8)
     return crop
 
 
@@ -98,22 +139,20 @@ def crop_around_detections_with_padding(
     """
     Crop the frame to a region that encompasses ALL detections plus padding.
 
-    Builds a single "master" bounding box as the union of every detection bbox,
-    expands it by padding_fraction (e.g. 0.1 = 10%) on each side, clamps to frame
-    bounds, and returns the cropped region. Ensures the AI sees full context when
-    multiple people (or objects) are in the frame.
-    If detections is empty, returns the full frame unchanged.
+    frame: torch.Tensor BCHW. Returns BCHW tensor (variable size crop; no resize to fixed size).
     Each detection must have "bbox" as [x1, y1, x2, y2] in pixel coordinates.
     """
+    if not _is_tensor(frame):
+        raise TypeError("crop_around_detections_with_padding expects torch.Tensor BCHW")
+    h, w = _get_tensor_hw(frame)
     if not detections:
         return frame
-    h, w = frame.shape[:2]
     if w <= 0 or h <= 0:
         return frame
-    x1_min = w
-    y1_min = h
-    x2_max = 0
-    y2_max = 0
+    x1_min = float(w)
+    y1_min = float(h)
+    x2_max = 0.0
+    y2_max = 0.0
     for d in detections:
         bbox = d.get("bbox")
         if not isinstance(bbox, (list, tuple)) or len(bbox) < 4:
@@ -139,29 +178,49 @@ def crop_around_detections_with_padding(
     y2 = min(h, y2)
     if x2 <= x1 or y2 <= y1:
         return frame
-    crop = frame[y1:y2, x1:x2]
-    return crop if crop.size > 0 else frame
+    crop = frame[:, :, y1:y2, x1:x2]
+    return crop if crop.numel() > 0 else frame
 
 
 def full_frame_resize_to_target(frame: Any, target_w: int, target_h: int) -> Any:
     """
-    Scale the entire frame to fit inside target_w x target_h preserving aspect ratio, then pad with black to exactly target_w x target_h.
+    Scale the entire frame to fit inside target_w x target_h preserving aspect ratio,
+    then pad with black to exactly target_w x target_h (letterbox).
 
-    Used when the subject occupies too much of the crop area (e.g. 40% threshold); the AI proxy receives full context with letterboxing instead of a tight crop.
+    frame: torch.Tensor BCHW. Returns BCHW tensor.
     """
+    import torch
+    import torch.nn.functional as F
+
+    if not _is_tensor(frame):
+        raise TypeError("full_frame_resize_to_target expects torch.Tensor BCHW")
     if target_w <= 0 or target_h <= 0:
         return frame
-    h, w = frame.shape[:2]
+    _, _, h, w = frame.shape
+    h, w = int(h), int(w)
     scale = min(target_w / w, target_h / h)
     new_w = int(round(w * scale))
     new_h = int(round(h * scale))
-    scaled = cv2.resize(frame, (new_w, new_h))
-    # Pad to exact target size (letterbox): top/bottom or left/right black bars
-    top = (target_h - new_h) // 2
-    bottom = target_h - new_h - top
-    left = (target_w - new_w) // 2
-    right = target_w - new_w - left
-    return cv2.copyMakeBorder(scaled, top, bottom, left, right, cv2.BORDER_CONSTANT, value=(0, 0, 0))
+    scaled = F.interpolate(
+        frame.float(),
+        size=(new_h, new_w),
+        mode="bilinear",
+        align_corners=False,
+    )
+    if frame.dtype == torch.uint8:
+        scaled = scaled.clamp(0, 255).round().to(torch.uint8)
+    # Letterbox: pad to (target_h, target_w)
+    pad_top = (target_h - new_h) // 2
+    pad_bottom = target_h - new_h - pad_top
+    pad_left = (target_w - new_w) // 2
+    pad_right = target_w - new_w - pad_left
+    padded = F.pad(
+        scaled,
+        (pad_left, pad_right, pad_top, pad_bottom),
+        mode="constant",
+        value=0,
+    )
+    return padded
 
 
 def motion_crop(
@@ -174,16 +233,23 @@ def motion_crop(
     center_override: tuple[int, int] | None = None,
 ) -> tuple[Any, Any]:
     """
-    Crop frame centered on the largest motion region (absdiff + contours).
-    If prev_gray is None or motion is below threshold, return center crop.
-    Returns (cropped_frame, next_gray) so caller can pass next_gray as prev_gray for next frame.
+    Crop frame centered on the largest motion region (absdiff + contours on GPU; findContours on CPU).
 
-    Optional: center_override (cx, cy) — when provided (e.g. from an on-device person detector),
-    use this center instead of motion. Enables "center on person" when a detector is used;
-    add e.g. Ultralytics YOLO or OpenCV DNN in the caller and pass the bbox center here.
+    frame, prev_gray: torch.Tensor. frame is BCHW RGB; prev_gray is 1CHW or HW (grayscale).
+    Returns (cropped_frame BCHW, next_gray 1CHW or HW). Cast to int16 before subtraction to avoid uint8 underflow.
     """
-    h, w = frame.shape[:2]
-    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    import torch
+
+    if not _is_tensor(frame):
+        raise TypeError("motion_crop expects frame as torch.Tensor BCHW")
+    _, c, h, w = frame.shape
+    # Grayscale from RGB: 0.299*R + 0.587*G + 0.114*B (on GPU)
+    if c == 3:
+        gray = (
+            0.299 * frame[:, 0:1] + 0.587 * frame[:, 1:2] + 0.114 * frame[:, 2:3]
+        ).to(frame.dtype)
+    else:
+        gray = frame[:, :1]
 
     if center_override is not None:
         cx, cy = center_override
@@ -193,10 +259,17 @@ def motion_crop(
     if prev_gray is None:
         return center_crop(frame, target_w, target_h), gray
 
-    diff = cv2.absdiff(prev_gray, gray)
-    _, thresh = cv2.threshold(diff, 25, 255, cv2.THRESH_BINARY)
+    # Cast to int16 before subtraction to avoid uint8 underflow (e.g. 50 - 60 = 246 in uint8).
+    prev_s = prev_gray.to(torch.int16)
+    gray_s = gray.to(torch.int16)
+    diff = torch.abs(prev_s - gray_s)
+    thresh = (diff > 25).to(torch.uint8) * 255
+    # Transfer only the 1-bit mask to CPU for findContours
+    mask_cpu = thresh.squeeze().cpu().numpy()
+    if mask_cpu.ndim == 3:
+        mask_cpu = mask_cpu[0]
     contours, _ = cv2.findContours(
-        thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+        mask_cpu, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
     )
 
     if not contours:
@@ -222,7 +295,7 @@ def motion_crop(
 
 
 def draw_timestamp_overlay(
-    frame: Any,
+    frame: Union[Any, np.ndarray],
     time_str: str,
     camera_name: str,
     seq_index: int,
@@ -236,24 +309,23 @@ def draw_timestamp_overlay(
     """
     Draw timestamp overlay on frame (top-left by default).
 
-    OpenCV putText requires a writable buffer; if the frame is read-only (e.g. from
-    ffmpegcv or a crop view), a copy is made so drawing succeeds. Callers must use
-    the returned frame—the overlay is drawn on that array.
-
-    Uses shadow/outline: black with thicker stroke first, then white with thinner
-    stroke, so text is readable on both bright (snow) and dark (night) backgrounds.
-    Format: time_str | camera_name | seq_index/seq_total (e.g. "12:34:56 | Doorbell | 3/24").
-
-    When person_area is not None, draws "person_area: {value}" at bottom-right in the
-    same style, for debugging camera-switch threshold tuning (multi-cam only).
-
-    Returns:
-        The frame with overlay drawn (same object if already writable, else a copy).
+    Accepts torch.Tensor BCHW RGB or numpy ndarray HWC BGR (Phase 1 compat).
+    For tensor: converts to HWC BGR at the OpenCV boundary, draws, returns numpy HWC BGR.
+    For numpy: draws in-place (or copy if read-only) and returns the array.
     """
-    if not getattr(frame, "flags", None) or not frame.flags.writeable:
-        frame = np.array(frame, copy=True)
+    if _is_tensor(frame):
+        # BCHW RGB → HWC BGR for OpenCV
+        if frame.dim() == 4:
+            frame_np = frame[:, [2, 1, 0], :, :].permute(0, 2, 3, 1).squeeze(0).cpu().numpy()
+        else:
+            # CHW
+            frame_np = frame[[2, 1, 0], :, :].permute(1, 2, 0).cpu().numpy()
+        frame = np.ascontiguousarray(frame_np)
+    else:
+        if not getattr(frame, "flags", None) or not frame.flags.writeable:
+            frame = np.array(frame, copy=True)
+
     label = f"{time_str} | {camera_name} | {seq_index}/{seq_total}"
-    # Black outline (thicker) first
     cv2.putText(
         frame,
         label,
@@ -264,7 +336,6 @@ def draw_timestamp_overlay(
         thickness_outline,
         cv2.LINE_AA,
     )
-    # White text (thinner) on top
     cv2.putText(
         frame,
         label,

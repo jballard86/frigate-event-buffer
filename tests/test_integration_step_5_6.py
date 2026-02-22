@@ -32,6 +32,22 @@ def _make_mock_extracted_frame():
     return _EF()
 
 
+def _make_mock_extracted_frame_tensor():
+    """Phase 5: One frame with tensor .frame (BCHW RGB) for analyze_multi_clip_ce."""
+    try:
+        import torch
+    except ImportError:
+        return None
+    class _EF:
+        __slots__ = ("frame", "timestamp_sec", "camera", "metadata")
+        def __init__(self):
+            self.frame = torch.zeros((1, 3, 100, 100), dtype=torch.uint8)
+            self.timestamp_sec = 0.0
+            self.camera = "cam1"
+            self.metadata = {}
+    return _EF()
+
+
 class TestIntegrationStep5Persistence(unittest.TestCase):
     """Verify analysis_result.json is created in the CE folder with expected content."""
 
@@ -99,6 +115,41 @@ class TestIntegrationStep5Persistence(unittest.TestCase):
             saved = json.load(f)
         self.assertEqual(saved["title"], "Partial")
         self.assertEqual(saved["shortSummary"], "No threat level in response.")
+
+    @patch("frigate_buffer.services.ai_analyzer.requests.post")
+    @patch("frigate_buffer.services.ai_analyzer.extract_target_centric_frames")
+    def test_analysis_result_json_created_with_tensor_frames(self, mock_extract, mock_post):
+        """Phase 5: analyze_multi_clip_ce accepts ExtractedFrame with tensor .frame; saves analysis_result.json."""
+        tensor_frame = _make_mock_extracted_frame_tensor()
+        if tensor_frame is None:
+            self.skipTest("torch not available")
+        ce_dir = tempfile.mkdtemp()
+        self.addCleanup(lambda: os.path.exists(ce_dir) and shutil.rmtree(ce_dir))
+        mock_extract.return_value = [tensor_frame]
+
+        payload = {
+            "title": "Tensor frame test",
+            "shortSummary": "Pipeline accepts tensor frames.",
+            "scene": "Test",
+            "confidence": 0.9,
+            "potential_threat_level": 0,
+        }
+        mock_post.return_value.status_code = 200
+        mock_post.return_value.json.return_value = {
+            "choices": [{"message": {"content": json.dumps(payload)}}]
+        }
+
+        config = {"GEMINI": {"enabled": True, "proxy_url": "http://proxy", "api_key": "key"}}
+        service = GeminiAnalysisService(config)
+        result = service.analyze_multi_clip_ce("ce_tensor", ce_dir, ce_start_time=0.0)
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result.get("title"), "Tensor frame test")
+        out_path = os.path.join(ce_dir, "analysis_result.json")
+        self.assertTrue(os.path.isfile(out_path), f"Expected {out_path} to exist")
+        with open(out_path, "r", encoding="utf-8") as f:
+            saved = json.load(f)
+        self.assertEqual(saved["title"], payload["title"])
 
 
 # --- Test Case 2: Orchestrator hand-off ---

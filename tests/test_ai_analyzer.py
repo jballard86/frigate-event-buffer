@@ -74,6 +74,31 @@ class TestGeminiAnalysisServicePayload(unittest.TestCase):
         self.assertTrue(url.startswith("data:image/jpeg;base64,"), f"Expected data URL, got: {url[:80]}")
 
 
+class TestFrameToBase64Url(unittest.TestCase):
+    """Test _frame_to_base64_url with numpy and tensor (Phase 4)."""
+
+    def test_frame_to_base64_url_numpy_returns_data_url(self):
+        config = {"GEMINI": {"enabled": True, "proxy_url": "http://p", "api_key": "k"}}
+        service = GeminiAnalysisService(config)
+        frame = np.zeros((60, 80, 3), dtype=np.uint8)
+        url = service._frame_to_base64_url(frame)
+        self.assertTrue(url.startswith("data:image/jpeg;base64,"))
+        self.assertGreater(len(url), 50)
+
+    def test_frame_to_base64_url_tensor_returns_data_url(self):
+        try:
+            import torch
+        except ImportError:
+            self.skipTest("torch not available")
+        config = {"GEMINI": {"enabled": True, "proxy_url": "http://p", "api_key": "k"}}
+        service = GeminiAnalysisService(config)
+        # BCHW RGB uint8
+        t = torch.zeros((1, 3, 60, 80), dtype=torch.uint8)
+        url = service._frame_to_base64_url(t)
+        self.assertTrue(url.startswith("data:image/jpeg;base64,"))
+        self.assertGreater(len(url), 50)
+
+
 class TestGeminiFrameCapAndLogging(unittest.TestCase):
     """Test rolling frame cap and API rate stats logging."""
 

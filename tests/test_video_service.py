@@ -1,11 +1,17 @@
 import json
 import os
+import sys
 import tempfile
 import unittest
 from unittest.mock import MagicMock, patch
 
+# Fake nelux module so we can patch VideoReader when the real wheel is not installed (e.g. on Windows).
+if "nelux" not in sys.modules:
+    sys.modules["nelux"] = MagicMock()
+
 from frigate_buffer.services.video import (
     VideoService,
+    BATCH_SIZE,
     ensure_detection_model_ready,
     get_detection_model_path,
 )
@@ -35,43 +41,51 @@ class TestVideoService(unittest.TestCase):
         result = self.video_service.generate_gif_from_clip("clip.mp4", "out.gif")
         self.assertFalse(result)
 
-    @patch("frigate_buffer.services.video.ffmpegcv.VideoCapture")
-    @patch("frigate_buffer.services.video.ffmpegcv.VideoCaptureNV")
+    @patch("frigate_buffer.services.video._run_detection_on_batch")
+    @patch("frigate_buffer.services.video._get_video_metadata")
     def test_generate_detection_sidecar_opens_clip_and_writes_json_schema(
-        self, mock_capture_nv, mock_capture_cpu
+        self, mock_get_metadata, mock_run_batch
     ):
-        """generate_detection_sidecar reads frames and writes detection.json with expected schema."""
-        import numpy as np
-        mock_capture_nv.side_effect = RuntimeError("No GPU")
-        mock_cap = MagicMock()
-        mock_cap.isOpened.return_value = True
-        mock_cap.fps = 30.0
-        # Return 3 frames then EOF
-        mock_cap.read.side_effect = [
-            (True, np.zeros((480, 640, 3), dtype=np.uint8)),
-            (True, np.zeros((480, 640, 3), dtype=np.uint8)),
-            (True, np.zeros((480, 640, 3), dtype=np.uint8)),
-            (False, None),
-        ]
-        mock_cap.release = MagicMock()
-        mock_capture_cpu.return_value = mock_cap
+        """generate_detection_sidecar uses NeLux VideoReader, batches frames, writes detection.json with expected schema."""
+        try:
+            import torch
+        except ImportError:
+            self.skipTest("torch not available")
+        mock_get_metadata.return_value = (640, 480, 30.0, 10.0)
+        mock_reader = MagicMock()
+        mock_reader.fps = 30.0
+        mock_reader.__len__ = lambda self: 90
+
+        def get_batch(indices):
+            return torch.zeros((len(indices), 3, 480, 640), dtype=torch.uint8)
+
+        mock_reader.get_batch.side_effect = get_batch
+
+        def run_batch_side_effect(model, batch, device, imgsz=640):
+            return [[] for _ in range(batch.shape[0])]
+
+        mock_run_batch.side_effect = run_batch_side_effect
 
         config = {
-            "DETECTION_MODEL": "",
+            "DETECTION_MODEL": "yolov8n.pt",
             "DETECTION_DEVICE": "",
             "DETECTION_FRAME_INTERVAL": 2,
+            "STORAGE_PATH": "/tmp",
         }
-        tmp = os.path.join(os.path.dirname(__file__), "tmp_video_sidecar")
-        os.makedirs(tmp, exist_ok=True)
+        tmp = tempfile.mkdtemp(prefix="tmp_video_sidecar_")
+        clip_path = os.path.join(tmp, "clip.mp4")
+        sidecar_path = os.path.join(tmp, "detection.json")
         try:
-            clip_path = os.path.join(tmp, "clip.mp4")
-            sidecar_path = os.path.join(tmp, "detection.json")
             with open(clip_path, "wb"):
                 pass
-            result = self.video_service.generate_detection_sidecar(
-                clip_path, sidecar_path, config
-            )
-            self.assertTrue(result)
+            with patch.object(sys.modules["nelux"], "VideoReader", return_value=mock_reader):
+                with patch("frigate_buffer.services.video.get_detection_model_path", return_value=os.path.join("/tmp", "yolo_models", "yolov8n.pt")):
+                    with patch("ultralytics.YOLO") as mock_yolo:
+                        mock_yolo.return_value = MagicMock()
+                        result = self.video_service.generate_detection_sidecar(
+                            clip_path, sidecar_path, config
+                        )
+            self.assertTrue(result, "generate_detection_sidecar should return True")
             self.assertTrue(os.path.isfile(sidecar_path))
             with open(sidecar_path, encoding="utf-8") as f:
                 data = json.load(f)
@@ -99,36 +113,31 @@ class TestVideoService(unittest.TestCase):
                 except OSError:
                     pass
 
-    @patch("frigate_buffer.services.video.ffmpegcv.VideoCapture")
-    @patch("frigate_buffer.services.video.ffmpegcv.VideoCaptureNV")
+    @patch("frigate_buffer.services.video._get_video_metadata")
     def test_generate_detection_sidecar_returns_false_when_clip_wont_open(
-        self, mock_capture_nv, mock_capture_cpu
+        self, mock_get_metadata
     ):
-        mock_capture_nv.side_effect = RuntimeError("No GPU")
-        mock_cap = MagicMock()
-        mock_cap.isOpened.return_value = False
-        mock_capture_cpu.return_value = mock_cap
+        mock_get_metadata.return_value = (640, 480, 30.0, 10.0)
+        with patch.object(sys.modules["nelux"], "VideoReader", side_effect=RuntimeError("NeLux open failed")):
 
-        tmp = os.path.join(os.path.dirname(__file__), "tmp_video_sidecar_noclip")
-        os.makedirs(tmp, exist_ok=True)
-        try:
-            sidecar_path = os.path.join(tmp, "detection.json")
-            result = self.video_service.generate_detection_sidecar(
-                "/nonexistent/clip.mp4", sidecar_path, {}
-            )
-            self.assertFalse(result)
-            self.assertFalse(os.path.isfile(sidecar_path))
-        finally:
-            if os.path.isdir(tmp):
-                try:
-                    for f in os.listdir(tmp):
-                        os.remove(os.path.join(tmp, f))
-                    os.rmdir(tmp)
-                except OSError:
-                    pass
+            tmp = tempfile.mkdtemp(prefix="tmp_video_sidecar_noclip_")
+            try:
+                sidecar_path = os.path.join(tmp, "detection.json")
+                result = self.video_service.generate_detection_sidecar(
+                    "/nonexistent/clip.mp4", sidecar_path, {}
+                )
+                self.assertFalse(result)
+                self.assertFalse(os.path.isfile(sidecar_path))
+            finally:
+                if os.path.isdir(tmp):
+                    try:
+                        for f in os.listdir(tmp):
+                            os.remove(os.path.join(tmp, f))
+                        os.rmdir(tmp)
+                    except OSError:
+                        pass
 
     def test_generate_detection_sidecars_for_cameras_acquires_and_releases_app_lock(self):
-        """When set_sidecar_app_lock was called, generate_detection_sidecars_for_cameras acquires and releases the lock."""
         mock_lock = MagicMock()
         self.video_service.set_sidecar_app_lock(mock_lock)
         with patch.object(
@@ -144,7 +153,6 @@ class TestVideoService(unittest.TestCase):
         mock_lock.release.assert_called_once()
 
     def test_generate_detection_sidecars_for_cameras_no_lock_when_not_set(self):
-        """When set_sidecar_app_lock was never called, no lock is used (e.g. in tests)."""
         self.assertIsNone(self.video_service._sidecar_app_lock)
         result = self.video_service.generate_detection_sidecars_for_cameras([], {})
         self.assertEqual(result, [])
@@ -172,16 +180,14 @@ class TestEnsureDetectionModelReady(unittest.TestCase):
         mock_yolo_cls.assert_called_once_with(model_path)
 
     def test_get_detection_model_path_under_storage(self):
-        """get_detection_model_path returns a path under STORAGE_PATH with yolo_models and model basename."""
         config = {"STORAGE_PATH": "/app/storage", "DETECTION_MODEL": "yolo26m.pt"}
         path = get_detection_model_path(config)
-        self.assertEqual(path, "/app/storage/yolo_models/yolo26m.pt")
+        self.assertEqual(path, os.path.join("/app/storage", "yolo_models", "yolo26m.pt"))
 
     def test_get_detection_model_path_default_model_when_empty(self):
-        """When DETECTION_MODEL is empty, basename falls back to yolov8n.pt."""
         config = {"STORAGE_PATH": "/data"}
         path = get_detection_model_path(config)
-        self.assertEqual(path, "/data/yolo_models/yolov8n.pt")
+        self.assertEqual(path, os.path.join("/data", "yolo_models", "yolov8n.pt"))
 
 
 if __name__ == "__main__":

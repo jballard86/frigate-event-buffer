@@ -42,6 +42,22 @@ import numpy as np
 logger = logging.getLogger('frigate-buffer')
 
 
+def _numpy_bgr_to_tensor_bchw_rgb(arr: np.ndarray) -> Any:
+    """Phase 1 bridge: convert numpy HWC BGR to torch.Tensor BCHW RGB for crop_utils."""
+    import torch
+    rgb = arr[:, :, [2, 1, 0]].copy()
+    t = torch.from_numpy(rgb).permute(2, 0, 1).unsqueeze(0)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    return t.to(device=device, dtype=torch.uint8)
+
+
+def _tensor_bchw_rgb_to_numpy_bgr(t: Any) -> np.ndarray:
+    """Phase 1 bridge: convert torch.Tensor BCHW RGB to numpy HWC BGR."""
+    if t.dim() == 4:
+        t = t.squeeze(0)
+    return t.permute(1, 2, 0).cpu().numpy()[:, :, [2, 1, 0]]
+
+
 class StateAwareOrchestrator:
     """Main orchestrator coordinating all components."""
 
@@ -364,9 +380,12 @@ class StateAwareOrchestrator:
             return
         detections = self.video_service.run_detection_on_image(image_bgr, self.config)
         if detections:
-            image_to_send = crop_utils.crop_around_detections_with_padding(
-                image_bgr, detections, padding_fraction=0.1
+            # Phase 4: keep tensor for proxy; generate_quick_title accepts numpy or tensor
+            image_tensor = _numpy_bgr_to_tensor_bchw_rgb(image_bgr)
+            cropped_tensor = crop_utils.crop_around_detections_with_padding(
+                image_tensor, detections, padding_fraction=0.1
             )
+            image_to_send = cropped_tensor
         else:
             image_to_send = image_bgr
         title = self.ai_analyzer.generate_quick_title(image_to_send, camera, label)

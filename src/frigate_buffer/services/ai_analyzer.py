@@ -206,16 +206,17 @@ class GeminiAnalysisService:
                 continue
         return None
 
-    def generate_quick_title(self, image_bgr: Any, camera: str, label: str) -> str | None:
+    def generate_quick_title(self, image: Any, camera: str, label: str) -> str | None:
         """
         Send a single cropped/live frame to the Gemini proxy and return a short title (3–6 words).
+        image: numpy HWC BGR or torch.Tensor BCHW RGB (Phase 4); encoded via _frame_to_base64_url.
         Used for the quick-title pipeline shortly after event start. Returns None on failure or empty.
         """
         if not self._proxy_url or not self._api_key:
             logger.warning("Gemini proxy_url or api_key not configured for quick title")
             return None
         system_prompt = self._load_quick_title_prompt()
-        raw = self._send_single_image_get_text(system_prompt, image_bgr)
+        raw = self._send_single_image_get_text(system_prompt, image)
         if not raw:
             return None
         # Strip markdown code blocks if present
@@ -253,6 +254,9 @@ class GeminiAnalysisService:
 
     def _center_crop(self, frame: Any, target_w: int, target_h: int) -> Any:
         """Crop frame to target_w x target_h centered. Resize if crop larger than frame."""
+        logger.warning(
+            "_center_crop is a legacy NumPy helper; production code must use crop_utils (BCHW tensors) instead."
+        )
         h, w = frame.shape[:2]
         if target_w <= 0 or target_h <= 0:
             return frame
@@ -278,6 +282,9 @@ class GeminiAnalysisService:
         box is [ymin, xmin, ymax, xmax] normalized 0-1. Expands box by padding (e.g. 0.15)
         so the model sees subject plus immediate environment.
         """
+        logger.warning(
+            "_smart_crop is a legacy NumPy helper; production code must use crop_utils (BCHW tensors) instead."
+        )
         h, w = frame.shape[:2]
         if target_w <= 0 or target_h <= 0:
             return frame
@@ -323,13 +330,54 @@ class GeminiAnalysisService:
         return crop
 
     def _frame_to_base64_url(self, frame: Any) -> str:
-        """Encode a BGR frame as JPEG base64 data URL."""
+        """
+        Encode a frame as JPEG base64 data URL.
+        Accepts numpy HWC BGR (cv2) or torch.Tensor BCHW/CHW RGB (Phase 4 GPU pipeline).
+        """
+        if type(frame).__name__ == "Tensor":
+            return self._frame_tensor_to_base64_url(frame)
         h, w = frame.shape[:2]
         if w > FRAME_MAX_WIDTH:
             scale = FRAME_MAX_WIDTH / w
             frame = cv2.resize(frame, (FRAME_MAX_WIDTH, int(h * scale)))
         _, buf = cv2.imencode('.jpg', frame)
         b64 = base64.b64encode(buf.tobytes()).decode('ascii')
+        return f"data:image/jpeg;base64,{b64}"
+
+    def _frame_tensor_to_base64_url(self, t: Any) -> str:
+        """Encode torch.Tensor BCHW/CHW RGB (uint8) as JPEG base64 data URL. Resizes if width > FRAME_MAX_WIDTH."""
+        try:
+            import torch
+            from torch.nn import functional as F
+            from torchvision.io import encode_jpeg
+        except ImportError:
+            logger.warning("torch/torchvision not available for tensor base64 encode")
+            return "data:image/jpeg;base64,"
+        if t.dim() == 4:
+            t = t.squeeze(0)
+        if t.dim() != 3 or t.shape[0] not in (1, 3):
+            logger.warning("_frame_tensor_to_base64_url expected CHW with 1 or 3 channels, got shape %s", t.shape)
+            return "data:image/jpeg;base64,"
+        h, w = int(t.shape[1]), int(t.shape[2])
+        if w > FRAME_MAX_WIDTH:
+            scale = FRAME_MAX_WIDTH / w
+            new_h, new_w = int(h * scale), FRAME_MAX_WIDTH
+            t = F.interpolate(
+                t.unsqueeze(0).float(),
+                size=(new_h, new_w),
+                mode="bilinear",
+                align_corners=False,
+            ).squeeze(0)
+            t = t.clamp(0.0, 255.0).round().to(torch.uint8)
+        elif t.dtype != torch.uint8:
+            t = t.clamp(0.0, 255.0).round().to(torch.uint8) if t.is_floating_point() else t.to(torch.uint8)
+        t = t.cpu()
+        try:
+            jpeg_bytes = encode_jpeg(t, quality=90)
+        except Exception as e:
+            logger.warning("encode_jpeg failed in _frame_tensor_to_base64_url: %s", e)
+            return "data:image/jpeg;base64,"
+        b64 = base64.b64encode(jpeg_bytes.cpu().numpy().tobytes()).decode("ascii")
         return f"data:image/jpeg;base64,{b64}"
 
     def _frame_cap_stats_and_check(self, frame_count: int) -> tuple[bool, int, int]:
@@ -378,7 +426,7 @@ class GeminiAnalysisService:
     ) -> dict[str, Any] | None:
         """
         POST system prompt and images to Gemini proxy (OpenAI-compatible).
-        image_buffers: list of numpy arrays (BGR, from cv2).
+        image_buffers: list of numpy HWC BGR or torch.Tensor BCHW RGB (Phase 4); encoded via _frame_to_base64_url.
         Returns parsed JSON with title, shortSummary, scene, confidence, potential_threat_level, or None on failure.
         """
         if not self._proxy_url or not self._api_key:
