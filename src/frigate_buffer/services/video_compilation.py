@@ -336,7 +336,7 @@ def _run_nelux_compilation(
                 t0 = sl["start_sec"]
                 t1 = sl["end_sec"]
                 duration = t1 - t0
-                # At least one frame for very short slices (match FFmpeg behavior).
+                # At least one frame for very short slices.
                 n_frames = max(1, round(duration * 20.0))
                 xs, ys, w, h = sl["crop_start"]
                 xe, ye, we, he = sl["crop_end"]
@@ -364,7 +364,7 @@ def _run_nelux_compilation(
                     frame = batch[i : i + 1]
                     t = output_times[i]
                     t_rel = t - t0
-                    # Smooth pan: same as FFmpeg t/duration interpolation; clamp to bounds.
+                    # Smooth pan: t/duration interpolation; clamp to bounds.
                     if duration <= 1e-6:
                         x, y = xs, ys
                     else:
