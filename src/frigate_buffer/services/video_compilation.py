@@ -189,7 +189,9 @@ def generate_compilation_video(
     fg_str = ";".join(filter_complex)
     logger.debug(f"Compilation FFmpeg filter_complex:\n{fg_str}")
     
-    cmd = ["ffmpeg", "-y", "-hwaccel", "cuda", "-hwaccel_output_format", "cuda"]
+    # Use software decode so filter_complex (crop, format, concat) runs on CPU with
+    # consistent pixel formats; h264_nvenc still does GPU encode.
+    cmd = ["ffmpeg", "-y"]
     cmd.extend(inputs)
     cmd.extend([
         "-filter_complex", fg_str,

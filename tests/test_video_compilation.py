@@ -290,11 +290,9 @@ class TestGenerateCompilationVideo(unittest.TestCase):
 
         cmd = mock_run.call_args[0][0]
 
-        # Check expected flags are present
+        # Check expected flags are present (software decode, GPU encode)
         self.assertEqual(cmd[0], "ffmpeg")
         self.assertIn("-y", cmd)
-        self.assertIn("-hwaccel", cmd)
-        self.assertIn("cuda", cmd)
         self.assertIn("-filter_complex", cmd)
         self.assertIn("-map", cmd)
         self.assertIn("[outv]", cmd)
