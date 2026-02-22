@@ -505,6 +505,35 @@ class TestGenerateCompilationVideo(unittest.TestCase):
         # Crop x/y expressions must be single-quoted so commas in min(max(...),...) are literal
         self.assertIn("'min(max(0,", filter_complex)
 
+    @patch("frigate_buffer.services.video_compilation.subprocess.run")
+    @patch("frigate_buffer.services.video_compilation.os.path.isfile")
+    @patch("frigate_buffer.services.video_compilation.os.rename")
+    @patch("frigate_buffer.services.video_compilation.os.path.getsize")
+    @patch("frigate_buffer.services.query.resolve_clip_in_folder")
+    @patch("builtins.open", new_callable=mock_open)
+    def test_last_slice_of_camera_run_holds_crop(
+        self, mock_file, mock_resolve, mock_getsize, mock_rename, mock_isfile, mock_run
+    ):
+        """Last slice before a camera switch must have crop_end == crop_start (smooth hold)."""
+        mock_resolve.return_value = "cam.mp4"
+        mock_isfile.return_value = True
+        mock_getsize.return_value = 1000
+        sidecar_data = {
+            "native_width": 1920,
+            "native_height": 1080,
+            "entries": [],
+        }
+        mock_file.return_value.read.return_value = json.dumps(sidecar_data)
+        slices = [
+            {"camera": "doorbell", "start_sec": 0.0, "end_sec": 5.0},
+            {"camera": "carport", "start_sec": 5.0, "end_sec": 10.0},
+        ]
+        ce_dir = "/app/storage/events/test"
+        output_path = "/app/storage/events/test/test_summary.mp4"
+        mock_run.return_value = MagicMock(returncode=0)
+        generate_compilation_video(slices, ce_dir, output_path)
+        self.assertEqual(slices[0]["crop_start"], slices[0]["crop_end"])
+
 
 class TestCompileCeVideoConfig(unittest.TestCase):
     """Tests that compile_ce_video uses same timeline config as frame timeline."""

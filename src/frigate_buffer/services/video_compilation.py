@@ -336,9 +336,14 @@ def generate_compilation_video(
         sl["crop_start"] = calculate_crop_at_time(
             sidecar_data, t0, sw, sh, target_w, target_h, timestamps_sorted=ts_sorted
         )
-        sl["crop_end"] = calculate_crop_at_time(
-            sidecar_data, t1, sw, sh, target_w, target_h, timestamps_sorted=ts_sorted
-        )
+        # Last slice of a camera run: hold crop (no pan to switch-time position) to avoid panning away from the person at the cut.
+        is_last_of_run = (i + 1 < len(slices)) and (slices[i + 1]["camera"] != cam)
+        if is_last_of_run:
+            sl["crop_end"] = sl["crop_start"]
+        else:
+            sl["crop_end"] = calculate_crop_at_time(
+                sidecar_data, t1, sw, sh, target_w, target_h, timestamps_sorted=ts_sorted
+            )
 
     if crop_smooth_alpha > 0:
         smooth_crop_centers_ema(slices, crop_smooth_alpha)
