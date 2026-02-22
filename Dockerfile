@@ -52,7 +52,8 @@ COPY src/frigate_buffer/ ./src/frigate_buffer/
 COPY config.example.yaml ./
 RUN mkdir -p /app/storage
 
-RUN pip install --no-cache-dir --no-deps .
+# Install package with deps from pyproject.toml so all runtime deps (e.g. pyyaml) are present.
+RUN pip install --no-cache-dir .
 
 EXPOSE 5055
 
