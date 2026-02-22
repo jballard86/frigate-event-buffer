@@ -307,6 +307,8 @@ class EventQueryService:
                 continue
             if '.' in ce_id and not ce_id.split('_')[0].isdigit():
                 continue
+            if ce_id == "ultralytics":
+                continue
 
             # Cache key uses content mtime so adding a clip (*.mp4) in any camera subdir invalidates cache
             content_mtime = entry.stat().st_mtime

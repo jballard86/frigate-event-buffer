@@ -139,5 +139,27 @@ class TestEventQueryService(unittest.TestCase):
         self.assertIn("end_timestamp", ev)
         self.assertEqual(ev["end_timestamp"], 1234567895.25)
 
+    def test_ultralytics_folder_excluded_from_events(self):
+        """The ultralytics config folder should not appear as an event."""
+        # Create an ultralytics folder in the events directory (simulating config folder misplaced or created there)
+        ultralytics_dir = os.path.join(self.events_dir, "ultralytics")
+        os.makedirs(ultralytics_dir, exist_ok=True)
+
+        # Create some files that Ultralytics would create
+        with open(os.path.join(ultralytics_dir, "settings.json"), "w") as f:
+            json.dump({"settings_version": "0.0.6", "datasets_dir": "/app/datasets"}, f)
+
+        with open(os.path.join(ultralytics_dir, "persistent_cache.json"), "w") as f:
+            json.dump({"cpu_info": "Test CPU"}, f)
+
+        # Get consolidated events - should still only return 1 event (the real CE)
+        events = self.service.get_events("events")
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["event_id"], self.ce_id)
+
+        # Verify ultralytics is not in the event list
+        for ev in events:
+            self.assertNotEqual(ev.get("event_id"), "ultralytics")
+
 if __name__ == '__main__':
     unittest.main()
