@@ -280,7 +280,8 @@ def _resolve_clip_path(ce_dir: str, camera: str, resolve_clip_in_folder: object)
     clip_name = resolve_clip_in_folder(cam_dir) if callable(resolve_clip_in_folder) else None
     if not clip_name:
         clip_name = f"{camera}.mp4"
-    clip_path = os.path.join(cam_dir, clip_name)
+    # Coerce to str so join() gets StrPath (resolve_clip_in_folder is typed object for test mocks).
+    clip_path = os.path.join(cam_dir, str(clip_name))
     if not os.path.isfile(clip_path):
         raise FileNotFoundError(f"Clip not found: {clip_path}")
     return clip_path
@@ -299,18 +300,19 @@ def _run_nelux_compilation(
     Decode each slice with NeLux (NVDEC), crop with smooth panning in tensor space, encode (NVENC).
     Frames stay on GPU (zero-copy). Output 20fps, no audio. Encoder created from first slice's reader.
     """
-    from nelux import VideoReader
+    from nelux import VideoReader  # type: ignore[import-untyped]
 
     if not slices:
         return
 
     # Resolve first slice clip and open reader for encoder creation (NeLux API requires reader.create_encoder).
     first_clip = _resolve_clip_path(ce_dir, slices[0]["camera"], resolve_clip_in_folder)
-    first_reader: VideoReader | None = VideoReader(
+    first_reader = VideoReader(
         first_clip,
         decode_accelerator="nvdec",
         cuda_device_index=cuda_device_index,
     )
+    assert first_reader is not None  # NeLux VideoReader does not return None; narrows for type checker.
 
     with first_reader.create_encoder(tmp_output_path) as enc:
         # Do not encode audio; output is -an equivalent.
