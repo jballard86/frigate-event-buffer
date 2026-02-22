@@ -137,9 +137,13 @@ The app uses the storage volume for Ultralytics config and the YOLO model cache:
 
 ## 6. Update (after code changes)
 
-Pull and build from repo root. Use one of the following.
+Pull and build from repo root. Docker layer cache keeps rebuilds fast when only code changed.
 
-**Fast pull and build (development only):** larger image, no X11 deps removed; build finishes in ~1–2 minutes.
+**After only code changes** (no changes to `requirements.txt` or `wheels/`): the heavy step (Python deps + OpenCV) is cached; only app copy and `pip install .` run, so build is typically **~1–2 minutes** with either command below. Using BuildKit (default in Docker 23+) caches pip wheels for the app install, which speeds repeated code-only builds further.
+
+**When the deps layer runs** (first build, or after changing `requirements.txt` or `wheels/`): use the dev build to avoid the slow OpenCV swap.
+
+**Fast pull and build (development):** larger image (keeps GUI OpenCV); use when you want the quickest full rebuild or when you might change deps.
 
 ```bash
 cd /mnt/user/appdata/frigate-buffer
@@ -147,7 +151,7 @@ git pull
 docker build -t frigate-buffer:latest --build-arg USE_GUI_OPENCV=true .
 ```
 
-**Slow pull and build (production):** default headless image; build can take 15+ minutes.
+**Production build (smaller image):** headless OpenCV; full rebuild can take 15+ minutes when the deps layer runs.
 
 ```bash
 cd /mnt/user/appdata/frigate-buffer
@@ -187,3 +191,4 @@ If `git pull` reports that local changes would be overwritten by merge (e.g. to 
 - **FFmpeg / NVDEC decode issues** — The image is Ubuntu 24.04 with FFmpeg 6.1 (required by the NeLux wheel and for GIF generation). Video decode is **NeLux NVDEC only** (no CPU fallback). Rebuild from this repo (`docker build -t frigate-buffer:latest .`) and run with GPU access (`--gpus all` and NVIDIA env vars). Set **`NVIDIA_DRIVER_CAPABILITIES=compute,video,utility`** (the `video` capability is required for NVDEC). Check startup logs for decode-related errors; inside the container run `nvidia-smi` to confirm the GPU is visible.
 - **Build fails with "frigate_buffer" or "config.example" not found** — You are not in the repo root. `cd` to the directory that contains `Dockerfile` and `src/frigate_buffer/`.
 - **"NeLux get_batch failed" or reader errors** — Decode is GPU-only (NeLux). If readers fail, check GPU memory and driver; there is no CPU decode fallback. Reduce concurrent load or clip length if GPU memory is limited.
+- **`libyuv.so` or `libspdlog.so: cannot open shared object file`** — The NeLux wheel needs these native libs at runtime with unversioned names. The **Docker image** installs `libyuv0` and `libspdlog1.12` and creates symlinks (`libyuv.so` → `libyuv.so.0`, `libspdlog.so` → `libspdlog.so.1.12`) in `/usr/lib/x86_64-linux-gnu/`. Rebuild the image so the fix is included. For a **native (non-Docker)** install, install the distro packages and create the same symlinks so the loader finds the libraries.

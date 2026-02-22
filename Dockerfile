@@ -1,6 +1,8 @@
+# syntax=docker/dockerfile:1
 # Build from repo root: docker build -t frigate-buffer:latest .
-# Base: Ubuntu 24.04 + CUDA 12.6 runtime for NVDEC/NVENC. FFmpeg 6.1 and libyuv from distro for NeLux wheel (zero-copy GPU compilation).
+# Base: Ubuntu 24.04 + CUDA 12.6 runtime for NVDEC/NVENC. FFmpeg 6.1, libyuv0, libspdlog1.12 from distro; symlinks libyuv.so and libspdlog.so for NeLux wheel (zero-copy GPU compilation).
 # NeLux wheel is vendored in wheels/ (built against FFmpeg 6.1 / Ubuntu 24.04); do not use PyPI.
+# Use BuildKit (default in Docker 23+) for pip cache on app install: faster code-only rebuilds.
 ARG USE_GUI_OPENCV=false
 FROM nvidia/cuda:12.6.0-runtime-ubuntu24.04
 
@@ -12,9 +14,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends software-proper
     python3-pip \
     ffmpeg \
     libyuv0 \
+    libspdlog1.12 \
     curl \
     ca-certificates \
     libgomp1 \
+    && ln -s libyuv.so.0 /usr/lib/x86_64-linux-gnu/libyuv.so \
+    && ln -s libspdlog.so.1.12 /usr/lib/x86_64-linux-gnu/libspdlog.so \
     && apt-get purge -y software-properties-common && apt-get autoremove -y --purge \
     && rm -rf /var/lib/apt/lists/*
 
@@ -41,7 +46,9 @@ COPY src/frigate_buffer/ ./src/frigate_buffer/
 COPY config.example.yaml ./
 RUN mkdir -p /app/storage
 
-RUN pip3 install --no-cache-dir --break-system-packages .
+# Cache pip wheels so code-only rebuilds reuse deps (BuildKit cache mount).
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip3 install --break-system-packages .
 
 EXPOSE 5055
 
