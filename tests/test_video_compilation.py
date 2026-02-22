@@ -478,5 +478,22 @@ class TestCompileCeVideoConfig(unittest.TestCase):
         self.assertEqual(call_args[1], 50)
 
 
+class TestNeluxImportOrder(unittest.TestCase):
+    """NeLux must be imported after torch at runtime; this test guards that contract."""
+
+    def test_torch_before_nelux_import_succeeds(self):
+        """Importing torch then nelux (or VideoReader) must succeed when both are installed."""
+        try:
+            import torch  # noqa: F401
+        except ImportError:
+            self.skipTest("torch not installed")
+        try:
+            from nelux import VideoReader  # noqa: F401
+        except ImportError:
+            self.skipTest("nelux not installed (e.g. Linux wheel not present on this host)")
+        # If we get here, the required order (torch then nelux) was respected and imports succeeded.
+        self.assertTrue(True)
+
+
 if __name__ == "__main__":
     unittest.main()

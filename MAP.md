@@ -32,7 +32,7 @@
 | **Frameworks** | Flask (web), paho-mqtt (MQTT), schedule (cron-like jobs) |
 | **Config** | YAML + env, validated with Voluptuous |
 | **Data / state** | In-memory (EventStateManager, ConsolidatedEventManager); filesystem for events, clips, timelines, daily reports |
-| **Video / AI** | ffmpegcv (NVDEC decode), Ultralytics YOLO (detection sidecars), OpenAI-compatible Gemini proxy (HTTP) |
+| **Video / AI** | ffmpegcv (NVDEC decode), Ultralytics YOLO (detection sidecars), **NeLux** (vendored wheel: NVDEC/NVENC for compilation), OpenAI-compatible Gemini proxy (HTTP) |
 | **Testing** | pytest (`pythonpath = ["src"]`) |
 
 ---
@@ -61,6 +61,8 @@ frigate-event-buffer/
 ├── Dockerfile
 ├── pyproject.toml
 ├── requirements.txt
+├── wheels/
+│   └── nelux-0.8.9-cp312-cp312-linux_x86_64.whl   # vendored; do not use PyPI
 ├── MAP.md
 ├── README.md
 ├── INSTALL.md
@@ -171,8 +173,9 @@ frigate-event-buffer/
 | `config.yaml` | User config: cameras, network, settings, HA, Gemini, multi_cam. | Read by `config.load_config()` at startup. |
 | `config.example.yaml` | Example config with all keys and comments. | Reference only. |
 | `pyproject.toml` | Package metadata, deps, `where = ["src"]`, pytest `pythonpath = ["src"]`, `requires-python = ">=3.12"`. | Used by `pip install -e .` and pytest. |
-| `requirements.txt` | Pip install list. | Referenced by Dockerfile. |
-| `Dockerfile` | Multi-stage build: lean Python base + FFmpeg/NVDEC from donor; donor stage copies ldd-discovered system libs (libcrypto, libexpat, libgomp, libssl, libz; excludes glibc/toolchain) into `/out/lib`; installs libgomp1 in final stage as fallback; no entrypoint; runs `python -m frigate_buffer.main`. Build arg `USE_GUI_OPENCV` (default `false`): when `false`, uninstalls `opencv-python` (GUI from ultralytics) and reinstalls `opencv-python-headless` only (no X11/libxcb deps, ~15+ min build, smaller image); when `true`, accepts the GUI version for faster builds (~1-2 min) at cost of ~100-150 MB larger image with X11 deps. That layer is cached until `requirements.txt` changes, so src-only builds skip the opencv step. | Build from repo root. |
+| `requirements.txt` | Pip install list; includes vendored NeLux wheel from `wheels/` (do not use PyPI). | Referenced by Dockerfile. |
+| `wheels/` | Vendored NeLux wheel (`nelux-0.8.9-cp312-cp312-linux_x86_64.whl`) for zero-copy GPU compilation; built against FFmpeg 6.1 / Ubuntu 24.04. Python 3.12; torch must be imported before nelux at runtime. | Copied into image; installed via requirements.txt. |
+| `Dockerfile` | Single-stage: base `nvidia/cuda:12.6.0-runtime-ubuntu24.04`; installs Python 3.12, FFmpeg 6.1 (from distro), and app. NeLux wheel from `wheels/`; FFmpeg 6.1 required for NeLux. Build arg `USE_GUI_OPENCV` (default `false`): when `false`, uninstalls opencv-python and reinstalls opencv-python-headless (no X11); when `true`, keeps GUI opencv for faster builds. Runs `python3 -m frigate_buffer.main`. | Build from repo root. |
 | `docker-compose.yaml` / `docker-compose.example.yaml` | Compose for local run; GPU, env, mounts. No `YOLO_CONFIG_DIR` needed—app uses storage for Ultralytics config and model cache. | Deployment. |
 | `MAP.md` | This file—architecture and context for AI. | Must be updated when structure or flows change. |
 | `PHASE1_REFACTOR_CATALOG.md` | Phase 1 discovery catalog for "Everything is a CE" refactor: removals and changes list. | Reference only; delete or archive after refactor is complete. |
@@ -219,7 +222,7 @@ frigate-event-buffer/
 | `src/frigate_buffer/services/timeline.py` | **TimelineLogger:** append HA/MQTT/Frigate API entries to `notification_timeline.json` via FileManager. | Orchestrator, notifier (timeline_callback). |
 | `src/frigate_buffer/services/mqtt_client.py` | **MqttClientWrapper:** connect, subscribe, message callback to orchestrator. | Orchestrator provides `_on_mqtt_message`. |
 | `src/frigate_buffer/services/crop_utils.py` | Crop/resize and motion-related image helpers; `crop_around_detections_with_padding` (master bbox over all detections + padding) for quick-title. | ai_analyzer, orchestrator (quick-title). |
-| `src/frigate_buffer/services/video_compilation.py` | Video compilation service. Generates a stitched, cropped, 20fps summary video for a CE lifecycle; uses the **same timeline config** as the frame timeline (MAX_MULTI_CAM_FRAMES_SEC, MAX_MULTI_CAM_FRAMES_MIN) and **one slice per assignment** so camera swapping matches the AI prompt timeline. Crop follows the tracked object with **smooth panning** (tensor crop with 0-based `t/duration` interpolation; optional EMA on crop center). On the **last slice of a camera run** (slice before a camera switch), crop is **held** (`crop_end = crop_start`) so there is no pan toward the switch-time position at the cut. **NeLux** pipeline: NVDEC decode per slice into PyTorch CUDA tensors, tensor crop (smooth pan), NVENC encode; 20fps, no audio, output MP4. | Used by lifecycle, orchestrator. |
+| `src/frigate_buffer/services/video_compilation.py` | Video compilation service. Generates a stitched, cropped, 20fps summary video for a CE lifecycle; uses the **same timeline config** as the frame timeline (MAX_MULTI_CAM_FRAMES_SEC, MAX_MULTI_CAM_FRAMES_MIN) and **one slice per assignment** so camera swapping matches the AI prompt timeline. Crop follows the tracked object with **smooth panning** (tensor crop with 0-based `t/duration` interpolation; optional EMA on crop center). On the **last slice of a camera run** (slice before a camera switch), crop is **held** (`crop_end = crop_start`) so there is no pan toward the switch-time position at the cut. **NeLux** (vendored wheel): NVDEC decode per slice into PyTorch CUDA tensors, tensor crop (smooth pan), NVENC encode; 20fps, no audio, output MP4. **Import order:** `import torch` before `from nelux import VideoReader` (required by NeLux). | Used by lifecycle, orchestrator. |
 | `src/frigate_buffer/services/report_prompt.txt` | Default prompt for daily report. | daily_reporter. |
 | `src/frigate_buffer/services/ai_analyzer_system_prompt.txt` | System prompt for Gemini proxy (multi-clip CE analysis). | ai_analyzer. |
 | `src/frigate_buffer/services/quick_title_prompt.txt` | System prompt for quick-title (single image, 3–6 word title only). | ai_analyzer. |

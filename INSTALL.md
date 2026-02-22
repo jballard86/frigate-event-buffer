@@ -7,8 +7,8 @@ Install and run via the command line only (no Dockge). Clone the repo so the **r
 ## Prerequisites
 
 - Docker (no compose required; we use `docker build` and `docker run` only).
-- For GPU decode (NVDEC): The image includes FFmpeg with NVDEC support for hardware-accelerated frame reading. At runtime you need an NVIDIA GPU, driver, and [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html) (e.g. `docker run --gpus all`). Set `NVIDIA_DRIVER_CAPABILITIES=compute,video,utility` so the container can use the GPU for decoding.
-- **Summary video compilation** uses the **NeLux** library (NVDEC decode, NVENC encode) for a zero-copy GPU pipeline. NeLux is a required dependency. Ensure the same GPU/driver and `NVIDIA_DRIVER_CAPABILITIES=compute,video,utility` are available so compilation can run on the GPU. On Linux, if PyPI has no pre-built wheel, see the [NeLux project](https://github.com/NevermindNilas/Nelux) for source or release wheels.
+- For GPU decode (NVDEC): The image is based on `nvidia/cuda:12.6.0-runtime-ubuntu24.04` with FFmpeg 6.1 for hardware-accelerated decode (and NeLux compilation). At runtime you need an NVIDIA GPU, driver, and [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html) (e.g. `docker run --gpus all`). Set `NVIDIA_DRIVER_CAPABILITIES=compute,video,utility` so the container can use the GPU for decoding.
+- **Summary video compilation** uses the **NeLux** library (NVDEC decode, NVENC encode) for a zero-copy GPU pipeline. NeLux is **vendored** in `wheels/nelux-0.8.9-cp312-cp312-linux_x86_64.whl` (do not use PyPI). The image is built on Ubuntu 24.04 with FFmpeg 6.1 to match the wheel. Ensure the same GPU/driver and `NVIDIA_DRIVER_CAPABILITIES=compute,video,utility` are available so compilation can run on the GPU.
 
 ---
 
@@ -61,7 +61,7 @@ git clone https://github.com/jballard86/frigate-event-buffer.git .
 - If it **already has a clone** (contains `.git`): `git pull` and continue from step 3.
 - If it's **not a git repo**: clone into a new folder instead (see first clone block above; use a different folder name if needed).
 
-You must have `Dockerfile` and `src/` in the current directory (repo root).
+You must have `Dockerfile`, `src/`, and `wheels/` (with the NeLux wheel file) in the current directory (repo root).
 
 ---
 
@@ -129,6 +129,62 @@ docker run -d --name frigate_buffer --restart unless-stopped \
 ```
 
 The app uses the storage volume for Ultralytics config and the YOLO model cache: `storage/ultralytics/` (settings) and `storage/yolo_models/` (downloaded weights). These persist across restarts so you won’t see the config-directory warning or re-download the model each boot. You do not need to set `YOLO_CONFIG_DIR` unless you want to override this.
+
+---
+
+### 5b. Alternatively: Docker Compose
+
+From the repo root you can use Docker Compose instead of `docker run`. The example below matches `docker-compose.yaml` and `docker-compose.example.yaml`: build from the current directory, expose port 5055, mount storage and config, and reserve the GPU. Update paths and environment values (e.g. `HA_IP`, `FRIGATE_URL`, `MQTT_BROKER`) to match your setup.
+
+```yaml
+services:
+  frigate-buffer:
+    image: frigate-buffer:latest
+    pull_policy: build
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: frigate_buffer
+    restart: unless-stopped
+    network_mode: bridge
+    ports:
+      - 5055:5055
+    volumes:
+      - /mnt/user/appdata/frigate_buffer:/app/storage
+      - /mnt/user/appdata/frigate_buffer/config.yaml:/app/config.yaml:ro
+      - /etc/localtime:/etc/localtime:ro
+    environment:
+      - HA_IP=YOUR_HOME_ASSISTANT_IP
+      - FRIGATE_URL=http://REDACTED_LOCAL_IP:5000
+      - MQTT_BROKER=REDACTED_LOCAL_IP
+      - MQTT_PORT=1883
+      - RETENTION_DAYS=3
+      - LOG_LEVEL=INFO
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,video,utility
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities:
+                - gpu
+    healthcheck:
+      test:
+        - CMD
+        - curl
+        - -f
+        - http://localhost:5055/status
+      interval: 60s
+      timeout: 10s
+      retries: 3
+```
+
+Build and start: `docker compose build` then `docker compose up -d` (or `docker-compose up -d` on older Docker).
+
+---
+
 ## 6. Update (after code changes)
 
 Pull and Build:
@@ -172,6 +228,6 @@ If `git pull` reports that local changes would be overwritten by merge (e.g. to 
 
 ## Troubleshooting
 
-- **FFmpeg / NVDEC decode issues** — The image uses FFmpeg for decode only (no encoding). Rebuild from this repo (`docker build -t frigate-buffer:latest .`) and run with GPU access (`--gpus all` and NVIDIA env vars). Set **`NVIDIA_DRIVER_CAPABILITIES=compute,video,utility`** (the `video` capability is required for NVDEC). Check startup logs for decode-related errors; inside the container you can run `nvidia-smi` to confirm the GPU is visible.
+- **FFmpeg / NVDEC decode issues** — The image is Ubuntu 24.04 with FFmpeg 6.1 (and NeLux wheel). Rebuild from this repo (`docker build -t frigate-buffer:latest .`) and run with GPU access (`--gpus all` and NVIDIA env vars). Set **`NVIDIA_DRIVER_CAPABILITIES=compute,video,utility`** (the `video` capability is required for NVDEC). Check startup logs for decode-related errors; inside the container you can run `nvidia-smi` to confirm the GPU is visible.
 - **Build fails with "frigate_buffer" or "config.example" not found** — You are not in the repo root. `cd` to the directory that contains `Dockerfile` and `src/frigate_buffer/`.
 - **"Reader process died for camera … read of closed file"** — If multiple NVDEC readers fail, check GPU memory and driver; CPU decode is used only as fallback. You can set `multi_cam.decode_second_camera_cpu_only: true` to force 2nd+ cameras to CPU decode if needed (legacy workaround).

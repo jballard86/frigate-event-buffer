@@ -300,6 +300,7 @@ def _run_nelux_compilation(
     Decode each slice with NeLux (NVDEC), crop with smooth panning in tensor space, encode (NVENC).
     Frames stay on GPU (zero-copy). Output 20fps, no audio. Encoder created from first slice's reader.
     """
+    import torch  # required before nelux
     from nelux import VideoReader  # type: ignore[import-untyped]
 
     if not slices:
