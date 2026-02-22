@@ -357,7 +357,7 @@ def generate_compilation_video(
         else:
             x_expr = f"min(max(0,{xs}+({xe}-{xs})*(t/{duration})),iw-{w})"
             y_expr = f"min(max(0,{ys}+({ye}-{ys})*(t/{duration})),ih-{h})"
-            fg = f"[{i}:v]trim=start={t0}:end={t1},setpts=PTS-STARTPTS,fps=20,crop={w}:{h}:{x_expr}:{y_expr},format=yuv420p[v{i}]"
+            fg = f"[{i}:v]trim=start={t0}:end={t1},setpts=PTS-STARTPTS,fps=20,crop={w}:{h}:'{x_expr}':'{y_expr}',format=yuv420p[v{i}]"
         filter_parts.append(fg)
     concat_inputs = "".join(f"[v{i}]" for i in range(len(slices)))
     filter_parts.append(concat_inputs + f"concat=n={len(slices)}:v=1:a=0[outv]")

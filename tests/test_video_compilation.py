@@ -502,6 +502,8 @@ class TestGenerateCompilationVideo(unittest.TestCase):
         self.assertIn("[1:v]", filter_complex)
         self.assertIn("(t/", filter_complex)
         self.assertNotIn("(t-", filter_complex)
+        # Crop x/y expressions must be single-quoted so commas in min(max(...),...) are literal
+        self.assertIn("'min(max(0,", filter_complex)
 
 
 class TestCompileCeVideoConfig(unittest.TestCase):
