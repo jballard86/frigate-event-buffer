@@ -62,6 +62,9 @@ frigate-event-buffer/
 ├── pyproject.toml
 ├── requirements.txt
 ├── wheels/
+│   ├── Create_NeLux_Wheel.md                      # Build NeLux wheel from source (Docker, FFmpeg 6.1, CUDA)
+│   ├── Update_NeLux_Wheel.md                      # Steps to update to a new NeLux version
+│   ├── Dockerfile.nelux                            # Builder image for compiling the NeLux wheel
 │   └── nelux-0.8.9-cp312-cp312-linux_x86_64.whl   # vendored; do not use PyPI
 ├── MAP.md
 ├── README.md
@@ -174,8 +177,8 @@ frigate-event-buffer/
 | `config.example.yaml` | Example config with all keys and comments. | Reference only. |
 | `pyproject.toml` | Package metadata, deps, `where = ["src"]`, pytest `pythonpath = ["src"]`, `requires-python = ">=3.12"`. | Used by `pip install -e .` and pytest. |
 | `requirements.txt` | Pip install list; includes vendored NeLux wheel from `wheels/` (do not use PyPI). | Referenced by Dockerfile. |
-| `wheels/` | Vendored NeLux wheel (`nelux-0.8.9-cp312-cp312-linux_x86_64.whl`) for zero-copy GPU compilation; built against FFmpeg 6.1 / Ubuntu 24.04. Python 3.12; torch must be imported before nelux at runtime. | Copied into image; installed via requirements.txt. |
-| `Dockerfile` | Single-stage: base `nvidia/cuda:12.6.0-runtime-ubuntu24.04`; installs Python 3.12, FFmpeg 6.1 (from distro), and app. NeLux wheel from `wheels/`; FFmpeg 6.1 required for NeLux. Build arg `USE_GUI_OPENCV` (default `false`): when `false`, uninstalls opencv-python and reinstalls opencv-python-headless (no X11); when `true`, keeps GUI opencv for faster builds. Runs `python3 -m frigate_buffer.main`. | Build from repo root. |
+| `wheels/` | Vendored NeLux wheel (`nelux-0.8.9-cp312-cp312-linux_x86_64.whl`) for zero-copy GPU compilation; built against FFmpeg 6.1 / Ubuntu 24.04. Python 3.12; torch must be imported before nelux at runtime. **For wheel build/update issues:** see `wheels/Create_NeLux_Wheel.md` (build from source), `wheels/Update_NeLux_Wheel.md` (update to new NeLux version), `wheels/Dockerfile.nelux` (builder image). | Copied into image; installed via requirements.txt. |
+| `Dockerfile` | Single-stage: base `nvidia/cuda:12.6.0-runtime-ubuntu24.04`; installs Python 3.12, FFmpeg 6.1 and libyuv (distro packages) and app. NeLux wheel from `wheels/`; FFmpeg 6.1 and libyuv required for NeLux at runtime. Build arg `USE_GUI_OPENCV` (default `false`): when `false`, uninstalls opencv-python and reinstalls opencv-python-headless (no X11); when `true`, keeps GUI opencv for faster builds. Runs `python3 -m frigate_buffer.main`. | Build from repo root. |
 | `docker-compose.yaml` / `docker-compose.example.yaml` | Compose for local run; GPU, env, mounts. No `YOLO_CONFIG_DIR` needed—app uses storage for Ultralytics config and model cache. | Deployment. |
 | `MAP.md` | This file—architecture and context for AI. | Must be updated when structure or flows change. |
 | `PHASE1_REFACTOR_CATALOG.md` | Phase 1 discovery catalog for "Everything is a CE" refactor: removals and changes list. | Reference only; delete or archive after refactor is complete. |
@@ -270,6 +273,18 @@ frigate-event-buffer/
 ---
 
 ## 6. AI Agent Directives (Rules & Conventions)
+
+### Wheel build and update
+
+When there are issues with the **NeLux wheel** (making, updating, or rebuilding it), use the docs in **`wheels/`**:
+
+| Need | File |
+|------|------|
+| Build wheel from source (first time or clean build) | `wheels/Create_NeLux_Wheel.md` |
+| Update to a new NeLux version | `wheels/Update_NeLux_Wheel.md` |
+| Builder image definition | `wheels/Dockerfile.nelux` |
+
+Do not use PyPI for NeLux; the project vendors the wheel from `wheels/`.
 
 ### File placement rules
 

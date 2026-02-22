@@ -8,7 +8,7 @@ Install and run via the command line only (no Dockge). Clone the repo so the **r
 
 - Docker (no compose required; we use `docker build` and `docker run` only).
 - For GPU decode (NVDEC): The image is based on `nvidia/cuda:12.6.0-runtime-ubuntu24.04` with FFmpeg 6.1 for hardware-accelerated decode (and NeLux compilation). At runtime you need an NVIDIA GPU, driver, and [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html) (e.g. `docker run --gpus all`). Set `NVIDIA_DRIVER_CAPABILITIES=compute,video,utility` so the container can use the GPU for decoding.
-- **Summary video compilation** uses the **NeLux** library (NVDEC decode, NVENC encode) for a zero-copy GPU pipeline. NeLux is **vendored** in `wheels/nelux-0.8.9-cp312-cp312-linux_x86_64.whl` (do not use PyPI). The image is built on Ubuntu 24.04 with FFmpeg 6.1 to match the wheel. Ensure the same GPU/driver and `NVIDIA_DRIVER_CAPABILITIES=compute,video,utility` are available so compilation can run on the GPU.
+- **Summary video compilation** uses the **NeLux** library (NVDEC decode, NVENC encode) for a zero-copy GPU pipeline. NeLux is **vendored** in `wheels/nelux-0.8.9-cp312-cp312-linux_x86_64.whl` (do not use PyPI). The image is built on Ubuntu 24.04 with FFmpeg 6.1 and **libyuv** (distro package `libyuv0`) so the NeLux native extension can load at runtime. Ensure the same GPU/driver and `NVIDIA_DRIVER_CAPABILITIES=compute,video,utility` are available so compilation can run on the GPU.
 
 ---
 
@@ -132,78 +132,34 @@ The app uses the storage volume for Ultralytics config and the YOLO model cache:
 
 ---
 
-### 5b. Alternatively: Docker Compose
-
-From the repo root you can use Docker Compose instead of `docker run`. The example below matches `docker-compose.yaml` and `docker-compose.example.yaml`: build from the current directory, expose port 5055, mount storage and config, and reserve the GPU. Update paths and environment values (e.g. `HA_IP`, `FRIGATE_URL`, `MQTT_BROKER`) to match your setup.
-
-```yaml
-services:
-  frigate-buffer:
-    image: frigate-buffer:latest
-    pull_policy: build
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: frigate_buffer
-    restart: unless-stopped
-    network_mode: bridge
-    ports:
-      - 5055:5055
-    volumes:
-      - /mnt/user/appdata/frigate_buffer:/app/storage
-      - /mnt/user/appdata/frigate_buffer/config.yaml:/app/config.yaml:ro
-      - /etc/localtime:/etc/localtime:ro
-    environment:
-      - HA_IP=YOUR_HOME_ASSISTANT_IP
-      - FRIGATE_URL=http://REDACTED_LOCAL_IP:5000
-      - MQTT_BROKER=REDACTED_LOCAL_IP
-      - MQTT_PORT=1883
-      - RETENTION_DAYS=3
-      - LOG_LEVEL=INFO
-      - NVIDIA_VISIBLE_DEVICES=all
-      - NVIDIA_DRIVER_CAPABILITIES=compute,video,utility
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities:
-                - gpu
-    healthcheck:
-      test:
-        - CMD
-        - curl
-        - -f
-        - http://localhost:5055/status
-      interval: 60s
-      timeout: 10s
-      retries: 3
-```
-
-Build and start: `docker compose build` then `docker compose up -d` (or `docker-compose up -d` on older Docker).
 
 ---
 
 ## 6. Update (after code changes)
 
-Pull and Build:
+Pull and build from repo root. Use one of the following.
+
+**Fast pull and build (development only):** larger image, no X11 deps removed; build finishes in ~1–2 minutes.
 
 ```bash
-**Fast pull and build option (development only):**
 cd /mnt/user/appdata/frigate-buffer
 git pull
 docker build -t frigate-buffer:latest --build-arg USE_GUI_OPENCV=true .
+```
 
-**Slow pull and build option
+**Slow pull and build (production):** default headless image; build can take 15+ minutes.
+
+```bash
 cd /mnt/user/appdata/frigate-buffer
 git pull
 docker build -t frigate-buffer:latest .
-# Then run the same docker run command from step 5 again.
 ```
 
-## restart docker
+After either build, restart the container (or run the same `docker run` command from step 5 again):
+
+```bash
 docker restart frigate_buffer
+```
 
 ## Switching branches
 
