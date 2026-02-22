@@ -161,5 +161,60 @@ class TestEventQueryService(unittest.TestCase):
         for ev in events:
             self.assertNotEqual(ev.get("event_id"), "ultralytics")
 
+    def test_ultralytics_capital_u_excluded_from_events(self):
+        """The Ultralytics folder with capital U should not appear as an event (case sensitivity test)."""
+        # Create an Ultralytics folder with capital U (as shown in bug report)
+        ultralytics_dir = os.path.join(self.events_dir, "Ultralytics")
+        os.makedirs(ultralytics_dir, exist_ok=True)
+
+        # Create the exact files from the bug report
+        with open(os.path.join(ultralytics_dir, "settings.json"), "w") as f:
+            json.dump({"settings_version": "0.0.6", "datasets_dir": "/app/datasets"}, f)
+
+        with open(os.path.join(ultralytics_dir, "persistent_cache.json"), "w") as f:
+            json.dump({"cpu_info": "AMD Ryzen Threadripper 1900X 8-Core Processor"}, f)
+
+        # Get consolidated events - should still only return 1 event (the real CE)
+        events = self.service.get_events("events")
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["event_id"], self.ce_id)
+
+        # Verify Ultralytics (capital U) is not in the event list
+        for ev in events:
+            self.assertNotEqual(ev.get("event_id"), "Ultralytics")
+
+    def test_ultralytics_excluded_from_cameras(self):
+        """The ultralytics folder should not appear as a camera."""
+        # Create ultralytics folder at storage root (where YOLO_CONFIG_DIR points)
+        ultralytics_dir = os.path.join(self.test_dir, "ultralytics")
+        os.makedirs(ultralytics_dir, exist_ok=True)
+
+        with open(os.path.join(ultralytics_dir, "settings.json"), "w") as f:
+            json.dump({"settings_version": "0.0.6"}, f)
+
+        # Get cameras - should not include ultralytics
+        cameras = self.service.get_cameras()
+        self.assertNotIn("ultralytics", cameras)
+        self.assertNotIn("Ultralytics", cameras)
+        # Should still have front_door and events
+        self.assertIn("front_door", cameras)
+        self.assertIn("events", cameras)
+
+    def test_yolo_models_excluded_from_cameras(self):
+        """The yolo_models folder should not appear as a camera."""
+        # Create yolo_models folder at storage root
+        yolo_dir = os.path.join(self.test_dir, "yolo_models")
+        os.makedirs(yolo_dir, exist_ok=True)
+
+        with open(os.path.join(yolo_dir, "yolov8n.pt"), "w") as f:
+            f.write("dummy model")
+
+        # Get cameras - should not include yolo_models
+        cameras = self.service.get_cameras()
+        self.assertNotIn("yolo_models", cameras)
+        # Should still have front_door and events
+        self.assertIn("front_door", cameras)
+        self.assertIn("events", cameras)
+
 if __name__ == '__main__':
     unittest.main()

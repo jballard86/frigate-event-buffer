@@ -303,11 +303,13 @@ class EventQueryService:
 
         for entry in entries:
             ce_id = entry.name
+            # Consolidated event folders must follow pattern: {timestamp}_{id}
+            # Strictly enforce this to prevent non-event folders from appearing as events
+            parts = ce_id.split('_', 1)
+            if len(parts) < 2 or not parts[0].isdigit():
+                continue
+            # Skip test folders (test1, test2, etc.)
             if re.match(r"^test\d+$", ce_id):
-                continue
-            if '.' in ce_id and not ce_id.split('_')[0].isdigit():
-                continue
-            if ce_id == "ultralytics":
                 continue
 
             # Cache key uses content mtime so adding a clip (*.mp4) in any camera subdir invalidates cache
@@ -553,13 +555,21 @@ class EventQueryService:
         if cached is not None:
             return cached
 
+        # Non-camera directories to exclude from camera listing
+        _NON_CAMERA_DIRS = {"ultralytics", "yolo_models", "daily_reports", "daily_reviews"}
+
         active_cameras = []
         try:
             for item in os.listdir(self.storage_path):
                 item_path = os.path.join(self.storage_path, item)
                 if os.path.isdir(item_path):
-                    if not item.split('_')[0].isdigit():
-                        active_cameras.append(item)
+                    # Skip if it starts with a numeric prefix (event folder pattern)
+                    if item.split('_')[0].isdigit():
+                        continue
+                    # Skip known non-camera directories
+                    if item in _NON_CAMERA_DIRS:
+                        continue
+                    active_cameras.append(item)
         except Exception as e:
             logger.error(f"Error listing cameras: {e}")
 

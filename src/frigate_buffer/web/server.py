@@ -547,6 +547,9 @@ def create_app(orchestrator):
         by_camera = {}
         most_recent = None
 
+        # Non-camera directories to exclude from stats scanning
+        _NON_CAMERA_DIRS = {"ultralytics", "yolo_models", "daily_reports", "daily_reviews"}
+
         try:
             # Top-level dirs: legacy cameras (e.g. carport) and "events" for consolidated events.
             # For "events", each direct child is a CE folder (events/ce_id/); we count one event per CE.
@@ -556,6 +559,8 @@ def create_app(orchestrator):
                         continue
                     camera_dir = camera_entry.name
                     if camera_dir.split('_')[0].isdigit():
+                        continue
+                    if camera_dir in _NON_CAMERA_DIRS:
                         continue
 
                     count = 0
