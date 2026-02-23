@@ -13,61 +13,26 @@ import logging
 import threading
 import time
 from datetime import datetime
-from typing import Any, Sequence
+from typing import Any, Callable
 
 # Relative path under CE folder for detection sidecar (must match multi_clip_extractor)
 _DETECTION_SIDECAR_FILENAME = "detection.json"
 
-from frigate_buffer.constants import FRAME_MAX_WIDTH, LOG_MAX_RESPONSE_BODY
+from frigate_buffer.constants import (
+    FRAME_MAX_WIDTH,
+    GEMINI_PROXY_ANALYSIS_TIMEOUT,
+    GEMINI_PROXY_QUICK_TITLE_TIMEOUT,
+)
 from frigate_buffer.managers.file import write_ai_frame_analysis_multi_cam
 
 from frigate_buffer.services import crop_utils
+from frigate_buffer.services.gemini_proxy_client import GeminiProxyClient
 from frigate_buffer.services.multi_clip_extractor import extract_target_centric_frames
 
 import cv2
 import requests
-import urllib3.exceptions
 
-logger = logging.getLogger('frigate-buffer')
-
-
-def _log_proxy_failure(proxy_url: str, attempt: int, exc: Exception) -> None:
-    """Log proxy request failure with URL, optional response body, and a hint for connection errors."""
-    err_name = type(exc).__name__
-    err_msg = str(exc)
-    hint = ""
-    if "refused" in err_msg.lower() or "Connection refused" in err_msg:
-        hint = f" Ensure the AI proxy is running at {proxy_url}."
-    # When raise_for_status() raised (requests.exceptions.HTTPError), include response body for debugging
-    response_body = ""
-    resp = getattr(exc, "response", None)
-    if resp is not None:
-        try:
-            data = resp.json()
-            # Prefer structured error message (OpenAI/Gemini style)
-            err_obj = data.get("error") if isinstance(data, dict) else None
-            if isinstance(err_obj, dict) and err_obj.get("message"):
-                response_body = json.dumps({"error": {"message": err_obj.get("message"), "type": err_obj.get("type", "unknown")}})
-            else:
-                response_body = json.dumps(data) if data is not None else ""
-        except (ValueError, TypeError, AttributeError):
-            try:
-                text = getattr(resp, "text", None) or (resp.content.decode("utf-8", errors="replace") if getattr(resp, "content", None) else "")
-                response_body = (text or "")[:LOG_MAX_RESPONSE_BODY]
-            except Exception:
-                response_body = repr(getattr(resp, "content", None))[:LOG_MAX_RESPONSE_BODY]
-        if len(response_body) > LOG_MAX_RESPONSE_BODY:
-            response_body = response_body[:LOG_MAX_RESPONSE_BODY] + "..."
-    if response_body:
-        logger.error(
-            "Proxy request failed [%s]. URL: %s. Body: %s. attempt=%s/2.%s",
-            getattr(resp, "status_code", "?"), proxy_url, response_body, attempt, hint,
-        )
-    else:
-        logger.error(
-            "Proxy request failed on attempt %s/2: %s: %s. url=%s.%s",
-            attempt, err_name, err_msg, proxy_url, hint,
-        )
+logger = logging.getLogger("frigate-buffer")
 
 
 class GeminiAnalysisService:
@@ -98,6 +63,15 @@ class GeminiAnalysisService:
         self._frame_cap_per_hour = int(config.get('GEMINI_FRAMES_PER_HOUR_CAP', 200) or 0)
         self._frame_cap_records: list[tuple[float, int]] = []
         self._frame_cap_lock = threading.Lock()
+        self._proxy_client = GeminiProxyClient(
+            self._proxy_url,
+            self._api_key,
+            self._model,
+            self._temperature,
+            self._top_p,
+            self._frequency_penalty,
+            self._presence_penalty,
+        )
 
     def _load_system_prompt_template(self) -> str:
         if self._prompt_template is not None:
@@ -141,64 +115,50 @@ class GeminiAnalysisService:
             "No quotes, no markdown, no JSON, no explanation."
         )
 
+    def _post_messages(self, messages: list[dict[str, Any]], timeout: int) -> requests.Response | None:
+        """Delegate to GeminiProxyClient. Returns response on success, None on failure."""
+        return self._proxy_client.post_messages(messages, timeout)
+
+    def _parse_response_content(self, data: dict[str, Any]) -> str | None:
+        """Extract text content from proxy response (native Gemini or OpenAI format). Returns None if empty."""
+        content = None
+        candidates = data.get("candidates") or []
+        if candidates:
+            first = candidates[0]
+            if isinstance(first, dict):
+                content_obj = first.get("content")
+                if isinstance(content_obj, dict):
+                    for part in (content_obj.get("parts") or []):
+                        if isinstance(part, dict) and "text" in part:
+                            content = part.get("text")
+                            break
+                    if content is not None:
+                        return str(content).strip() or None
+        if content is None:
+            content = (data.get("choices") or [{}])[0].get("message", {}).get("content")
+        if not content or not str(content).strip():
+            return None
+        return str(content).strip()
+
     def _send_single_image_get_text(self, system_prompt: str, image_bgr: Any) -> str | None:
         """POST one image to proxy and return raw message content (plain text). Used for quick-title."""
-        url = f"{self._proxy_url}/v1/chat/completions"
         user_content = [
             {"type": "text", "text": "Describe this image with the requested short title only."},
             {"type": "image_url", "image_url": {"url": self._frame_to_base64_url(image_bgr)}},
         ]
-        payload = {
-            "model": self._model,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_content},
-            ],
-            "temperature": self._temperature,
-            "top_p": self._top_p,
-            "frequency_penalty": self._frequency_penalty,
-            "presence_penalty": self._presence_penalty,
-        }
-        base_headers = {
-            "Authorization": f"Bearer {self._api_key}",
-            "Content-Type": "application/json",
-        }
-        for attempt in range(2):
-            headers = dict(base_headers)
-            if attempt == 1:
-                headers["Accept-Encoding"] = "identity"
-                headers["Connection"] = "close"
-            try:
-                resp = requests.post(url, json=payload, headers=headers, timeout=30)
-                resp.raise_for_status()
-                data = resp.json()
-                content = None
-                candidates = data.get("candidates") or []
-                if candidates:
-                    first = candidates[0]
-                    if isinstance(first, dict):
-                        content_obj = first.get("content")
-                        if isinstance(content_obj, dict):
-                            for part in (content_obj.get("parts") or []):
-                                if isinstance(part, dict) and "text" in part:
-                                    content = part.get("text")
-                                    break
-                                if content is not None:
-                                    break
-                if content is None:
-                    content = (data.get("choices") or [{}])[0].get("message", {}).get("content")
-                if not content or not str(content).strip():
-                    return None
-                return str(content).strip()
-            except (requests.exceptions.ChunkedEncodingError, urllib3.exceptions.ProtocolError) as e:
-                logger.warning("Quick title proxy attempt %s/2 ChunkedEncodingError: %s", attempt + 1, e)
-                continue
-            except Exception as e:
-                _log_proxy_failure(url, attempt + 1, e)
-                if attempt == 1:
-                    return None
-                continue
-        return None
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_content},
+        ]
+        resp = self._post_messages(messages, GEMINI_PROXY_QUICK_TITLE_TIMEOUT)
+        if resp is None:
+            return None
+        try:
+            data = resp.json()
+        except (ValueError, TypeError) as e:
+            logger.warning("Failed to parse quick-title response JSON: %s", e)
+            return None
+        return self._parse_response_content(data)
 
     def generate_quick_title(self, image: Any, camera: str, label: str) -> str | None:
         """
@@ -245,83 +205,6 @@ class GeminiAnalysisService:
             .replace('{list of zones in global event, dont repeat zones}', zones_str)
             .replace('{list of labels and sub_labels tracked in scene}', labels_str)
         )
-
-    def _center_crop(self, frame: Any, target_w: int, target_h: int) -> Any:
-        """Crop frame to target_w x target_h centered. Resize if crop larger than frame."""
-        logger.warning(
-            "_center_crop is a legacy NumPy helper; production code must use crop_utils (BCHW tensors) instead."
-        )
-        h, w = frame.shape[:2]
-        if target_w <= 0 or target_h <= 0:
-            return frame
-        x1 = max(0, (w - target_w) // 2)
-        y1 = max(0, (h - target_h) // 2)
-        x2 = min(w, x1 + target_w)
-        y2 = min(h, y1 + target_h)
-        crop = frame[y1:y2, x1:x2]
-        if crop.shape[1] != target_w or crop.shape[0] != target_h:
-            crop = cv2.resize(crop, (target_w, target_h))
-        return crop
-
-    def _smart_crop(
-        self,
-        frame: Any,
-        box: Sequence[float],
-        target_w: int,
-        target_h: int,
-        padding: float | None = None,
-    ) -> Any:
-        """
-        Crop frame centered on the bounding box with padding for visual context.
-        box is [ymin, xmin, ymax, xmax] normalized 0-1. Expands box by padding (e.g. 0.15)
-        so the model sees subject plus immediate environment.
-        """
-        logger.warning(
-            "_smart_crop is a legacy NumPy helper; production code must use crop_utils (BCHW tensors) instead."
-        )
-        h, w = frame.shape[:2]
-        if target_w <= 0 or target_h <= 0:
-            return frame
-        if not box or len(box) != 4:
-            return self._center_crop(frame, target_w, target_h)
-        pad = padding if padding is not None else self.smart_crop_padding
-        ymin, xmin, ymax, xmax = float(box[0]), float(box[1]), float(box[2]), float(box[3])
-        # Expand by padding (fraction of box size or frame)
-        bw, bh = xmax - xmin, ymax - ymin
-        dx = max(bw * pad, 0.05)
-        dy = max(bh * pad, 0.05)
-        ymin = max(0.0, ymin - dy)
-        xmin = max(0.0, xmin - dx)
-        ymax = min(1.0, ymax + dy)
-        xmax = min(1.0, xmax + dx)
-        # To pixel coords
-        py1, px1 = int(ymin * h), int(xmin * w)
-        py2, px2 = int(ymax * h), int(xmax * w)
-        cy = (py1 + py2) // 2
-        cx = (px1 + px2) // 2
-        x1 = cx - target_w // 2
-        y1 = cy - target_h // 2
-        x2 = x1 + target_w
-        y2 = y1 + target_h
-        if x1 < 0:
-            x2 -= x1
-            x1 = 0
-        if y1 < 0:
-            y2 -= y1
-            y1 = 0
-        if x2 > w:
-            x1 -= x2 - w
-            x2 = w
-        if y2 > h:
-            y1 -= y2 - h
-            y2 = h
-        x1, y1 = max(0, x1), max(0, y1)
-        crop = frame[y1:y2, x1:x2]
-        if crop.size == 0:
-            return self._center_crop(frame, target_w, target_h)
-        if crop.shape[1] != target_w or crop.shape[0] != target_h:
-            crop = cv2.resize(crop, (target_w, target_h))
-        return crop
 
     def _frame_to_base64_url(self, frame: Any) -> str:
         """
@@ -371,7 +254,7 @@ class GeminiAnalysisService:
         except Exception as e:
             logger.warning("encode_jpeg failed in _frame_tensor_to_base64_url: %s", e)
             return "data:image/jpeg;base64,"
-        b64 = base64.b64encode(jpeg_bytes.cpu().numpy().tobytes()).decode("ascii")
+        b64 = base64.b64encode(jpeg_bytes.cpu().numpy().tobytes()).decode("ascii")  # type: ignore[union-attr]
         return f"data:image/jpeg;base64,{b64}"
 
     def _frame_cap_stats_and_check(self, frame_count: int) -> tuple[bool, int, int]:
@@ -426,7 +309,6 @@ class GeminiAnalysisService:
         if not self._proxy_url or not self._api_key:
             logger.warning("Gemini proxy_url or api_key not configured")
             return None
-        # Rolling cap check and stats log (current rate, status, blocked)
         allowed, _, _ = self._frame_cap_stats_and_check(len(image_buffers))
         if not allowed:
             logger.warning(
@@ -434,89 +316,45 @@ class GeminiAnalysisService:
                 self._frame_cap_per_hour,
             )
             return None
-        url = f"{self._proxy_url}/v1/chat/completions"
-        user_content = [{"type": "text", "text": "Analyze these security camera frames and respond with the requested JSON."}]
+        user_content: list[dict[str, Any]] = [
+            {"type": "text", "text": "Analyze these security camera frames and respond with the requested JSON."}
+        ]
         for frame in image_buffers:
             user_content.append({
                 "type": "image_url",
-                "image_url": {"url": self._frame_to_base64_url(frame)}
+                "image_url": {"url": self._frame_to_base64_url(frame)},
             })
-        payload = {
-            "model": self._model,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_content},
-            ],
-            "temperature": self._temperature,
-            "top_p": self._top_p,
-            "frequency_penalty": self._frequency_penalty,
-            "presence_penalty": self._presence_penalty,
-        }
-        base_headers = {
-            "Authorization": f"Bearer {self._api_key}",
-            "Content-Type": "application/json",
-        }
-        for attempt in range(2):
-            headers = dict(base_headers)
-            if attempt == 1:
-                headers["Accept-Encoding"] = "identity"
-                headers["Connection"] = "close"
-            try:
-                resp = requests.post(
-                    url,
-                    json=payload,
-                    headers=headers,
-                    timeout=60,
-                )
-                resp.raise_for_status()
-                data = resp.json()
-                # Prefer native Gemini format; fallback to OpenAI-compatible format.
-                content = None
-                candidates = data.get("candidates") or []
-                if candidates:
-                    first = candidates[0]
-                    if isinstance(first, dict):
-                        content_obj = first.get("content")
-                        if isinstance(content_obj, dict):
-                            parts = content_obj.get("parts") or []
-                            for part in parts:
-                                if isinstance(part, dict) and "text" in part:
-                                    content = part.get("text")
-                                    break
-                if content is None:
-                    content = (data.get("choices") or [{}])[0].get("message", {}).get("content")
-                if not content or not content.strip():
-                    logger.warning("Empty response content from proxy")
-                    return None
-                # Strip markdown code blocks if present
-                raw = content.strip()
-                if raw.startswith("```"):
-                    lines = raw.split("\n")
-                    if lines[0].startswith("```"):
-                        lines = lines[1:]
-                    if lines and lines[-1].strip() == "```":
-                        lines = lines[:-1]
-                    raw = "\n".join(lines)
-                result = json.loads(raw)
-                self._record_frames_sent(len(image_buffers))
-                return result
-            except (requests.exceptions.ChunkedEncodingError, urllib3.exceptions.ProtocolError) as e:
-                logger.warning(
-                    "Proxy attempt %s/2 failed with ChunkedEncodingError: %s. Retrying with 'Connection: close'...",
-                    attempt + 1, e,
-                )
-                continue
-            except json.JSONDecodeError as e:
-                logger.exception("Failed to parse proxy JSON: %s", e)
-                if attempt == 1:
-                    return None
-                continue
-            except Exception as e:
-                _log_proxy_failure(url, attempt + 1, e)
-                if attempt == 1:
-                    return None
-                continue
-        return None
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_content},
+        ]
+        resp = self._post_messages(messages, GEMINI_PROXY_ANALYSIS_TIMEOUT)
+        if resp is None:
+            return None
+        try:
+            data = resp.json()
+        except (ValueError, TypeError) as e:
+            logger.warning("Failed to parse send_to_proxy response JSON: %s", e)
+            return None
+        content = self._parse_response_content(data)
+        if not content:
+            logger.warning("Empty response content from proxy")
+            return None
+        raw = content.strip()
+        if raw.startswith("```"):
+            lines = raw.split("\n")
+            if lines[0].startswith("```"):
+                lines = lines[1:]
+            if lines and lines[-1].strip() == "```":
+                lines = lines[:-1]
+            raw = "\n".join(lines)
+        try:
+            result = json.loads(raw)
+        except json.JSONDecodeError as e:
+            logger.exception("Failed to parse proxy JSON: %s", e)
+            return None
+        self._record_frames_sent(len(image_buffers))
+        return result
 
     def send_text_prompt(self, system_prompt: str, user_prompt: str) -> str | None:
         """
@@ -527,53 +365,90 @@ class GeminiAnalysisService:
         if not self._proxy_url or not self._api_key:
             logger.warning("Gemini proxy_url or api_key not configured")
             return None
-        url = f"{self._proxy_url}/v1/chat/completions"
-        payload = {
-            "model": self._model,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-            "temperature": self._temperature,
-            "top_p": self._top_p,
-            "frequency_penalty": self._frequency_penalty,
-            "presence_penalty": self._presence_penalty,
-        }
-        base_headers = {
-            "Authorization": f"Bearer {self._api_key}",
-            "Content-Type": "application/json",
-        }
-        for attempt in range(2):
-            headers = dict(base_headers)
-            if attempt == 1:
-                headers["Accept-Encoding"] = "identity"
-                headers["Connection"] = "close"
-            try:
-                resp = requests.post(
-                    url,
-                    json=payload,
-                    headers=headers,
-                    timeout=60,
-                )
-                resp.raise_for_status()
-                data = resp.json()
-                content = (data.get("choices") or [{}])[0].get("message", {}).get("content")
-                if not content or not str(content).strip():
-                    logger.warning("Empty response content from proxy (text prompt)")
-                    return None
-                return str(content).strip()
-            except (requests.exceptions.ChunkedEncodingError, urllib3.exceptions.ProtocolError) as e:
-                logger.warning(
-                    "Proxy attempt %s/2 failed with ChunkedEncodingError: %s. Retrying with 'Connection: close'...",
-                    attempt + 1, e,
-                )
-                continue
-            except Exception as e:
-                _log_proxy_failure(url, attempt + 1, e)
-                if attempt == 1:
-                    return None
-                continue
-        return None
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ]
+        resp = self._post_messages(messages, GEMINI_PROXY_ANALYSIS_TIMEOUT)
+        if resp is None:
+            return None
+        try:
+            data = resp.json()
+        except (ValueError, TypeError) as e:
+            logger.warning("Failed to parse send_text_prompt response JSON: %s", e)
+            return None
+        content = self._parse_response_content(data)
+        if not content:
+            logger.warning("Empty response content from proxy (text prompt)")
+            return None
+        return content
+
+    def _extract_and_prepare_ce_frames(
+        self,
+        ce_folder_path: str,
+        ce_start_time: float = 0,
+        primary_camera: str | None = None,
+        log_callback: Callable[[str], None] | None = None,
+    ) -> tuple[tuple[list[Any], str, list[Any]] | None, str | None]:
+        """
+        Extract frames from CE folder, add timestamp overlays, and build system prompt.
+        Single place for config read, extract_target_centric_frames, overlay loop, and prompt build.
+        Returns ((frames_raw, system_prompt, frames), None) on success, (None, error_message) on failure.
+        """
+        if not os.path.isdir(ce_folder_path):
+            return (None, "CE folder not found")
+        max_frames_sec = float(self.config.get("MAX_MULTI_CAM_FRAMES_SEC", 1))
+        max_frames_min = int(self.config.get("MAX_MULTI_CAM_FRAMES_MIN", 60))
+        if log_callback is None:
+            logger.info("Creating frame timeline")
+        frames_raw = extract_target_centric_frames(
+            ce_folder_path,
+            max_frames_sec=max_frames_sec,
+            max_frames_min=max_frames_min,
+            crop_width=self.crop_width,
+            crop_height=self.crop_height,
+            tracking_target_frame_percent=int(self.config.get("TRACKING_TARGET_FRAME_PERCENT", 40)),
+            primary_camera=primary_camera,
+            decode_second_camera_cpu_only=bool(self.config.get("DECODE_SECOND_CAMERA_CPU_ONLY", False)),
+            log_callback=log_callback,
+            config=self.config,
+            camera_timeline_analysis_multiplier=float(self.config.get("CAMERA_TIMELINE_ANALYSIS_MULTIPLIER", 2)),
+            camera_timeline_ema_alpha=float(self.config.get("CAMERA_TIMELINE_EMA_ALPHA", 0.4)),
+            camera_timeline_primary_bias_multiplier=float(self.config.get("CAMERA_TIMELINE_PRIMARY_BIAS_MULTIPLIER", 1.2)),
+            camera_switch_min_segment_frames=int(self.config.get("CAMERA_SWITCH_MIN_SEGMENT_FRAMES", 5)),
+            camera_switch_hysteresis_margin=float(self.config.get("CAMERA_SWITCH_HYSTERESIS_MARGIN", 1.15)),
+            camera_timeline_final_yolo_drop_no_person=bool(self.config.get("CAMERA_TIMELINE_FINAL_YOLO_DROP_NO_PERSON", False)),
+        )
+        if not frames_raw:
+            return (None, "No frames extracted (check clips and sidecars).")
+        image_count = len(frames_raw)
+        cameras_str = ", ".join(sorted({ef.camera for ef in frames_raw}))
+        for i, ef in enumerate(frames_raw):
+            ts = ce_start_time + ef.timestamp_sec if ce_start_time > 0 else ef.timestamp_sec
+            time_str = datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S")
+            person_area = ef.metadata.get("person_area") if self.config.get("PERSON_AREA_DEBUG") else None
+            ef.frame = crop_utils.draw_timestamp_overlay(
+                ef.frame, time_str, ef.camera, i + 1, image_count, person_area=person_area
+            )
+        frames = [ef.frame for ef in frames_raw]
+        first_ts = frames_raw[0].timestamp_sec if frames_raw else 0
+        activity_start_str = (
+            datetime.fromtimestamp(ce_start_time + first_ts).strftime("%Y-%m-%d %H:%M:%S")
+            if ce_start_time > 0 else datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        )
+        if log_callback is None:
+            logger.info("Preparing system prompt")
+        system_prompt = self._build_system_prompt(
+            image_count=image_count,
+            camera_list=cameras_str,
+            first_image_number=1,
+            last_image_number=image_count,
+            activity_start_str=activity_start_str,
+            duration_str="multi-camera event",
+            zones_str="none recorded",
+            labels_str="(none recorded)",
+        )
+        return ((frames_raw, system_prompt, frames), None)
 
     def analyze_multi_clip_ce(
         self,
@@ -595,63 +470,14 @@ class GeminiAnalysisService:
             logger.debug("Gemini proxy not configured, skipping CE %s", ce_id)
             return None
         try:
-            if not os.path.isdir(ce_folder_path):
-                logger.warning("CE folder not found: %s", ce_folder_path)
+            data, err = self._extract_and_prepare_ce_frames(
+                ce_folder_path, ce_start_time, primary_camera=primary_camera, log_callback=None
+            )
+            if err or data is None:
+                if err == "No frames extracted (check clips and sidecars).":
+                    logger.warning("No frames extracted from CE %s", ce_id)
                 return None
-
-            max_frames_sec = float(self.config.get("MAX_MULTI_CAM_FRAMES_SEC", 1))
-            max_frames_min = int(self.config.get("MAX_MULTI_CAM_FRAMES_MIN", 60))
-            logger.info("Creating frame timeline")
-            frames_raw = extract_target_centric_frames(
-                ce_folder_path,
-                max_frames_sec=max_frames_sec,
-                max_frames_min=max_frames_min,
-                crop_width=self.crop_width,
-                crop_height=self.crop_height,
-                tracking_target_frame_percent=int(self.config.get("TRACKING_TARGET_FRAME_PERCENT", 40)),
-                primary_camera=primary_camera,
-                decode_second_camera_cpu_only=bool(self.config.get("DECODE_SECOND_CAMERA_CPU_ONLY", False)),
-                config=self.config,
-                camera_timeline_analysis_multiplier=float(self.config.get("CAMERA_TIMELINE_ANALYSIS_MULTIPLIER", 2)),
-                camera_timeline_ema_alpha=float(self.config.get("CAMERA_TIMELINE_EMA_ALPHA", 0.4)),
-                camera_timeline_primary_bias_multiplier=float(self.config.get("CAMERA_TIMELINE_PRIMARY_BIAS_MULTIPLIER", 1.2)),
-                camera_switch_min_segment_frames=int(self.config.get("CAMERA_SWITCH_MIN_SEGMENT_FRAMES", 5)),
-                camera_switch_hysteresis_margin=float(self.config.get("CAMERA_SWITCH_HYSTERESIS_MARGIN", 1.15)),
-                camera_timeline_final_yolo_drop_no_person=bool(self.config.get("CAMERA_TIMELINE_FINAL_YOLO_DROP_NO_PERSON", False)),
-            )
-            if not frames_raw:
-                logger.warning("No frames extracted from CE %s", ce_id)
-                return None
-
-            # Add timestamp overlay; keep ExtractedFrame with overlay drawn on .frame
-            image_count = len(frames_raw)
-            cameras_str = ", ".join(sorted({ef.camera for ef in frames_raw}))
-            for i, ef in enumerate(frames_raw):
-                ts = ce_start_time + ef.timestamp_sec if ce_start_time > 0 else ef.timestamp_sec
-                time_str = datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S")
-                person_area = ef.metadata.get("person_area") if self.config.get("PERSON_AREA_DEBUG") else None
-                ef.frame = crop_utils.draw_timestamp_overlay(
-                    ef.frame, time_str, ef.camera, i + 1, image_count, person_area=person_area
-                )
-
-            # Build payload and send to proxy first (disk write deferred so API call starts earlier).
-            frames = [ef.frame for ef in frames_raw]
-            first_ts = frames_raw[0].timestamp_sec if frames_raw else 0
-            activity_start_str = (
-                datetime.fromtimestamp(ce_start_time + first_ts).strftime("%Y-%m-%d %H:%M:%S")
-                if ce_start_time > 0 else datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            )
-            logger.info("Preparing system prompt")
-            system_prompt = self._build_system_prompt(
-                image_count=image_count,
-                camera_list=cameras_str,
-                first_image_number=1,
-                last_image_number=image_count,
-                activity_start_str=activity_start_str,
-                duration_str="multi-camera event",
-                zones_str="none recorded",
-                labels_str="(none recorded)",
-            )
+            frames_raw, system_prompt, frames = data
             logger.info("Sending to proxy")
             result = self.send_to_proxy(system_prompt, frames)
             if result and isinstance(result, dict):
@@ -662,7 +488,6 @@ class GeminiAnalysisService:
                     logger.debug("Saved analysis_result.json for CE %s to %s", ce_id, out_path)
                 except OSError as e:
                     logger.warning("Failed to write analysis_result.json for CE %s: %s", ce_id, e)
-                # Write ai_frame_analysis after API return (moves disk I/O off critical path).
                 logger.info("Writing frames to disk")
                 save_frames = bool(self.config.get("SAVE_AI_FRAMES", True))
                 create_zip = bool(self.config.get("CREATE_AI_ANALYSIS_ZIP", True))
@@ -708,7 +533,6 @@ class GeminiAnalysisService:
                 if log_messages is not None:
                     log_messages.append(msg)
 
-            # Frame selection: require detection sidecars for every camera
             camera_subdirs: list[str] = []
             try:
                 with os.scandir(ce_folder_path) as it:
@@ -728,45 +552,17 @@ class GeminiAnalysisService:
                 part = f" (missing for: {', '.join(missing)})" if missing else ""
                 _log(f"Frame selection: detection sidecars missing; skipping multi-clip extraction.{part}")
 
-            max_frames_sec = float(self.config.get("MAX_MULTI_CAM_FRAMES_SEC", 1))
-            max_frames_min = int(self.config.get("MAX_MULTI_CAM_FRAMES_MIN", 60))
-            _log("Creating frame timeline")
-            frames_raw = extract_target_centric_frames(
+            data, err = self._extract_and_prepare_ce_frames(
                 ce_folder_path,
-                max_frames_sec=max_frames_sec,
-                max_frames_min=max_frames_min,
-                crop_width=self.crop_width,
-                crop_height=self.crop_height,
-                tracking_target_frame_percent=int(self.config.get("TRACKING_TARGET_FRAME_PERCENT", 40)),
+                ce_start_time,
                 primary_camera=None,
-                decode_second_camera_cpu_only=bool(self.config.get("DECODE_SECOND_CAMERA_CPU_ONLY", False)),
                 log_callback=_log if log_messages is not None else None,
-                config=self.config,
-                camera_timeline_analysis_multiplier=float(self.config.get("CAMERA_TIMELINE_ANALYSIS_MULTIPLIER", 2)),
-                camera_timeline_ema_alpha=float(self.config.get("CAMERA_TIMELINE_EMA_ALPHA", 0.4)),
-                camera_timeline_primary_bias_multiplier=float(self.config.get("CAMERA_TIMELINE_PRIMARY_BIAS_MULTIPLIER", 1.2)),
-                camera_switch_min_segment_frames=int(self.config.get("CAMERA_SWITCH_MIN_SEGMENT_FRAMES", 5)),
-                camera_switch_hysteresis_margin=float(self.config.get("CAMERA_SWITCH_HYSTERESIS_MARGIN", 1.15)),
-                camera_timeline_final_yolo_drop_no_person=bool(self.config.get("CAMERA_TIMELINE_FINAL_YOLO_DROP_NO_PERSON", False)),
             )
-            if not frames_raw:
-                logger.warning("No frames extracted from CE folder %s", ce_folder_path)
-                return (None, "No frames extracted (check clips and sidecars).")
-
-            cameras_from_frames = ", ".join(sorted({ef.camera for ef in frames_raw}))
-            _log(f"Extracted {len(frames_raw)} frames from clips ({cameras_from_frames}).")
-            _log(f"Adding timestamps to frames ({cameras_from_frames}).")
-
-            image_count = len(frames_raw)
+            if err or data is None:
+                return (None, err or "Preparation failed")
+            frames_raw, system_prompt, frames = data
             cameras_str = ", ".join(sorted({ef.camera for ef in frames_raw}))
-            for i, ef in enumerate(frames_raw):
-                ts = ce_start_time + ef.timestamp_sec if ce_start_time > 0 else ef.timestamp_sec
-                time_str = datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S")
-                person_area = ef.metadata.get("person_area") if self.config.get("PERSON_AREA_DEBUG") else None
-                ef.frame = crop_utils.draw_timestamp_overlay(
-                    ef.frame, time_str, ef.camera, i + 1, image_count, person_area=person_area
-                )
-
+            _log(f"Extracted {len(frames_raw)} frames from clips ({cameras_str}).")
             _log(f"Organizing timeline (saving {len(frames_raw)} frames).")
             save_frames = bool(self.config.get("SAVE_AI_FRAMES", True))
             write_ai_frame_analysis_multi_cam(
@@ -775,24 +571,6 @@ class GeminiAnalysisService:
                 write_manifest=True,
                 create_zip_flag=False,
                 save_frames=save_frames,
-            )
-
-            frames = [ef.frame for ef in frames_raw]
-            first_ts = frames_raw[0].timestamp_sec if frames_raw else 0
-            activity_start_str = (
-                datetime.fromtimestamp(ce_start_time + first_ts).strftime("%Y-%m-%d %H:%M:%S")
-                if ce_start_time > 0 else datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            )
-            _log("Preparing system prompt")
-            system_prompt = self._build_system_prompt(
-                image_count=image_count,
-                camera_list=cameras_str,
-                first_image_number=1,
-                last_image_number=image_count,
-                activity_start_str=activity_start_str,
-                duration_str="multi-camera event",
-                zones_str="none recorded",
-                labels_str="(none recorded)",
             )
             _log("Building payload for preview")
             user_content: list[Any] = [
@@ -803,14 +581,12 @@ class GeminiAnalysisService:
                     "type": "image_url",
                     "image_url": {"url": self._frame_to_base64_url(frame)},
                 })
-
             frame_relative_paths: list[str] = []
             frames_dir = os.path.join(ce_folder_path, "ai_frame_analysis", "frames")
             if os.path.isdir(frames_dir):
                 for name in sorted(os.listdir(frames_dir)):
                     if name.startswith("frame_") and name.endswith(".jpg"):
                         frame_relative_paths.append(os.path.join("ai_frame_analysis", "frames", name))
-
             return ((system_prompt, user_content, frame_relative_paths), None)
         except Exception as e:
             logger.exception("build_multi_cam_payload_for_preview failed for %s: %s", ce_folder_path, e)

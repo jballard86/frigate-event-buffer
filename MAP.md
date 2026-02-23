@@ -48,7 +48,7 @@ The project uses a **zero-copy GPU pipeline** for all video decode and frame pro
 
 - **ffmpegcv** — Forbidden. Do not add it to dependencies or use it for decode/capture.
 - **CPU-decoding fallbacks** — Forbidden. Do not add fallback paths that decode video on CPU (e.g. OpenCV `VideoCapture`, FFmpeg subprocess for decode, or ffmpegcv) when NeLux is used for the main pipeline. The only remaining FFmpeg use is **GIF generation** (subprocess) and **ffprobe** for metadata.
-- **Production frame processing on NumPy in the core path** — Forbidden. New crop/resize logic in the GPU pipeline must use `crop_utils` (BCHW tensors). Legacy NumPy helpers in ai_analyzer (`_center_crop`, `_smart_crop`) are deprecated; production must use `crop_utils`.
+- **Production frame processing on NumPy in the core path** — Forbidden. New crop/resize logic in the GPU pipeline must use `crop_utils` (BCHW tensors). Legacy NumPy crop helpers were removed from ai_analyzer; production uses `crop_utils`.
 
 ---
 
@@ -113,6 +113,7 @@ frigate-event-buffer/
 │       ├── services/
 │       │   ├── __init__.py
 │       │   ├── ai_analyzer.py
+│       │   ├── gemini_proxy_client.py
 │       │   ├── multi_clip_extractor.py
 │       │   ├── timeline_ema.py
 │       │   ├── video.py
@@ -225,7 +226,7 @@ frigate-event-buffer/
 | `src/frigate_buffer/config.py` | Load/validate YAML + env via Voluptuous `CONFIG_SCHEMA`; flat keys (e.g. `MQTT_BROKER`, `GEMINI_PROXY_URL`, `MAX_EVENT_LENGTH_SECONDS`). Frame limits for AI: `multi_cam.max_multi_cam_frames_*` only. `single_camera_ce_close_delay_seconds` (0 = close single-cam CE as soon as event ends). Invalid config exits 1. | Used by `main.py`. |
 | `src/frigate_buffer/version.txt` | Version string read at startup; logged in main. | Package data; included by `COPY src/` in Dockerfile. |
 | `src/frigate_buffer/logging_utils.py` | `setup_logging()`, `ErrorBuffer` for stats dashboard. | Called from main; ErrorBuffer used by web/server and orchestrator. |
-| `src/frigate_buffer/constants.py` | Shared constants: `NON_CAMERA_DIRS`; `HTTP_STREAM_CHUNK_SIZE` (8192), `HTTP_DOWNLOAD_CHUNK_SIZE` (65536); `FRIGATE_PROXY_SNAPSHOT_TIMEOUT` (15), `FRIGATE_PROXY_LATEST_TIMEOUT` (10); `LOG_MAX_RESPONSE_BODY` (2000), `FRAME_MAX_WIDTH` (1280); `DEFAULT_STORAGE_STATS_MAX_AGE_SECONDS` (30 min); `ERROR_BUFFER_MAX_SIZE` (10). Also `is_tensor()` helper for torch.Tensor checks. | Imported by file manager, query, blueprints, frigate_proxy, frigate_export_watchdog, download, ai_analyzer, ha_storage_stats, logging_utils; is_tensor by file, video, crop_utils. |
+| `src/frigate_buffer/constants.py` | Shared constants: `NON_CAMERA_DIRS`; `HTTP_STREAM_CHUNK_SIZE` (8192), `HTTP_DOWNLOAD_CHUNK_SIZE` (65536); `FRIGATE_PROXY_SNAPSHOT_TIMEOUT` (15), `FRIGATE_PROXY_LATEST_TIMEOUT` (10); `GEMINI_PROXY_QUICK_TITLE_TIMEOUT` (30), `GEMINI_PROXY_ANALYSIS_TIMEOUT` (60); `LOG_MAX_RESPONSE_BODY` (2000), `FRAME_MAX_WIDTH` (1280); `DEFAULT_STORAGE_STATS_MAX_AGE_SECONDS` (30 min); `ERROR_BUFFER_MAX_SIZE` (10). Also `is_tensor()` helper for torch.Tensor checks. | Imported by file manager, query, blueprints, frigate_proxy, frigate_export_watchdog, download, ai_analyzer, ha_storage_stats, logging_utils; is_tensor by file, video, crop_utils. |
 
 ### Core coordinator & models
 
@@ -247,7 +248,8 @@ frigate-event-buffer/
 
 | Path/Name | Purpose | Dependencies/Interactions |
 |-----------|---------|---------------------------|
-| `src/frigate_buffer/services/ai_analyzer.py` | **GeminiAnalysisService:** system prompt from file; POST to OpenAI-compatible proxy; parses both **native Gemini** and OpenAI-shaped responses; returns analysis dict; writes `analysis_result.json`; rolling frame cap. **Phase 4:** `_frame_to_base64_url` and `send_to_proxy` accept numpy HWC BGR or torch.Tensor BCHW RGB; `generate_quick_title` accepts numpy or tensor. **Legacy NumPy helpers** `_center_crop` and `_smart_crop` are deprecated (logger.warning); production must use crop_utils (BCHW). All analysis via `analyze_multi_clip_ce`; **generate_quick_title** (single image, quick_title_prompt.txt) for 3–6 word title shortly after event start. | Called by orchestrator (`on_ce_ready_for_analysis`) and QuickTitleService (quick-title); uses VideoService, FileManager. |
+| `src/frigate_buffer/services/ai_analyzer.py` | **GeminiAnalysisService:** uses **GeminiProxyClient** for HTTP; system prompt from file; parses native Gemini and OpenAI responses; returns analysis dict; writes `analysis_result.json`; rolling frame cap. `_frame_to_base64_url` and `send_to_proxy` accept numpy HWC BGR or torch.Tensor BCHW RGB; `generate_quick_title` accepts numpy or tensor. Legacy NumPy crop helpers removed; production uses crop_utils (BCHW). All analysis via `analyze_multi_clip_ce`; **generate_quick_title** (single image, quick_title_prompt.txt) for 3–6 word title shortly after event start. | Called by orchestrator, QuickTitleService; uses GeminiProxyClient, VideoService, FileManager. |
+| `src/frigate_buffer/services/gemini_proxy_client.py` | **GeminiProxyClient:** HTTP client for Gemini proxy (OpenAI-compatible `/v1/chat/completions`). POST with 2-attempt retry (second attempt: Accept-Encoding identity, Connection close). Used by GeminiAnalysisService for all proxy requests; no response parsing. | Used by ai_analyzer. |
 | `src/frigate_buffer/services/multi_clip_extractor.py` | Target-centric frame extraction for CE; requires detection sidecars (no HOG fallback when any camera lacks sidecar). Camera assignment uses **timeline_ema** (dense grid + EMA + hysteresis + segment merge). **NeLux** decode: one VideoReader per camera, single-threaded **get_batch** per sample time; **ExtractedFrame.frame** is torch.Tensor BCHW RGB; `del` + `torch.cuda.empty_cache()` after each frame. No ffmpegcv/CPU fallback; parallel sidecar JSON load only. Config: CUDA_DEVICE_INDEX, LOG_EXTRACTION_PHASE_TIMING. | Used by ai_analyzer, event_test_orchestrator. |
 | `src/frigate_buffer/services/timeline_ema.py` | Core camera-assignment logic for multi-cam: dense time grid, EMA smoothing, hysteresis, and segment merge (including first-segment roll-forward). Sole path for which camera is chosen per sample time. | Used by multi_clip_extractor. |
 | `src/frigate_buffer/services/video.py` | **VideoService:** **NeLux** NVDEC decode for detection sidecars (one `VideoReader` per clip, batched `get_batch` with **BATCH_SIZE=16**, float32/255 normalization for YOLO; `del` + `torch.cuda.empty_cache()` after each batch). No ffmpegcv/CPU decode; NeLux open/get_batch failures log and return False. If reader is missing `_decoder`, monkey-patch `reader._decoder = reader` so existing code works. `_nelux_frame_count(reader, fps, duration)` gets frame count from reader or ffprobe fallback when reader's `len()` fails. `get_detection_model_path(config)` (model under `STORAGE_PATH/yolo_models/`), `generate_detection_sidecar`, `generate_detection_sidecars_for_cameras` (shared YOLO + lock), `run_detection_on_image` (numpy or tensor, normalized for YOLO; quick-title), `generate_gif_from_clip` (subprocess FFmpeg—only remaining FFmpeg use). Single `_get_video_metadata` ffprobe per clip. App-level sidecar lock injected by orchestrator. | Used by lifecycle, ai_analyzer, event_test. |
@@ -320,7 +322,7 @@ frigate-event-buffer/
 
 - **Do not** add or use **ffmpegcv** for video decode or capture.
 - **Do not** add **CPU-decoding fallbacks** (e.g. OpenCV VideoCapture or FFmpeg subprocess for decode) for the main pipeline; NeLux (NVDEC) is the only decode path. FFmpeg is allowed only for GIF generation and ffprobe metadata.
-- **Production frame crops/resize** must use **`crop_utils`** with **BCHW tensors**. Do not add new NumPy/OpenCV-based crop or resize logic in the core frame path; use the existing tensor helpers in `crop_utils.py`. Legacy NumPy helpers in ai_analyzer (`_center_crop`, `_smart_crop`) are deprecated and must not be used for new production code.
+- **Production frame crops/resize** must use **`crop_utils`** with **BCHW tensors**. Do not add new NumPy/OpenCV-based crop or resize logic in the core frame path; use the existing tensor helpers in `crop_utils.py`. Legacy NumPy crop helpers were removed from ai_analyzer; use crop_utils for all production crops.
 
 ### Wheel build and update
 

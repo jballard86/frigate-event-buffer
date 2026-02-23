@@ -50,7 +50,7 @@ class _MockSuccessResponse:
 class TestProxyRetryOnChunkedEncodingError(unittest.TestCase):
     """Retry: first call raises ChunkedEncodingError, second succeeds."""
 
-    @patch("frigate_buffer.services.ai_analyzer.requests.post")
+    @patch("frigate_buffer.services.gemini_proxy_client.requests.post")
     def test_send_to_proxy_retries_and_succeeds(self, mock_post):
         mock_post.side_effect = [
             requests.exceptions.ChunkedEncodingError("Connection broken: InvalidChunkLength(...)"),
@@ -72,7 +72,7 @@ class TestProxyRetryOnChunkedEncodingError(unittest.TestCase):
         self.assertEqual(second_kw.get("headers", {}).get("Accept-Encoding"), "identity")
         self.assertEqual(second_kw.get("headers", {}).get("Connection"), "close")
 
-    @patch("frigate_buffer.services.ai_analyzer.requests.post")
+    @patch("frigate_buffer.services.gemini_proxy_client.requests.post")
     def test_send_text_prompt_retries_and_succeeds(self, mock_post):
         class _TextResponse:
             status_code = 200
@@ -93,8 +93,8 @@ class TestProxyRetryOnChunkedEncodingError(unittest.TestCase):
 class TestProxyFailureAfterTwoAttempts(unittest.TestCase):
     """Both attempts raise ChunkedEncodingError; returns None and logs."""
 
-    @patch("frigate_buffer.services.ai_analyzer.requests.post")
-    @patch("frigate_buffer.services.ai_analyzer.logger")
+    @patch("frigate_buffer.services.gemini_proxy_client.requests.post")
+    @patch("frigate_buffer.services.gemini_proxy_client.logger")
     def test_send_to_proxy_returns_none_when_both_fail(self, mock_logger, mock_post):
         mock_post.side_effect = [
             requests.exceptions.ChunkedEncodingError("first"),
@@ -110,8 +110,8 @@ class TestProxyFailureAfterTwoAttempts(unittest.TestCase):
         # ChunkedEncodingError path logs warning each time (no generic Exception)
         self.assertGreaterEqual(mock_logger.warning.call_count, 1)
 
-    @patch("frigate_buffer.services.ai_analyzer.requests.post")
-    @patch("frigate_buffer.services.ai_analyzer.logger")
+    @patch("frigate_buffer.services.gemini_proxy_client.requests.post")
+    @patch("frigate_buffer.services.gemini_proxy_client.logger")
     def test_send_text_prompt_returns_none_when_both_fail(self, mock_logger, mock_post):
         mock_post.side_effect = [
             requests.exceptions.ChunkedEncodingError("first"),
@@ -129,7 +129,7 @@ class TestProxyFailureAfterTwoAttempts(unittest.TestCase):
 class TestSendToProxyNativeGeminiFormat(unittest.TestCase):
     """send_to_proxy parses native Gemini API response (candidates[].content.parts[].text)."""
 
-    @patch("frigate_buffer.services.ai_analyzer.requests.post")
+    @patch("frigate_buffer.services.gemini_proxy_client.requests.post")
     def test_send_to_proxy_parses_native_gemini_response(self, mock_post):
         gemini_payload = {
             "title": "G",

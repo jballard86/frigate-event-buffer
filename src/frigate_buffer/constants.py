@@ -28,6 +28,10 @@ HTTP_DOWNLOAD_CHUNK_SIZE: int = 65536
 FRIGATE_PROXY_SNAPSHOT_TIMEOUT: int = 15
 FRIGATE_PROXY_LATEST_TIMEOUT: int = 10
 
+# Gemini proxy request timeouts (seconds). Quick-title = single image; analysis = multi-frame or text-only.
+GEMINI_PROXY_QUICK_TITLE_TIMEOUT: int = 30
+GEMINI_PROXY_ANALYSIS_TIMEOUT: int = 60
+
 # AI/display: max chars to log for proxy error response body; max frame width for API (preserve aspect).
 LOG_MAX_RESPONSE_BODY: int = 2000
 FRAME_MAX_WIDTH: int = 1280

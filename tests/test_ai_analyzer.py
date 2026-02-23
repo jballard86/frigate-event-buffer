@@ -38,7 +38,7 @@ class TestGeminiAnalysisServiceConfig(unittest.TestCase):
 class TestGeminiAnalysisServicePayload(unittest.TestCase):
     """Test that the JSON payload sent to the proxy matches OpenAI schema."""
 
-    @patch("frigate_buffer.services.ai_analyzer.requests.post")
+    @patch("frigate_buffer.services.gemini_proxy_client.requests.post")
     def test_payload_structure(self, mock_post):
         mock_post.return_value.status_code = 200
         mock_post.return_value.json.return_value = {
@@ -102,7 +102,7 @@ class TestFrameToBase64Url(unittest.TestCase):
 class TestGeminiFrameCapAndLogging(unittest.TestCase):
     """Test rolling frame cap and API rate stats logging."""
 
-    @patch("frigate_buffer.services.ai_analyzer.requests.post")
+    @patch("frigate_buffer.services.gemini_proxy_client.requests.post")
     def test_cap_disabled_sends_and_logs(self, mock_post):
         """When GEMINI_FRAMES_PER_HOUR_CAP is 0, request is sent and log mentions cap=disabled."""
         mock_post.return_value.status_code = 200
@@ -127,7 +127,7 @@ class TestGeminiFrameCapAndLogging(unittest.TestCase):
             f"Expected log to contain 'cap=disabled', got: {log_calls}",
         )
 
-    @patch("frigate_buffer.services.ai_analyzer.requests.post")
+    @patch("frigate_buffer.services.gemini_proxy_client.requests.post")
     def test_cap_enforced_blocks_second_request(self, mock_post):
         """When cap is 2, first send (2 frames) succeeds; second send (1 frame) is blocked."""
         mock_post.return_value.status_code = 200
@@ -149,7 +149,7 @@ class TestGeminiFrameCapAndLogging(unittest.TestCase):
         self.assertIsNone(result2, "Second request should be blocked by cap")
         self.assertEqual(mock_post.call_count, 1, "POST should not be called again when blocked")
 
-    @patch("frigate_buffer.services.ai_analyzer.requests.post")
+    @patch("frigate_buffer.services.gemini_proxy_client.requests.post")
     def test_cap_logs_current_rate_status_blocked(self, mock_post):
         """When cap is enabled, info log contains current_frames, status, blocked."""
         mock_post.return_value.status_code = 200
@@ -176,7 +176,7 @@ class TestGeminiFrameCapAndLogging(unittest.TestCase):
 class TestGeminiAnalysisServiceSendTextPrompt(unittest.TestCase):
     """Test send_text_prompt: text-only POST, no images; returns raw content string or None."""
 
-    @patch("frigate_buffer.services.ai_analyzer.requests.post")
+    @patch("frigate_buffer.services.gemini_proxy_client.requests.post")
     def test_send_text_prompt_returns_content_on_success(self, mock_post):
         mock_post.return_value.status_code = 200
         mock_post.return_value.json.return_value = {
@@ -198,7 +198,7 @@ class TestGeminiAnalysisServiceSendTextPrompt(unittest.TestCase):
         self.assertEqual(messages[1]["content"], "User text")
         self.assertNotIn("image_url", str(messages))
 
-    @patch("frigate_buffer.services.ai_analyzer.requests.post")
+    @patch("frigate_buffer.services.gemini_proxy_client.requests.post")
     def test_send_text_prompt_returns_none_when_empty_content(self, mock_post):
         mock_post.return_value.status_code = 200
         mock_post.return_value.json.return_value = {"choices": [{"message": {"content": ""}}]}
@@ -207,7 +207,7 @@ class TestGeminiAnalysisServiceSendTextPrompt(unittest.TestCase):
         result = service.send_text_prompt("Sys", "User")
         self.assertIsNone(result)
 
-    @patch("frigate_buffer.services.ai_analyzer.requests.post")
+    @patch("frigate_buffer.services.gemini_proxy_client.requests.post")
     def test_send_text_prompt_returns_none_on_5xx(self, mock_post):
         def raise_http_error(*args, **kwargs):
             raise requests.exceptions.HTTPError("500 Server Error")
@@ -232,7 +232,7 @@ class TestGeminiAnalysisServiceSendTextPrompt(unittest.TestCase):
 class TestGeminiAnalysisServiceProxyFailure(unittest.TestCase):
     """Test that proxy failures are caught and do not crash the process."""
 
-    @patch("frigate_buffer.services.ai_analyzer.requests.post")
+    @patch("frigate_buffer.services.gemini_proxy_client.requests.post")
     def test_proxy_failure_handling_500(self, mock_post):
         import requests as req
         mock_post.return_value.raise_for_status.side_effect = req.exceptions.HTTPError("500 Server Error")
@@ -243,7 +243,7 @@ class TestGeminiAnalysisServiceProxyFailure(unittest.TestCase):
         result = service.send_to_proxy("Prompt", [frame])
         self.assertIsNone(result)
 
-    @patch("frigate_buffer.services.ai_analyzer.requests.post")
+    @patch("frigate_buffer.services.gemini_proxy_client.requests.post")
     def test_proxy_failure_handling_timeout(self, mock_post):
         import requests
         mock_post.side_effect = requests.exceptions.Timeout("timeout")
@@ -253,7 +253,7 @@ class TestGeminiAnalysisServiceProxyFailure(unittest.TestCase):
         result = service.send_to_proxy("Prompt", [frame])
         self.assertIsNone(result)
 
-    @patch("frigate_buffer.services.ai_analyzer.requests.post")
+    @patch("frigate_buffer.services.gemini_proxy_client.requests.post")
     def test_proxy_failure_handling_invalid_json(self, mock_post):
         mock_post.return_value.raise_for_status.side_effect = None
         mock_post.return_value.json.return_value = {"choices": [{"message": {"content": "not valid json {"}}]}
@@ -307,7 +307,7 @@ class TestGeminiAnalysisServiceFlatConfig(unittest.TestCase):
 class TestGeminiAnalysisServiceProxyTuningPayload(unittest.TestCase):
     """Test that proxy request body includes temperature, top_p, frequency_penalty, presence_penalty."""
 
-    @patch("frigate_buffer.services.ai_analyzer.requests.post")
+    @patch("frigate_buffer.services.gemini_proxy_client.requests.post")
     def test_payload_includes_tuning_params(self, mock_post):
         mock_post.return_value.status_code = 200
         mock_post.return_value.json.return_value = {
@@ -371,57 +371,6 @@ class TestGeminiAnalysisServicePromptFile(unittest.TestCase):
         template = service._load_system_prompt_template()
         self.assertIsNotNone(template)
         self.assertGreater(len(template), 0)
-
-
-class TestGeminiAnalysisServiceCenterCrop(unittest.TestCase):
-    """Test _center_crop behavior."""
-
-    def test_center_crop_returns_exact_dimensions(self):
-        config = {"GEMINI": {"enabled": True, "proxy_url": "http://p", "api_key": "k"}}
-        service = GeminiAnalysisService(config)
-        frame = np.zeros((200, 320, 3), dtype=np.uint8)
-        crop = service._center_crop(frame, 160, 100)
-        self.assertEqual(crop.shape, (100, 160, 3))
-
-    def test_center_crop_passthrough_when_target_zero(self):
-        config = {"GEMINI": {"enabled": True, "proxy_url": "http://p", "api_key": "k"}}
-        service = GeminiAnalysisService(config)
-        frame = np.zeros((100, 100, 3), dtype=np.uint8)
-        out = service._center_crop(frame, 0, 0)
-        self.assertIs(out, frame)
-        out = service._center_crop(frame, 50, 0)
-        self.assertIs(out, frame)
-
-
-class TestGeminiAnalysisServiceSmartCrop(unittest.TestCase):
-    """Test _smart_crop with normalized box and padding."""
-
-    def test_smart_crop_returns_exact_dimensions(self):
-        config = {"GEMINI": {"enabled": True, "proxy_url": "http://p", "api_key": "k"}, "SMART_CROP_PADDING": 0.15}
-        service = GeminiAnalysisService(config)
-        frame = np.zeros((200, 320, 3), dtype=np.uint8)
-        box = (0.25, 0.25, 0.75, 0.75)
-        crop = service._smart_crop(frame, box, 160, 100)
-        self.assertEqual(crop.shape, (100, 160, 3))
-
-    def test_smart_crop_empty_box_falls_back_to_center_crop(self):
-        config = {"GEMINI": {"enabled": True, "proxy_url": "http://p", "api_key": "k"}}
-        service = GeminiAnalysisService(config)
-        frame = np.zeros((100, 100, 3), dtype=np.uint8)
-        out = service._smart_crop(frame, [], 50, 50)
-        self.assertEqual(out.shape, (50, 50, 3))
-        out = service._smart_crop(frame, None, 50, 50)
-        self.assertEqual(out.shape, (50, 50, 3))
-
-    def test_smart_crop_with_padding_produces_larger_region(self):
-        config = {"GEMINI": {"enabled": True, "proxy_url": "http://p", "api_key": "k"}, "SMART_CROP_PADDING": 0.2}
-        service = GeminiAnalysisService(config)
-        frame = np.zeros((100, 100, 3), dtype=np.uint8)
-        box = (0.4, 0.4, 0.6, 0.6)
-        crop_padded = service._smart_crop(frame, box, 50, 50, padding=0.2)
-        crop_no_pad = service._smart_crop(frame, box, 50, 50, padding=0.0)
-        self.assertEqual(crop_padded.shape, (50, 50, 3))
-        self.assertEqual(crop_no_pad.shape, (50, 50, 3))
 
 
 class TestGeminiAnalysisServiceConfigMisc(unittest.TestCase):

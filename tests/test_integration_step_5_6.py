@@ -51,7 +51,7 @@ def _make_mock_extracted_frame_tensor():
 class TestIntegrationStep5Persistence(unittest.TestCase):
     """Verify analysis_result.json is created in the CE folder with expected content."""
 
-    @patch("frigate_buffer.services.ai_analyzer.requests.post")
+    @patch("frigate_buffer.services.gemini_proxy_client.requests.post")
     @patch("frigate_buffer.services.ai_analyzer.extract_target_centric_frames")
     def test_analysis_result_json_created_with_expected_fields(self, mock_extract, mock_post):
         ce_dir = tempfile.mkdtemp()
@@ -90,7 +90,7 @@ class TestIntegrationStep5Persistence(unittest.TestCase):
         self.assertEqual(saved["shortSummary"], payload["shortSummary"])
         self.assertEqual(saved["potential_threat_level"], payload["potential_threat_level"])
 
-    @patch("frigate_buffer.services.ai_analyzer.requests.post")
+    @patch("frigate_buffer.services.gemini_proxy_client.requests.post")
     @patch("frigate_buffer.services.ai_analyzer.extract_target_centric_frames")
     def test_analysis_result_saved_even_when_required_fields_missing(self, mock_extract, mock_post):
         """When proxy returns partial result (e.g. missing potential_threat_level), we still save the dict."""
@@ -116,7 +116,7 @@ class TestIntegrationStep5Persistence(unittest.TestCase):
         self.assertEqual(saved["title"], "Partial")
         self.assertEqual(saved["shortSummary"], "No threat level in response.")
 
-    @patch("frigate_buffer.services.ai_analyzer.requests.post")
+    @patch("frigate_buffer.services.gemini_proxy_client.requests.post")
     @patch("frigate_buffer.services.ai_analyzer.extract_target_centric_frames")
     def test_analysis_result_json_created_with_tensor_frames(self, mock_extract, mock_post):
         """Phase 5: analyze_multi_clip_ce accepts ExtractedFrame with tensor .frame; saves analysis_result.json."""
@@ -219,7 +219,7 @@ class TestIntegrationStep6OrchestratorHandoff(unittest.TestCase):
 class TestIntegrationStep5ErrorHandling(unittest.TestCase):
     """Verify invalid JSON or 5xx does not create analysis_result.json or crash."""
 
-    @patch("frigate_buffer.services.ai_analyzer.requests.post")
+    @patch("frigate_buffer.services.gemini_proxy_client.requests.post")
     @patch("frigate_buffer.services.ai_analyzer.extract_target_centric_frames")
     def test_invalid_json_does_not_create_analysis_result_file(self, mock_extract, mock_post):
         ce_dir = tempfile.mkdtemp()
@@ -239,7 +239,7 @@ class TestIntegrationStep5ErrorHandling(unittest.TestCase):
         out_path = os.path.join(ce_dir, "analysis_result.json")
         self.assertFalse(os.path.isfile(out_path), "Should not create analysis_result.json on invalid JSON")
 
-    @patch("frigate_buffer.services.ai_analyzer.requests.post")
+    @patch("frigate_buffer.services.gemini_proxy_client.requests.post")
     def test_proxy_500_send_to_proxy_returns_none(self, mock_post):
         import requests as req
         mock_post.return_value.status_code = 500
@@ -252,7 +252,7 @@ class TestIntegrationStep5ErrorHandling(unittest.TestCase):
         result = service.send_to_proxy("Prompt", [frame])
         self.assertIsNone(result)
 
-    @patch("frigate_buffer.services.ai_analyzer.requests.post")
+    @patch("frigate_buffer.services.gemini_proxy_client.requests.post")
     @patch("frigate_buffer.services.ai_analyzer.extract_target_centric_frames")
     def test_proxy_500_analyze_multi_clip_ce_does_not_create_analysis_result(self, mock_extract, mock_post):
         import requests as req
