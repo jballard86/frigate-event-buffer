@@ -18,8 +18,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends software-proper
     && apt-get purge -y software-properties-common && apt-get autoremove -y --purge \
     && rm -rf /var/lib/apt/lists/*
 
-# Library path for PyTorch and NVIDIA runtimes.
-ENV LD_LIBRARY_PATH="/usr/local/lib/python3.12/dist-packages/torch/lib:/usr/local/lib/python3.12/dist-packages/nvidia/cuda_runtime/lib:/usr/local/lib/python3.12/dist-packages/nvidia/cudnn/lib:/usr/local/lib:${LD_LIBRARY_PATH}"
 
 # Prefer python3.12 for the rest of the build and runtime.
 RUN update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.12 1 \
