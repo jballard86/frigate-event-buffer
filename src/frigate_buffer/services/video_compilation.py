@@ -12,6 +12,7 @@ import logging
 import os
 import subprocess
 
+from frigate_buffer.constants import NVDEC_INIT_FAILURE_PREFIX
 from frigate_buffer.services import timeline_ema
 from frigate_buffer.services.video import (
     _get_video_metadata,
@@ -301,8 +302,13 @@ def _encode_frames_via_ffmpeg(
         "-pix_fmt", "rgb24",
         "-s", f"{target_w}x{target_h}",
         "-r", "20",
+        "-thread_queue_size", "512",
         "-i", "pipe:0",
         "-c:v", "h264_nvenc",
+        "-preset", "p1",
+        "-tune", "hq",
+        "-rc", "vbr",
+        "-cq", "24",
         "-an",
         tmp_output_path,
     ]
@@ -397,6 +403,7 @@ def _run_nelux_compilation(
         first_clip,
         decode_accelerator="nvdec",
         cuda_device_index=cuda_device_index,
+        thread_count=1,
     )
     assert first_reader is not None
     # Monkey-patch: If the wrapper is missing _decoder, point it to itself
@@ -404,6 +411,11 @@ def _run_nelux_compilation(
         first_reader._decoder = first_reader
 
     if not _nelux_reader_ready(first_reader):
+        logger.error(
+            "%s: NeLux decoder not initialized for first clip. path=%s Check GPU/drivers; container may restart.",
+            NVDEC_INIT_FAILURE_PREFIX,
+            first_clip,
+        )
         logger.warning(
             "NeLux decoder not initialized for first clip, skipping compilation: %s",
             first_clip,
@@ -422,10 +434,17 @@ def _run_nelux_compilation(
                     clip_path,
                     decode_accelerator="nvdec",
                     cuda_device_index=cuda_device_index,
+                    thread_count=1,
                 )
                 if not hasattr(reader, "_decoder"):
                     reader._decoder = reader
                 if not _nelux_reader_ready(reader):
+                    logger.error(
+                        "%s: NeLux decoder not initialized for slice %s. path=%s Check GPU/drivers; container may restart.",
+                        NVDEC_INIT_FAILURE_PREFIX,
+                        slice_idx,
+                        clip_path,
+                    )
                     logger.warning(
                         "NeLux decoder not initialized for slice %s, skipping: %s",
                         slice_idx,

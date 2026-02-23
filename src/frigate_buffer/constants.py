@@ -42,6 +42,9 @@ DEFAULT_STORAGE_STATS_MAX_AGE_SECONDS: int = 30 * 60
 # Error buffer for stats dashboard: max number of recent ERROR/WARNING log entries.
 ERROR_BUFFER_MAX_SIZE: int = 10
 
+# NVDEC/NeLux init failure: log this prefix so crash-loop logs are searchable before container restart.
+NVDEC_INIT_FAILURE_PREFIX: str = "NVDEC hardware initialization failed"
+
 
 def is_tensor(x: Any) -> bool:
     """True if x is a torch.Tensor; avoids importing torch at module level for tests."""

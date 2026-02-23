@@ -12,6 +12,7 @@ from frigate_buffer.constants import (
     HTTP_STREAM_CHUNK_SIZE,
     LOG_MAX_RESPONSE_BODY,
     NON_CAMERA_DIRS,
+    NVDEC_INIT_FAILURE_PREFIX,
     is_tensor,
 )
 
@@ -80,3 +81,12 @@ class TestNumericConstants(unittest.TestCase):
         """Storage stats TTL and error buffer size are positive."""
         self.assertEqual(DEFAULT_STORAGE_STATS_MAX_AGE_SECONDS, 30 * 60)
         self.assertEqual(ERROR_BUFFER_MAX_SIZE, 10)
+
+
+class TestNvdecInitFailurePrefix(unittest.TestCase):
+    """NVDEC init failure log prefix is searchable in crash-loop logs."""
+
+    def test_prefix_is_non_empty_and_searchable(self):
+        """NVDEC_INIT_FAILURE_PREFIX is a fixed string used when NVDEC/NeLux init fails."""
+        self.assertEqual(NVDEC_INIT_FAILURE_PREFIX, "NVDEC hardware initialization failed")
+        self.assertIn("NVDEC", NVDEC_INIT_FAILURE_PREFIX)

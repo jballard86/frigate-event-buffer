@@ -15,7 +15,7 @@ import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
-from frigate_buffer.constants import is_tensor
+from frigate_buffer.constants import is_tensor, NVDEC_INIT_FAILURE_PREFIX
 
 logger = logging.getLogger("frigate-buffer")
 
@@ -421,11 +421,18 @@ class VideoService:
                 clip_path,
                 decode_accelerator="nvdec",
                 cuda_device_index=cuda_device_index,
+                thread_count=1,
             )
             # Monkey-patch: If the wrapper is missing _decoder, point it to itself
             if not hasattr(reader, "_decoder"):
                 reader._decoder = reader
         except Exception as e:
+            logger.error(
+                "%s (VideoReader open failed). path=%s error=%s Check GPU, drivers, and NeLux wheel; container may restart.",
+                NVDEC_INIT_FAILURE_PREFIX,
+                clip_path,
+                e,
+            )
             logger.warning(
                 "NeLux failed to open clip for sidecar: path=%s error=%s",
                 clip_path,
@@ -440,6 +447,11 @@ class VideoService:
             return False
 
         if not _nelux_reader_ready(reader):
+            logger.error(
+                "%s: NeLux decoder not initialized for clip. path=%s Check GPU/drivers; container may restart.",
+                NVDEC_INIT_FAILURE_PREFIX,
+                clip_path,
+            )
             logger.warning(
                 "NeLux decoder not initialized for clip, skipping sidecar: %s",
                 clip_path,

@@ -617,6 +617,26 @@ class TestEncodeFramesViaFfmpeg(unittest.TestCase):
         self.assertIn("h264_nvenc", call_args)
         self.assertNotIn("libx264", call_args)
 
+    def test_encode_uses_thread_queue_size_and_nvenc_tune(self):
+        """FFmpeg command includes -thread_queue_size 512 and h264_nvenc preset/tune/rc/cq for stability."""
+        import numpy as np
+        frames = [np.zeros((1080, 1440, 3), dtype=np.uint8)]
+        with patch("frigate_buffer.services.video_compilation.subprocess.Popen") as mock_popen:
+            proc = MagicMock()
+            proc.stdin = MagicMock()
+            proc.returncode = 0
+            proc.communicate.return_value = (b"", b"")
+            mock_popen.return_value = proc
+            _encode_frames_via_ffmpeg(frames, 1440, 1080, "/tmp/out.mp4")
+        call_args = mock_popen.call_args[0][0]
+        cmd_str = " ".join(call_args) if isinstance(call_args, list) else str(call_args)
+        self.assertIn("thread_queue_size", cmd_str)
+        self.assertIn("512", cmd_str)
+        self.assertIn("p1", cmd_str)
+        self.assertIn("hq", cmd_str)
+        self.assertIn("vbr", cmd_str)
+        self.assertIn("24", cmd_str)
+
     def test_encode_failure_raises_with_descriptive_message(self):
         """On non-zero exit, RuntimeError is raised and message states GPU-only, no CPU fallback."""
         import numpy as np
