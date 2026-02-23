@@ -310,6 +310,7 @@ def _encode_frames_via_ffmpeg(
         "-rc", "vbr",
         "-cq", "24",
         "-an",
+        "-f", "mp4",
         tmp_output_path,
     ]
     try:
