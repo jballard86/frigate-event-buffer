@@ -1,0 +1,78 @@
+﻿============================= test session starts =============================
+platform win32 -- Python 3.13.2, pytest-9.0.2, pluggy-1.6.0 -- C:\Program Files\Python313\python.exe
+cachedir: .pytest_cache
+rootdir: C:\Users\jeffb\OneDrive\Documents\GitHub\frigate-event-buffer
+configfile: pyproject.toml
+collecting ... collected 1 item
+
+tests/test_video_compilation.py::TestGenerateCompilationVideo::test_run_pynv_compilation_calls_ffmpeg_encode_with_h264_nvenc FAILED [100%]
+
+================================== FAILURES ===================================
+_ TestGenerateCompilationVideo.test_run_pynv_compilation_calls_ffmpeg_encode_with_h264_nvenc _
+
+self = <test_video_compilation.TestGenerateCompilationVideo testMethod=test_run_pynv_compilation_calls_ffmpeg_encode_with_h264_nvenc>
+mock_isfile = <MagicMock name='isfile' id='1333342985520'>
+mock_get_metadata = <MagicMock name='_get_video_metadata' id='1333342985856'>
+mock_open_fn = <MagicMock name='open' id='1333342986192'>
+mock_popen = <MagicMock name='Popen' id='1333342985184'>
+mock_create_decoder = <MagicMock name='create_decoder' id='1333342989552'>
+
+    @patch("frigate_buffer.services.video_compilation.GPU_LOCK", MagicMock())
+    @patch("frigate_buffer.services.video_compilation.create_decoder")
+    @patch("frigate_buffer.services.video_compilation.subprocess.Popen")
+    @patch("builtins.open", new_callable=mock_open)
+    @patch("frigate_buffer.services.video_compilation._get_video_metadata")
+    @patch("frigate_buffer.services.video_compilation.os.path.isfile")
+    def test_run_pynv_compilation_calls_ffmpeg_encode_with_h264_nvenc(
+        self, mock_isfile, mock_get_metadata, mock_open_fn, mock_popen, mock_create_decoder
+    ):
+        """Compilation encode is via FFmpeg streaming (h264_nvenc only; no CPU fallback)."""
+        try:
+            import torch
+        except ImportError:
+            self.skipTest("torch not available")
+        mock_isfile.return_value = True
+        mock_get_metadata.return_value = (640, 480, 20.0, 2.0)
+        mock_ctx = _fake_create_decoder_context(200, 480, 640)
+        if mock_ctx is None:
+            self.skipTest("torch not available")
+        mock_cm = MagicMock()
+        mock_cm.__enter__ = MagicMock(return_value=mock_ctx)
+        mock_cm.__exit__ = MagicMock(return_value=None)
+        mock_create_decoder.return_value = mock_cm
+        proc = MagicMock()
+        proc.stdin = MagicMock()
+        proc.returncode = 0
+        mock_popen.return_value = proc
+    
+        slices = [
+            {
+                "camera": "doorbell",
+                "start_sec": 0.0,
+                "end_sec": 2.0,
+                "crop_start": (0, 0, 320, 240),
+                "crop_end": (0, 0, 320, 240),
+            },
+        ]
+        resolve_clip = MagicMock(return_value="doorbell-1.mp4")
+    
+        _run_pynv_compilation(
+            slices=slices,
+            ce_dir="/ce",
+            tmp_output_path="/out.mp4.tmp",
+            target_w=1440,
+            target_h=1080,
+            resolve_clip_in_folder=resolve_clip,
+            cuda_device_index=0,
+        )
+    
+        mock_popen.assert_called_once()
+        call_args = mock_popen.call_args[0][0]
+        self.assertIn("h264_nvenc", call_args)
+>       self.assertIn("thread_queue_size", call_args)
+E       AssertionError: 'thread_queue_size' not found in ['ffmpeg', '-y', '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-s', '1440x1080', '-r', '20', '-thread_queue_size', '512', '-i', 'pipe:0', '-c:v', 'h264_nvenc', '-preset', 'p1', '-tune', 'hq', '-rc', 'vbr', '-cq', '24', '-an', '-pix_fmt', 'yuv420p', '/out.mp4.tmp']
+
+tests\test_video_compilation.py:687: AssertionError
+=========================== short test summary info ===========================
+FAILED tests/test_video_compilation.py::TestGenerateCompilationVideo::test_run_pynv_compilation_calls_ffmpeg_encode_with_h264_nvenc - AssertionError: 'thread_queue_size' not found in ['ffmpeg', '-y', '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-s', '1440x1080', '-r', '20', '-thread_queue_size', '512', '-i', 'pipe:0', '-c:v', 'h264_nvenc', '-preset', 'p1', '-tune', 'hq', '-rc', 'vbr', '-cq', '24', '-an', '-pix_fmt', 'yuv420p', '/out.mp4.tmp']
+============================== 1 failed in 1.48s ==============================

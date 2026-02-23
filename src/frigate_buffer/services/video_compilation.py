@@ -363,25 +363,14 @@ def calculate_segment_crop(
     return (x, y, target_w, target_h)
 
 
-def _encode_frames_via_ffmpeg(
-    frames: list,
-    target_w: int,
-    target_h: int,
-    tmp_output_path: str,
-) -> None:
+def _compilation_ffmpeg_cmd_and_log_path(
+    tmp_output_path: str, target_w: int, target_h: int
+) -> tuple[list[str], str]:
     """
-    Encode a list of RGB frames to MP4 using FFmpeg with h264_nvenc only (GPU).
-
-    frames: list of numpy arrays (H, W, 3) uint8 RGB with H=target_h, W=target_w.
-    FFmpeg stderr is routed to a physical log file in the event folder to avoid
-    OS-level pipe deadlock. h264_nvenc cannot ingest rgb24; we request yuv420p output.
-    No CPU fallback; on failure logs and raises, advising to check ffmpeg_compile.log.
+    Build FFmpeg h264_nvenc command and log path for compilation encode.
+    Shared by _encode_frames_via_ffmpeg and _run_pynv_compilation (streaming path).
     """
-    if not frames:
-        return
-    # Route stderr to a physical file to prevent pipe deadlock; log is kept for debugging.
     log_file_path = os.path.join(os.path.dirname(tmp_output_path), "ffmpeg_compile.log")
-    log_file = open(log_file_path, "w", encoding="utf-8")
     cmd = [
         "ffmpeg",
         "-y",
@@ -400,6 +389,29 @@ def _encode_frames_via_ffmpeg(
         "-pix_fmt", "yuv420p",
         tmp_output_path,
     ]
+    return cmd, log_file_path
+
+
+def _encode_frames_via_ffmpeg(
+    frames: list,
+    target_w: int,
+    target_h: int,
+    tmp_output_path: str,
+) -> None:
+    """
+    Encode a list of RGB frames to MP4 using FFmpeg with h264_nvenc only (GPU).
+
+    frames: list of numpy arrays (H, W, 3) uint8 RGB with H=target_h, W=target_w.
+    FFmpeg stderr is routed to a physical log file in the event folder to avoid
+    OS-level pipe deadlock. h264_nvenc cannot ingest rgb24; we request yuv420p output.
+    No CPU fallback; on failure logs and raises, advising to check ffmpeg_compile.log.
+    """
+    if not frames:
+        return
+    cmd, log_file_path = _compilation_ffmpeg_cmd_and_log_path(
+        tmp_output_path, target_w, target_h
+    )
+    log_file = open(log_file_path, "w", encoding="utf-8")
     try:
         proc = subprocess.Popen(
             cmd,
@@ -482,6 +494,7 @@ def _run_pynv_compilation(
     """
     Decode each slice with PyNvVideoCodec (gpu_decoder); crop with smooth panning in tensor space.
     Uses PTS-based frame selection (get_index_from_time_in_seconds) to reduce variable frame rate jitter.
+    Frames are streamed directly to FFmpeg stdin (no in-memory frame list) to avoid RAM spikes.
     Encode via FFmpeg h264_nvenc only (GPU); no CPU fallback. Output 20fps, no audio.
     """
     import torch
@@ -489,119 +502,175 @@ def _run_pynv_compilation(
     if not slices:
         return
 
-    frames_list: list = []  # list of (target_h, target_w, 3) uint8 RGB numpy arrays
+    cmd, log_file_path = _compilation_ffmpeg_cmd_and_log_path(
+        tmp_output_path, target_w, target_h
+    )
+    log_file = open(log_file_path, "w", encoding="utf-8")
+    proc = None
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.DEVNULL,
+            stderr=log_file,
+        )
+    except FileNotFoundError:
+        log_file.close()
+        logger.error(
+            "Compilation encode failed: ffmpeg not found. "
+            "Compilation requires GPU encoding (h264_nvenc). No CPU fallback is provided. "
+            "Ensure FFmpeg is installed and available on PATH with NVENC support."
+        )
+        raise RuntimeError(
+            "ffmpeg not found; compilation encoding is GPU-only (h264_nvenc), no CPU fallback"
+        ) from None
+    assert proc is not None and proc.stdin is not None
+
     logged_cameras: set[str] = set()
     slices_per_cam = Counter(sl["camera"] for sl in slices)
-
-    for slice_idx, sl in enumerate(slices):
-        cam = sl["camera"]
-        clip_path = _resolve_clip_path(ce_dir, cam, resolve_clip_in_folder)
-        t0 = sl["start_sec"]
-        t1 = sl["end_sec"]
-        duration = t1 - t0
-        n_frames = max(1, round(duration * float(COMPILATION_OUTPUT_FPS)))
-        if "crop_start" not in sl or "crop_end" not in sl:
-            logger.error(
-                "Compilation fallback to center crop: slice %s missing crop_start/crop_end for camera=%s; output will be static.",
-                slice_idx, cam,
-            )
-        crop_start = sl.get("crop_start")
-        crop_end = sl.get("crop_end")
-        output_times = [t0 + i / float(COMPILATION_OUTPUT_FPS) for i in range(n_frames)]
-
-        # ffprobe outside GPU_LOCK so the GPU is not held during subprocess I/O (Finding 4.1).
-        slice_meta = _get_video_metadata(clip_path)
-        fallback_fps = (slice_meta[2] if slice_meta and slice_meta[2] > 0 else 30.0)
-        fallback_duration = slice_meta[3] if slice_meta else duration
-
-        try:
-            with GPU_LOCK:
-                with create_decoder(clip_path, gpu_id=cuda_device_index) as ctx:
-                    frame_count = len(ctx)
-                    if frame_count <= 0:
-                        fps = fallback_fps
-                        frame_count = max(1, int(fallback_duration * fps))
-                    # PTS-based frame indices to reduce jitter (decoder time→index mapping).
-                    src_indices = [
-                        min(max(0, ctx.get_index_from_time_in_seconds(t)), frame_count - 1)
-                        for t in output_times
-                    ]
-                    if not src_indices:
-                        continue
-                    batch = ctx.get_frames(src_indices)
-            # Decoder context closed; batch is cloned so we can use it.
-            _, _, ih, iw = batch.shape
-            sw = sl.get("native_width") or iw
-            sh = sl.get("native_height") or ih
-            scale_x = (iw / sw) if sw > 0 else 1.0
-            scale_y = (ih / sh) if sh > 0 else 1.0
-            # Scale crop from sidecar native (sw, sh) to decoder frame (iw, ih).
-            if crop_start and crop_end:
-                xs, ys, w, h = crop_start
-                xe, ye, we, he = crop_end
-                w_d = max(1, min(iw, int(w * scale_x)))
-                h_d = max(1, min(ih, int(h * scale_y)))
-                we_d = max(1, min(iw, int(we * scale_x)))
-                he_d = max(1, min(ih, int(he * scale_y)))
-                xs_d = xs * scale_x
-                ys_d = ys * scale_y
-                xe_d = xe * scale_x
-                ye_d = ye * scale_y
-                start_cx = xs_d + w_d / 2.0
-                start_cy = ys_d + h_d / 2.0
-                end_cx = xe_d + we_d / 2.0
-                end_cy = ye_d + he_d / 2.0
-            else:
-                # Fallback: center in decoder space (slice missing crop_start/crop_end).
-                start_cx = iw / 2.0
-                start_cy = ih / 2.0
-                end_cx = iw / 2.0
-                end_cy = ih / 2.0
-
-            if len(src_indices) > 1 and len(set(src_indices)) == 1:
+    try:
+        for slice_idx, sl in enumerate(slices):
+            cam = sl["camera"]
+            clip_path = _resolve_clip_path(ce_dir, cam, resolve_clip_in_folder)
+            t0 = sl["start_sec"]
+            t1 = sl["end_sec"]
+            duration = t1 - t0
+            n_frames = max(1, round(duration * float(COMPILATION_OUTPUT_FPS)))
+            if "crop_start" not in sl or "crop_end" not in sl:
                 logger.error(
-                    "Compilation static frame: decoder returned same frame index %s for all %s frames for camera=%s slice [%.2f, %.2f]; check decoder/time mapping.",
-                    src_indices[0], n_frames, cam, t0, t1,
+                    "Compilation fallback to center crop: slice %s missing crop_start/crop_end for camera=%s; output will be static.",
+                    slice_idx, cam,
                 )
+            crop_start = sl.get("crop_start")
+            crop_end = sl.get("crop_end")
+            output_times = [t0 + i / float(COMPILATION_OUTPUT_FPS) for i in range(n_frames)]
 
-            # One log per camera per compilation run (avoids flooding when many slices).
-            if cam not in logged_cameras:
-                logger.debug(
-                    "Compilation camera=%s: frame %sx%s, crop center (%.0f,%.0f)->(%.0f,%.0f), target %sx%s, n_slices=%s, n_frames=%s",
-                    cam, iw, ih, start_cx, start_cy, end_cx, end_cy, target_w, target_h,
-                    slices_per_cam.get(cam, 0), n_frames,
+            # ffprobe outside GPU_LOCK so the GPU is not held during subprocess I/O (Finding 4.1).
+            slice_meta = _get_video_metadata(clip_path)
+            fallback_fps = (slice_meta[2] if slice_meta and slice_meta[2] > 0 else 30.0)
+            fallback_duration = slice_meta[3] if slice_meta else duration
+
+            try:
+                with GPU_LOCK:
+                    with create_decoder(clip_path, gpu_id=cuda_device_index) as ctx:
+                        frame_count = len(ctx)
+                        if frame_count <= 0:
+                            fps = fallback_fps
+                            frame_count = max(1, int(fallback_duration * fps))
+                        # PTS-based frame indices to reduce jitter (decoder time→index mapping).
+                        src_indices = [
+                            min(max(0, ctx.get_index_from_time_in_seconds(t)), frame_count - 1)
+                            for t in output_times
+                        ]
+                        if not src_indices:
+                            continue
+                        batch = ctx.get_frames(src_indices)
+                # Decoder context closed; batch is cloned so we can use it.
+                _, _, ih, iw = batch.shape
+                sw = sl.get("native_width") or iw
+                sh = sl.get("native_height") or ih
+                scale_x = (iw / sw) if sw > 0 else 1.0
+                scale_y = (ih / sh) if sh > 0 else 1.0
+                # Scale crop from sidecar native (sw, sh) to decoder frame (iw, ih).
+                if crop_start and crop_end:
+                    xs, ys, w, h = crop_start
+                    xe, ye, we, he = crop_end
+                    w_d = max(1, min(iw, int(w * scale_x)))
+                    h_d = max(1, min(ih, int(h * scale_y)))
+                    we_d = max(1, min(iw, int(we * scale_x)))
+                    he_d = max(1, min(ih, int(he * scale_y)))
+                    xs_d = xs * scale_x
+                    ys_d = ys * scale_y
+                    xe_d = xe * scale_x
+                    ye_d = ye * scale_y
+                    start_cx = xs_d + w_d / 2.0
+                    start_cy = ys_d + h_d / 2.0
+                    end_cx = xe_d + we_d / 2.0
+                    end_cy = ye_d + he_d / 2.0
+                else:
+                    # Fallback: center in decoder space (slice missing crop_start/crop_end).
+                    start_cx = iw / 2.0
+                    start_cy = ih / 2.0
+                    end_cx = iw / 2.0
+                    end_cy = ih / 2.0
+
+                if len(src_indices) > 1 and len(set(src_indices)) == 1:
+                    logger.error(
+                        "Compilation static frame: decoder returned same frame index %s for all %s frames for camera=%s slice [%.2f, %.2f]; check decoder/time mapping.",
+                        src_indices[0], n_frames, cam, t0, t1,
+                    )
+
+                # One log per camera per compilation run (avoids flooding when many slices).
+                if cam not in logged_cameras:
+                    logger.debug(
+                        "Compilation camera=%s: frame %sx%s, crop center (%.0f,%.0f)->(%.0f,%.0f), target %sx%s, n_slices=%s, n_frames=%s",
+                        cam, iw, ih, start_cx, start_cy, end_cx, end_cy, target_w, target_h,
+                        slices_per_cam.get(cam, 0), n_frames,
+                    )
+                    logged_cameras.add(cam)
+
+                for i in range(n_frames):
+                    frame = batch[i : i + 1]
+                    t = output_times[i]
+                    t_progress = (t - t0) / duration if duration > 1e-6 else 0.0
+                    current_cx = start_cx + t_progress * (end_cx - start_cx)
+                    current_cy = start_cy + t_progress * (end_cy - start_cy)
+                    current_cx = int(current_cx)
+                    current_cy = int(current_cy)
+                    cropped = crop_utils.crop_around_center(
+                        frame, current_cx, current_cy, target_w, target_h
+                    )
+                    arr = cropped[0].permute(1, 2, 0).cpu().numpy()
+                    proc.stdin.write(arr.tobytes())
+                    proc.stdin.flush()
+                del batch
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+            except Exception as e:
+                logger.error(
+                    "%s (decoder failed for slice %s). path=%s error=%s",
+                    NVDEC_INIT_FAILURE_PREFIX,
+                    slice_idx,
+                    clip_path,
+                    e,
+                    exc_info=True,
                 )
-                logged_cameras.add(cam)
-
-            for i in range(n_frames):
-                frame = batch[i : i + 1]
-                t = output_times[i]
-                t_progress = (t - t0) / duration if duration > 1e-6 else 0.0
-                current_cx = start_cx + t_progress * (end_cx - start_cx)
-                current_cy = start_cy + t_progress * (end_cy - start_cy)
-                current_cx = int(current_cx)
-                current_cy = int(current_cy)
-                cropped = crop_utils.crop_around_center(
-                    frame, current_cx, current_cy, target_w, target_h
-                )
-                arr = cropped[0].permute(1, 2, 0).cpu().numpy()
-                frames_list.append(arr)
-            del batch
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-        except Exception as e:
-            logger.error(
-                "%s (decoder failed for slice %s). path=%s error=%s",
-                NVDEC_INIT_FAILURE_PREFIX,
-                slice_idx,
-                clip_path,
-                e,
-                exc_info=True,
-            )
-            logger.warning("Skipping slice %s (%s): %s", slice_idx, clip_path, e)
-
-    if frames_list:
-        _encode_frames_via_ffmpeg(frames_list, target_w, target_h, tmp_output_path)
+                logger.warning("Skipping slice %s (%s): %s", slice_idx, clip_path, e)
+    except BrokenPipeError:
+        logger.error(
+            "FFmpeg closed stdin (broken pipe). Command: %s. Check %s for stderr.",
+            " ".join(cmd),
+            log_file_path,
+        )
+        proc.wait()
+        raise RuntimeError(
+            f"FFmpeg broke pipe during encode; check {log_file_path!r} for details"
+        ) from None
+    except Exception as e:
+        logger.error(
+            "Compilation encode failed while writing frames: %s. Command: %s. Check %s for stderr.",
+            e,
+            " ".join(cmd),
+            log_file_path,
+        )
+        proc.wait()
+        raise
+    finally:
+        if proc.stdin is not None:
+            proc.stdin.close()
+        proc.wait()
+        log_file.close()
+    if proc.returncode != 0:
+        logger.error(
+            "Compilation encode failed: FFmpeg exited with code %s. Command: %s. Check %s for full stderr.",
+            proc.returncode,
+            " ".join(cmd),
+            log_file_path,
+        )
+        raise RuntimeError(
+            f"FFmpeg h264_nvenc encode failed (exit {proc.returncode}); "
+            f"check {log_file_path!r} for details"
+        )
 
 
 def generate_compilation_video(

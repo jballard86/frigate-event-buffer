@@ -264,7 +264,8 @@ def _run_detection_on_frame(
             if t.dim() == 3:
                 t = t.unsqueeze(0)
             if t.dtype == torch.uint8:
-                t = t.float() / 255.0
+                t = t.float()
+                t.div_(255.0)
             elif t.dtype != torch.float32 and t.dtype != torch.float64:
                 t = t.float()
         else:
@@ -346,7 +347,7 @@ def _run_detection_on_batch(
         target_w = max(32, math.ceil((read_w * scale) / 32) * 32)
         target_h = max(32, math.ceil((read_h * scale) / 32) * 32)
         batch_resized = F.interpolate(
-            batch.float(), size=(target_h, target_w), mode="bilinear", align_corners=False
+            batch, size=(target_h, target_w), mode="bilinear", align_corners=False
         )
         logger.info("_run_detection_on_batch: calling model.predict (YOLO inference)")
         _flush_logger()

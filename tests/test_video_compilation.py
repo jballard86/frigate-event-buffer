@@ -569,13 +569,14 @@ class TestGenerateCompilationVideo(unittest.TestCase):
 
     @patch("frigate_buffer.services.video_compilation.GPU_LOCK", MagicMock())
     @patch("frigate_buffer.services.video_compilation.create_decoder")
-    @patch("frigate_buffer.services.video_compilation._encode_frames_via_ffmpeg")
+    @patch("frigate_buffer.services.video_compilation.subprocess.Popen")
+    @patch("builtins.open", new_callable=mock_open)
     @patch("frigate_buffer.services.video_compilation._get_video_metadata")
     @patch("frigate_buffer.services.video_compilation.os.path.isfile")
     def test_run_pynv_compilation_uses_metadata_fallback_when_len_zero(
-        self, mock_isfile, mock_get_metadata, mock_encode_ffmpeg, mock_create_decoder
+        self, mock_isfile, mock_get_metadata, mock_open_fn, mock_popen, mock_create_decoder
     ):
-        """When decoder reports len 0, frame count uses _get_video_metadata fallback and _run_pynv_compilation completes; encode via FFmpeg."""
+        """When decoder reports len 0, frame count uses _get_video_metadata fallback and _run_pynv_compilation completes; encode via FFmpeg streaming."""
         try:
             import torch
         except ImportError:
@@ -593,6 +594,10 @@ class TestGenerateCompilationVideo(unittest.TestCase):
         mock_cm.__enter__ = MagicMock(return_value=mock_ctx)
         mock_cm.__exit__ = MagicMock(return_value=None)
         mock_create_decoder.return_value = mock_cm
+        proc = MagicMock()
+        proc.stdin = MagicMock()
+        proc.returncode = 0
+        mock_popen.return_value = proc
 
         slices = [
             {
@@ -616,26 +621,33 @@ class TestGenerateCompilationVideo(unittest.TestCase):
         )
 
         mock_get_metadata.assert_called()
-        mock_encode_ffmpeg.assert_called_once()
-        args = mock_encode_ffmpeg.call_args[0]
-        self.assertEqual(len(args), 4)
-        self.assertEqual(args[1], 1440)
-        self.assertEqual(args[2], 1080)
-        self.assertEqual(args[3], "/out.mp4.tmp")
+        mock_popen.assert_called_once()
+        call_args = mock_popen.call_args[0][0]
+        self.assertIn("h264_nvenc", call_args)
+        self.assertEqual(call_args[call_args.index("-s") + 1], "1440x1080")
+        self.assertEqual(call_args[-1], "/out.mp4.tmp")
+        # 2 s at 20 fps = 40 frames
+        self.assertEqual(proc.stdin.write.call_count, 40)
+        proc.stdin.flush.assert_called()
+        proc.stdin.close.assert_called_once()
+        proc.wait.assert_called()
 
     @patch("frigate_buffer.services.video_compilation.GPU_LOCK", MagicMock())
     @patch("frigate_buffer.services.video_compilation.create_decoder")
-    @patch("frigate_buffer.services.video_compilation._encode_frames_via_ffmpeg")
+    @patch("frigate_buffer.services.video_compilation.subprocess.Popen")
+    @patch("builtins.open", new_callable=mock_open)
+    @patch("frigate_buffer.services.video_compilation._get_video_metadata")
     @patch("frigate_buffer.services.video_compilation.os.path.isfile")
     def test_run_pynv_compilation_calls_ffmpeg_encode_with_h264_nvenc(
-        self, mock_isfile, mock_encode_ffmpeg, mock_create_decoder
+        self, mock_isfile, mock_get_metadata, mock_open_fn, mock_popen, mock_create_decoder
     ):
-        """Compilation encode is via _encode_frames_via_ffmpeg (h264_nvenc only; no CPU fallback)."""
+        """Compilation encode is via FFmpeg streaming (h264_nvenc only; no CPU fallback)."""
         try:
             import torch
         except ImportError:
             self.skipTest("torch not available")
         mock_isfile.return_value = True
+        mock_get_metadata.return_value = (640, 480, 20.0, 2.0)
         mock_ctx = _fake_create_decoder_context(200, 480, 640)
         if mock_ctx is None:
             self.skipTest("torch not available")
@@ -643,6 +655,10 @@ class TestGenerateCompilationVideo(unittest.TestCase):
         mock_cm.__enter__ = MagicMock(return_value=mock_ctx)
         mock_cm.__exit__ = MagicMock(return_value=None)
         mock_create_decoder.return_value = mock_cm
+        proc = MagicMock()
+        proc.stdin = MagicMock()
+        proc.returncode = 0
+        mock_popen.return_value = proc
 
         slices = [
             {
@@ -665,22 +681,38 @@ class TestGenerateCompilationVideo(unittest.TestCase):
             cuda_device_index=0,
         )
 
-        mock_encode_ffmpeg.assert_called_once()
-        args = mock_encode_ffmpeg.call_args[0]
-        self.assertEqual(args[1], 1440)
-        self.assertEqual(args[2], 1080)
-        self.assertEqual(args[3], "/out.mp4.tmp")
+        mock_popen.assert_called_once()
+        call_args = mock_popen.call_args[0][0]
+        self.assertIn("h264_nvenc", call_args)
+        self.assertIn("-thread_queue_size", call_args)
+        self.assertIn("512", call_args)
+        self.assertIn("p1", call_args)
+        self.assertIn("hq", call_args)
+        self.assertEqual(call_args[call_args.index("-s") + 1], "1440x1080")
+        self.assertEqual(call_args[-1], "/out.mp4.tmp")
+        # 2 s at 20 fps = 40 frames
+        self.assertEqual(proc.stdin.write.call_count, 40)
+        proc.stdin.flush.assert_called()
+        proc.stdin.close.assert_called_once()
+        proc.wait.assert_called()
 
     @patch("frigate_buffer.services.video_compilation.GPU_LOCK", MagicMock())
     @patch("frigate_buffer.services.video_compilation.create_decoder")
-    @patch("frigate_buffer.services.video_compilation._encode_frames_via_ffmpeg")
+    @patch("frigate_buffer.services.video_compilation.subprocess.Popen")
+    @patch("builtins.open", new_callable=mock_open)
+    @patch("frigate_buffer.services.video_compilation._get_video_metadata")
     @patch("frigate_buffer.services.video_compilation.os.path.isfile")
     def test_run_pynv_compilation_skips_slice_on_decoder_failure(
-        self, mock_isfile, mock_encode_ffmpeg, mock_create_decoder
+        self, mock_isfile, mock_get_metadata, mock_open_fn, mock_popen, mock_create_decoder
     ):
-        """When create_decoder raises for a slice, that slice is skipped and encode is not called (no frames)."""
+        """When create_decoder raises for a slice, that slice is skipped; FFmpeg is opened but no frames are written."""
         mock_isfile.return_value = True
+        mock_get_metadata.return_value = (640, 480, 20.0, 2.0)
         mock_create_decoder.side_effect = RuntimeError("NVDEC init failed")
+        proc = MagicMock()
+        proc.stdin = MagicMock()
+        proc.returncode = 0
+        mock_popen.return_value = proc
 
         slices = [
             {
@@ -703,22 +735,28 @@ class TestGenerateCompilationVideo(unittest.TestCase):
             cuda_device_index=0,
         )
 
-        mock_encode_ffmpeg.assert_not_called()
+        mock_popen.assert_called_once()
+        self.assertEqual(proc.stdin.write.call_count, 0)
+        proc.stdin.close.assert_called_once()
+        proc.wait.assert_called()
 
     @patch("frigate_buffer.services.video_compilation.GPU_LOCK", MagicMock())
     @patch("frigate_buffer.services.video_compilation.create_decoder")
-    @patch("frigate_buffer.services.video_compilation._encode_frames_via_ffmpeg")
+    @patch("frigate_buffer.services.video_compilation.subprocess.Popen")
+    @patch("builtins.open", new_callable=mock_open)
     @patch("frigate_buffer.services.video_compilation.crop_utils.crop_around_center")
+    @patch("frigate_buffer.services.video_compilation._get_video_metadata")
     @patch("frigate_buffer.services.video_compilation.os.path.isfile")
     def test_run_pynv_compilation_uses_crop_utils_and_outputs_target_resolution(
-        self, mock_isfile, mock_crop_around_center, mock_encode_ffmpeg, mock_create_decoder
+        self, mock_isfile, mock_get_metadata, mock_crop_around_center, mock_open_fn, mock_popen, mock_create_decoder
     ):
-        """_run_pynv_compilation uses crop_utils.crop_around_center and passes target_w/target_h; frames sent to FFmpeg are target resolution."""
+        """_run_pynv_compilation uses crop_utils.crop_around_center and passes target_w/target_h; frames streamed to FFmpeg are target resolution."""
         try:
             import torch
         except ImportError:
             self.skipTest("torch not available")
         mock_isfile.return_value = True
+        mock_get_metadata.return_value = (640, 480, 20.0, 2.0)
         # Decoder returns 640x480; slice has native 1920x1080 so scaling is applied.
         mock_ctx = _fake_create_decoder_context(200, height=480, width=640)
         if mock_ctx is None:
@@ -733,6 +771,10 @@ class TestGenerateCompilationVideo(unittest.TestCase):
         mock_crop_around_center.side_effect = lambda frame, cx, cy, tw, th: torch.zeros(
             (1, 3, th, tw), dtype=torch.uint8
         )
+        proc = MagicMock()
+        proc.stdin = MagicMock()
+        proc.returncode = 0
+        mock_popen.return_value = proc
 
         slices = [
             {
@@ -762,19 +804,24 @@ class TestGenerateCompilationVideo(unittest.TestCase):
         args = mock_crop_around_center.call_args[0]
         self.assertEqual(args[3], target_w)
         self.assertEqual(args[4], target_h)
-        mock_encode_ffmpeg.assert_called_once()
-        frames = mock_encode_ffmpeg.call_args[0][0]
-        self.assertTrue(len(frames) > 0)
-        for arr in frames:
-            self.assertEqual(arr.shape, (target_h, target_w, 3))
+        mock_popen.assert_called_once()
+        # 2 s at 20 fps = 40 frames; each write is one frame (target_h * target_w * 3 bytes)
+        self.assertEqual(proc.stdin.write.call_count, 40)
+        expected_frame_bytes = target_h * target_w * 3
+        for call in proc.stdin.write.call_args_list:
+            self.assertEqual(len(call[0][0]), expected_frame_bytes)
+        proc.stdin.flush.assert_called()
+        proc.stdin.close.assert_called_once()
+        proc.wait.assert_called()
 
     @patch("frigate_buffer.services.video_compilation.GPU_LOCK", MagicMock())
     @patch("frigate_buffer.services.video_compilation.create_decoder")
-    @patch("frigate_buffer.services.video_compilation._encode_frames_via_ffmpeg")
+    @patch("frigate_buffer.services.video_compilation.subprocess.Popen")
+    @patch("builtins.open", new_callable=mock_open)
     @patch("frigate_buffer.services.video_compilation.logger")
     @patch("frigate_buffer.services.video_compilation.os.path.isfile")
     def test_run_pynv_compilation_logs_error_when_all_src_indices_identical(
-        self, mock_isfile, mock_logger, mock_encode_ffmpeg, mock_create_decoder
+        self, mock_isfile, mock_logger, mock_open_fn, mock_popen, mock_create_decoder
     ):
         """When decoder returns same frame index for all times, log at ERROR level (static frame)."""
         try:
@@ -793,6 +840,10 @@ class TestGenerateCompilationVideo(unittest.TestCase):
         mock_cm.__enter__ = MagicMock(return_value=mock_ctx)
         mock_cm.__exit__ = MagicMock(return_value=None)
         mock_create_decoder.return_value = mock_cm
+        proc = MagicMock()
+        proc.stdin = MagicMock()
+        proc.returncode = 0
+        mock_popen.return_value = proc
 
         slices = [
             {
@@ -828,11 +879,12 @@ class TestGenerateCompilationVideo(unittest.TestCase):
 
     @patch("frigate_buffer.services.video_compilation.GPU_LOCK", MagicMock())
     @patch("frigate_buffer.services.video_compilation.create_decoder")
-    @patch("frigate_buffer.services.video_compilation._encode_frames_via_ffmpeg")
+    @patch("frigate_buffer.services.video_compilation.subprocess.Popen")
+    @patch("builtins.open", new_callable=mock_open)
     @patch("frigate_buffer.services.video_compilation.logger")
     @patch("frigate_buffer.services.video_compilation.os.path.isfile")
     def test_run_pynv_compilation_logs_once_per_camera_not_per_slice(
-        self, mock_isfile, mock_logger, mock_encode_ffmpeg, mock_create_decoder
+        self, mock_isfile, mock_logger, mock_open_fn, mock_popen, mock_create_decoder
     ):
         """DEBUG compilation log is emitted once per distinct camera, not once per slice."""
         try:
@@ -850,6 +902,10 @@ class TestGenerateCompilationVideo(unittest.TestCase):
         mock_cm.__enter__ = MagicMock(return_value=mock_ctx)
         mock_cm.__exit__ = MagicMock(return_value=None)
         mock_create_decoder.return_value = mock_cm
+        proc = MagicMock()
+        proc.stdin = MagicMock()
+        proc.returncode = 0
+        mock_popen.return_value = proc
 
         # 3 slices for doorbell, 2 for front_door (5 slices, 2 distinct cameras).
         slices = [

@@ -97,7 +97,7 @@ _, buf = cv2.imencode('.jpg', frame)
 
 ## 2. Memory Management & Spikes
 
-### 2.1 [MEDIUM] Redundant `batch.float()` in `_run_detection_on_batch` (`video.py`)
+### 2.1 [MEDIUM] [DONE] Redundant `batch.float()` in `_run_detection_on_batch` (`video.py`)
 
 **Location:** `src/frigate_buffer/services/video.py` ~334–349  
 
@@ -116,7 +116,7 @@ batch_resized = F.interpolate(
 
 ---
 
-### 2.2 [LOW] `run_detection_on_image`: non–in-place normalize (`video.py`)
+### 2.2 [LOW] [DONE] `run_detection_on_image`: non–in-place normalize (`video.py`)
 
 **Location:** `src/frigate_buffer/services/video.py` ~267  
 
@@ -130,7 +130,7 @@ t = t.float() / 255.0
 
 ---
 
-### 2.3 [MEDIUM] Compilation: full slice frames held in RAM before encode (`video_compilation.py`)
+### 2.3 [MEDIUM] [DONE] Compilation: full slice frames held in RAM before encode (`video_compilation.py`)
 
 **Location:** `src/frigate_buffer/services/video_compilation.py` ~570–582, ~419–421  
 
