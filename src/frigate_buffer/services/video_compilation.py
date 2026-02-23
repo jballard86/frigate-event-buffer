@@ -612,45 +612,56 @@ def generate_compilation_video(
     target_h: int = 1080,
     crop_smooth_alpha: float = 0.0,
     config: dict | None = None,
+    sidecars: dict[str, dict] | None = None,
 ) -> None:
     """
     Concatenates slices into a final 20fps cropped video. Decode and crop via PyNvVideoCodec (gpu_decoder) and PyTorch;
     encode via FFmpeg h264_nvenc only (GPU; no CPU fallback). Smooth panning uses t/duration interpolation.
     Optional EMA smoothing of crop centers. No audio.
+    When sidecars is provided (e.g. from compile_ce_video), detection.json is not read from disk.
     """
     logger.info(f"Starting compilation of {len(slices)} slices to {output_path}")
 
     from frigate_buffer.services.query import resolve_clip_in_folder
 
-    # Load sidecar once per camera (batch I/O)
+    # Load sidecar once per camera: use provided dict or read from disk
     sidecar_cache: dict[str, dict] = {}
     sidecar_timestamps: dict[str, list[float]] = {}
-    for sl in slices:
-        cam = sl["camera"]
-        if cam in sidecar_cache:
-            continue
-        cam_dir = os.path.join(ce_dir, cam)
-        sidecar_path = os.path.join(cam_dir, "detection.json")
-        if os.path.isfile(sidecar_path):
-            try:
-                with open(sidecar_path, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                    sidecar_cache[cam] = data if isinstance(data, dict) else {"entries": data or [], "native_width": 1920, "native_height": 1080}
-            except Exception as e:
+    if sidecars is not None:
+        sidecar_cache = sidecars
+        for sl in slices:
+            cam = sl["camera"]
+            if cam in sidecar_timestamps:
+                continue
+            entries = sidecar_cache.get(cam, {}).get("entries") or []
+            sidecar_timestamps[cam] = sorted(float(e.get("timestamp_sec") or 0) for e in entries)
+    else:
+        for sl in slices:
+            cam = sl["camera"]
+            if cam in sidecar_cache:
+                continue
+            cam_dir = os.path.join(ce_dir, cam)
+            sidecar_path = os.path.join(cam_dir, "detection.json")
+            if os.path.isfile(sidecar_path):
+                try:
+                    with open(sidecar_path, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                        sidecar_cache[cam] = data if isinstance(data, dict) else {"entries": data or [], "native_width": 1920, "native_height": 1080}
+                except Exception as e:
+                    logger.error(
+                        "Compilation fallback to center crop: error loading sidecar for camera=%s path=%s error=%s; output will be static.",
+                        cam, sidecar_path, e,
+                    )
+                    sidecar_cache[cam] = {"entries": [], "native_width": 1920, "native_height": 1080}
+            else:
                 logger.error(
-                    "Compilation fallback to center crop: error loading sidecar for camera=%s path=%s error=%s; output will be static.",
-                    cam, sidecar_path, e,
+                    "Compilation fallback to center crop: sidecar missing for camera=%s path=%s; output will be static.",
+                    cam, sidecar_path,
                 )
                 sidecar_cache[cam] = {"entries": [], "native_width": 1920, "native_height": 1080}
-        else:
-            logger.error(
-                "Compilation fallback to center crop: sidecar missing for camera=%s path=%s; output will be static.",
-                cam, sidecar_path,
-            )
-            sidecar_cache[cam] = {"entries": [], "native_width": 1920, "native_height": 1080}
-        entries = sidecar_cache[cam].get("entries") or []
-        timestamps = sorted(float(e.get("timestamp_sec") or 0) for e in entries)
-        sidecar_timestamps[cam] = timestamps
+            entries = sidecar_cache[cam].get("entries") or []
+            timestamps = sorted(float(e.get("timestamp_sec") or 0) for e in entries)
+            sidecar_timestamps[cam] = timestamps
 
     for i, sl in enumerate(slices):
         cam = sl["camera"]
@@ -734,11 +745,10 @@ def compile_ce_video(ce_dir: str, global_end: float, config: dict, primary_camer
     """
     logger.info(f"Starting compilation process for {ce_dir}")
     
-    # 1. Gather sidecars and native sizes
-    sidecars = {}
-    native_sizes = {}
+    # 1. Gather sidecars once (full structure: entries, native_width, native_height) for timeline and compilation
+    sidecar_cache: dict[str, dict] = {}
     from frigate_buffer.services.query import resolve_clip_in_folder
-    
+
     cameras = []
     try:
         with os.scandir(ce_dir) as it:
@@ -750,11 +760,11 @@ def compile_ce_video(ce_dir: str, global_end: float, config: dict, primary_camer
                         cameras.append(cam)
     except OSError:
         pass
-        
+
     if not cameras:
         logger.warning(f"No cameras found with clips in {ce_dir}")
         return None
-        
+
     for cam in cameras:
         path = os.path.join(ce_dir, cam, "detection.json")
         if os.path.isfile(path):
@@ -762,23 +772,27 @@ def compile_ce_video(ce_dir: str, global_end: float, config: dict, primary_camer
                 with open(path, "r", encoding="utf-8") as f:
                     data = json.load(f)
                     if isinstance(data, dict):
-                        sidecars[cam] = data.get("entries") or []
-                        nw = int(data.get("native_width", 0) or 0)
-                        nh = int(data.get("native_height", 0) or 0)
-                        native_sizes[cam] = (nw, nh)
-                    elif isinstance(data, list):
-                        sidecars[cam] = data
-                        native_sizes[cam] = (0, 0)
+                        entries = data.get("entries") or []
+                        nw = int(data.get("native_width", 0) or 0) or 1920
+                        nh = int(data.get("native_height", 0) or 0) or 1080
+                        sidecar_cache[cam] = {"entries": entries, "native_width": nw, "native_height": nh}
+                    else:
+                        sidecar_cache[cam] = {"entries": data or [], "native_width": 1920, "native_height": 1080}
             except Exception as e:
                 logger.error(f"Failed to load sidecar for {cam}: {e}")
-                
-    if not sidecars:
+                sidecar_cache[cam] = {"entries": [], "native_width": 1920, "native_height": 1080}
+        else:
+            sidecar_cache[cam] = {"entries": [], "native_width": 1920, "native_height": 1080}
+
+    if not sidecar_cache:
         logger.warning(f"No sidecars available in {ce_dir} for compilation.")
         return None
-        
+
+    native_sizes = {cam: (sidecar_cache[cam]["native_width"], sidecar_cache[cam]["native_height"]) for cam in sidecar_cache}
+
     # Helper to calculate area of person targets at t_sec
     def _person_area_at_time(cam_name: str, t_sec: float) -> float:
-        entries = sidecars.get(cam_name) or []
+        entries = (sidecar_cache.get(cam_name) or {}).get("entries") or []
         if not entries:
             return 0.0
         # Find nearest
@@ -818,7 +832,8 @@ def compile_ce_video(ce_dir: str, global_end: float, config: dict, primary_camer
 
     # 3. One slice per assignment; then trim to action window (first/last detection ± pre/post roll)
     slices = assignments_to_slices(assignments, global_end)
-    slices = _trim_slices_to_action_window(slices, sidecars, global_end)
+    sidecars_entries = {cam: sidecar_cache[cam]["entries"] for cam in sidecar_cache}
+    slices = _trim_slices_to_action_window(slices, sidecars_entries, global_end)
     if not slices:
         logger.warning("No slices remain after trimming to action window; skipping compilation.")
         return None
@@ -836,6 +851,7 @@ def compile_ce_video(ce_dir: str, global_end: float, config: dict, primary_camer
             target_h=int(config.get("SUMMARY_TARGET_HEIGHT", 1080)),
             crop_smooth_alpha=crop_smooth_alpha,
             config=config,
+            sidecars=sidecar_cache,
         )
         return output_path
     except Exception as e:

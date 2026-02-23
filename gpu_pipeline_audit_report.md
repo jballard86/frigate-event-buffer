@@ -174,7 +174,7 @@ _encode_frames_via_ffmpeg(frames_list, target_w, target_h, tmp_output_path)
 
 ## 3. Redundant I/O and File Parsing
 
-### 3.1 [HIGH] Same `detection.json` read twice in one compilation flow (`video_compilation.py`)
+### 3.1 [HIGH] [DONE] Same `detection.json` read twice in one compilation flow (`video_compilation.py`)
 
 **Locations:**  
 - `compile_ce_video` (lines 753–769): reads `detection.json` for each camera into `sidecars` and `native_sizes`.  
@@ -189,7 +189,7 @@ _encode_frames_via_ffmpeg(frames_list, target_w, target_h, tmp_output_path)
 
 ---
 
-### 3.2 [MEDIUM] detection.json read by multiple consumers in the same CE flow
+### 3.2 [MEDIUM] [DONE] detection.json read by multiple consumers in the same CE flow
 
 **Flow:**  
 1. Lifecycle: `generate_detection_sidecars_for_cameras` **writes** `detection.json` per camera.  
