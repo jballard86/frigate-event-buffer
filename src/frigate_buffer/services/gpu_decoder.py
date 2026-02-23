@@ -49,7 +49,8 @@ class DecoderContext:
 
         Uses DLPack for zero-copy handover to PyTorch. Each frame from the decoder
         is CHW (3, H, W); stacking produces (N, 3, H, W) = BCHW. Caller must hold
-        GPU_LOCK when calling this.
+        GPU_LOCK when calling this. The returned batch is cloned so the decoder
+        context may be closed or reconfigured without invalidating the tensor.
         """
         import torch
 

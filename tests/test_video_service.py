@@ -10,6 +10,8 @@ from frigate_buffer.services.video import (
     BATCH_SIZE,
     _decoder_frame_count,
     _decoder_reader_ready,
+    _get_video_metadata,
+    _METADATA_CACHE,
     _run_detection_on_batch,
     ensure_detection_model_ready,
     get_detection_model_path,
@@ -116,6 +118,22 @@ class TestVideoService(unittest.TestCase):
                     os.rmdir(tmp)
                 except OSError:
                     pass
+
+    @patch("frigate_buffer.services.video.subprocess.run")
+    def test_get_video_metadata_caches_result(self, mock_run):
+        """Second call with same path returns cached result and does not run ffprobe again."""
+        ffprobe_json = json.dumps({
+            "streams": [{"width": 1920, "height": 1080, "r_frame_rate": "30/1"}],
+            "format": {"duration": "5.5"},
+        }).encode("utf-8")
+        mock_run.return_value = MagicMock(returncode=0, stdout=ffprobe_json)
+        path = "/nonexistent/test_clip.mp4"
+        _METADATA_CACHE.clear()
+        first = _get_video_metadata(path)
+        second = _get_video_metadata(path)
+        self.assertEqual(first, (1920, 1080, 30.0, 5.5))
+        self.assertEqual(second, first)
+        self.assertEqual(mock_run.call_count, 1, "ffprobe should be invoked only once; second call uses cache")
 
     def test_decoder_reader_ready(self):
         """_decoder_reader_ready returns True for DecoderContext (frame_count) or reader with _decoder."""

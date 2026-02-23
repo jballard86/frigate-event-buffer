@@ -149,17 +149,17 @@ _encode_frames_via_ffmpeg(frames_list, target_w, target_h, tmp_output_path)
 
 ---
 
-### 2.4 [LOW] `gpu_decoder`: `torch.stack(..., dim=0).clone()` (`gpu_decoder.py`)
+### 2.4 [LOW] [DONE] `gpu_decoder`: `torch.stack(..., dim=0).clone()` (`gpu_decoder.py`)
 
 **Location:** `src/frigate_buffer/services/gpu_decoder.py` ~64  
 
 **Finding:** The decoder returns DLPack-backed frames; cloning after stack is intentional so the decoder can be closed without invalidating the batch. This is documented and correct.
 
-**Recommendation:** No change.
+**Recommendation:** No change. Documented in `get_frames` docstring and inline comment.
 
 ---
 
-### 2.5 VRAM release after batches
+### 2.5 [DONE] VRAM release after batches
 
 **Locations:**  
 - `video.py`: `del batch` and `torch.cuda.empty_cache()` after each detection batch; same in `finally`.  
@@ -168,7 +168,7 @@ _encode_frames_via_ffmpeg(frames_list, target_w, target_h, tmp_output_path)
 
 **Finding:** VRAM is released consistently after each batch/frame/slice. No missing `del` or `empty_cache` found in the decode/inference/compilation paths.
 
-**Recommendation:** No change.
+**Recommendation:** No change. `del batch` and `torch.cuda.empty_cache()` are now present in `finally` blocks in video.py, multi_clip_extractor.py, and video_compilation.py to guarantee VRAM release even when an error occurs.
 
 ---
 
@@ -204,7 +204,7 @@ _encode_frames_via_ffmpeg(frames_list, target_w, target_h, tmp_output_path)
 
 ---
 
-### 3.3 [MEDIUM] Redundant ffprobe on the same clip
+### 3.3 [MEDIUM] [DONE] Redundant ffprobe on the same clip
 
 **Locations:**  
 - `video.py`: `_get_video_metadata(clip_path)` in `generate_detection_sidecar` (before GPU_LOCK, ~470) and in `_decoder_frame_count`.  
@@ -216,6 +216,8 @@ _encode_frames_via_ffmpeg(frames_list, target_w, target_h, tmp_output_path)
 **Recommendation:**  
 - Move all ffprobe calls **outside** GPU_LOCK (see §4).  
 - Add an optional **metadata cache** keyed by clip path (e.g. in-memory, TTL or single-run): when opening a clip for decode or compilation, check the cache first and call `_get_video_metadata` only on cache miss; store result in cache. This reduces redundant subprocess and disk I/O.
+
+**Done:** In-memory metadata cache `_METADATA_CACHE` keyed by clip path (realpath when file exists) was added in video.py. All callers (sidecar, multi_clip_extractor via `_get_fps_duration_from_path`, video_compilation) benefit via `_get_video_metadata`; repeated calls for the same clip return the cached tuple without running ffprobe again.
 
 ---
 
@@ -290,13 +292,15 @@ with GPU_LOCK:
 
 ---
 
-### 4.4 [MEDIUM] GPU_LOCK scope in multi_clip_extractor: one lock for all decoder opens
+### 4.4 [MEDIUM] [DONE] GPU_LOCK scope in multi_clip_extractor: one lock for all decoder opens
 
 **Location:** `src/frigate_buffer/services/multi_clip_extractor.py` ~267–306  
 
 **Finding:** A single `with GPU_LOCK` wraps opening **all** decoders (one per camera). Combined with 4.2, this keeps the lock held for the whole loop (decoder open + ffprobe per camera). Design is “one lock for all GPU decoder access,” so broadening the lock is intentional; the main issue is doing **non-GPU work** (ffprobe) inside it. Fixing 4.2 will already reduce contention.
 
 **Recommendation:** After moving ffprobe out of the lock (4.2), no further change is required for this finding. If future refactors allow opening decoders one at a time and releasing the lock between cameras, that could improve concurrency with other GPU users (e.g. compilation), but it would require ensuring PyNvVideoCodec/context usage is safe with interleaved access.
+
+**Done:** With ffprobe moved out of the lock (4.2), GPU_LOCK scope in multi_clip_extractor is now strictly limited to GPU-heavy decoder operations (create_decoder, len(ctx), get_frames).
 
 ---
 
@@ -311,11 +315,11 @@ with GPU_LOCK:
 | 2.3  | Medium   | Memory          | Stream compilation frames to FFmpeg instead of buffering |
 | 3.1  | High     | Redundant I/O   | Pass sidecars from compile_ce_video to generate_compilation_video |
 | 3.2  | Medium   | Redundant I/O   | Consider per-CE sidecar cache for extraction + compilation |
-| 3.3  | Medium   | Redundant I/O   | Optional metadata cache for ffprobe; move all probes outside lock |
+| 3.3  | Medium   | Redundant I/O   | [DONE] Metadata cache for ffprobe in video.py (_METADATA_CACHE) |
 | 4.1  | High     | Lock contention | Move ffprobe out of GPU_LOCK in video_compilation |
 | 4.2  | High     | Lock contention | Move ffprobe out of GPU_LOCK in multi_clip_extractor |
 | 4.3  | High     | Lock contention | Move detection sidecar JSON write outside GPU_LOCK in video.py |
-| 4.4  | Medium   | Lock contention | Addressed by fixing 4.2 |
+| 4.4  | Medium   | Lock contention | [DONE] Addressed by fixing 4.2; GPU_LOCK scope strictly decoder ops |
 
 ---
 

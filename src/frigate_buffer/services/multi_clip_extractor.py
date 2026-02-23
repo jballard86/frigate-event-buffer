@@ -416,60 +416,68 @@ def extract_target_centric_frames(
                 continue
             if batch is None or batch.shape[0] < 1:
                 continue
-            frame_t = batch[0:1].clone()
-            del batch
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-            best_tensor = frame_t
-            meta: dict[str, Any] = {}
-            if crop_width > 0 and crop_height > 0 and _CROP_AVAILABLE:
-                entry = _nearest_sidecar_entry(sidecars.get(best_camera) or [], T)
-                detections = (entry.get("detections") or []) if entry else []
-                frame_h, frame_w = int(best_tensor.shape[2]), int(best_tensor.shape[3])
-                frame_area = frame_w * frame_h
-                native_w, native_h = native_size_per_cam.get(best_camera, (0, 0))
-                if native_w > 0 and native_h > 0:
-                    frame_area = native_w * native_h
-                reference_area = min(target_crop_area, frame_area) if target_crop_area > 0 else frame_area
-                if not detections:
-                    best_tensor = _crop_utils.center_crop(best_tensor, crop_width, crop_height)
-                else:
-                    person_dets = [d for d in detections if (d.get("label") or "").lower() in PREFERRED_LABELS]
-                    if not person_dets:
+            try:
+                frame_t = batch[0:1].clone()
+                del batch
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                best_tensor = frame_t
+                meta: dict[str, Any] = {}
+                if crop_width > 0 and crop_height > 0 and _CROP_AVAILABLE:
+                    entry = _nearest_sidecar_entry(sidecars.get(best_camera) or [], T)
+                    detections = (entry.get("detections") or []) if entry else []
+                    frame_h, frame_w = int(best_tensor.shape[2]), int(best_tensor.shape[3])
+                    frame_area = frame_w * frame_h
+                    native_w, native_h = native_size_per_cam.get(best_camera, (0, 0))
+                    if native_w > 0 and native_h > 0:
+                        frame_area = native_w * native_h
+                    reference_area = min(target_crop_area, frame_area) if target_crop_area > 0 else frame_area
+                    if not detections:
                         best_tensor = _crop_utils.center_crop(best_tensor, crop_width, crop_height)
                     else:
-                        largest = max(person_dets, key=lambda d: float(d.get("area") or 0))
-                        person_area_val = float(largest.get("area") or 0)
-                        if (
-                            reference_area > 0
-                            and tracking_target_frame_percent > 0
-                            and (person_area_val / reference_area) >= (tracking_target_frame_percent / 100.0)
-                        ):
-                            best_tensor = _crop_utils.full_frame_resize_to_target(
-                                best_tensor, crop_width, crop_height
-                            )
-                            meta["is_full_frame_resize"] = True
+                        person_dets = [d for d in detections if (d.get("label") or "").lower() in PREFERRED_LABELS]
+                        if not person_dets:
+                            best_tensor = _crop_utils.center_crop(best_tensor, crop_width, crop_height)
                         else:
-                            cp = largest.get("centerpoint")
-                            if cp and len(cp) >= 2:
-                                best_tensor = _crop_utils.crop_around_center(
-                                    best_tensor, cp[0], cp[1], crop_width, crop_height
+                            largest = max(person_dets, key=lambda d: float(d.get("area") or 0))
+                            person_area_val = float(largest.get("area") or 0)
+                            if (
+                                reference_area > 0
+                                and tracking_target_frame_percent > 0
+                                and (person_area_val / reference_area) >= (tracking_target_frame_percent / 100.0)
+                            ):
+                                best_tensor = _crop_utils.full_frame_resize_to_target(
+                                    best_tensor, crop_width, crop_height
                                 )
+                                meta["is_full_frame_resize"] = True
                             else:
-                                best_tensor = _crop_utils.center_crop(best_tensor, crop_width, crop_height)
-                            meta["is_full_frame_resize"] = False
-            raw_person_area = _person_area_at_time(sidecars.get(best_camera) or [], T)
-            meta["person_area"] = int(raw_person_area)
-            skip_append = (
-                (raw_person_area <= 0) if camera_timeline_final_yolo_drop_no_person else False
-            )
-            if not skip_append:
-                collected.append(ExtractedFrame(frame=best_tensor, timestamp_sec=T, camera=best_camera, metadata=meta))
-            if best_camera == current_camera:
-                frames_on_current += 1
-            else:
-                current_camera = best_camera
-                frames_on_current = 1
+                                cp = largest.get("centerpoint")
+                                if cp and len(cp) >= 2:
+                                    best_tensor = _crop_utils.crop_around_center(
+                                        best_tensor, cp[0], cp[1], crop_width, crop_height
+                                    )
+                                else:
+                                    best_tensor = _crop_utils.center_crop(best_tensor, crop_width, crop_height)
+                                meta["is_full_frame_resize"] = False
+                raw_person_area = _person_area_at_time(sidecars.get(best_camera) or [], T)
+                meta["person_area"] = int(raw_person_area)
+                skip_append = (
+                    (raw_person_area <= 0) if camera_timeline_final_yolo_drop_no_person else False
+                )
+                if not skip_append:
+                    collected.append(ExtractedFrame(frame=best_tensor, timestamp_sec=T, camera=best_camera, metadata=meta))
+                if best_camera == current_camera:
+                    frames_on_current += 1
+                else:
+                    current_camera = best_camera
+                    frames_on_current = 1
+            finally:
+                try:
+                    del batch
+                except NameError:
+                    pass
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
 
         if _log_phase_timing and _t0_read is not None and log_callback:
             log_callback(f"Reading frames: {time.monotonic() - _t0_read:.1f}s")

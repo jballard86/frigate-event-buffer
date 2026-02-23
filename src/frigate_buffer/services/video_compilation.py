@@ -636,6 +636,13 @@ def _run_pynv_compilation(
                     exc_info=True,
                 )
                 logger.warning("Skipping slice %s (%s): %s", slice_idx, clip_path, e)
+            finally:
+                try:
+                    del batch
+                except NameError:
+                    pass
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
     except BrokenPipeError:
         logger.error(
             "FFmpeg closed stdin (broken pipe). Command: %s. Check %s for stderr.",

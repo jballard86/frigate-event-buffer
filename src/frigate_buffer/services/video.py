@@ -25,6 +25,10 @@ logger = logging.getLogger("frigate-buffer")
 # Serialize PyNvVideoCodec decoder access across threads (create_decoder and get_frames).
 GPU_LOCK = threading.Lock()
 
+# In-memory cache for ffprobe results keyed by clip path (realpath when exists).
+# Reduces redundant subprocess I/O when the same clip is probed by sidecar, extraction, and compilation.
+_METADATA_CACHE: dict[str, tuple[int, int, float, float] | None] = {}
+
 
 def _flush_logger() -> None:
     """Flush all logging handlers so logs are not lost on C++ segfault/abort."""
@@ -132,7 +136,12 @@ def _get_video_metadata(clip_path: str) -> tuple[int, int, float, float] | None:
     """
     Single ffprobe call returning (width, height, fps, duration_sec).
     Returns None on failure or missing stream.
+    Results are cached by path (realpath when the file exists) so repeated callers
+    (sidecar, multi-clip extraction, compilation) do not re-run ffprobe.
     """
+    cache_key = os.path.realpath(clip_path) if os.path.exists(clip_path) else clip_path
+    if cache_key in _METADATA_CACHE:
+        return _METADATA_CACHE[cache_key]
     try:
         out = subprocess.run(
             [
@@ -164,9 +173,12 @@ def _get_video_metadata(clip_path: str) -> tuple[int, int, float, float] | None:
             fps = float(fps_str) if fps_str else 30.0
         dur_str = fmt.get("duration")
         duration = float(dur_str) if dur_str else 0.0
-        return (w, h, fps, duration)
+        result = (w, h, fps, duration)
+        _METADATA_CACHE[cache_key] = result
+        return result
     except (FileNotFoundError, subprocess.TimeoutExpired, ValueError, OSError, json.JSONDecodeError) as e:
         logger.debug("ffprobe metadata failed for %s: %s", clip_path, e)
+    _METADATA_CACHE[cache_key] = None
     return None
 
 
@@ -598,6 +610,10 @@ class VideoService:
                     pass
             return False
         finally:
+            try:
+                del batch
+            except NameError:
+                pass
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
 
