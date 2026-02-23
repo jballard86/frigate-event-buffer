@@ -82,6 +82,7 @@ frigate-event-buffer/
 ├── USER_GUIDE.md
 ├── MULTI_CAM_PLAN.md
 ├── DIAGNOSTIC_SIDECAR_TIMELINE_COMPILATION.md  # Diagnostic: sidecar write, timeline EMA, compilation fallback
+├── gpu_pipeline_audit_report.md               # GPU performance audit: CPU/GPU boundary, memory, I/O, lock contention
 │
 ├── scripts/
 │   ├── bench_post_download_pre_api.py          # Benchmark: post-download pre-API segment (run with pytest)
@@ -211,6 +212,7 @@ frigate-event-buffer/
 | `docker-compose.yaml` / `docker-compose.example.yaml` | Compose for local run; GPU, env, mounts. No `YOLO_CONFIG_DIR` needed—app uses storage for Ultralytics config and model cache. | Deployment. |
 | `MAP.md` | This file—architecture and context for AI. | Must be updated when structure or flows change. |
 | `DIAGNOSTIC_SIDECAR_TIMELINE_COMPILATION.md` | Diagnostic: sidecar writing (video.py), timeline_ema usage, and compilation fallback conditions. | Reference for debugging frame extraction and static compilation output. |
+| `gpu_pipeline_audit_report.md` | GPU performance audit (no code changes): CPU/GPU boundary, memory, redundant I/O, GPU_LOCK contention. | Reference for optimization and lock refactors. |
 
 ### Entry & config
 

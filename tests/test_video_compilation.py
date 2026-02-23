@@ -826,6 +826,62 @@ class TestGenerateCompilationVideo(unittest.TestCase):
             "Expected at least one ERROR log for static frame (same index for all frames)",
         )
 
+    @patch("frigate_buffer.services.video_compilation.GPU_LOCK", MagicMock())
+    @patch("frigate_buffer.services.video_compilation.create_decoder")
+    @patch("frigate_buffer.services.video_compilation._encode_frames_via_ffmpeg")
+    @patch("frigate_buffer.services.video_compilation.logger")
+    @patch("frigate_buffer.services.video_compilation.os.path.isfile")
+    def test_run_pynv_compilation_logs_once_per_camera_not_per_slice(
+        self, mock_isfile, mock_logger, mock_encode_ffmpeg, mock_create_decoder
+    ):
+        """DEBUG compilation log is emitted once per distinct camera, not once per slice."""
+        try:
+            import torch
+        except ImportError:
+            self.skipTest("torch not available")
+        mock_isfile.return_value = True
+        mock_ctx = _fake_create_decoder_context(200, height=480, width=640)
+        if mock_ctx is None:
+            self.skipTest("torch not available")
+        mock_ctx.get_frames = lambda indices: torch.zeros(
+            (len(indices), 3, 480, 640), dtype=torch.uint8
+        )
+        mock_cm = MagicMock()
+        mock_cm.__enter__ = MagicMock(return_value=mock_ctx)
+        mock_cm.__exit__ = MagicMock(return_value=None)
+        mock_create_decoder.return_value = mock_cm
+
+        # 3 slices for doorbell, 2 for front_door (5 slices, 2 distinct cameras).
+        slices = [
+            {"camera": "doorbell", "start_sec": 0.0, "end_sec": 1.0, "crop_start": (0, 0, 320, 240), "crop_end": (0, 0, 320, 240)},
+            {"camera": "doorbell", "start_sec": 1.0, "end_sec": 2.0, "crop_start": (0, 0, 320, 240), "crop_end": (0, 0, 320, 240)},
+            {"camera": "doorbell", "start_sec": 2.0, "end_sec": 3.0, "crop_start": (0, 0, 320, 240), "crop_end": (0, 0, 320, 240)},
+            {"camera": "front_door", "start_sec": 3.0, "end_sec": 4.0, "crop_start": (0, 0, 320, 240), "crop_end": (0, 0, 320, 240)},
+            {"camera": "front_door", "start_sec": 4.0, "end_sec": 5.0, "crop_start": (0, 0, 320, 240), "crop_end": (0, 0, 320, 240)},
+        ]
+        resolve_clip = MagicMock(return_value="clip.mp4")
+
+        _run_pynv_compilation(
+            slices=slices,
+            ce_dir="/ce",
+            tmp_output_path="/out.mp4.tmp",
+            target_w=1440,
+            target_h=1080,
+            resolve_clip_in_folder=resolve_clip,
+            cuda_device_index=0,
+        )
+
+        compilation_debug_calls = [
+            c for c in mock_logger.debug.call_args_list
+            if c[0] and "Compilation camera=" in (str(c[0][0]) if c[0] else "")
+        ]
+        self.assertEqual(
+            len(compilation_debug_calls),
+            2,
+            "Expected exactly 2 DEBUG logs (one per distinct camera), not one per slice. "
+            f"Got {len(compilation_debug_calls)} calls.",
+        )
+
 
 class TestEncodeFramesViaFfmpeg(unittest.TestCase):
     """Tests for _encode_frames_via_ffmpeg: h264_nvenc only, descriptive error on failure."""

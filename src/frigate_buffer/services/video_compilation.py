@@ -11,6 +11,7 @@ import json
 import logging
 import os
 import subprocess
+from collections import Counter
 
 from frigate_buffer.constants import NVDEC_INIT_FAILURE_PREFIX
 from frigate_buffer.services import crop_utils
@@ -489,6 +490,8 @@ def _run_pynv_compilation(
         return
 
     frames_list: list = []  # list of (target_h, target_w, 3) uint8 RGB numpy arrays
+    logged_cameras: set[str] = set()
+    slices_per_cam = Counter(sl["camera"] for sl in slices)
 
     for slice_idx, sl in enumerate(slices):
         cam = sl["camera"]
@@ -506,14 +509,18 @@ def _run_pynv_compilation(
         crop_end = sl.get("crop_end")
         output_times = [t0 + i / float(COMPILATION_OUTPUT_FPS) for i in range(n_frames)]
 
+        # ffprobe outside GPU_LOCK so the GPU is not held during subprocess I/O (Finding 4.1).
+        slice_meta = _get_video_metadata(clip_path)
+        fallback_fps = (slice_meta[2] if slice_meta and slice_meta[2] > 0 else 30.0)
+        fallback_duration = slice_meta[3] if slice_meta else duration
+
         try:
             with GPU_LOCK:
                 with create_decoder(clip_path, gpu_id=cuda_device_index) as ctx:
                     frame_count = len(ctx)
                     if frame_count <= 0:
-                        meta = _get_video_metadata(clip_path)
-                        fps = (meta[2] if meta and meta[2] > 0 else 30.0)
-                        frame_count = max(1, int((meta[3] if meta else duration) * fps))
+                        fps = fallback_fps
+                        frame_count = max(1, int(fallback_duration * fps))
                     # PTS-based frame indices to reduce jitter (decoder time→index mapping).
                     src_indices = [
                         min(max(0, ctx.get_index_from_time_in_seconds(t)), frame_count - 1)
@@ -557,11 +564,14 @@ def _run_pynv_compilation(
                     src_indices[0], n_frames, cam, t0, t1,
                 )
 
-            # One log per slice with actionable info (not per-frame).
-            logger.debug(
-                "Compilation slice %s camera=%s: frame %sx%s, crop center (%.0f,%.0f)->(%.0f,%.0f), target %sx%s, n_frames=%s",
-                slice_idx, cam, iw, ih, start_cx, start_cy, end_cx, end_cy, target_w, target_h, n_frames,
-            )
+            # One log per camera per compilation run (avoids flooding when many slices).
+            if cam not in logged_cameras:
+                logger.debug(
+                    "Compilation camera=%s: frame %sx%s, crop center (%.0f,%.0f)->(%.0f,%.0f), target %sx%s, n_slices=%s, n_frames=%s",
+                    cam, iw, ih, start_cx, start_cy, end_cx, end_cy, target_w, target_h,
+                    slices_per_cam.get(cam, 0), n_frames,
+                )
+                logged_cameras.add(cam)
 
             for i in range(n_frames):
                 frame = batch[i : i + 1]

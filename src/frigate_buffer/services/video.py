@@ -567,15 +567,16 @@ class VideoService:
 
                     if native_w <= 0 and read_w > 0:
                         native_w, native_h = read_w, read_h
-                    payload: dict[str, Any] = {
-                        "native_width": native_w or read_w,
-                        "native_height": native_h or read_h,
-                        "entries": sidecar_entries,
-                    }
-                    with open(sidecar_path, "w", encoding="utf-8") as f:
-                        json.dump(payload, f, indent=None, separators=(",", ":"))
-                    logger.debug("Wrote detection sidecar %s (%d frames)", sidecar_path, len(sidecar_entries))
-                    return True
+                payload = {
+                    "native_width": native_w or read_w,
+                    "native_height": native_h or read_h,
+                    "entries": sidecar_entries,
+                }
+            # GPU_LOCK and decoder exited; disk write outside lock to avoid holding GPU idle.
+            with open(sidecar_path, "w", encoding="utf-8") as f:
+                json.dump(payload, f, indent=None, separators=(",", ":"))
+            logger.debug("Wrote detection sidecar %s (%d frames)", sidecar_path, len(sidecar_entries))
+            return True
         except Exception as e:
             logger.error(
                 "%s (decoder open or decode failed). path=%s error=%s Check GPU, drivers; container may restart.",

@@ -263,6 +263,10 @@ def extract_target_centric_frames(
     frame_count_per_cam: dict[str, int] = {}
     if log_callback:
         log_callback("Opening clips (PyNvVideoCodec NVDEC).")
+    # ffprobe outside GPU_LOCK so the GPU is not held during subprocess I/O (Finding 4.2).
+    clip_metadata: dict[str, tuple[float, float] | None] = {}
+    for (_cam, path) in clip_paths:
+        clip_metadata[path] = _get_fps_duration_from_path(path)
     with contextlib.ExitStack() as stack:
         with GPU_LOCK:
             for (cam, path) in clip_paths:
@@ -289,7 +293,7 @@ def extract_target_centric_frames(
                             pass
                     return []
                 count = len(ctx)
-                path_meta = _get_fps_duration_from_path(path)
+                path_meta = clip_metadata.get(path)
                 if path_meta is not None:
                     fps = path_meta[0]
                     duration_sec = path_meta[1]
