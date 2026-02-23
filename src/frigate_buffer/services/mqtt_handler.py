@@ -13,6 +13,7 @@ import threading
 import time
 from typing import Any
 
+from frigate_buffer.logging_utils import should_suppress_review_debug_logs
 from frigate_buffer.models import EventState, _is_no_concerns
 
 logger = logging.getLogger("frigate-buffer")
@@ -260,12 +261,13 @@ class MqttMessageHandler:
         detections = data.get("detections", [])
         severity = review_data.get("severity", "detection")
         genai = data.get("metadata") or data.get("genai") or {}
-        logger.debug(
-            "Processing review: type=%s, %s detections, severity=%s",
-            event_type,
-            len(detections),
-            severity,
-        )
+        if not should_suppress_review_debug_logs():
+            logger.debug(
+                "Processing review: type=%s, %s detections, severity=%s",
+                event_type,
+                len(detections),
+                severity,
+            )
         for event_id in detections:
             event = self._state_manager.get_event(event_id)
             if event and self._timeline_logger.folder_for_event(event):
@@ -287,11 +289,17 @@ class MqttMessageHandler:
                     threat_level,
                 )
             else:
-                logger.debug(
-                    "Review for %s: title=N/A, threat_level=%s", event_id, threat_level
-                )
+                if not should_suppress_review_debug_logs():
+                    logger.debug(
+                        "Review for %s: title=N/A, threat_level=%s",
+                        event_id,
+                        threat_level,
+                    )
             if not title and not description:
-                logger.debug("Skipping finalization for %s: no GenAI data yet", event_id)
+                if not should_suppress_review_debug_logs():
+                    logger.debug(
+                        "Skipping finalization for %s: no GenAI data yet", event_id
+                    )
                 continue
             if self._state_manager.set_genai_metadata(
                 event_id, title, description, severity, threat_level, scene=scene

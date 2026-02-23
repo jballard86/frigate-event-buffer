@@ -2,7 +2,7 @@
 
 Install and run via the command line only (no Dockge). Clone the repo so the **repo root** is the directory that contains `Dockerfile` and `src/`. All commands below are run from that directory or use its path.
 
-**Required layout:** This guide assumes the repo has **`src/`** (with `src/frigate_buffer/` inside). If your `ls` shows `frigate_buffer/` at root instead of `src/`, you may be on a branch with a different layout. Switch to **`main`** (or the branch that has `src/`): run `git checkout main` then `git pull`, and confirm with `ls` that you have `Dockerfile` and `src/`.
+**Required layout:** This guide assumes the repo has `**src/`** (with `src/frigate_buffer/` inside). If your `ls` shows `frigate_buffer/` at root instead of `src/`, you may be on a branch with a different layout. Switch to `**main`** (or the branch that has `src/`): run `git checkout main` then `git pull`, and confirm with `ls` that you have `Dockerfile` and `src/`.
 
 ## Prerequisites
 
@@ -34,18 +34,21 @@ git clone https://github.com/jballard86/frigate-event-buffer.git frigate-buffer
 cd frigate-buffer
 ```
 
-You are now in the repo root. Your prompt should show that path (e.g. `root@Tower:/mnt/user/appdata/frigate-buffer#`). **Check layout:** run `ls` and ensure you see **`Dockerfile`** and **`src/`**. If you see `frigate_buffer/` at root instead of `src/`, run `git checkout main` and `git pull`, then continue. If you cloned somewhere else, replace `/mnt/user/appdata/frigate-buffer` in the `cd` commands below with your repo root path.
+You are now in the repo root. Your prompt should show that path (e.g. `root@Tower:/mnt/user/appdata/frigate-buffer#`). **Check layout:** run `ls` and ensure you see `**Dockerfile`** and `**src/`**. If you see `frigate_buffer/` at root instead of `src/`, run `git checkout main` and `git pull`, then continue. If you cloned somewhere else, replace `/mnt/user/appdata/frigate-buffer` in the `cd` commands below with your repo root path.
 
 **If Git prompts for username/password or says "Password authentication is not supported":** GitHub no longer accepts account passwords for HTTPS. Use either:
+
 - **SSH** (if you have SSH keys added to GitHub): `git clone git@github.com:jballard86/frigate-event-buffer.git frigate-buffer`
 - **Personal Access Token (PAT):** At GitHub → Settings → Developer settings → Personal access tokens, create a token (repo scope). When prompted for password, paste the token instead of your account password.
 
 **Avoid being prompted every time:** After the first successful login you can have Git remember credentials.
+
 - **Option A — Store (saves on disk):** From the repo root run `git config --global credential.helper store`. The next time you enter username and PAT, Git will save them (in `~/.git-credentials`) and reuse them for future pulls/fetches.
 - **Option B — Cache (memory only, for a while):** Run `git config --global credential.helper 'cache --timeout=86400'` to cache for 24 hours so you’re not asked again in that period.
 - **Option C — Use SSH:** If you use SSH to clone (or switch the remote to SSH), you won’t be prompted for a password as long as your SSH key is loaded. To switch an existing clone to SSH: `cd /mnt/user/appdata/frigate-buffer` then `git remote set-url origin git@github.com:jballard86/frigate-event-buffer.git`. Then `git pull` and future pulls use SSH (no user/pass).
 
 **If you get `fatal: destination path 'frigate-buffer' already exists and is not empty`:**
+
 - If that folder **has a git repo** (contains `.git`): `cd frigate-buffer` then `git pull`, then continue from step 3.
 - Otherwise use a different name: `git clone ... frigate-buffer-app` and `cd frigate-buffer-app`.
 
@@ -101,7 +104,7 @@ Trade-off: Fast builds complete in ~1-2 minutes but produce an image ~100-150 MB
 
 ## 5. Run
 
-Run from repo root. **Use the same env vars and volume paths as in your `docker-compose.yaml`**; the command below mirrors that file. The only value you must change is **`HA_IP`** — replace `YOUR_HOME_ASSISTANT_IP` with your Home Assistant IP (or leave it if you set it in the compose). If you use different paths or IPs in `docker-compose.yaml`, use those here instead.
+Run from repo root. **Use the same env vars and volume paths as in your `docker-compose.yaml`**; the command below mirrors that file. The only value you must change is `**HA_IP**` — replace `YOUR_HOME_ASSISTANT_IP` with your Home Assistant IP (or leave it if you set it in the compose). If you use different paths or IPs in `docker-compose.yaml`, use those here instead.
 
 If a container named `frigate_buffer` already exists, stop and remove it first: `docker stop frigate_buffer` then `docker rm frigate_buffer`. The commands below do that automatically.
 
@@ -132,7 +135,6 @@ docker run -d --name frigate_buffer --restart unless-stopped \
 The app uses the storage volume for Ultralytics config and the YOLO model cache: `storage/ultralytics/` (settings) and `storage/yolo_models/` (downloaded weights). These persist across restarts so you won’t see the config-directory warning or re-download the model each boot. You do not need to set `YOLO_CONFIG_DIR` unless you want to override this.
 
 ---
-
 
 ---
 
@@ -181,14 +183,13 @@ Replace `<branch-name>` with the branch you want (e.g. `main`, `Multi_Cam_Review
 
 ---
 
-
-
 If `git pull` reports that local changes would be overwritten by merge (e.g. to a file that was removed upstream), discard those changes then pull: run `git checkout -- <file>` for each file listed (or `git restore <file>`), then run `git pull` again and continue with the build and restart steps.
 
 ---
 
 ## Troubleshooting
 
-- **FFmpeg / NVDEC decode issues** — The image uses FFmpeg for GIF and ffprobe; video decode is **PyNvVideoCodec (NVDEC) only** (no CPU fallback). Rebuild from this repo (`docker build -t frigate-buffer:latest .`) and run with GPU access (`--gpus all` and NVIDIA env vars). Set **`NVIDIA_DRIVER_CAPABILITIES=compute,video,utility`** (the `video` capability is required for NVDEC). Check startup logs for decode-related errors (search for `NVDEC hardware initialization failed`); inside the container run `nvidia-smi` to confirm the GPU is visible.
+- **FFmpeg / NVDEC decode issues** — The image uses FFmpeg for GIF and ffprobe; video decode is **PyNvVideoCodec (NVDEC) only** (no CPU fallback). Rebuild from this repo (`docker build -t frigate-buffer:latest .`) and run with GPU access (`--gpus all` and NVIDIA env vars). Set `**NVIDIA_DRIVER_CAPABILITIES=compute,video,utility`** (the `video` capability is required for NVDEC). Check startup logs for decode-related errors (search for `NVDEC hardware initialization failed`); inside the container run `nvidia-smi` to confirm the GPU is visible.
 - **Build fails with "frigate_buffer" or "config.example" not found** — You are not in the repo root. `cd` to the directory that contains `Dockerfile` and `src/frigate_buffer/`.
 - **Decoder / get_frames errors** — Decode is GPU-only (PyNvVideoCodec). If decode fails, check GPU memory and driver; there is no CPU decode fallback. Reduce concurrent load or clip length if GPU memory is limited. Search logs for `NVDEC hardware initialization failed` for init failures.
+

@@ -2,7 +2,7 @@
 
 import json
 import unittest
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from frigate_buffer.services.mqtt_handler import MqttMessageHandler
 
@@ -192,6 +192,57 @@ class TestMqttHandlerRouting(unittest.TestCase):
         state_manager.set_genai_metadata.assert_called_once()
         notifier.publish_notification.assert_called_once()
         self.assertEqual(notifier.publish_notification.call_args[0][1], "finalized")
+
+    def test_review_debug_logs_suppressed_when_test_run_flag_set(self) -> None:
+        """When suppress_review_debug_logs is True, the three review DEBUG logs are not emitted."""
+        state_manager = MagicMock()
+        state_manager.get_event.return_value = MagicMock(folder_path="/ev/ev1")
+        state_manager.set_genai_metadata.return_value = False
+        timeline_logger = MagicMock()
+        timeline_logger.folder_for_event.return_value = None
+        consolidated_manager = MagicMock()
+        handler = self._make_handler(
+            state_manager=state_manager,
+            timeline_logger=timeline_logger,
+            consolidated_manager=consolidated_manager,
+        )
+        msg = _make_msg(
+            "frigate/reviews",
+            {
+                "type": "end",
+                "after": {
+                    "data": {
+                        "detections": ["ev1", "ev2"],
+                        "metadata": {},
+                    },
+                    "severity": "detection",
+                },
+            },
+        )
+        with patch(
+            "frigate_buffer.services.mqtt_handler.should_suppress_review_debug_logs",
+            return_value=True,
+        ):
+            with patch(
+                "frigate_buffer.services.mqtt_handler.logger"
+            ) as mock_logger:
+                handler.on_message(None, None, msg)
+        suppress_patterns = (
+            "Processing review:",
+            "Review for ",
+            "Skipping finalization for ",
+        )
+        for call in mock_logger.debug.call_args_list:
+            args = call[0]
+            if not args:
+                continue
+            fmt = args[0]
+            for pattern in suppress_patterns:
+                self.assertNotIn(
+                    pattern,
+                    fmt,
+                    f"Suppressed log should not be emitted: {fmt!r}",
+                )
 
     def test_on_message_invalid_json_does_not_crash(self):
         """Invalid JSON in payload does not raise; handler completes."""

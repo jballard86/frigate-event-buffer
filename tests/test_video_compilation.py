@@ -313,7 +313,7 @@ class TestGenerateCompilationVideo(unittest.TestCase):
 
         mock_run_pynv.assert_called_once()
         call_kw = mock_run_pynv.call_args[1]
-        temp_path = output_path.replace(".mp4", ".tmp.mp4")
+        temp_path = output_path.replace(".mp4", "_temp.mp4")
         self.assertEqual(call_kw["tmp_output_path"], temp_path)
         self.assertEqual(call_kw["target_w"], 1440)
         self.assertEqual(call_kw["target_h"], 1080)
@@ -370,7 +370,7 @@ class TestGenerateCompilationVideo(unittest.TestCase):
 
         generate_compilation_video(segments, ce_dir, output_path)
 
-        temp_path = output_path.replace(".mp4", ".tmp.mp4")
+        temp_path = output_path.replace(".mp4", "_temp.mp4")
         mock_rename.assert_called_once_with(temp_path, output_path)
 
     @patch("frigate_buffer.services.video_compilation._run_pynv_compilation")
@@ -601,31 +601,32 @@ class TestEncodeFramesViaFfmpeg(unittest.TestCase):
     """Tests for _encode_frames_via_ffmpeg: h264_nvenc only, descriptive error on failure."""
 
     def test_encode_uses_h264_nvenc_in_command(self):
-        """FFmpeg is invoked with -c:v h264_nvenc (GPU only; no libx264)."""
+        """FFmpeg is invoked with -c:v h264_nvenc (GPU only; no libx264) and -pix_fmt yuv420p."""
         import numpy as np
         frames = [np.zeros((1080, 1440, 3), dtype=np.uint8)]
-        with patch("frigate_buffer.services.video_compilation.subprocess.Popen") as mock_popen:
-            proc = MagicMock()
-            proc.stdin = MagicMock()
-            proc.returncode = 0
-            proc.communicate.return_value = (b"", b"")
-            mock_popen.return_value = proc
-            _encode_frames_via_ffmpeg(frames, 1440, 1080, "/tmp/out.mp4")
+        with patch("builtins.open", mock_open()):
+            with patch("frigate_buffer.services.video_compilation.subprocess.Popen") as mock_popen:
+                proc = MagicMock()
+                proc.stdin = MagicMock()
+                proc.returncode = 0
+                mock_popen.return_value = proc
+                _encode_frames_via_ffmpeg(frames, 1440, 1080, "/tmp/out.mp4")
         call_args = mock_popen.call_args[0][0]
         self.assertIn("h264_nvenc", call_args)
         self.assertNotIn("libx264", call_args)
+        self.assertIn("yuv420p", call_args)
 
     def test_encode_uses_thread_queue_size_and_nvenc_tune(self):
         """FFmpeg command includes -thread_queue_size 512 and h264_nvenc preset/tune/rc/cq for stability."""
         import numpy as np
         frames = [np.zeros((1080, 1440, 3), dtype=np.uint8)]
-        with patch("frigate_buffer.services.video_compilation.subprocess.Popen") as mock_popen:
-            proc = MagicMock()
-            proc.stdin = MagicMock()
-            proc.returncode = 0
-            proc.communicate.return_value = (b"", b"")
-            mock_popen.return_value = proc
-            _encode_frames_via_ffmpeg(frames, 1440, 1080, "/tmp/out.mp4")
+        with patch("builtins.open", mock_open()):
+            with patch("frigate_buffer.services.video_compilation.subprocess.Popen") as mock_popen:
+                proc = MagicMock()
+                proc.stdin = MagicMock()
+                proc.returncode = 0
+                mock_popen.return_value = proc
+                _encode_frames_via_ffmpeg(frames, 1440, 1080, "/tmp/out.mp4")
         call_args = mock_popen.call_args[0][0]
         cmd_str = " ".join(call_args) if isinstance(call_args, list) else str(call_args)
         self.assertIn("thread_queue_size", cmd_str)
@@ -636,37 +637,34 @@ class TestEncodeFramesViaFfmpeg(unittest.TestCase):
         self.assertIn("24", cmd_str)
 
     def test_encode_failure_raises_with_descriptive_message(self):
-        """On non-zero exit, RuntimeError is raised and message states GPU-only, no CPU fallback."""
+        """On non-zero exit, RuntimeError is raised advising to check ffmpeg_compile.log."""
         import numpy as np
         frames = [np.zeros((1080, 1440, 3), dtype=np.uint8)]
-        with patch("frigate_buffer.services.video_compilation.subprocess.Popen") as mock_popen:
-            proc = MagicMock()
-            proc.stdin = MagicMock()
-            proc.returncode = 1
-            proc.communicate.return_value = (b"", b"Encoder not found")
-            mock_popen.return_value = proc
-            with self.assertRaises(RuntimeError) as ctx:
-                _encode_frames_via_ffmpeg(frames, 1440, 1080, "/tmp/out.mp4")
+        with patch("builtins.open", mock_open()):
+            with patch("frigate_buffer.services.video_compilation.subprocess.Popen") as mock_popen:
+                proc = MagicMock()
+                proc.stdin = MagicMock()
+                proc.returncode = 1
+                mock_popen.return_value = proc
+                with self.assertRaises(RuntimeError) as ctx:
+                    _encode_frames_via_ffmpeg(frames, 1440, 1080, "/tmp/out.mp4")
         self.assertIn("h264_nvenc", str(ctx.exception))
-        self.assertIn("no CPU fallback", str(ctx.exception))
+        self.assertIn("ffmpeg_compile.log", str(ctx.exception))
 
-    def test_broken_pipe_logs_stderr_and_raises(self):
-        """When FFmpeg crashes and closes stdin, BrokenPipeError is caught; stderr is read and logged, RuntimeError raised."""
+    def test_broken_pipe_logs_and_raises_with_log_path(self):
+        """When FFmpeg crashes and closes stdin, BrokenPipeError is caught; RuntimeError advises checking ffmpeg_compile.log."""
         import numpy as np
         frames = [np.zeros((1080, 1440, 3), dtype=np.uint8)]
-        ffmpeg_stderr = b"NVENC error: out of memory"
-        with patch("frigate_buffer.services.video_compilation.subprocess.Popen") as mock_popen:
-            proc = MagicMock()
-            proc.stdin = MagicMock()
-            proc.stdin.write.side_effect = BrokenPipeError
-            proc.stderr = MagicMock()
-            proc.stderr.read.return_value = ffmpeg_stderr
-            mock_popen.return_value = proc
-            with self.assertRaises(RuntimeError) as ctx:
-                _encode_frames_via_ffmpeg(frames, 1440, 1080, "/tmp/out.mp4")
+        with patch("builtins.open", mock_open()):
+            with patch("frigate_buffer.services.video_compilation.subprocess.Popen") as mock_popen:
+                proc = MagicMock()
+                proc.stdin = MagicMock()
+                proc.stdin.write.side_effect = BrokenPipeError
+                mock_popen.return_value = proc
+                with self.assertRaises(RuntimeError) as ctx:
+                    _encode_frames_via_ffmpeg(frames, 1440, 1080, "/tmp/out.mp4")
         self.assertIn("broke pipe", str(ctx.exception))
-        self.assertIn("out of memory", str(ctx.exception))
-        proc.stderr.read.assert_called_once()
+        self.assertIn("ffmpeg_compile.log", str(ctx.exception))
         proc.wait.assert_called_once()
 
 

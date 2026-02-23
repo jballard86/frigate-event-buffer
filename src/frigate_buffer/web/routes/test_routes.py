@@ -7,6 +7,7 @@ import re
 from flask import Blueprint, Response, jsonify, request
 
 from frigate_buffer.event_test.event_test_orchestrator import run_test_pipeline
+from frigate_buffer.logging_utils import set_suppress_review_debug_logs
 from frigate_buffer.web.path_helpers import resolve_under_storage
 
 
@@ -33,18 +34,22 @@ def create_bp(orchestrator):
             return jsonify({"error": "Cannot read event folder"}), 400
 
         def generate():
-            for ev in run_test_pipeline(
-                source_path,
-                storage_path,
-                file_manager,
-                orchestrator.download_service,
-                orchestrator.video_service,
-                orchestrator.ai_analyzer,
-                orchestrator.config,
-            ):
-                yield f"data: {json.dumps(ev)}\n\n"
-                if ev.get("type") in ("done", "error"):
-                    break
+            set_suppress_review_debug_logs(True)
+            try:
+                for ev in run_test_pipeline(
+                    source_path,
+                    storage_path,
+                    file_manager,
+                    orchestrator.download_service,
+                    orchestrator.video_service,
+                    orchestrator.ai_analyzer,
+                    orchestrator.config,
+                ):
+                    yield f"data: {json.dumps(ev)}\n\n"
+                    if ev.get("type") in ("done", "error"):
+                        break
+            finally:
+                set_suppress_review_debug_logs(False)
 
         return Response(
             generate(),

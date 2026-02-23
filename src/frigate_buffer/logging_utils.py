@@ -49,6 +49,25 @@ class ErrorBufferHandler(logging.Handler):
 
 error_buffer = ErrorBuffer(max_size=ERROR_BUFFER_MAX_SIZE)
 
+# Thread-safe flag: when True, MQTT review handler skips specific DEBUG logs
+# (Processing review, Review for ... title=N/A, Skipping finalization). Set by test
+# stream while the TEST button pipeline is running so other logs remain visible.
+_suppress_review_debug_logs = False
+_suppress_review_lock = threading.Lock()
+
+
+def set_suppress_review_debug_logs(value: bool) -> None:
+    """Set whether to suppress review-related DEBUG logs (used by test stream)."""
+    with _suppress_review_lock:
+        global _suppress_review_debug_logs
+        _suppress_review_debug_logs = value
+
+
+def should_suppress_review_debug_logs() -> bool:
+    """Return True if review DEBUG logs should be suppressed (test run active)."""
+    with _suppress_review_lock:
+        return _suppress_review_debug_logs
+
 
 def setup_logging(log_level: str):
     """Configure logging with the specified level."""

@@ -291,10 +291,15 @@ def _encode_frames_via_ffmpeg(
     Encode a list of RGB frames to MP4 using FFmpeg with h264_nvenc only (GPU).
 
     frames: list of numpy arrays (H, W, 3) uint8 RGB with H=target_h, W=target_w.
-    No CPU fallback; on failure logs full context and raises.
+    FFmpeg stderr is routed to a physical log file in the event folder to avoid
+    OS-level pipe deadlock. h264_nvenc cannot ingest rgb24; we request yuv420p output.
+    No CPU fallback; on failure logs and raises, advising to check ffmpeg_compile.log.
     """
     if not frames:
         return
+    # Route stderr to a physical file to prevent pipe deadlock; log is kept for debugging.
+    log_file_path = os.path.join(os.path.dirname(tmp_output_path), "ffmpeg_compile.log")
+    log_file = open(log_file_path, "w", encoding="utf-8")
     cmd = [
         "ffmpeg",
         "-y",
@@ -310,16 +315,18 @@ def _encode_frames_via_ffmpeg(
         "-rc", "vbr",
         "-cq", "24",
         "-an",
+        "-pix_fmt", "yuv420p",
         tmp_output_path,
     ]
     try:
         proc = subprocess.Popen(
             cmd,
             stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            stdout=subprocess.DEVNULL,
+            stderr=log_file,
         )
     except FileNotFoundError:
+        log_file.close()
         logger.error(
             "Compilation encode failed: ffmpeg not found. "
             "Compilation requires GPU encoding (h264_nvenc). No CPU fallback is provided. "
@@ -333,51 +340,38 @@ def _encode_frames_via_ffmpeg(
         for arr in frames:
             proc.stdin.write(arr.tobytes())
         proc.stdin.close()
+        proc.wait()
     except BrokenPipeError:
-        stderr = (
-            (proc.stderr.read() or b"").decode("utf-8", errors="replace")
-            if proc.stderr else ""
-        )
         logger.error(
-            "FFmpeg closed stdin (broken pipe). stderr: %s. Command: %s. "
-            "Compilation encoding is GPU-only (h264_nvenc). No CPU fallback is provided.",
-            stderr,
+            "FFmpeg closed stdin (broken pipe). Command: %s. Check %s for stderr.",
             " ".join(cmd),
+            log_file_path,
         )
         proc.wait()
         raise RuntimeError(
-            f"FFmpeg broke pipe during encode; stderr: {stderr!r}"
+            f"FFmpeg broke pipe during encode; check {log_file_path!r} for details"
         ) from None
     except Exception as e:
-        stderr = (
-            (proc.stderr.read() or b"").decode("utf-8", errors="replace")
-            if proc.stderr else ""
-        )
         logger.error(
-            "Compilation encode failed while writing frames: %s. "
-            "FFmpeg command: %s. stderr: %s. "
-            "Compilation encoding is GPU-only (h264_nvenc). No CPU fallback is provided.",
+            "Compilation encode failed while writing frames: %s. Command: %s. Check %s for stderr.",
             e,
             " ".join(cmd),
-            stderr,
+            log_file_path,
         )
         proc.wait()
         raise
-    stdout, stderr = proc.communicate()
-    stderr_str = (stderr or b"").decode("utf-8", errors="replace")
+    finally:
+        log_file.close()
     if proc.returncode != 0:
         logger.error(
-            "Compilation encode failed: FFmpeg exited with code %s. "
-            "Command: %s. stderr: %s. "
-            "Compilation encoding is GPU-only (h264_nvenc). No CPU fallback is provided. "
-            "Ensure an NVENC-capable GPU and drivers/FFmpeg with h264_nvenc support.",
+            "Compilation encode failed: FFmpeg exited with code %s. Command: %s. Check %s for full stderr.",
             proc.returncode,
             " ".join(cmd),
-            stderr_str,
+            log_file_path,
         )
         raise RuntimeError(
             f"FFmpeg h264_nvenc encode failed (exit {proc.returncode}); "
-            "compilation is GPU-only, no CPU fallback"
+            f"check {log_file_path!r} for details"
         )
 
 
@@ -548,7 +542,9 @@ def generate_compilation_video(
         smooth_crop_centers_ema(slices, crop_smooth_alpha)
 
     cuda_device_index = int(config.get("CUDA_DEVICE_INDEX", 0)) if config else 0
-    temp_path = output_path.replace(".mp4", ".tmp.mp4")
+    temp_path = output_path.replace(".mp4", "_temp.mp4")
+    if not temp_path.endswith(".mp4"):
+        temp_path = temp_path + ".mp4"
     try:
         _run_pynv_compilation(
             slices=slices,
@@ -561,7 +557,7 @@ def generate_compilation_video(
         )
         if os.path.isfile(temp_path) and os.path.getsize(temp_path) > 0:
             os.rename(temp_path, output_path)
-            logger.info(f"Compilation finished successfully. Output saved to: {output_path}")
+            logger.info(f"Successfully compiled summary video to {output_path}")
         else:
             raise FileNotFoundError(
                 f"Compiler finished but tmp result file was empty or missing: {temp_path}"
