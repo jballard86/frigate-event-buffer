@@ -21,8 +21,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends software-proper
     && rm -rf /var/lib/apt/lists/*
 
 # Copy vendored C++ shared libraries for NeLux (match wheel ABI)
-COPY wheels/libyuv.so* /usr/lib/x86_64-linux-gnu/
-COPY wheels/libspdlog.so* /usr/lib/x86_64-linux-gnu/
+COPY wheels/libyuv.so* /usr/local/lib/
+COPY wheels/libspdlog.so* /usr/local/lib/
 
 # Refresh the Linux dynamic linker cache so it sees the new files
 RUN ldconfig
