@@ -56,6 +56,16 @@ class TestConsolidationClosingState(unittest.TestCase):
     def test_mark_closing_unknown_ce_returns_false(self):
         self.assertFalse(self.mgr.mark_closing("nonexistent"))
 
+    def test_get_active_ce_folders_returns_tuple_of_folder_names(self):
+        """get_active_ce_folders() returns tuple of folder names (no full CE list)."""
+        ce1, _, _ = self.mgr.get_or_create("e1", "cam1", "person", 1000.0)
+        folders = self.mgr.get_active_ce_folders()
+        self.assertIsInstance(folders, tuple, "get_active_ce_folders must return a tuple")
+        self.assertGreaterEqual(len(folders), 1)
+        self.assertIn(ce1.folder_name, folders)
+        for f in folders:
+            self.assertIsInstance(f, str, "each folder must be a string (folder_name), not a CE object")
+
     def test_schedule_close_timer_noop_when_closing(self):
         now = 1000.0
         ce, _, _ = self.mgr.get_or_create("e1", "cam1", "person", now)

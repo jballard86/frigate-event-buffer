@@ -3,7 +3,7 @@
 Manual verification script for Gemini proxy connectivity.
 
 Run from project root:
-  python tests/verify_gemini_proxy.py
+  python scripts/verify_gemini_proxy.py
 
 Loads real config.yaml, instantiates GeminiAnalysisService, sends a single
 dummy image to the proxy, and prints request payload and response.
@@ -14,8 +14,11 @@ import json
 import sys
 import os
 
-# Ensure project root is on path
+# Ensure project root is on path (scripts/ -> parent = project root)
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+# Ensure src is on path
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src"))
 
 import cv2
 from frigate_buffer.config import load_config

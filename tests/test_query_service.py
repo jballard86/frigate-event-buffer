@@ -4,7 +4,8 @@ import shutil
 import tempfile
 import json
 import time
-from frigate_buffer.services.query import EventQueryService
+from collections import OrderedDict
+from frigate_buffer.services.query import EventQueryService, read_timeline_merged
 
 class TestEventQueryService(unittest.TestCase):
     def setUp(self):
@@ -235,6 +236,86 @@ class TestEventQueryService(unittest.TestCase):
             self.assertNotEqual(ev.get("camera"), "ultralytics", f"Ghost event from ultralytics: {ev.get('event_id')}")
         # We should still have our real events (1 camera event + 1 consolidated)
         self.assertGreaterEqual(len(all_events), 2)
+
+
+class TestQueryCaching(unittest.TestCase):
+    """EventQueryService cache TTL and per-folder caching behavior."""
+
+    def setUp(self):
+        self.test_dir = tempfile.mkdtemp()
+        self.ttl = 2
+        self.service = EventQueryService(self.test_dir, cache_ttl=self.ttl)
+
+        self.cam = "test_cam"
+        os.makedirs(os.path.join(self.test_dir, self.cam))
+        self.event_id = "event1"
+        self.event_dir = os.path.join(self.test_dir, self.cam, f"{int(time.time())}_{self.event_id}")
+        os.makedirs(self.event_dir)
+
+        self.summary_path = os.path.join(self.event_dir, "summary.txt")
+        with open(self.summary_path, "w") as f:
+            f.write("Title: Initial Title")
+
+    def tearDown(self):
+        shutil.rmtree(self.test_dir, ignore_errors=True)
+
+    def test_caching_behavior(self):
+        events = self.service.get_events(self.cam)
+        self.assertEqual(events[0]['title'], "Initial Title")
+
+        with open(self.summary_path, "w") as f:
+            f.write("Title: Modified Title")
+
+        st = os.stat(self.event_dir)
+        os.utime(self.event_dir, (st.st_atime, st.st_mtime + 1.0))
+
+        events_cached = self.service.get_events(self.cam)
+        self.assertEqual(events_cached[0]['title'], "Initial Title", "Should return cached data immediately")
+
+        time.sleep(self.ttl + 0.1)
+
+        events_fresh = self.service.get_events(self.cam)
+        self.assertEqual(events_fresh[0]['title'], "Modified Title", "Should return fresh data after TTL")
+
+    def test_event_cache_evicts_when_over_max(self):
+        """Event cache is bounded with LRU eviction (event_cache_max)."""
+        storage = tempfile.mkdtemp()
+        self.addCleanup(lambda: shutil.rmtree(storage, ignore_errors=True))
+        os.makedirs(os.path.join(storage, "cam1"), exist_ok=True)
+        for i in range(5):
+            d = os.path.join(storage, "cam1", f"100{i}_ev{i}")
+            os.makedirs(d, exist_ok=True)
+            with open(os.path.join(d, "summary.txt"), "w") as f:
+                f.write("Event")
+        svc = EventQueryService(storage, cache_ttl=5, event_cache_max=3)
+        self.assertIsInstance(svc._event_cache, OrderedDict)
+        self.assertEqual(svc._event_cache_max, 3)
+        for i in range(5):
+            svc.get_events("cam1")
+        self.assertLessEqual(len(svc._event_cache), 3, "event cache must not exceed max size")
+
+
+class TestReadTimelineMerged(unittest.TestCase):
+    """read_timeline_merged merges base notification_timeline.json and append JSONL."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(lambda: shutil.rmtree(self.tmp, ignore_errors=True))
+
+    def test_read_timeline_merged_merges_base_and_append(self):
+        folder = os.path.join(self.tmp, "cam1", "123_ev1")
+        os.makedirs(folder, exist_ok=True)
+        base_path = os.path.join(folder, "notification_timeline.json")
+        append_path = os.path.join(folder, "notification_timeline_append.jsonl")
+        with open(base_path, "w") as f:
+            json.dump({"event_id": "ev1", "entries": [{"ts": "T1", "label": "base"}]}, f)
+        with open(append_path, "a") as f:
+            f.write(json.dumps({"ts": "T2", "label": "append"}) + "\n")
+        data = read_timeline_merged(folder)
+        self.assertEqual(len(data["entries"]), 2)
+        self.assertEqual(data["entries"][0]["label"], "base")
+        self.assertEqual(data["entries"][1]["label"], "append")
+
 
 if __name__ == '__main__':
     unittest.main()

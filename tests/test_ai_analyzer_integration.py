@@ -1,8 +1,6 @@
 """
-Integration tests for Step 5 (Proxy Response Bridge) and Step 6 (Orchestrator Integration).
-
-Verifies: persistence of analysis_result.json, orchestrator hand-off to Frigate and HA,
-and error handling when proxy returns invalid JSON or 5xx.
+Integration tests for AI analyzer: persistence of analysis_result.json,
+orchestrator hand-off to Frigate and HA, and error handling when proxy returns invalid JSON or 5xx.
 """
 
 import json
@@ -247,7 +245,6 @@ class TestIntegrationStep5ErrorHandling(unittest.TestCase):
 
         config = {"GEMINI": {"enabled": True, "proxy_url": "http://p", "api_key": "k"}}
         service = GeminiAnalysisService(config)
-        # Must be a real numpy array so _frame_to_base64_url can read .shape
         frame = np.zeros((50, 50, 3), dtype=np.uint8)
         result = service.send_to_proxy("Prompt", [frame])
         self.assertIsNone(result)

@@ -12,6 +12,8 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 
 from frigate_buffer.services.frigate_export_watchdog import (
     DELETE_EXPORT_TIMEOUT,
+    MAX_LINK_CHECK_FOLDERS,
+    MAX_HEAD_REQUESTS,
     run_once,
 )
 
@@ -27,6 +29,11 @@ class TestFrigateExportWatchdog(unittest.TestCase):
 
     def tearDown(self):
         self.logger.removeHandler(self.log_handler)
+
+    def test_watchdog_constants_capped(self):
+        """HEAD requests for link verification are capped (20 folders, 120 requests)."""
+        self.assertEqual(MAX_LINK_CHECK_FOLDERS, 20)
+        self.assertEqual(MAX_HEAD_REQUESTS, 120)
 
     def _make_timeline_with_export_response(self, export_id="test-export-id-123", label="Clip export response (from Frigate API)"):
         return {

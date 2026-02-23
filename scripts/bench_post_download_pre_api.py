@@ -1,6 +1,6 @@
 """
 Temporary benchmarks for post-download, pre-API segment (sidecar → extract → overlay → write).
-Run: pytest tests/bench_post_download_pre_api.py -v -s
+Run from project root: pytest scripts/bench_post_download_pre_api.py -v -s
 Use BENCH_RUNS=5 to set repeat count (default 3). Results print mean ± stdev in seconds.
 Phase 6: extract uses NeLux VideoReader; bench mocks nelux.VideoReader so no GPU required.
 """
@@ -12,6 +12,9 @@ import sys
 import time
 import unittest
 from unittest.mock import MagicMock, patch
+
+# Ensure src is on path when run from scripts/
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "src")))
 
 import numpy as np
 

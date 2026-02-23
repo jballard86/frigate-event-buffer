@@ -1,8 +1,9 @@
 import unittest
 from unittest.mock import MagicMock, patch, ANY
 import logging
-import sys
 import os
+import shutil
+import sys
 import requests
 
 # Add parent dir to path
@@ -41,6 +42,21 @@ class TestDownloadService(unittest.TestCase):
         """Two calls can produce different filenames (random suffix)."""
         names = {_dynamic_clip_basename("cam1") for _ in range(20)}
         self.assertGreater(len(names), 1, "Random 5-digit suffix should vary across calls")
+
+    @patch('frigate_buffer.services.download.requests.get')
+    def test_download_snapshot_uses_stream_true(self, mock_get):
+        """Snapshot download uses stream=True and writes in chunks."""
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.iter_content = lambda chunk_size: [b"chunk1", b"chunk2"]
+        mock_get.return_value = mock_resp
+        folder = os.path.join(os.path.dirname(__file__), "_snapshot_dl")
+        os.makedirs(folder, exist_ok=True)
+        self.addCleanup(lambda: shutil.rmtree(folder, ignore_errors=True) if os.path.isdir(folder) else None)
+        self.download_service.download_snapshot("ev1", folder)
+        mock_get.assert_called_once()
+        kwargs = mock_get.call_args[1]
+        self.assertTrue(kwargs.get("stream"), "download_snapshot must use stream=True")
 
     @patch('frigate_buffer.services.download.requests.post')
     @patch('frigate_buffer.services.download.requests.get')

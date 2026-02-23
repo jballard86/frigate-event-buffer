@@ -70,6 +70,21 @@ class TestDailyReporterServiceScan(unittest.TestCase):
         self.assertEqual(total_matched, 1)
         self.assertEqual(events_list[0][1].get("title"), "CE event")
 
+    def test_collect_events_for_date_returns_tuple_of_list_and_counts(self):
+        """_collect_events_for_date returns (events_list, total_seen, total_matched)."""
+        import datetime
+        config = {}
+        mock_analyzer = MagicMock()
+        service = DailyReporterService(config, tempfile.gettempdir(), mock_analyzer)
+        result = service._collect_events_for_date(datetime.date.today())
+        self.assertIsInstance(result, tuple)
+        self.assertEqual(len(result), 3)
+        events_list, total_seen, total_matched = result
+        self.assertIsInstance(events_list, list)
+        self.assertIsInstance(total_seen, int)
+        self.assertIsInstance(total_matched, int)
+        self.assertEqual(total_matched, len(events_list))
+
 
 class TestDailyReporterServiceAggregate(unittest.TestCase):
     """Test event line format: [{time}] {title}: {shortSummary} (Threat: {level})."""
