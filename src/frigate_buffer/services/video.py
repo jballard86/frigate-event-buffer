@@ -20,6 +20,22 @@ from frigate_buffer.services.video_sanitizer import sanitize_for_nelux
 
 logger = logging.getLogger("frigate-buffer")
 
+
+def _flush_logger() -> None:
+    """Flush all logging handlers so logs are not lost on C++ segfault/abort."""
+    for h in logger.handlers:
+        try:
+            h.flush()
+        except Exception:
+            pass
+    root = logging.getLogger()
+    for h in root.handlers:
+        try:
+            h.flush()
+        except Exception:
+            pass
+
+
 # Chunk size for NeLux get_batch to protect 8GB VRAM when running YOLO.
 BATCH_SIZE = 16
 
@@ -271,7 +287,11 @@ def _run_detection_on_frame(
             if xyxy is None:
                 continue
             try:
+                logger.info("_run_detection: converting xyxy tensor to CPU/numpy")
+                _flush_logger()
                 xyxy = xyxy.cpu().numpy() if hasattr(xyxy, "cpu") else xyxy
+                logger.info("_run_detection: xyxy converted to numpy")
+                _flush_logger()
             except Exception:
                 pass
             for i in range(len(xyxy)):
@@ -307,9 +327,13 @@ def _run_detection_on_batch(
     try:
         if batch.dtype == torch.uint8:
             batch = batch.float() / 255.0
+        logger.info("_run_detection_on_batch: calling model.predict (YOLO inference)")
+        _flush_logger()
         results = model(
             batch, device=device, verbose=False, classes=[_PERSON_CLASS_ID], imgsz=imgsz
         )
+        logger.info("_run_detection_on_batch: model.predict returned")
+        _flush_logger()
         if not results:
             return [[] for _ in range(batch.shape[0])]
         for r in results:
@@ -317,7 +341,11 @@ def _run_detection_on_batch(
             if r.boxes is not None and r.boxes.xyxy is not None:
                 xyxy = r.boxes.xyxy
                 try:
+                    logger.info("_run_detection_on_batch: converting xyxy tensor to CPU/numpy")
+                    _flush_logger()
                     xyxy = xyxy.cpu().numpy() if hasattr(xyxy, "cpu") else xyxy
+                    logger.info("_run_detection_on_batch: xyxy converted to numpy")
+                    _flush_logger()
                 except Exception:
                     pass
                 for i in range(len(xyxy)):
@@ -416,9 +444,15 @@ class VideoService:
         else:
             native_w, native_h, fps_val, duration_sec = 0, 0, 30.0, 0.0
 
+        logger.info("generate_detection_sidecar: entering sanitize_for_nelux clip_path=%s", clip_path)
+        _flush_logger()
         with sanitize_for_nelux(clip_path) as safe_path:
+            logger.info("generate_detection_sidecar: sanitize_for_nelux yielded safe_path=%s", safe_path)
+            _flush_logger()
             reader = None
             try:
+                logger.info("generate_detection_sidecar: opening NeLux VideoReader safe_path=%s", safe_path)
+                _flush_logger()
                 reader = VideoReader(
                     safe_path,
                     decode_accelerator="nvdec",
@@ -428,6 +462,8 @@ class VideoService:
                 # Monkey-patch: If the wrapper is missing _decoder, point it to itself
                 if not hasattr(reader, "_decoder"):
                     reader._decoder = reader
+                logger.info("generate_detection_sidecar: VideoReader initialized safe_path=%s", safe_path)
+                _flush_logger()
             except Exception as e:
                 logger.error(
                     "%s (VideoReader open failed). path=%s error=%s Check GPU, drivers, and NeLux wheel; container may restart.",
@@ -466,7 +502,11 @@ class VideoService:
                 return False
 
             try:
+                logger.info("generate_detection_sidecar: calling _nelux_frame_count fps_val=%s duration_sec=%s", fps_val, duration_sec)
+                _flush_logger()
                 frame_count = _nelux_frame_count(reader, fps_val, duration_sec)
+                logger.info("generate_detection_sidecar: _nelux_frame_count returned frame_count=%s", frame_count)
+                _flush_logger()
                 fps = float(reader.fps) if getattr(reader, "fps", None) else fps_val
                 if fps <= 0:
                     fps = 30.0
@@ -496,6 +536,15 @@ class VideoService:
 
                 for chunk_start in range(0, len(indices), BATCH_SIZE):
                     chunk_indices = indices[chunk_start : chunk_start + BATCH_SIZE]
+                    start_idx = chunk_indices[0] if chunk_indices else 0
+                    end_idx = chunk_indices[-1] if chunk_indices else 0
+                    logger.info(
+                        "generate_detection_sidecar: requesting NeLux batch start_idx=%s end_idx=%s indices=%s",
+                        start_idx,
+                        end_idx,
+                        chunk_indices,
+                    )
+                    _flush_logger()
                     try:
                         batch = reader.get_batch(chunk_indices)
                     except Exception as e:
@@ -513,13 +562,26 @@ class VideoService:
                                 pass
                         break
 
+                    logger.info(
+                        "generate_detection_sidecar: NeLux batch returned len=%s shape=%s",
+                        len(chunk_indices),
+                        batch.shape if batch is not None else None,
+                    )
+                    _flush_logger()
+
                     if read_h == 0 and batch is not None and batch.numel() > 0:
                         read_h = int(batch.shape[2])
                         read_w = int(batch.shape[3])
 
+                    logger.info("generate_detection_sidecar: normalizing batch to float32 [0,1]")
+                    _flush_logger()
                     batch = batch.float() / 255.0
+                    logger.info("generate_detection_sidecar: batch normalized")
+                    _flush_logger()
 
                     if model_to_use is not None:
+                        logger.info("generate_detection_sidecar: calling _run_detection_on_batch (tensor/YOLO)")
+                        _flush_logger()
                         if yolo_lock is not None:
                             with yolo_lock:
                                 det_lists = _run_detection_on_batch(
@@ -529,6 +591,8 @@ class VideoService:
                             det_lists = _run_detection_on_batch(
                                 model_to_use, batch, detection_device, imgsz=detection_imgsz
                             )
+                        logger.info("generate_detection_sidecar: _run_detection_on_batch returned %s detections", len(det_lists) if det_lists else 0)
+                        _flush_logger()
                         for i, idx in enumerate(chunk_indices):
                             det = det_lists[i] if i < len(det_lists) else []
                             if native_w > 0 and native_h > 0 and read_w > 0 and read_h > 0:
@@ -546,6 +610,8 @@ class VideoService:
                                 "detections": [],
                             })
 
+                    logger.info("generate_detection_sidecar: deleting batch and clearing CUDA cache")
+                    _flush_logger()
                     del batch
                     if torch.cuda.is_available():
                         torch.cuda.empty_cache()
