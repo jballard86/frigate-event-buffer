@@ -40,7 +40,7 @@
 The project uses a **zero-copy GPU pipeline** for all video decode and frame processing in the main path:
 
 - **Decode:** **PyNvVideoCodec** (gpu_decoder) only. Clips are opened with **create_decoder(clip_path, gpu_id)**; frames are decoded directly into PyTorch CUDA tensors (BCHW). There is **no CPU decode fallback** and **no ffmpegcv** anywhere in the codebase. Decoder access is **single-threaded**: the app-wide **GPU_LOCK** (in video.py) is the only lock; it serializes **create_decoder** and every **get_frames** call across video, multi_clip_extractor, and video_compilation.
-- **Detection sidecars:** gpu_decoder decode → batched frames via **get_frames(indices)** → float32 [0,1] normalization → YOLO → `del` batch + `torch.cuda.empty_cache()` after each batch. No ffmpegcv or subprocess FFmpeg for decode.
+- **Detection sidecars:** gpu_decoder decode → batched frames via **get_frames(indices)** (batch size 4 to limit VRAM) → float32 [0,1] normalization via in-place `div_(255.0)` → YOLO → `del` batch + aggressive `torch.cuda.empty_cache()` after each batch. No ffmpegcv or subprocess FFmpeg for decode.
 - **Frame crops/resize:** All production frame manipulation uses **`crop_utils`** with **PyTorch tensors in BCHW**. NumPy/OpenCV (e.g. `cv2.resize`, `np.ndarray`) are allowed **only at boundaries** (e.g. decoding a single image from the network, or encoding tensor → JPEG for API/disk, or tensor → numpy for FFmpeg rawvideo stdin).
 - **Output encoding:** Tensor frames are encoded via `torchvision.io.encode_jpeg` for API (base64) and file writes; compilation encodes HWC numpy (at encode boundary only) via FFmpeg h264_nvenc rawvideo stdin.
 

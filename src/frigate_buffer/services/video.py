@@ -41,7 +41,7 @@ def _flush_logger() -> None:
 
 
 # Chunk size for batched decode to protect VRAM when running YOLO.
-BATCH_SIZE = 16
+BATCH_SIZE = 4
 
 # COCO class 0 = person; we restrict YOLO to this class only for sidecar.
 _PERSON_CLASS_ID = 0
@@ -331,7 +331,8 @@ def _run_detection_on_batch(
     out: list[list[dict[str, Any]]] = []
     try:
         if batch.dtype == torch.uint8:
-            batch = batch.float() / 255.0
+            batch = batch.float()
+            batch.div_(255.0)
         logger.info("_run_detection_on_batch: calling model.predict (YOLO inference)")
         _flush_logger()
         results = model(
@@ -506,7 +507,8 @@ class VideoService:
                             read_h = int(batch.shape[2])
                             read_w = int(batch.shape[3])
 
-                        batch = batch.float() / 255.0
+                        batch = batch.float()
+                        batch.div_(255.0)
 
                         if model_to_use is not None:
                             if yolo_lock is not None:
@@ -537,7 +539,7 @@ class VideoService:
 
                         del batch
                         if torch.cuda.is_available():
-                            torch.cuda.empty_cache()
+                            torch.cuda.empty_cache()  # Reclaim VRAM after each batch
 
                     if native_w <= 0 and read_w > 0:
                         native_w, native_h = read_w, read_h
