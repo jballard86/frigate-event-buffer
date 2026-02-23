@@ -465,6 +465,7 @@ class TestGenerateCompilationVideo(unittest.TestCase):
             return torch.zeros((len(indices), 3, 480, 640), dtype=torch.uint8)
 
         mock_reader.get_batch.side_effect = get_batch
+        mock_reader._decoder = MagicMock()
         mock_reader.create_encoder.return_value.__enter__ = MagicMock(return_value=mock_encoder)
         mock_reader.create_encoder.return_value.__exit__ = MagicMock(return_value=False)
         mock_video_reader_cls.return_value = mock_reader
@@ -492,6 +493,97 @@ class TestGenerateCompilationVideo(unittest.TestCase):
 
         mock_get_metadata.assert_called()
         mock_encoder.encode_frame.assert_called()
+
+    @patch("frigate_buffer.services.video_compilation.sys.platform", "linux")
+    @patch("frigate_buffer.services.video_compilation.os.path.isfile")
+    @patch("frigate_buffer.services.video_compilation._get_video_metadata")
+    @patch.object(sys.modules["nelux"], "VideoReader")
+    def test_run_nelux_compilation_linux_uses_h264_nvenc_not_single_arg(
+        self, mock_video_reader_cls, mock_get_metadata, mock_isfile
+    ):
+        """On non-Windows we call create_encoder with encoder='h264_nvenc'; never single-arg (h264_mf default)."""
+        try:
+            import torch
+        except ImportError:
+            self.skipTest("torch not available")
+        mock_isfile.return_value = True
+        mock_get_metadata.return_value = (640, 480, 20.0, 10.0)
+        mock_encoder = MagicMock()
+        mock_reader = MagicMock()
+        mock_reader.fps = 20.0
+        mock_reader._decoder = MagicMock()
+        mock_reader.__len__ = lambda self: 200
+        mock_reader.get_batch.side_effect = lambda indices: torch.zeros(
+            (len(indices), 3, 480, 640), dtype=torch.uint8
+        )
+        mock_reader.create_encoder.return_value.__enter__ = MagicMock(
+            return_value=mock_encoder
+        )
+        mock_reader.create_encoder.return_value.__exit__ = MagicMock(return_value=False)
+        mock_video_reader_cls.return_value = mock_reader
+
+        slices = [
+            {
+                "camera": "doorbell",
+                "start_sec": 0.0,
+                "end_sec": 2.0,
+                "crop_start": (0, 0, 320, 240),
+                "crop_end": (0, 0, 320, 240),
+            },
+        ]
+        resolve_clip = MagicMock(return_value="doorbell-1.mp4")
+
+        _run_nelux_compilation(
+            slices=slices,
+            ce_dir="/ce",
+            tmp_output_path="/out.mp4.tmp",
+            target_w=1440,
+            target_h=1080,
+            resolve_clip_in_folder=resolve_clip,
+            cuda_device_index=0,
+        )
+
+        mock_reader.create_encoder.assert_called_once()
+        call_args, call_kw = mock_reader.create_encoder.call_args
+        self.assertEqual(call_args[0], "/out.mp4.tmp")
+        self.assertEqual(call_kw.get("encoder"), "h264_nvenc")
+        self.assertEqual(len(call_args), 1, "On Linux must not use single-arg create_encoder")
+
+    @patch("frigate_buffer.services.video_compilation.os.path.isfile")
+    @patch.object(sys.modules["nelux"], "VideoReader")
+    def test_run_nelux_compilation_returns_early_when_first_reader_has_no_decoder(
+        self, mock_video_reader_cls, mock_isfile
+    ):
+        """When first VideoReader has no _decoder, _run_nelux_compilation returns without calling create_encoder."""
+        mock_isfile.return_value = True
+        reader_no_decoder = MagicMock()
+        reader_no_decoder.fps = 20.0
+        reader_no_decoder.create_encoder = MagicMock()
+        del reader_no_decoder._decoder
+        mock_video_reader_cls.return_value = reader_no_decoder
+
+        slices = [
+            {
+                "camera": "doorbell",
+                "start_sec": 0.0,
+                "end_sec": 2.0,
+                "crop_start": (0, 0, 320, 240),
+                "crop_end": (0, 0, 320, 240),
+            },
+        ]
+        resolve_clip = MagicMock(return_value="doorbell-1.mp4")
+
+        _run_nelux_compilation(
+            slices=slices,
+            ce_dir="/ce",
+            tmp_output_path="/out.mp4.tmp",
+            target_w=1440,
+            target_h=1080,
+            resolve_clip_in_folder=resolve_clip,
+            cuda_device_index=0,
+        )
+
+        reader_no_decoder.create_encoder.assert_not_called()
 
 
 class TestCompileCeVideoConfig(unittest.TestCase):

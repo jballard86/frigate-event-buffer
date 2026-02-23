@@ -151,6 +151,16 @@ def _get_video_metadata(clip_path: str) -> tuple[int, int, float, float] | None:
     return None
 
 
+def _nelux_reader_ready(reader: Any) -> bool:
+    """
+    True if the NeLux VideoReader has a decoder (get_batch / frame_count will work).
+
+    When NVDEC or NeLux fails to init, the reader can exist without _decoder; we check
+    once to avoid repeated get_batch AttributeErrors.
+    """
+    return hasattr(reader, "_decoder")
+
+
 def _nelux_frame_count(
     reader: Any,
     fallback_fps: float,
@@ -427,6 +437,18 @@ class VideoService:
                     logger.debug("VRAM summary: %s", torch.cuda.memory_summary())
                 except Exception:
                     pass
+            return False
+
+        if not _nelux_reader_ready(reader):
+            logger.warning(
+                "NeLux decoder not initialized for clip, skipping sidecar: %s",
+                clip_path,
+            )
+            try:
+                if hasattr(reader, "release"):
+                    reader.release()
+            except Exception:
+                pass
             return False
 
         try:

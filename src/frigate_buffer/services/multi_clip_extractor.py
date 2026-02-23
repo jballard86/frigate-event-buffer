@@ -269,6 +269,24 @@ def extract_target_centric_frames(
                 decode_accelerator="nvdec",
                 cuda_device_index=cuda_device_index,
             )
+            if not hasattr(reader, "_decoder"):
+                logger.warning(
+                    "NeLux decoder not initialized for %s (%s), skipping multi-clip extraction",
+                    cam,
+                    path,
+                )
+                try:
+                    if hasattr(reader, "release"):
+                        reader.release()
+                except Exception:
+                    pass
+                for r in readers.values():
+                    try:
+                        if hasattr(r, "release"):
+                            r.release()
+                    except Exception:
+                        pass
+                return []
             fps = float(reader.fps) if getattr(reader, "fps", None) else 1.0
             if fps <= 0:
                 fps = 1.0

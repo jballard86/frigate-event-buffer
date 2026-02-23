@@ -13,6 +13,7 @@ from frigate_buffer.services.video import (
     VideoService,
     BATCH_SIZE,
     _nelux_frame_count,
+    _nelux_reader_ready,
     ensure_detection_model_ready,
     get_detection_model_path,
 )
@@ -101,6 +102,52 @@ class TestVideoService(unittest.TestCase):
                 self.assertIn("timestamp_sec", entry)
                 self.assertIn("detections", entry)
                 self.assertIsInstance(entry["detections"], list)
+        finally:
+            for f in (sidecar_path, clip_path):
+                if os.path.exists(f):
+                    try:
+                        os.remove(f)
+                    except OSError:
+                        pass
+            if os.path.isdir(tmp):
+                try:
+                    os.rmdir(tmp)
+                except OSError:
+                    pass
+
+    def test_nelux_reader_ready_requires_decoder(self):
+        """_nelux_reader_ready returns False when reader has no _decoder."""
+        reader_no_decoder = MagicMock(spec=["fps", "get_batch"])
+        reader_no_decoder.fps = 30.0
+        self.assertFalse(_nelux_reader_ready(reader_no_decoder))
+        reader_with_decoder = MagicMock()
+        reader_with_decoder._decoder = MagicMock()
+        self.assertTrue(_nelux_reader_ready(reader_with_decoder))
+
+    @patch("frigate_buffer.services.video._get_video_metadata")
+    def test_generate_detection_sidecar_returns_false_when_reader_has_no_decoder(
+        self, mock_get_metadata
+    ):
+        """When VideoReader has no _decoder, return False and do not call get_batch."""
+        mock_get_metadata.return_value = (640, 480, 30.0, 10.0)
+        reader_no_decoder = MagicMock(spec=["fps", "release"])
+        reader_no_decoder.fps = 30.0
+        reader_no_decoder.get_batch = MagicMock()
+        tmp = tempfile.mkdtemp(prefix="tmp_video_sidecar_nodecoder_")
+        clip_path = os.path.join(tmp, "clip.mp4")
+        sidecar_path = os.path.join(tmp, "detection.json")
+        try:
+            with open(clip_path, "wb"):
+                pass
+            with patch.object(
+                sys.modules["nelux"], "VideoReader", return_value=reader_no_decoder
+            ):
+                result = self.video_service.generate_detection_sidecar(
+                    clip_path, sidecar_path, {}
+                )
+            self.assertFalse(result)
+            reader_no_decoder.get_batch.assert_not_called()
+            self.assertFalse(os.path.isfile(sidecar_path))
         finally:
             for f in (sidecar_path, clip_path):
                 if os.path.exists(f):

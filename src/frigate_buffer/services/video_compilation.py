@@ -10,9 +10,14 @@ import bisect
 import json
 import logging
 import os
+import sys
 
 from frigate_buffer.services import timeline_ema
-from frigate_buffer.services.video import _get_video_metadata, _nelux_frame_count
+from frigate_buffer.services.video import (
+    _get_video_metadata,
+    _nelux_frame_count,
+    _nelux_reader_ready,
+)
 
 logger = logging.getLogger("frigate-buffer")
 
@@ -316,11 +321,26 @@ def _run_nelux_compilation(
     )
     assert first_reader is not None  # NeLux VideoReader does not return None; narrows for type checker.
 
-    # Request h264_nvenc so Linux containers use NVENC; avoid h264_mf (Windows-only).
-    try:
-        enc_ctx = first_reader.create_encoder(tmp_output_path, encoder="h264_nvenc")
-    except TypeError:
-        enc_ctx = first_reader.create_encoder(tmp_output_path)
+    if not _nelux_reader_ready(first_reader):
+        logger.warning(
+            "NeLux decoder not initialized for first clip, skipping compilation: %s",
+            first_clip,
+        )
+        return
+
+    # On Linux use h264_nvenc only (no fallback to h264_mf). On Windows allow fallback if encoder= not supported.
+    if sys.platform == "win32":
+        try:
+            enc_ctx = first_reader.create_encoder(tmp_output_path, encoder="h264_nvenc")
+        except TypeError:
+            enc_ctx = first_reader.create_encoder(tmp_output_path)
+    else:
+        try:
+            enc_ctx = first_reader.create_encoder(tmp_output_path, encoder="h264_nvenc")
+        except TypeError as e:
+            raise RuntimeError(
+                "NeLux create_encoder must support encoder= on Linux for h264_nvenc"
+            ) from e
     with enc_ctx as enc:
         # Do not encode audio; output is -an equivalent.
         for slice_idx, sl in enumerate(slices):
@@ -334,6 +354,14 @@ def _run_nelux_compilation(
                     decode_accelerator="nvdec",
                     cuda_device_index=cuda_device_index,
                 )
+                if not _nelux_reader_ready(reader):
+                    logger.warning(
+                        "NeLux decoder not initialized for slice %s, skipping: %s",
+                        slice_idx,
+                        clip_path,
+                    )
+                    del reader
+                    continue
 
             try:
                 fps = float(reader.fps)

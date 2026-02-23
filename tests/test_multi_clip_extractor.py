@@ -208,6 +208,7 @@ class TestMultiClipExtractor(unittest.TestCase):
                     f,
                 )
         mock_reader = self._make_nelux_reader_mock()
+        mock_reader._decoder = MagicMock()
         mock_video_reader_cls.return_value = mock_reader
 
         result = extract_target_centric_frames(self.tmp, max_frames_sec=1.0, max_frames_min=5)
@@ -229,6 +230,28 @@ class TestMultiClipExtractor(unittest.TestCase):
         # Phase 5: sequential extractor — one get_batch per sample time that yields a frame
         mock_reader.get_batch.assert_called()
         self.assertEqual(mock_reader.get_batch.call_count, len(result))
+
+    @patch.object(sys.modules["nelux"], "VideoReader")
+    def test_extract_returns_empty_when_reader_has_no_decoder(self, mock_video_reader_cls):
+        """When VideoReader has no _decoder, open phase fails and extract returns [] (no get_batch)."""
+        os.makedirs(os.path.join(self.tmp, "cam1"))
+        with open(os.path.join(self.tmp, "cam1", "clip.mp4"), "wb"):
+            pass
+        sidecar_path = os.path.join(self.tmp, "cam1", DETECTION_SIDECAR_FILENAME)
+        with open(sidecar_path, "w", encoding="utf-8") as f:
+            json.dump(
+                {"native_width": 100, "native_height": 100, "entries": [{"timestamp_sec": 0.0, "detections": [{"label": "person", "area": 100}]}]},
+                f,
+            )
+        reader_no_decoder = MagicMock(spec=["fps", "release"])
+        reader_no_decoder.fps = 1.0
+        reader_no_decoder.get_batch = MagicMock()
+        mock_video_reader_cls.return_value = reader_no_decoder
+
+        result = extract_target_centric_frames(self.tmp, max_frames_sec=1.0, max_frames_min=5)
+
+        self.assertEqual(result, [])
+        reader_no_decoder.get_batch.assert_not_called()
 
     @patch.object(sys.modules["nelux"], "VideoReader")
     def test_extract_drops_camera_when_get_batch_raises(self, mock_video_reader_cls):
@@ -281,6 +304,7 @@ class TestMultiClipExtractor(unittest.TestCase):
             )
         mock_get_fps_duration.return_value = (1.0, 10.0)
         mock_reader = self._make_nelux_reader_mock(fps=1.0, frame_count=10)
+        mock_reader._decoder = MagicMock()
         mock_reader.__len__ = MagicMock(side_effect=AttributeError("'VideoReader' object has no attribute '_decoder'"))
         mock_video_reader_cls.return_value = mock_reader
 
