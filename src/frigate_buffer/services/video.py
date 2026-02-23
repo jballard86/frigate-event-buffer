@@ -2,7 +2,7 @@
 Video service: NeLux decode (CPU reader), YOLO detection, sidecar writing, GIF via FFmpeg.
 
 Hybrid pipeline: sanitizer does GPU heavy lifting (FFmpeg CUDA/nvenc); NeLux VideoReader uses
-decode_accelerator='cpu' (num_threads=4) for stable frame reading from sanitized All-I output.
+decode_accelerator='cpu' (num_threads=1) for stable frame reading and to avoid async_lock deadlocks.
 Frames are normalized to float32 [0,1] before YOLO. VRAM is released after each chunk (del + torch.cuda.empty_cache).
 """
 
@@ -461,7 +461,7 @@ class VideoService:
                     reader = VideoReader(
                         safe_path,
                         decode_accelerator="cpu",
-                        num_threads=4,
+                        num_threads=1,
                     )
                     # Monkey-patch: If the wrapper is missing _decoder, point it to itself
                     if not hasattr(reader, "_decoder"):

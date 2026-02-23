@@ -26,8 +26,8 @@ def sanitize_for_nelux(clip_path: str) -> Generator[str, None, None]:
     """
     Yield a path safe for NeLux VideoReader: either a sanitized temp file or the original.
 
-    Re-encodes the clip with FFmpeg (CUDA decode + scale_cuda, h264_nvenc profile high, GOP=1, -b:v 30M)
-    into a temp file on RAM disk when possible. 100% GPU; All-I-frame output so the downstream CPU reader can decode frames without NVDEC. On FFmpeg failure, logs stderr and yields clip_path
+    Re-encodes the clip with FFmpeg (CUDA decode + scale_cuda, h264_nvenc profile high, -g 1, -b:v 30M, -forced-idr 1, -bsf:v dump_extra, -movflags +faststart)
+    into a temp file on RAM disk when possible. 100% GPU; All-I-frame, IDR forced, metadata-heavy stream for stable single-threaded CPU read. On FFmpeg failure, logs stderr and yields clip_path
     so callers can attempt NeLux on the original and fail in a controlled way.
     Temp file is always removed in finally.
     """
@@ -49,6 +49,9 @@ def sanitize_for_nelux(clip_path: str) -> Generator[str, None, None]:
                 "-profile:v", "high",
                 "-g", "1",
                 "-b:v", "30M",
+                "-forced-idr", "1",
+                "-bsf:v", "dump_extra",
+                "-movflags", "+faststart",
                 "-an",
                 temp_path
             ], capture_output=True, text=True, check=True)

@@ -5,7 +5,7 @@ Requires detection sidecars (detection.json per camera) from generate_detection_
 Reads sidecars and picks the camera with largest person area per time step.
 If any camera lacks a sidecar, returns [] (no on-frame detector fallback). No Frigate metadata.
 
-Uses NeLux (CPU decode, num_threads=4) for stable frame reading: one VideoReader per camera, get_batch per sample
+Uses NeLux (CPU decode, num_threads=1) for stable frame reading and to avoid async_lock: one VideoReader per camera, get_batch per sample
 time. ExtractedFrame.frame is torch.Tensor BCHW RGB. No ffmpegcv fallback.
 """
 
@@ -275,7 +275,7 @@ def extract_target_centric_frames(
                     reader = VideoReader(
                         safe_path,
                         decode_accelerator="cpu",
-                        num_threads=4,
+                        num_threads=1,
                     )
                     # Monkey-patch: If the wrapper is missing _decoder, point it to itself
                     if not hasattr(reader, "_decoder"):
