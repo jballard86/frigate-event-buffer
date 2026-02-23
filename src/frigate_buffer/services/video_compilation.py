@@ -13,6 +13,7 @@ import os
 import subprocess
 
 from frigate_buffer.constants import NVDEC_INIT_FAILURE_PREFIX
+from frigate_buffer.services import crop_utils
 from frigate_buffer.services import timeline_ema
 from frigate_buffer.services.gpu_decoder import create_decoder
 from frigate_buffer.services.video import GPU_LOCK, _get_video_metadata
@@ -416,8 +417,13 @@ def _run_pynv_compilation(
         t1 = sl["end_sec"]
         duration = t1 - t0
         n_frames = max(1, round(duration * float(COMPILATION_OUTPUT_FPS)))
-        xs, ys, w, h = sl["crop_start"]
-        xe, ye, we, he = sl["crop_end"]
+        if "crop_start" not in sl or "crop_end" not in sl:
+            logger.error(
+                "Compilation fallback to center crop: slice %s missing crop_start/crop_end for camera=%s; output will be static.",
+                slice_idx, cam,
+            )
+        crop_start = sl.get("crop_start")
+        crop_end = sl.get("crop_end")
         output_times = [t0 + i / float(COMPILATION_OUTPUT_FPS) for i in range(n_frames)]
 
         try:
@@ -438,25 +444,50 @@ def _run_pynv_compilation(
                     batch = ctx.get_frames(src_indices)
             # Decoder context closed; batch is cloned so we can use it.
             _, _, ih, iw = batch.shape
+            sw = sl.get("native_width") or iw
+            sh = sl.get("native_height") or ih
+            scale_x = (iw / sw) if sw > 0 else 1.0
+            scale_y = (ih / sh) if sh > 0 else 1.0
+            # Scale crop from sidecar native (sw, sh) to decoder frame (iw, ih).
+            if crop_start and crop_end:
+                xs, ys, w, h = crop_start
+                xe, ye, we, he = crop_end
+                w_d = max(1, min(iw, int(w * scale_x)))
+                h_d = max(1, min(ih, int(h * scale_y)))
+                we_d = max(1, min(iw, int(we * scale_x)))
+                he_d = max(1, min(ih, int(he * scale_y)))
+                xs_d = xs * scale_x
+                ys_d = ys * scale_y
+                xe_d = xe * scale_x
+                ye_d = ye * scale_y
+                start_cx = xs_d + w_d / 2.0
+                start_cy = ys_d + h_d / 2.0
+                end_cx = xe_d + we_d / 2.0
+                end_cy = ye_d + he_d / 2.0
+            else:
+                # Fallback: center in decoder space (slice missing crop_start/crop_end).
+                start_cx = iw / 2.0
+                start_cy = ih / 2.0
+                end_cx = iw / 2.0
+                end_cy = ih / 2.0
+
+            if len(src_indices) > 1 and len(set(src_indices)) == 1:
+                logger.error(
+                    "Compilation static frame: decoder returned same frame index %s for all %s frames for camera=%s slice [%.2f, %.2f]; check decoder/time mapping.",
+                    src_indices[0], n_frames, cam, t0, t1,
+                )
+
             for i in range(n_frames):
                 frame = batch[i : i + 1]
                 t = output_times[i]
-                t_rel = t - t0
-                if duration <= 1e-6:
-                    x, y = xs, ys
-                else:
-                    x = xs + (xe - xs) * (t_rel / duration)
-                    y = ys + (ye - ys) * (t_rel / duration)
-                x = int(min(max(0, x), iw - w))
-                y = int(min(max(0, y), ih - h))
-                cropped = frame[:, :, y : y + h, x : x + w]
-                if cropped.shape[2] != target_h or cropped.shape[3] != target_w:
-                    cropped = torch.nn.functional.interpolate(
-                        cropped.float(),
-                        size=(target_h, target_w),
-                        mode="bilinear",
-                        align_corners=False,
-                    ).byte()
+                t_progress = (t - t0) / duration if duration > 1e-6 else 0.0
+                current_cx = start_cx + t_progress * (end_cx - start_cx)
+                current_cy = start_cy + t_progress * (end_cy - start_cy)
+                current_cx = int(current_cx)
+                current_cy = int(current_cy)
+                cropped = crop_utils.crop_around_center(
+                    frame, current_cx, current_cy, target_w, target_h
+                )
                 arr = cropped[0].permute(1, 2, 0).cpu().numpy()
                 frames_list.append(arr)
             del batch
@@ -510,9 +541,16 @@ def generate_compilation_video(
                     data = json.load(f)
                     sidecar_cache[cam] = data if isinstance(data, dict) else {"entries": data or [], "native_width": 1920, "native_height": 1080}
             except Exception as e:
-                logger.error(f"Error loading sidecar for {cam}: {e}")
+                logger.error(
+                    "Compilation fallback to center crop: error loading sidecar for camera=%s path=%s error=%s; output will be static.",
+                    cam, sidecar_path, e,
+                )
                 sidecar_cache[cam] = {"entries": [], "native_width": 1920, "native_height": 1080}
         else:
+            logger.error(
+                "Compilation fallback to center crop: sidecar missing for camera=%s path=%s; output will be static.",
+                cam, sidecar_path,
+            )
             sidecar_cache[cam] = {"entries": [], "native_width": 1920, "native_height": 1080}
         entries = sidecar_cache[cam].get("entries") or []
         timestamps = sorted(float(e.get("timestamp_sec") or 0) for e in entries)
@@ -526,6 +564,23 @@ def generate_compilation_video(
         ts_sorted = sidecar_timestamps.get(cam)
         t0 = sl["start_sec"]
         t1 = sl["end_sec"]
+        entries = sidecar_data.get("entries") or []
+        # crop_start/crop_end are in native (sw, sh) space; stored on slice for decoder-space scaling in _run_pynv_compilation.
+        if not entries:
+            logger.error(
+                "Compilation fallback to center crop: no sidecar entries for camera=%s slice [%.2f, %.2f]; output will be static.",
+                cam, t0, t1,
+            )
+        else:
+            entry0 = _nearest_entry_at_t(entries, t0, ts_sorted)
+            entry1 = _nearest_entry_at_t(entries, t1, ts_sorted)
+            dets0 = (entry0 or {}).get("detections") or []
+            dets1 = (entry1 or {}).get("detections") or []
+            if not dets0 or not dets1:
+                logger.error(
+                    "Compilation fallback to center crop: no detections in sidecar for camera=%s slice [%.2f, %.2f]; output will be static.",
+                    cam, t0, t1,
+                )
         sl["crop_start"] = calculate_crop_at_time(
             sidecar_data, t0, sw, sh, target_w, target_h, timestamps_sorted=ts_sorted
         )
@@ -537,6 +592,8 @@ def generate_compilation_video(
             sl["crop_end"] = calculate_crop_at_time(
                 sidecar_data, t1, sw, sh, target_w, target_h, timestamps_sorted=ts_sorted
             )
+        sl["native_width"] = sw
+        sl["native_height"] = sh
 
     if crop_smooth_alpha > 0:
         smooth_crop_centers_ema(slices, crop_smooth_alpha)

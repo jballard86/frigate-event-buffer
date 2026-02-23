@@ -429,6 +429,10 @@ class TestGenerateCompilationVideo(unittest.TestCase):
         self.assertEqual(call_kw["slices"][0]["end_sec"], 5.0)
         self.assertEqual(call_kw["slices"][1]["start_sec"], 5.0)
         self.assertEqual(call_kw["slices"][1]["end_sec"], 10.0)
+        self.assertIn("native_width", call_kw["slices"][0])
+        self.assertIn("native_height", call_kw["slices"][0])
+        self.assertEqual(call_kw["slices"][0]["native_width"], 1920)
+        self.assertEqual(call_kw["slices"][0]["native_height"], 1080)
 
     @patch("frigate_buffer.services.video_compilation._run_pynv_compilation")
     @patch("frigate_buffer.services.video_compilation.os.path.isfile")
@@ -595,6 +599,127 @@ class TestGenerateCompilationVideo(unittest.TestCase):
         )
 
         mock_encode_ffmpeg.assert_not_called()
+
+    @patch("frigate_buffer.services.video_compilation.GPU_LOCK", MagicMock())
+    @patch("frigate_buffer.services.video_compilation.create_decoder")
+    @patch("frigate_buffer.services.video_compilation._encode_frames_via_ffmpeg")
+    @patch("frigate_buffer.services.video_compilation.crop_utils.crop_around_center")
+    @patch("frigate_buffer.services.video_compilation.os.path.isfile")
+    def test_run_pynv_compilation_uses_crop_utils_and_outputs_target_resolution(
+        self, mock_isfile, mock_crop_around_center, mock_encode_ffmpeg, mock_create_decoder
+    ):
+        """_run_pynv_compilation uses crop_utils.crop_around_center and passes target_w/target_h; frames sent to FFmpeg are target resolution."""
+        try:
+            import torch
+        except ImportError:
+            self.skipTest("torch not available")
+        mock_isfile.return_value = True
+        # Decoder returns 640x480; slice has native 1920x1080 so scaling is applied.
+        mock_ctx = _fake_create_decoder_context(200, height=480, width=640)
+        if mock_ctx is None:
+            self.skipTest("torch not available")
+        mock_ctx.get_frames = lambda indices: torch.zeros(
+            (len(indices), 3, 480, 640), dtype=torch.uint8
+        )
+        mock_cm = MagicMock()
+        mock_cm.__enter__ = MagicMock(return_value=mock_ctx)
+        mock_cm.__exit__ = MagicMock(return_value=None)
+        mock_create_decoder.return_value = mock_cm
+        mock_crop_around_center.side_effect = lambda frame, cx, cy, tw, th: torch.zeros(
+            (1, 3, th, tw), dtype=torch.uint8
+        )
+
+        slices = [
+            {
+                "camera": "doorbell",
+                "start_sec": 0.0,
+                "end_sec": 2.0,
+                "crop_start": (240, 0, 1440, 1080),
+                "crop_end": (300, 0, 1440, 1080),
+                "native_width": 1920,
+                "native_height": 1080,
+            },
+        ]
+        resolve_clip = MagicMock(return_value="doorbell-1.mp4")
+        target_w, target_h = 1440, 1080
+
+        _run_pynv_compilation(
+            slices=slices,
+            ce_dir="/ce",
+            tmp_output_path="/out.mp4.tmp",
+            target_w=target_w,
+            target_h=target_h,
+            resolve_clip_in_folder=resolve_clip,
+            cuda_device_index=0,
+        )
+
+        mock_crop_around_center.assert_called()
+        args = mock_crop_around_center.call_args[0]
+        self.assertEqual(args[3], target_w)
+        self.assertEqual(args[4], target_h)
+        mock_encode_ffmpeg.assert_called_once()
+        frames = mock_encode_ffmpeg.call_args[0][0]
+        self.assertTrue(len(frames) > 0)
+        for arr in frames:
+            self.assertEqual(arr.shape, (target_h, target_w, 3))
+
+    @patch("frigate_buffer.services.video_compilation.GPU_LOCK", MagicMock())
+    @patch("frigate_buffer.services.video_compilation.create_decoder")
+    @patch("frigate_buffer.services.video_compilation._encode_frames_via_ffmpeg")
+    @patch("frigate_buffer.services.video_compilation.logger")
+    @patch("frigate_buffer.services.video_compilation.os.path.isfile")
+    def test_run_pynv_compilation_logs_error_when_all_src_indices_identical(
+        self, mock_isfile, mock_logger, mock_encode_ffmpeg, mock_create_decoder
+    ):
+        """When decoder returns same frame index for all times, log at ERROR level (static frame)."""
+        try:
+            import torch
+        except ImportError:
+            self.skipTest("torch not available")
+        mock_isfile.return_value = True
+        mock_ctx = _fake_create_decoder_context(200, height=480, width=640)
+        if mock_ctx is None:
+            self.skipTest("torch not available")
+        mock_ctx.get_index_from_time_in_seconds = lambda t: 0
+        mock_ctx.get_frames = lambda indices: torch.zeros(
+            (len(indices), 3, 480, 640), dtype=torch.uint8
+        )
+        mock_cm = MagicMock()
+        mock_cm.__enter__ = MagicMock(return_value=mock_ctx)
+        mock_cm.__exit__ = MagicMock(return_value=None)
+        mock_create_decoder.return_value = mock_cm
+
+        slices = [
+            {
+                "camera": "doorbell",
+                "start_sec": 0.0,
+                "end_sec": 2.0,
+                "crop_start": (0, 0, 320, 240),
+                "crop_end": (0, 0, 320, 240),
+                "native_width": 640,
+                "native_height": 480,
+            },
+        ]
+        resolve_clip = MagicMock(return_value="doorbell-1.mp4")
+
+        _run_pynv_compilation(
+            slices=slices,
+            ce_dir="/ce",
+            tmp_output_path="/out.mp4.tmp",
+            target_w=1440,
+            target_h=1080,
+            resolve_clip_in_folder=resolve_clip,
+            cuda_device_index=0,
+        )
+
+        error_calls = [
+            c for c in mock_logger.error.call_args_list
+            if c[0] and "static frame" in (str(c[0][0]) if c[0] else "")
+        ]
+        self.assertGreater(
+            len(error_calls), 0,
+            "Expected at least one ERROR log for static frame (same index for all frames)",
+        )
 
 
 class TestEncodeFramesViaFfmpeg(unittest.TestCase):
