@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 # Build from repo root: docker build -t frigate-buffer:latest .
-# Base: Ubuntu 24.04 + CUDA 12.6 runtime for NVDEC/NVENC. FFmpeg 6.1 from distro. libyuv and libspdlog are vendored in wheels/ and copied into /usr/lib/x86_64-linux-gnu/ for NeLux wheel ABI match (zero-copy GPU compilation).
+# Base: Ubuntu 24.04 + CUDA 12.6 runtime for NVDEC/NVENC. FFmpeg 6.1 from distro. libyuv and libspdlog are vendored in wheels/ and copied into /usr/lib/x86_64-linux-gnu/; LD_LIBRARY_PATH set so NeLux native deps load at runtime.
 # NeLux wheel is vendored in wheels/ (built against FFmpeg 6.1 / Ubuntu 24.04); do not use PyPI.
 # Copy vendored C++ shared libraries from NeLux image to prevent ABI mismatch
 # Use BuildKit (default in Docker 23+) for pip cache on app install: faster code-only rebuilds.
@@ -21,11 +21,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends software-proper
     && rm -rf /var/lib/apt/lists/*
 
 # Copy vendored C++ shared libraries for NeLux (match wheel ABI)
-COPY wheels/libyuv.so* /usr/local/lib/
-COPY wheels/libspdlog.so* /usr/local/lib/
+COPY wheels/libyuv.so* /usr/lib/x86_64-linux-gnu/
+COPY wheels/libspdlog.so* /usr/lib/x86_64-linux-gnu/
 
-# Refresh the Linux dynamic linker cache so it sees the new files
+# Refresh the Linux dynamic linker cache and set LD_LIBRARY_PATH so NeLux finds libyuv/libspdlog at runtime
 RUN ldconfig
+ENV LD_LIBRARY_PATH="/usr/lib/x86_64-linux-gnu:/usr/local/lib:${LD_LIBRARY_PATH}"
 
 # Prefer python3.12 for the rest of the build and runtime.
 RUN update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.12 1 \
