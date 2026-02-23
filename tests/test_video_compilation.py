@@ -313,10 +313,11 @@ class TestGenerateCompilationVideo(unittest.TestCase):
 
         mock_run_pynv.assert_called_once()
         call_kw = mock_run_pynv.call_args[1]
-        self.assertEqual(call_kw["tmp_output_path"], output_path + ".tmp")
+        temp_path = output_path.replace(".mp4", ".tmp.mp4")
+        self.assertEqual(call_kw["tmp_output_path"], temp_path)
         self.assertEqual(call_kw["target_w"], 1440)
         self.assertEqual(call_kw["target_h"], 1080)
-        mock_rename.assert_called_once_with(output_path + ".tmp", output_path)
+        mock_rename.assert_called_once_with(temp_path, output_path)
 
     @patch("frigate_buffer.services.video_compilation._run_pynv_compilation")
     @patch("frigate_buffer.services.video_compilation.os.path.isfile")
@@ -369,8 +370,8 @@ class TestGenerateCompilationVideo(unittest.TestCase):
 
         generate_compilation_video(segments, ce_dir, output_path)
 
-        tmp_output_path = output_path + ".tmp"
-        mock_rename.assert_called_once_with(tmp_output_path, output_path)
+        temp_path = output_path.replace(".mp4", ".tmp.mp4")
+        mock_rename.assert_called_once_with(temp_path, output_path)
 
     @patch("frigate_buffer.services.video_compilation._run_pynv_compilation")
     @patch("frigate_buffer.services.video_compilation.os.path.isfile")
@@ -648,6 +649,25 @@ class TestEncodeFramesViaFfmpeg(unittest.TestCase):
                 _encode_frames_via_ffmpeg(frames, 1440, 1080, "/tmp/out.mp4")
         self.assertIn("h264_nvenc", str(ctx.exception))
         self.assertIn("no CPU fallback", str(ctx.exception))
+
+    def test_broken_pipe_logs_stderr_and_raises(self):
+        """When FFmpeg crashes and closes stdin, BrokenPipeError is caught; stderr is read and logged, RuntimeError raised."""
+        import numpy as np
+        frames = [np.zeros((1080, 1440, 3), dtype=np.uint8)]
+        ffmpeg_stderr = b"NVENC error: out of memory"
+        with patch("frigate_buffer.services.video_compilation.subprocess.Popen") as mock_popen:
+            proc = MagicMock()
+            proc.stdin = MagicMock()
+            proc.stdin.write.side_effect = BrokenPipeError
+            proc.stderr = MagicMock()
+            proc.stderr.read.return_value = ffmpeg_stderr
+            mock_popen.return_value = proc
+            with self.assertRaises(RuntimeError) as ctx:
+                _encode_frames_via_ffmpeg(frames, 1440, 1080, "/tmp/out.mp4")
+        self.assertIn("broke pipe", str(ctx.exception))
+        self.assertIn("out of memory", str(ctx.exception))
+        proc.stderr.read.assert_called_once()
+        proc.wait.assert_called_once()
 
 
 class TestCompileCeVideoConfig(unittest.TestCase):
