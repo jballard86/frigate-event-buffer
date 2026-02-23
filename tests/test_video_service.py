@@ -3,6 +3,7 @@ import os
 import sys
 import tempfile
 import unittest
+from contextlib import contextmanager
 from unittest.mock import MagicMock, patch
 
 # Fake nelux module so we can patch VideoReader when the real wheel is not installed (e.g. on Windows).
@@ -80,13 +81,19 @@ class TestVideoService(unittest.TestCase):
         try:
             with open(clip_path, "wb"):
                 pass
-            with patch.object(sys.modules["nelux"], "VideoReader", return_value=mock_reader):
-                with patch("frigate_buffer.services.video.get_detection_model_path", return_value=os.path.join("/tmp", "yolo_models", "yolov8n.pt")):
-                    with patch("ultralytics.YOLO") as mock_yolo:
-                        mock_yolo.return_value = MagicMock()
-                        result = self.video_service.generate_detection_sidecar(
-                            clip_path, sidecar_path, config
-                        )
+
+            @contextmanager
+            def fake_sanitize(path):
+                yield path
+
+            with patch("frigate_buffer.services.video.sanitize_for_nelux", side_effect=fake_sanitize):
+                with patch.object(sys.modules["nelux"], "VideoReader", return_value=mock_reader):
+                    with patch("frigate_buffer.services.video.get_detection_model_path", return_value=os.path.join("/tmp", "yolo_models", "yolov8n.pt")):
+                        with patch("ultralytics.YOLO") as mock_yolo:
+                            mock_yolo.return_value = MagicMock()
+                            result = self.video_service.generate_detection_sidecar(
+                                clip_path, sidecar_path, config
+                            )
             self.assertTrue(result, "generate_detection_sidecar should return True")
             self.assertTrue(os.path.isfile(sidecar_path))
             with open(sidecar_path, encoding="utf-8") as f:
@@ -143,15 +150,21 @@ class TestVideoService(unittest.TestCase):
         try:
             with open(clip_path, "wb"):
                 pass
-            with patch.object(
-                sys.modules["nelux"], "VideoReader", return_value=reader_no_decoder
-            ):
-                try:
-                    self.video_service.generate_detection_sidecar(
-                        clip_path, sidecar_path, {}
-                    )
-                except (TypeError, AttributeError):
-                    pass  # Mock may not satisfy full tensor API; we only assert patch and get_batch
+
+            @contextmanager
+            def fake_sanitize(path):
+                yield path
+
+            with patch("frigate_buffer.services.video.sanitize_for_nelux", side_effect=fake_sanitize):
+                with patch.object(
+                    sys.modules["nelux"], "VideoReader", return_value=reader_no_decoder
+                ):
+                    try:
+                        self.video_service.generate_detection_sidecar(
+                            clip_path, sidecar_path, {}
+                        )
+                    except (TypeError, AttributeError):
+                        pass  # Mock may not satisfy full tensor API; we only assert patch and get_batch
             self.assertTrue(
                 hasattr(reader_no_decoder, "_decoder"),
                 "Monkey-patch should set _decoder",
@@ -175,24 +188,29 @@ class TestVideoService(unittest.TestCase):
         self, mock_get_metadata
     ):
         mock_get_metadata.return_value = (640, 480, 30.0, 10.0)
-        with patch.object(sys.modules["nelux"], "VideoReader", side_effect=RuntimeError("NeLux open failed")):
 
-            tmp = tempfile.mkdtemp(prefix="tmp_video_sidecar_noclip_")
-            try:
-                sidecar_path = os.path.join(tmp, "detection.json")
-                result = self.video_service.generate_detection_sidecar(
-                    "/nonexistent/clip.mp4", sidecar_path, {}
-                )
-                self.assertFalse(result)
-                self.assertFalse(os.path.isfile(sidecar_path))
-            finally:
-                if os.path.isdir(tmp):
-                    try:
-                        for f in os.listdir(tmp):
-                            os.remove(os.path.join(tmp, f))
-                        os.rmdir(tmp)
-                    except OSError:
-                        pass
+        @contextmanager
+        def fake_sanitize(path):
+            yield path
+
+        with patch("frigate_buffer.services.video.sanitize_for_nelux", side_effect=fake_sanitize):
+            with patch.object(sys.modules["nelux"], "VideoReader", side_effect=RuntimeError("NeLux open failed")):
+                tmp = tempfile.mkdtemp(prefix="tmp_video_sidecar_noclip_")
+                try:
+                    sidecar_path = os.path.join(tmp, "detection.json")
+                    result = self.video_service.generate_detection_sidecar(
+                        "/nonexistent/clip.mp4", sidecar_path, {}
+                    )
+                    self.assertFalse(result)
+                    self.assertFalse(os.path.isfile(sidecar_path))
+                finally:
+                    if os.path.isdir(tmp):
+                        try:
+                            for f in os.listdir(tmp):
+                                os.remove(os.path.join(tmp, f))
+                            os.rmdir(tmp)
+                        except OSError:
+                            pass
 
     @patch("frigate_buffer.services.video._run_detection_on_batch")
     @patch("frigate_buffer.services.video._get_video_metadata")
@@ -227,13 +245,19 @@ class TestVideoService(unittest.TestCase):
         try:
             with open(clip_path, "wb"):
                 pass
-            with patch.object(sys.modules["nelux"], "VideoReader", return_value=mock_reader):
-                with patch("frigate_buffer.services.video.get_detection_model_path", return_value=os.path.join("/tmp", "yolo_models", "yolov8n.pt")):
-                    with patch("ultralytics.YOLO") as mock_yolo:
-                        mock_yolo.return_value = MagicMock()
-                        result = self.video_service.generate_detection_sidecar(
-                            clip_path, sidecar_path, config
-                        )
+
+            @contextmanager
+            def fake_sanitize(path):
+                yield path
+
+            with patch("frigate_buffer.services.video.sanitize_for_nelux", side_effect=fake_sanitize):
+                with patch.object(sys.modules["nelux"], "VideoReader", return_value=mock_reader):
+                    with patch("frigate_buffer.services.video.get_detection_model_path", return_value=os.path.join("/tmp", "yolo_models", "yolov8n.pt")):
+                        with patch("ultralytics.YOLO") as mock_yolo:
+                            mock_yolo.return_value = MagicMock()
+                            result = self.video_service.generate_detection_sidecar(
+                                clip_path, sidecar_path, config
+                            )
             self.assertTrue(result, "generate_detection_sidecar should succeed using metadata fallback")
             self.assertTrue(os.path.isfile(sidecar_path))
             with open(sidecar_path, encoding="utf-8") as f:

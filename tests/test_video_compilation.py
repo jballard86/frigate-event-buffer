@@ -4,7 +4,16 @@ import json
 import os
 import sys
 import unittest
+from contextlib import contextmanager
 from unittest.mock import MagicMock, patch, mock_open
+
+
+def _fake_sanitize_for_nelux(path):
+    """Context manager that yields path (no FFmpeg)."""
+    @contextmanager
+    def cm():
+        yield path
+    return cm()
 
 # Fake nelux so we can patch VideoReader when the real wheel is not installed.
 if "nelux" not in sys.modules:
@@ -445,11 +454,12 @@ class TestGenerateCompilationVideo(unittest.TestCase):
         self.assertEqual(slices[0]["crop_start"], slices[0]["crop_end"])
 
     @patch("frigate_buffer.services.video_compilation.os.path.isfile")
+    @patch("frigate_buffer.services.video_compilation.sanitize_for_nelux", side_effect=_fake_sanitize_for_nelux)
     @patch("frigate_buffer.services.video_compilation._encode_frames_via_ffmpeg")
     @patch("frigate_buffer.services.video_compilation._get_video_metadata")
     @patch.object(sys.modules["nelux"], "VideoReader")
     def test_run_nelux_compilation_uses_metadata_fallback_when_len_raises(
-        self, mock_video_reader_cls, mock_get_metadata, mock_encode_ffmpeg, mock_isfile,
+        self, mock_video_reader_cls, mock_get_metadata, mock_encode_ffmpeg, mock_isfile, mock_sanitize,
     ):
         """When NeLux reader raises on len() (e.g. missing _decoder), frame count comes from _get_video_metadata and _run_nelux_compilation completes; encode via FFmpeg."""
         try:
@@ -498,12 +508,13 @@ class TestGenerateCompilationVideo(unittest.TestCase):
         self.assertEqual(args[2], 1080)
         self.assertEqual(args[3], "/out.mp4.tmp")
 
+    @patch("frigate_buffer.services.video_compilation.sanitize_for_nelux", side_effect=_fake_sanitize_for_nelux)
     @patch("frigate_buffer.services.video_compilation._encode_frames_via_ffmpeg")
     @patch("frigate_buffer.services.video_compilation.os.path.isfile")
     @patch("frigate_buffer.services.video_compilation._get_video_metadata")
     @patch.object(sys.modules["nelux"], "VideoReader")
     def test_run_nelux_compilation_calls_ffmpeg_encode_with_h264_nvenc(
-        self, mock_video_reader_cls, mock_get_metadata, mock_isfile, mock_encode_ffmpeg
+        self, mock_video_reader_cls, mock_get_metadata, mock_isfile, mock_encode_ffmpeg, mock_sanitize
     ):
         """Compilation encode is via _encode_frames_via_ffmpeg (h264_nvenc only; no CPU fallback)."""
         try:
@@ -548,12 +559,13 @@ class TestGenerateCompilationVideo(unittest.TestCase):
         self.assertEqual(args[2], 1080)
         self.assertEqual(args[3], "/out.mp4.tmp")
 
+    @patch("frigate_buffer.services.video_compilation.sanitize_for_nelux", side_effect=_fake_sanitize_for_nelux)
     @patch("frigate_buffer.services.video_compilation._encode_frames_via_ffmpeg")
     @patch("frigate_buffer.services.video_compilation._get_video_metadata")
     @patch("frigate_buffer.services.video_compilation.os.path.isfile")
     @patch.object(sys.modules["nelux"], "VideoReader")
     def test_run_nelux_compilation_monkey_patches_reader_when_no_decoder(
-        self, mock_video_reader_cls, mock_isfile, mock_get_metadata, mock_encode_ffmpeg
+        self, mock_video_reader_cls, mock_isfile, mock_get_metadata, mock_encode_ffmpeg, mock_sanitize
     ):
         """When first VideoReader has no _decoder, we monkey-patch reader._decoder = reader and compilation proceeds; _encode_frames_via_ffmpeg is called."""
         try:

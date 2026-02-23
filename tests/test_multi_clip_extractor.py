@@ -5,9 +5,18 @@ import os
 import shutil
 import sys
 import unittest
+from contextlib import contextmanager
 from unittest.mock import MagicMock, patch
 
 import numpy as np
+
+
+def _fake_sanitize_for_nelux(path):
+    """Context manager that yields path (no FFmpeg)."""
+    @contextmanager
+    def cm():
+        yield path
+    return cm()
 
 # Fake nelux so we can patch VideoReader when the real wheel is not installed (e.g. on Windows).
 if "nelux" not in sys.modules:
@@ -193,8 +202,9 @@ class TestMultiClipExtractor(unittest.TestCase):
         mock_reader.get_batch.side_effect = get_batch
         return mock_reader
 
+    @patch("frigate_buffer.services.multi_clip_extractor.sanitize_for_nelux", side_effect=_fake_sanitize_for_nelux)
     @patch.object(sys.modules["nelux"], "VideoReader")
-    def test_extract_with_nelux_mock_returns_tensor_frames(self, mock_video_reader_cls):
+    def test_extract_with_nelux_mock_returns_tensor_frames(self, mock_video_reader_cls, mock_sanitize):
         """extract_target_centric_frames uses NeLux get_batch; returns ExtractedFrame with tensor .frame."""
         os.makedirs(os.path.join(self.tmp, "cam1"))
         os.makedirs(os.path.join(self.tmp, "cam2"))
@@ -231,8 +241,9 @@ class TestMultiClipExtractor(unittest.TestCase):
         mock_reader.get_batch.assert_called()
         self.assertEqual(mock_reader.get_batch.call_count, len(result))
 
+    @patch("frigate_buffer.services.multi_clip_extractor.sanitize_for_nelux", side_effect=_fake_sanitize_for_nelux)
     @patch.object(sys.modules["nelux"], "VideoReader")
-    def test_extract_monkey_patches_reader_when_no_decoder(self, mock_video_reader_cls):
+    def test_extract_monkey_patches_reader_when_no_decoder(self, mock_video_reader_cls, mock_sanitize):
         """When VideoReader has no _decoder, we monkey-patch reader._decoder = reader and proceed; get_batch is called."""
         os.makedirs(os.path.join(self.tmp, "cam1"))
         with open(os.path.join(self.tmp, "cam1", "clip.mp4"), "wb"):
@@ -259,8 +270,9 @@ class TestMultiClipExtractor(unittest.TestCase):
         self.assertTrue(hasattr(reader_no_decoder, "_decoder"), "Monkey-patch should set _decoder")
         reader_no_decoder.get_batch.assert_called()
 
+    @patch("frigate_buffer.services.multi_clip_extractor.sanitize_for_nelux", side_effect=_fake_sanitize_for_nelux)
     @patch.object(sys.modules["nelux"], "VideoReader")
-    def test_extract_drops_camera_when_get_batch_raises(self, mock_video_reader_cls):
+    def test_extract_drops_camera_when_get_batch_raises(self, mock_video_reader_cls, mock_sanitize):
         """When one camera's get_batch raises, that camera is dropped and extraction continues with the other(s)."""
         os.makedirs(os.path.join(self.tmp, "cam1"))
         os.makedirs(os.path.join(self.tmp, "cam2"))
@@ -294,9 +306,10 @@ class TestMultiClipExtractor(unittest.TestCase):
             self.assertEqual(item.camera, "cam1", "Failed camera should be dropped; only cam1 should appear")
 
     @patch("frigate_buffer.services.multi_clip_extractor._get_fps_duration_from_path")
+    @patch("frigate_buffer.services.multi_clip_extractor.sanitize_for_nelux", side_effect=_fake_sanitize_for_nelux)
     @patch.object(sys.modules["nelux"], "VideoReader")
     def test_extract_uses_metadata_fallback_when_len_reader_raises(
-        self, mock_video_reader_cls, mock_get_fps_duration
+        self, mock_video_reader_cls, mock_sanitize, mock_get_fps_duration
     ):
         """When NeLux reader raises on len() (e.g. missing _decoder), frame count comes from _get_fps_duration_from_path and extraction does not crash."""
         os.makedirs(os.path.join(self.tmp, "cam1"))
@@ -322,8 +335,9 @@ class TestMultiClipExtractor(unittest.TestCase):
             self.assertIsNotNone(item.frame)
         mock_get_fps_duration.assert_called()
 
+    @patch("frigate_buffer.services.multi_clip_extractor.sanitize_for_nelux", side_effect=_fake_sanitize_for_nelux)
     @patch.object(sys.modules["nelux"], "VideoReader")
-    def test_extract_logs_nelux_nvdec(self, mock_video_reader_cls):
+    def test_extract_logs_nelux_nvdec(self, mock_video_reader_cls, mock_sanitize):
         """With NeLux, log_callback receives Decoding clips ... NeLux NVDEC."""
         os.makedirs(os.path.join(self.tmp, "cam1"))
         with open(os.path.join(self.tmp, "cam1", "clip.mp4"), "wb"):
@@ -347,8 +361,9 @@ class TestMultiClipExtractor(unittest.TestCase):
             f"Expected NeLux/NVDEC in decode message: {decode_logs}",
         )
 
+    @patch("frigate_buffer.services.multi_clip_extractor.sanitize_for_nelux", side_effect=_fake_sanitize_for_nelux)
     @patch.object(sys.modules["nelux"], "VideoReader")
-    def test_primary_camera_accepted(self, mock_video_reader_cls):
+    def test_primary_camera_accepted(self, mock_video_reader_cls, mock_sanitize):
         """extract_target_centric_frames accepts primary_camera (EMA pipeline); returns frames without error."""
         os.makedirs(os.path.join(self.tmp, "cam1"))
         os.makedirs(os.path.join(self.tmp, "cam2"))
@@ -371,8 +386,9 @@ class TestMultiClipExtractor(unittest.TestCase):
             self.assertIsInstance(item, ExtractedFrame)
             self.assertIn(item.camera, ("cam1", "cam2"))
 
+    @patch("frigate_buffer.services.multi_clip_extractor.sanitize_for_nelux", side_effect=_fake_sanitize_for_nelux)
     @patch.object(sys.modules["nelux"], "VideoReader")
-    def test_ema_drop_no_person_excludes_zero_area_frames(self, mock_video_reader_cls):
+    def test_ema_drop_no_person_excludes_zero_area_frames(self, mock_video_reader_cls, mock_sanitize):
         """With camera_timeline_final_yolo_drop_no_person=True, frames with person_area=0 are not in the result."""
         os.makedirs(os.path.join(self.tmp, "cam1"))
         os.makedirs(os.path.join(self.tmp, "cam2"))

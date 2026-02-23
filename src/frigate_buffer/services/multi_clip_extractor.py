@@ -11,6 +11,7 @@ time. ExtractedFrame.frame is torch.Tensor BCHW RGB. No ffmpegcv/CPU fallback.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import os
@@ -19,6 +20,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Callable
 
 from frigate_buffer.constants import NVDEC_INIT_FAILURE_PREFIX
+from frigate_buffer.services.video_sanitizer import sanitize_for_nelux
 
 logger = logging.getLogger("frigate-buffer")
 
@@ -264,55 +266,79 @@ def extract_target_centric_frames(
     frame_count_per_cam: dict[str, int] = {}
     if log_callback:
         log_callback("Opening clips (NeLux NVDEC).")
-    for cam, path in clip_paths:
-        try:
-            reader = VideoReader(
-                path,
-                decode_accelerator="nvdec",
-                cuda_device_index=cuda_device_index,
-                num_threads=1,
-            )
-            # Monkey-patch: If the wrapper is missing _decoder, point it to itself
-            if not hasattr(reader, "_decoder"):
-                reader._decoder = reader
-            fps = float(reader.fps) if getattr(reader, "fps", None) else 1.0
-            if fps <= 0:
-                fps = 1.0
+    with contextlib.ExitStack() as stack:
+        safe_paths = [stack.enter_context(sanitize_for_nelux(p)) for _, p in clip_paths]
+        for (cam, path), safe_path in zip(clip_paths, safe_paths):
             try:
-                count = int(len(reader))
-            except (AttributeError, TypeError, Exception):
-                count = 0
-            if count <= 0:
-                path_meta = _get_fps_duration_from_path(path)
-                if path_meta is not None:
-                    fps = path_meta[0]
-                    duration_sec = path_meta[1]
-                    count = max(1, int(duration_sec * fps))
-                else:
-                    count = 1
-            readers[cam] = reader
-            fps_per_cam[cam] = fps
-            frame_count_per_cam[cam] = count
-            durations[cam] = count / fps if fps > 0 else 0.0
-        except Exception as e:
-            logger.error(
-                "%s (VideoReader open failed). cam=%s path=%s error=%s Check GPU, drivers, and NeLux wheel; container may restart.",
-                NVDEC_INIT_FAILURE_PREFIX,
+                reader = VideoReader(
+                    safe_path,
+                    decode_accelerator="nvdec",
+                    cuda_device_index=cuda_device_index,
+                    num_threads=1,
+                )
+                # Monkey-patch: If the wrapper is missing _decoder, point it to itself
+                if not hasattr(reader, "_decoder"):
+                    reader._decoder = reader
+                fps = float(reader.fps) if getattr(reader, "fps", None) else 1.0
+                if fps <= 0:
+                    fps = 1.0
+                try:
+                    count = int(len(reader))
+                except (AttributeError, TypeError, Exception):
+                    count = 0
+                if count <= 0:
+                    path_meta = _get_fps_duration_from_path(path)
+                    if path_meta is not None:
+                        fps = path_meta[0]
+                        duration_sec = path_meta[1]
+                        count = max(1, int(duration_sec * fps))
+                    else:
+                        count = 1
+                readers[cam] = reader
+                fps_per_cam[cam] = fps
+                frame_count_per_cam[cam] = count
+                durations[cam] = count / fps if fps > 0 else 0.0
+            except Exception as e:
+                logger.error(
+                    "%s (VideoReader open failed). cam=%s path=%s error=%s Check GPU, drivers, and NeLux wheel; container may restart.",
+                    NVDEC_INIT_FAILURE_PREFIX,
+                    cam,
+                    path,
+                    e,
+                )
+                logger.warning(
+                    "NeLux VideoReader failed for %s (%s): %s",
+                    cam,
+                    path,
+                    e,
+                )
+                try:
+                    if torch.cuda.is_available():
+                        logger.debug("CUDA memory: %s", torch.cuda.memory_summary(abbreviated=True))
+                except Exception:
+                    pass
+                for r in readers.values():
+                    try:
+                        if hasattr(r, "release"):
+                            r.release()
+                    except Exception:
+                        pass
+                return []
+        if _log_phase_timing and _t0_open is not None and log_callback:
+            log_callback(f"Opening clips: {time.monotonic() - _t0_open:.1f}s")
+        for cam in readers:
+            logger.info(
+                "Multi-clip open: camera=%s path=%s duration_sec=%.2f fps=%.2f",
                 cam,
-                path,
-                e,
+                path_per_cam.get(cam, ""),
+                durations[cam],
+                fps_per_cam.get(cam, 0),
             )
-            logger.warning(
-                "NeLux VideoReader failed for %s (%s): %s",
-                cam,
-                path,
-                e,
-            )
-            try:
-                if torch.cuda.is_available():
-                    logger.debug("CUDA memory: %s", torch.cuda.memory_summary(abbreviated=True))
-            except Exception:
-                pass
+        if log_callback:
+            cams = ", ".join(sorted(readers.keys()))
+            log_callback(f"Decoding clips ({cams}): NeLux NVDEC.")
+        global_end = max(durations.values()) if durations else 0.0
+        if global_end <= 0 or not readers:
             for r in readers.values():
                 try:
                     if hasattr(r, "release"):
@@ -320,170 +346,148 @@ def extract_target_centric_frames(
                 except Exception:
                     pass
             return []
-    if _log_phase_timing and _t0_open is not None and log_callback:
-        log_callback(f"Opening clips: {time.monotonic() - _t0_open:.1f}s")
-    for cam in readers:
-        logger.info(
-            "Multi-clip open: camera=%s path=%s duration_sec=%.2f fps=%.2f",
-            cam,
-            path_per_cam.get(cam, ""),
-            durations[cam],
-            fps_per_cam.get(cam, 0),
-        )
-    if log_callback:
-        cams = ", ".join(sorted(readers.keys()))
-        log_callback(f"Decoding clips ({cams}): NeLux NVDEC.")
-    global_end = max(durations.values()) if durations else 0.0
-    if global_end <= 0 or not readers:
-        for r in readers.values():
-            try:
-                if hasattr(r, "release"):
-                    r.release()
-            except Exception:
-                pass
-        return []
-    use_sidecar = all_have_sidecar and len(sidecars) == len(clip_paths)
-    if not use_sidecar:
-        missing_cameras = [cam for cam, _ in clip_paths if cam not in sidecars]
-        logger.warning(
-            "Skipping multi-clip extraction: not all cameras have detection sidecars. CE folder=%s cameras_missing_sidecar=%s",
-            ce_folder_path,
-            missing_cameras,
-        )
-        for r in readers.values():
-            try:
-                if hasattr(r, "release"):
-                    r.release()
-            except Exception:
-                pass
-        return []
-    if log_callback:
-        log_callback("Creating extraction metadata (sidecar).")
-    logger.debug("Using detection sidecars for multi-clip selection")
-
-    dense_times = _timeline_ema.build_dense_times(
-        step_sec, max_frames_min, camera_timeline_analysis_multiplier, global_end
-    )
-    cameras_list = list(sidecars.keys())
-    assignments = _timeline_ema.build_phase1_assignments(
-        dense_times,
-        cameras_list,
-        lambda cam, t: _person_area_at_time(sidecars.get(cam) or [], t),
-        native_size_per_cam,
-        ema_alpha=camera_timeline_ema_alpha,
-        primary_bias_multiplier=camera_timeline_primary_bias_multiplier,
-        primary_camera=primary_camera,
-        hysteresis_margin=camera_switch_hysteresis_margin,
-        min_segment_frames=camera_switch_min_segment_frames,
-    )
-    sample_times_list = [t for t, _ in assignments]
-    assignment_list = [c for _, c in assignments]
-    if log_callback:
-        log_callback(f"Phase 1 EMA: {len(sample_times_list)} sample times, segment merge (min {camera_switch_min_segment_frames} frames).")
-
-    current_camera: str | None = None
-    frames_on_current = 0
-
-    _t0_read = time.monotonic() if _log_phase_timing else None
-    _num_sample_times = len(sample_times_list)
-    _progress_interval = max(1, _num_sample_times // 10)
-    dropped_cameras: set[str] = set()
-    for _step_idx, T in enumerate(sample_times_list, start=1):
-        if len(collected) >= max_frames_min:
-            break
-        if log_callback and _step_idx % _progress_interval == 1:
-            log_callback(f"Reading frames ({_step_idx}/{_num_sample_times}).")
-        idx = _step_idx - 1
-        if idx >= len(assignment_list):
-            break
-        best_camera = assignment_list[idx]
-        if best_camera in dropped_cameras:
-            continue
-        if T >= durations.get(best_camera, 0):
-            continue
-        reader = readers.get(best_camera)
-        if reader is None:
-            continue
-        fps = fps_per_cam.get(best_camera, 1.0)
-        fcount = frame_count_per_cam.get(best_camera, 0)
-        frame_idx = min(max(0, round(T * fps)), fcount - 1) if fcount > 0 else 0
-        try:
-            batch = reader.get_batch([frame_idx])
-        except Exception as e:
+        use_sidecar = all_have_sidecar and len(sidecars) == len(clip_paths)
+        if not use_sidecar:
+            missing_cameras = [cam for cam, _ in clip_paths if cam not in sidecars]
             logger.warning(
-                "NeLux get_batch failed for camera %s at T=%.2f (frame_idx=%s): %s",
-                best_camera,
-                T,
-                frame_idx,
-                e,
+                "Skipping multi-clip extraction: not all cameras have detection sidecars. CE folder=%s cameras_missing_sidecar=%s",
+                ce_folder_path,
+                missing_cameras,
             )
-            dropped_cameras.add(best_camera)
-            continue
-        if batch is None or batch.shape[0] < 1:
-            continue
-        frame_t = batch[0:1].clone()
-        del batch
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-        best_tensor = frame_t
-        meta: dict[str, Any] = {}
-        if crop_width > 0 and crop_height > 0 and _CROP_AVAILABLE:
-            entry = _nearest_sidecar_entry(sidecars.get(best_camera) or [], T)
-            detections = (entry.get("detections") or []) if entry else []
-            frame_h, frame_w = int(best_tensor.shape[2]), int(best_tensor.shape[3])
-            frame_area = frame_w * frame_h
-            native_w, native_h = native_size_per_cam.get(best_camera, (0, 0))
-            if native_w > 0 and native_h > 0:
-                frame_area = native_w * native_h
-            reference_area = min(target_crop_area, frame_area) if target_crop_area > 0 else frame_area
-            if not detections:
-                best_tensor = _crop_utils.center_crop(best_tensor, crop_width, crop_height)
-            else:
-                person_dets = [d for d in detections if (d.get("label") or "").lower() in PREFERRED_LABELS]
-                if not person_dets:
+            for r in readers.values():
+                try:
+                    if hasattr(r, "release"):
+                        r.release()
+                except Exception:
+                    pass
+            return []
+        if log_callback:
+            log_callback("Creating extraction metadata (sidecar).")
+        logger.debug("Using detection sidecars for multi-clip selection")
+
+        dense_times = _timeline_ema.build_dense_times(
+            step_sec, max_frames_min, camera_timeline_analysis_multiplier, global_end
+        )
+        cameras_list = list(sidecars.keys())
+        assignments = _timeline_ema.build_phase1_assignments(
+            dense_times,
+            cameras_list,
+            lambda cam, t: _person_area_at_time(sidecars.get(cam) or [], t),
+            native_size_per_cam,
+            ema_alpha=camera_timeline_ema_alpha,
+            primary_bias_multiplier=camera_timeline_primary_bias_multiplier,
+            primary_camera=primary_camera,
+            hysteresis_margin=camera_switch_hysteresis_margin,
+            min_segment_frames=camera_switch_min_segment_frames,
+        )
+        sample_times_list = [t for t, _ in assignments]
+        assignment_list = [c for _, c in assignments]
+        if log_callback:
+            log_callback(f"Phase 1 EMA: {len(sample_times_list)} sample times, segment merge (min {camera_switch_min_segment_frames} frames).")
+
+        current_camera: str | None = None
+        frames_on_current = 0
+
+        _t0_read = time.monotonic() if _log_phase_timing else None
+        _num_sample_times = len(sample_times_list)
+        _progress_interval = max(1, _num_sample_times // 10)
+        dropped_cameras: set[str] = set()
+        for _step_idx, T in enumerate(sample_times_list, start=1):
+            if len(collected) >= max_frames_min:
+                break
+            if log_callback and _step_idx % _progress_interval == 1:
+                log_callback(f"Reading frames ({_step_idx}/{_num_sample_times}).")
+            idx = _step_idx - 1
+            if idx >= len(assignment_list):
+                break
+            best_camera = assignment_list[idx]
+            if best_camera in dropped_cameras:
+                continue
+            if T >= durations.get(best_camera, 0):
+                continue
+            reader = readers.get(best_camera)
+            if reader is None:
+                continue
+            fps = fps_per_cam.get(best_camera, 1.0)
+            fcount = frame_count_per_cam.get(best_camera, 0)
+            frame_idx = min(max(0, round(T * fps)), fcount - 1) if fcount > 0 else 0
+            try:
+                batch = reader.get_batch([frame_idx])
+            except Exception as e:
+                logger.warning(
+                    "NeLux get_batch failed for camera %s at T=%.2f (frame_idx=%s): %s",
+                    best_camera,
+                    T,
+                    frame_idx,
+                    e,
+                )
+                dropped_cameras.add(best_camera)
+                continue
+            if batch is None or batch.shape[0] < 1:
+                continue
+            frame_t = batch[0:1].clone()
+            del batch
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            best_tensor = frame_t
+            meta: dict[str, Any] = {}
+            if crop_width > 0 and crop_height > 0 and _CROP_AVAILABLE:
+                entry = _nearest_sidecar_entry(sidecars.get(best_camera) or [], T)
+                detections = (entry.get("detections") or []) if entry else []
+                frame_h, frame_w = int(best_tensor.shape[2]), int(best_tensor.shape[3])
+                frame_area = frame_w * frame_h
+                native_w, native_h = native_size_per_cam.get(best_camera, (0, 0))
+                if native_w > 0 and native_h > 0:
+                    frame_area = native_w * native_h
+                reference_area = min(target_crop_area, frame_area) if target_crop_area > 0 else frame_area
+                if not detections:
                     best_tensor = _crop_utils.center_crop(best_tensor, crop_width, crop_height)
                 else:
-                    largest = max(person_dets, key=lambda d: float(d.get("area") or 0))
-                    person_area_val = float(largest.get("area") or 0)
-                    if (
-                        reference_area > 0
-                        and tracking_target_frame_percent > 0
-                        and (person_area_val / reference_area) >= (tracking_target_frame_percent / 100.0)
-                    ):
-                        best_tensor = _crop_utils.full_frame_resize_to_target(
-                            best_tensor, crop_width, crop_height
-                        )
-                        meta["is_full_frame_resize"] = True
+                    person_dets = [d for d in detections if (d.get("label") or "").lower() in PREFERRED_LABELS]
+                    if not person_dets:
+                        best_tensor = _crop_utils.center_crop(best_tensor, crop_width, crop_height)
                     else:
-                        cp = largest.get("centerpoint")
-                        if cp and len(cp) >= 2:
-                            best_tensor = _crop_utils.crop_around_center(
-                                best_tensor, cp[0], cp[1], crop_width, crop_height
+                        largest = max(person_dets, key=lambda d: float(d.get("area") or 0))
+                        person_area_val = float(largest.get("area") or 0)
+                        if (
+                            reference_area > 0
+                            and tracking_target_frame_percent > 0
+                            and (person_area_val / reference_area) >= (tracking_target_frame_percent / 100.0)
+                        ):
+                            best_tensor = _crop_utils.full_frame_resize_to_target(
+                                best_tensor, crop_width, crop_height
                             )
+                            meta["is_full_frame_resize"] = True
                         else:
-                            best_tensor = _crop_utils.center_crop(best_tensor, crop_width, crop_height)
-                        meta["is_full_frame_resize"] = False
-        raw_person_area = _person_area_at_time(sidecars.get(best_camera) or [], T)
-        meta["person_area"] = int(raw_person_area)
-        skip_append = (
-            (raw_person_area <= 0) if camera_timeline_final_yolo_drop_no_person else False
-        )
-        if not skip_append:
-            collected.append(ExtractedFrame(frame=best_tensor, timestamp_sec=T, camera=best_camera, metadata=meta))
-        if best_camera == current_camera:
-            frames_on_current += 1
-        else:
-            current_camera = best_camera
-            frames_on_current = 1
+                            cp = largest.get("centerpoint")
+                            if cp and len(cp) >= 2:
+                                best_tensor = _crop_utils.crop_around_center(
+                                    best_tensor, cp[0], cp[1], crop_width, crop_height
+                                )
+                            else:
+                                best_tensor = _crop_utils.center_crop(best_tensor, crop_width, crop_height)
+                            meta["is_full_frame_resize"] = False
+            raw_person_area = _person_area_at_time(sidecars.get(best_camera) or [], T)
+            meta["person_area"] = int(raw_person_area)
+            skip_append = (
+                (raw_person_area <= 0) if camera_timeline_final_yolo_drop_no_person else False
+            )
+            if not skip_append:
+                collected.append(ExtractedFrame(frame=best_tensor, timestamp_sec=T, camera=best_camera, metadata=meta))
+            if best_camera == current_camera:
+                frames_on_current += 1
+            else:
+                current_camera = best_camera
+                frames_on_current = 1
 
-    if _log_phase_timing and _t0_read is not None and log_callback:
-        log_callback(f"Reading frames: {time.monotonic() - _t0_read:.1f}s")
-    for r in readers.values():
-        try:
-            if hasattr(r, "release"):
-                r.release()
-        except Exception:
-            pass
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
-    return collected
+        if _log_phase_timing and _t0_read is not None and log_callback:
+            log_callback(f"Reading frames: {time.monotonic() - _t0_read:.1f}s")
+        for r in readers.values():
+            try:
+                if hasattr(r, "release"):
+                    r.release()
+            except Exception:
+                pass
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        return collected

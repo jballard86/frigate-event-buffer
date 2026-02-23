@@ -16,6 +16,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
 from frigate_buffer.constants import is_tensor, NVDEC_INIT_FAILURE_PREFIX
+from frigate_buffer.services.video_sanitizer import sanitize_for_nelux
 
 logger = logging.getLogger("frigate-buffer")
 
@@ -415,171 +416,172 @@ class VideoService:
         else:
             native_w, native_h, fps_val, duration_sec = 0, 0, 30.0, 0.0
 
-        reader = None
-        try:
-            reader = VideoReader(
-                clip_path,
-                decode_accelerator="nvdec",
-                cuda_device_index=cuda_device_index,
-                num_threads=1,
-            )
-            # Monkey-patch: If the wrapper is missing _decoder, point it to itself
-            if not hasattr(reader, "_decoder"):
-                reader._decoder = reader
-        except Exception as e:
-            logger.error(
-                "%s (VideoReader open failed). path=%s error=%s Check GPU, drivers, and NeLux wheel; container may restart.",
-                NVDEC_INIT_FAILURE_PREFIX,
-                clip_path,
-                e,
-            )
-            logger.warning(
-                "NeLux failed to open clip for sidecar: path=%s error=%s",
-                clip_path,
-                e,
-                exc_info=True,
-            )
-            if torch.cuda.is_available():
-                try:
-                    logger.debug("VRAM summary: %s", torch.cuda.memory_summary())
-                except Exception:
-                    pass
-            return False
-
-        if not _nelux_reader_ready(reader):
-            logger.error(
-                "%s: NeLux decoder not initialized for clip. path=%s Check GPU/drivers; container may restart.",
-                NVDEC_INIT_FAILURE_PREFIX,
-                clip_path,
-            )
-            logger.warning(
-                "NeLux decoder not initialized for clip, skipping sidecar: %s",
-                clip_path,
-            )
+        with sanitize_for_nelux(clip_path) as safe_path:
+            reader = None
             try:
-                if hasattr(reader, "release"):
-                    reader.release()
-            except Exception:
-                pass
-            return False
-
-        try:
-            frame_count = _nelux_frame_count(reader, fps_val, duration_sec)
-            fps = float(reader.fps) if getattr(reader, "fps", None) else fps_val
-            if fps <= 0:
-                fps = 30.0
-            if frame_count <= 0 and duration_sec > 0:
-                frame_count = int(duration_sec * fps)
-            if frame_count <= 0:
-                logger.warning("Could not determine frame count for %s", clip_path)
+                reader = VideoReader(
+                    safe_path,
+                    decode_accelerator="nvdec",
+                    cuda_device_index=cuda_device_index,
+                    num_threads=1,
+                )
+                # Monkey-patch: If the wrapper is missing _decoder, point it to itself
+                if not hasattr(reader, "_decoder"):
+                    reader._decoder = reader
+            except Exception as e:
+                logger.error(
+                    "%s (VideoReader open failed). path=%s error=%s Check GPU, drivers, and NeLux wheel; container may restart.",
+                    NVDEC_INIT_FAILURE_PREFIX,
+                    clip_path,
+                    e,
+                )
+                logger.warning(
+                    "NeLux failed to open clip for sidecar: path=%s error=%s",
+                    clip_path,
+                    e,
+                    exc_info=True,
+                )
+                if torch.cuda.is_available():
+                    try:
+                        logger.debug("VRAM summary: %s", torch.cuda.memory_summary())
+                    except Exception:
+                        pass
                 return False
 
-            interval = detection_frame_interval
-            indices = list(range(0, frame_count, interval))
-            if not indices:
-                indices = [0]
-
-            model_to_use = yolo_model
-            if model_to_use is None and detection_model:
+            if not _nelux_reader_ready(reader):
+                logger.error(
+                    "%s: NeLux decoder not initialized for clip. path=%s Check GPU/drivers; container may restart.",
+                    NVDEC_INIT_FAILURE_PREFIX,
+                    clip_path,
+                )
+                logger.warning(
+                    "NeLux decoder not initialized for clip, skipping sidecar: %s",
+                    clip_path,
+                )
                 try:
-                    from ultralytics import YOLO
-                    model_path = get_detection_model_path(config)
-                    model_to_use = YOLO(model_path)
-                    logger.debug("YOLO loaded for detection sidecar: %s", clip_path)
-                except Exception as e:
-                    logger.warning("Could not load YOLO for detection sidecar: %s", e)
+                    if hasattr(reader, "release"):
+                        reader.release()
+                except Exception:
+                    pass
+                return False
 
-            sidecar_entries: list[dict[str, Any]] = []
-            read_h, read_w = 0, 0
+            try:
+                frame_count = _nelux_frame_count(reader, fps_val, duration_sec)
+                fps = float(reader.fps) if getattr(reader, "fps", None) else fps_val
+                if fps <= 0:
+                    fps = 30.0
+                if frame_count <= 0 and duration_sec > 0:
+                    frame_count = int(duration_sec * fps)
+                if frame_count <= 0:
+                    logger.warning("Could not determine frame count for %s", clip_path)
+                    return False
 
-            for chunk_start in range(0, len(indices), BATCH_SIZE):
-                chunk_indices = indices[chunk_start : chunk_start + BATCH_SIZE]
-                try:
-                    batch = reader.get_batch(chunk_indices)
-                except Exception as e:
-                    logger.warning(
-                        "NeLux get_batch failed: clip_path=%s indices=%s error=%s",
-                        clip_path,
-                        chunk_indices,
-                        e,
-                        exc_info=True,
-                    )
-                    if torch.cuda.is_available():
-                        try:
-                            logger.debug("VRAM summary: %s", torch.cuda.memory_summary())
-                        except Exception:
-                            pass
-                    break
+                interval = detection_frame_interval
+                indices = list(range(0, frame_count, interval))
+                if not indices:
+                    indices = [0]
 
-                if read_h == 0 and batch is not None and batch.numel() > 0:
-                    read_h = int(batch.shape[2])
-                    read_w = int(batch.shape[3])
+                model_to_use = yolo_model
+                if model_to_use is None and detection_model:
+                    try:
+                        from ultralytics import YOLO
+                        model_path = get_detection_model_path(config)
+                        model_to_use = YOLO(model_path)
+                        logger.debug("YOLO loaded for detection sidecar: %s", clip_path)
+                    except Exception as e:
+                        logger.warning("Could not load YOLO for detection sidecar: %s", e)
 
-                batch = batch.float() / 255.0
+                sidecar_entries: list[dict[str, Any]] = []
+                read_h, read_w = 0, 0
 
-                if model_to_use is not None:
-                    if yolo_lock is not None:
-                        with yolo_lock:
+                for chunk_start in range(0, len(indices), BATCH_SIZE):
+                    chunk_indices = indices[chunk_start : chunk_start + BATCH_SIZE]
+                    try:
+                        batch = reader.get_batch(chunk_indices)
+                    except Exception as e:
+                        logger.warning(
+                            "NeLux get_batch failed: clip_path=%s indices=%s error=%s",
+                            clip_path,
+                            chunk_indices,
+                            e,
+                            exc_info=True,
+                        )
+                        if torch.cuda.is_available():
+                            try:
+                                logger.debug("VRAM summary: %s", torch.cuda.memory_summary())
+                            except Exception:
+                                pass
+                        break
+
+                    if read_h == 0 and batch is not None and batch.numel() > 0:
+                        read_h = int(batch.shape[2])
+                        read_w = int(batch.shape[3])
+
+                    batch = batch.float() / 255.0
+
+                    if model_to_use is not None:
+                        if yolo_lock is not None:
+                            with yolo_lock:
+                                det_lists = _run_detection_on_batch(
+                                    model_to_use, batch, detection_device, imgsz=detection_imgsz
+                                )
+                        else:
                             det_lists = _run_detection_on_batch(
                                 model_to_use, batch, detection_device, imgsz=detection_imgsz
                             )
+                        for i, idx in enumerate(chunk_indices):
+                            det = det_lists[i] if i < len(det_lists) else []
+                            if native_w > 0 and native_h > 0 and read_w > 0 and read_h > 0:
+                                det = _scale_detections_to_native(det, read_w, read_h, native_w, native_h)
+                            sidecar_entries.append({
+                                "frame_number": idx,
+                                "timestamp_sec": idx / fps if fps > 0 else 0,
+                                "detections": det,
+                            })
                     else:
-                        det_lists = _run_detection_on_batch(
-                            model_to_use, batch, detection_device, imgsz=detection_imgsz
-                        )
-                    for i, idx in enumerate(chunk_indices):
-                        det = det_lists[i] if i < len(det_lists) else []
-                        if native_w > 0 and native_h > 0 and read_w > 0 and read_h > 0:
-                            det = _scale_detections_to_native(det, read_w, read_h, native_w, native_h)
-                        sidecar_entries.append({
-                            "frame_number": idx,
-                            "timestamp_sec": idx / fps if fps > 0 else 0,
-                            "detections": det,
-                        })
-                else:
-                    for idx in chunk_indices:
-                        sidecar_entries.append({
-                            "frame_number": idx,
-                            "timestamp_sec": idx / fps if fps > 0 else 0,
-                            "detections": [],
-                        })
+                        for idx in chunk_indices:
+                            sidecar_entries.append({
+                                "frame_number": idx,
+                                "timestamp_sec": idx / fps if fps > 0 else 0,
+                                "detections": [],
+                            })
 
-                del batch
+                    del batch
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+
+                if native_w <= 0 and read_w > 0:
+                    native_w, native_h = read_w, read_h
+                payload: dict[str, Any] = {
+                    "native_width": native_w or read_w,
+                    "native_height": native_h or read_h,
+                    "entries": sidecar_entries,
+                }
+                with open(sidecar_path, "w", encoding="utf-8") as f:
+                    json.dump(payload, f, indent=None, separators=(",", ":"))
+                logger.debug("Wrote detection sidecar (NeLux) %s (%d frames)", sidecar_path, len(sidecar_entries))
+                return True
+            except Exception as e:
+                logger.warning(
+                    "Failed to generate detection sidecar for %s: %s",
+                    clip_path,
+                    e,
+                    exc_info=True,
+                )
+                if torch.cuda.is_available():
+                    try:
+                        logger.debug("VRAM summary: %s", torch.cuda.memory_summary())
+                    except Exception:
+                        pass
+                return False
+            finally:
+                if reader is not None:
+                    try:
+                        del reader
+                    except Exception:
+                        pass
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
-
-            if native_w <= 0 and read_w > 0:
-                native_w, native_h = read_w, read_h
-            payload: dict[str, Any] = {
-                "native_width": native_w or read_w,
-                "native_height": native_h or read_h,
-                "entries": sidecar_entries,
-            }
-            with open(sidecar_path, "w", encoding="utf-8") as f:
-                json.dump(payload, f, indent=None, separators=(",", ":"))
-            logger.debug("Wrote detection sidecar (NeLux) %s (%d frames)", sidecar_path, len(sidecar_entries))
-            return True
-        except Exception as e:
-            logger.warning(
-                "Failed to generate detection sidecar for %s: %s",
-                clip_path,
-                e,
-                exc_info=True,
-            )
-            if torch.cuda.is_available():
-                try:
-                    logger.debug("VRAM summary: %s", torch.cuda.memory_summary())
-                except Exception:
-                    pass
-            return False
-        finally:
-            if reader is not None:
-                try:
-                    del reader
-                except Exception:
-                    pass
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
 
     def generate_detection_sidecars_for_cameras(
         self,
