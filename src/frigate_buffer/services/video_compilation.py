@@ -310,7 +310,6 @@ def _encode_frames_via_ffmpeg(
         "-rc", "vbr",
         "-cq", "24",
         "-an",
-        "-f", "mp4",
         tmp_output_path,
     ]
     try:
@@ -334,11 +333,26 @@ def _encode_frames_via_ffmpeg(
         for arr in frames:
             proc.stdin.write(arr.tobytes())
         proc.stdin.close()
+    except BrokenPipeError:
+        stderr = (
+            (proc.stderr.read() or b"").decode("utf-8", errors="replace")
+            if proc.stderr else ""
+        )
+        logger.error(
+            "FFmpeg closed stdin (broken pipe). stderr: %s. Command: %s. "
+            "Compilation encoding is GPU-only (h264_nvenc). No CPU fallback is provided.",
+            stderr,
+            " ".join(cmd),
+        )
+        proc.wait()
+        raise RuntimeError(
+            f"FFmpeg broke pipe during encode; stderr: {stderr!r}"
+        ) from None
     except Exception as e:
-        if proc.stderr:
-            stderr = proc.stderr.read().decode("utf-8", errors="replace")
-        else:
-            stderr = ""
+        stderr = (
+            (proc.stderr.read() or b"").decode("utf-8", errors="replace")
+            if proc.stderr else ""
+        )
         logger.error(
             "Compilation encode failed while writing frames: %s. "
             "FFmpeg command: %s. stderr: %s. "
@@ -534,23 +548,23 @@ def generate_compilation_video(
         smooth_crop_centers_ema(slices, crop_smooth_alpha)
 
     cuda_device_index = int(config.get("CUDA_DEVICE_INDEX", 0)) if config else 0
-    tmp_output_path = output_path + ".tmp"
+    temp_path = output_path.replace(".mp4", ".tmp.mp4")
     try:
         _run_pynv_compilation(
             slices=slices,
             ce_dir=ce_dir,
-            tmp_output_path=tmp_output_path,
+            tmp_output_path=temp_path,
             target_w=target_w,
             target_h=target_h,
             resolve_clip_in_folder=resolve_clip_in_folder,
             cuda_device_index=cuda_device_index,
         )
-        if os.path.isfile(tmp_output_path) and os.path.getsize(tmp_output_path) > 0:
-            os.rename(tmp_output_path, output_path)
+        if os.path.isfile(temp_path) and os.path.getsize(temp_path) > 0:
+            os.rename(temp_path, output_path)
             logger.info(f"Compilation finished successfully. Output saved to: {output_path}")
         else:
             raise FileNotFoundError(
-                f"Compiler finished but tmp result file was empty or missing: {tmp_output_path}"
+                f"Compiler finished but tmp result file was empty or missing: {temp_path}"
             )
     except Exception as e:
         log_path = os.path.join(ce_dir, "compilation_error.log")
