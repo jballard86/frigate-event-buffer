@@ -403,7 +403,7 @@ def _run_nelux_compilation(
         first_clip,
         decode_accelerator="nvdec",
         cuda_device_index=cuda_device_index,
-        thread_count=1,
+        num_threads=1,
     )
     assert first_reader is not None
     # Monkey-patch: If the wrapper is missing _decoder, point it to itself
@@ -434,7 +434,7 @@ def _run_nelux_compilation(
                     clip_path,
                     decode_accelerator="nvdec",
                     cuda_device_index=cuda_device_index,
-                    thread_count=1,
+                    num_threads=1,
                 )
                 if not hasattr(reader, "_decoder"):
                     reader._decoder = reader

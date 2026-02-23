@@ -421,7 +421,7 @@ class VideoService:
                 clip_path,
                 decode_accelerator="nvdec",
                 cuda_device_index=cuda_device_index,
-                thread_count=1,
+                num_threads=1,
             )
             # Monkey-patch: If the wrapper is missing _decoder, point it to itself
             if not hasattr(reader, "_decoder"):
