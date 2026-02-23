@@ -12,6 +12,7 @@ from urllib.parse import urlparse, urlunparse
 
 import requests
 
+from frigate_buffer.constants import NON_CAMERA_DIRS
 from frigate_buffer.services.query import read_timeline_merged
 
 logger = logging.getLogger("frigate-buffer")
@@ -252,7 +253,7 @@ def run_once(config: dict[str, Any]) -> None:
                 if first_part.isdigit():
                     continue
                 # Skip non-camera directories (ultralytics, yolo_models, etc.)
-                if camera_dir in ("ultralytics", "yolo_models", "daily_reports", "daily_reviews"):
+                if camera_dir in NON_CAMERA_DIRS:
                     continue
 
                 try:

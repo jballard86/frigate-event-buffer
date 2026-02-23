@@ -12,6 +12,7 @@ from datetime import date, datetime, timedelta
 import requests
 from flask import Flask, Response, send_from_directory, jsonify, render_template, request, redirect
 
+from frigate_buffer.constants import HTTP_STREAM_CHUNK_SIZE, NON_CAMERA_DIRS
 from frigate_buffer.logging_utils import error_buffer
 from frigate_buffer.services.query import EventQueryService, read_timeline_merged
 from frigate_buffer.event_test.event_test_orchestrator import run_test_pipeline
@@ -56,7 +57,7 @@ def create_app(orchestrator):
             resp = requests.get(url, timeout=15, stream=True)
             resp.raise_for_status()
             return Response(
-                resp.iter_content(chunk_size=8192),
+                resp.iter_content(chunk_size=HTTP_STREAM_CHUNK_SIZE),
                 content_type=resp.headers.get('Content-Type', 'image/jpeg'),
                 status=resp.status_code
             )
@@ -79,7 +80,7 @@ def create_app(orchestrator):
             resp = requests.get(url, timeout=10, stream=True)
             resp.raise_for_status()
             return Response(
-                resp.iter_content(chunk_size=8192),
+                resp.iter_content(chunk_size=HTTP_STREAM_CHUNK_SIZE),
                 content_type=resp.headers.get('Content-Type', 'image/jpeg'),
                 status=resp.status_code
             )
@@ -311,8 +312,6 @@ def create_app(orchestrator):
             os.remove(viewed_path)
         return jsonify({"status": "success"}), 200
 
-    _NON_CAMERA_DIRS = {"ultralytics", "yolo_models", "daily_reports", "daily_reviews"}
-
     @app.route('/viewed/all', methods=['POST'])
     def mark_all_viewed():
         """Mark ALL events across all cameras as viewed."""
@@ -325,7 +324,7 @@ def create_app(orchestrator):
                     camera_dir = camera_entry.name
                     if camera_dir.split('_')[0].isdigit():
                         continue
-                    if camera_dir in _NON_CAMERA_DIRS:
+                    if camera_dir in NON_CAMERA_DIRS:
                         continue
 
                     with os.scandir(camera_entry.path) as it_events:
@@ -551,9 +550,6 @@ def create_app(orchestrator):
         by_camera = {}
         most_recent = None
 
-        # Non-camera directories to exclude from stats scanning
-        _NON_CAMERA_DIRS = {"ultralytics", "yolo_models", "daily_reports", "daily_reviews"}
-
         try:
             # Top-level dirs: legacy cameras (e.g. carport) and "events" for consolidated events.
             # For "events", each direct child is a CE folder (events/ce_id/); we count one event per CE.
@@ -564,7 +560,7 @@ def create_app(orchestrator):
                     camera_dir = camera_entry.name
                     if camera_dir.split('_')[0].isdigit():
                         continue
-                    if camera_dir in _NON_CAMERA_DIRS:
+                    if camera_dir in NON_CAMERA_DIRS:
                         continue
 
                     count = 0

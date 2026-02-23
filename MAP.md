@@ -87,9 +87,9 @@ frigate-event-buffer/
 ├── INSTALL.md
 ├── USER_GUIDE.md
 ├── MULTI_CAM_PLAN.md
-├── PHASE1_REFACTOR_CATALOG.md
 │
 ├── scripts/
+│   (reserved for standalone scripts)
 │
 ├── src/
 │   └── frigate_buffer/
@@ -98,6 +98,7 @@ frigate-event-buffer/
 │       ├── config.py
 │       ├── models.py
 │       ├── logging_utils.py
+│       ├── constants.py
 │       ├── version.txt
 │       ├── orchestrator.py
 │       ├── event_test/
@@ -122,6 +123,7 @@ frigate-event-buffer/
 │       │   ├── daily_reporter.py
 │       │   ├── frigate_export_watchdog.py
 │       │   ├── timeline.py
+│       │   ├── video_compilation.py
 │       │   ├── mqtt_client.py
 │       │   ├── crop_utils.py
 │       │   ├── report_prompt.txt
@@ -197,7 +199,6 @@ frigate-event-buffer/
 | `Dockerfile` | Single-stage: base `nvidia/cuda:12.6.0-runtime-ubuntu24.04`; installs Python 3.12, FFmpeg 6.1 from distro; copies vendored libyuv and libspdlog (`wheels/libyuv.so*`, `wheels/libspdlog.so*`) into `/usr/lib/x86_64-linux-gnu/` for NeLux ABI match; sets `LD_LIBRARY_PATH` so NeLux native deps load at runtime (no distro libyuv/libspdlog packages or symlinks). NeLux wheel from `wheels/`; FFmpeg 6.1 and vendored libs required at runtime. Uses BuildKit (`# syntax=docker/dockerfile:1`); final `pip install .` uses `--mount=type=cache,target=/root/.cache/pip` for faster code-only rebuilds. Build arg `USE_GUI_OPENCV` (default `false`): when `false`, uninstalls opencv-python and reinstalls opencv-python-headless (no X11); when `true`, keeps GUI opencv for faster full rebuilds. Runs `python3 -m frigate_buffer.main`. | Build from repo root. |
 | `docker-compose.yaml` / `docker-compose.example.yaml` | Compose for local run; GPU, env, mounts. No `YOLO_CONFIG_DIR` needed—app uses storage for Ultralytics config and model cache. | Deployment. |
 | `MAP.md` | This file—architecture and context for AI. | Must be updated when structure or flows change. |
-| `PHASE1_REFACTOR_CATALOG.md` | Phase 1 discovery catalog for "Everything is a CE" refactor: removals and changes list. | Reference only; delete or archive after refactor is complete. |
 
 ### Entry & config
 
@@ -207,6 +208,7 @@ frigate-event-buffer/
 | `src/frigate_buffer/config.py` | Load/validate YAML + env via Voluptuous `CONFIG_SCHEMA`; flat keys (e.g. `MQTT_BROKER`, `GEMINI_PROXY_URL`, `MAX_EVENT_LENGTH_SECONDS`). Frame limits for AI: `multi_cam.max_multi_cam_frames_*` only. `single_camera_ce_close_delay_seconds` (0 = close single-cam CE as soon as event ends). Invalid config exits 1. | Used by `main.py`. |
 | `src/frigate_buffer/version.txt` | Version string read at startup; logged in main. | Package data; included by `COPY src/` in Dockerfile. |
 | `src/frigate_buffer/logging_utils.py` | `setup_logging()`, `ErrorBuffer` for stats dashboard. | Called from main; ErrorBuffer used by web/server and orchestrator. |
+| `src/frigate_buffer/constants.py` | Shared constants: `NON_CAMERA_DIRS` (frozenset of non-camera dir names), `HTTP_STREAM_CHUNK_SIZE` (8192). | Imported by file manager, query, server, frigate_export_watchdog. |
 
 ### Core coordinator & models
 

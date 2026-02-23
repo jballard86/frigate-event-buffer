@@ -10,10 +10,9 @@ import logging
 from collections import OrderedDict
 from typing import Any
 
-logger = logging.getLogger('frigate-buffer')
+from frigate_buffer.constants import NON_CAMERA_DIRS
 
-# Directories under storage root that are not cameras; exclude from event/camera listing.
-NON_CAMERA_DIRS = frozenset({"ultralytics", "yolo_models", "daily_reports", "daily_reviews"})
+logger = logging.getLogger('frigate-buffer')
 
 
 def resolve_clip_in_folder(folder_path: str) -> str | None:
