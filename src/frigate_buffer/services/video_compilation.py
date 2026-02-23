@@ -23,6 +23,14 @@ logger = logging.getLogger("frigate-buffer")
 # Output frame rate for compilation (smooth panning samples at this rate).
 COMPILATION_OUTPUT_FPS = 20
 
+# When the nearest sidecar entry has no detections (e.g. person left frame), search for the
+# nearest entry with detections within this many seconds and hold that crop instead of panning to center.
+HOLD_CROP_MAX_DISTANCE_SEC = 5.0
+
+# Dynamic trimming: pre-roll and post-roll around first/last detection across all cameras.
+ACTION_PREROLL_SEC = 3.0
+ACTION_POSTROLL_SEC = 3.0
+
 
 def convert_timeline_to_segments(timeline_points: list[tuple[float, str]], global_end: float) -> list[dict]:
     """
@@ -83,6 +91,46 @@ def assignments_to_slices(
     return slices
 
 
+def _trim_slices_to_action_window(
+    slices: list[dict],
+    sidecars: dict[str, list],
+    global_end: float,
+) -> list[dict]:
+    """
+    Compute first/last detection time across all cameras' sidecar entries (with detections),
+    then discard slices entirely outside [action_start, action_end] and clamp overlapping
+    slices to that window. Returns a new list; does not mutate input.
+    """
+    first_detection_sec: float = global_end
+    last_detection_sec: float = 0.0
+    for entries in sidecars.values():
+        for e in entries or []:
+            if len(e.get("detections") or []) > 0:
+                ts = float(e.get("timestamp_sec") or 0)
+                first_detection_sec = min(first_detection_sec, ts)
+                last_detection_sec = max(last_detection_sec, ts)
+    if first_detection_sec > last_detection_sec:
+        action_start = 0.0
+        action_end = global_end
+    else:
+        action_start = max(0.0, first_detection_sec - ACTION_PREROLL_SEC)
+        action_end = min(global_end, last_detection_sec + ACTION_POSTROLL_SEC)
+
+    result: list[dict] = []
+    for sl in slices:
+        if sl["end_sec"] <= action_start or sl["start_sec"] >= action_end:
+            continue
+        s_start = max(sl["start_sec"], action_start)
+        s_end = min(sl["end_sec"], action_end)
+        if s_start >= s_end:
+            continue
+        new_slice = dict(sl)
+        new_slice["start_sec"] = s_start
+        new_slice["end_sec"] = s_end
+        result.append(new_slice)
+    return result
+
+
 def _nearest_entry_at_t(
     entries: list[dict], t_sec: float, timestamps_sorted: list[float] | None = None
 ) -> dict | None:
@@ -103,6 +151,30 @@ def _nearest_entry_at_t(
             return entries[idx]
         return entries[idx - 1]
     return min(entries, key=lambda e: abs((e.get("timestamp_sec") or 0) - t_sec))
+
+
+def _nearest_entry_with_detections_at_t(
+    entries: list[dict],
+    t_sec: float,
+    max_distance_sec: float,
+    timestamps_sorted: list[float] | None = None,  # noqa: ARG001 — reserved for future bisect optimization
+) -> dict | None:
+    """
+    Return the sidecar entry with detections whose timestamp_sec is nearest to t_sec
+    and within max_distance_sec. Used to hold the last-known crop when a person leaves
+    the frame instead of panning to center.
+    """
+    candidates = [
+        e for e in entries
+        if len(e.get("detections") or []) > 0
+        and abs((e.get("timestamp_sec") or 0) - t_sec) <= max_distance_sec
+    ]
+    if not candidates:
+        return None
+    return min(
+        candidates,
+        key=lambda e: abs((e.get("timestamp_sec") or 0) - t_sec),
+    )
 
 
 def calculate_crop_at_time(
@@ -127,6 +199,14 @@ def calculate_crop_at_time(
         avg_cy = source_height / 2.0
     else:
         entry = _nearest_entry_at_t(entries, t_sec, timestamps_sorted)
+        # Hold last-known crop: if nearest entry has no detections (e.g. person left frame),
+        # use the nearest entry with detections within threshold instead of panning to center.
+        if entry and len(entry.get("detections") or []) == 0:
+            fallback = _nearest_entry_with_detections_at_t(
+                entries, t_sec, HOLD_CROP_MAX_DISTANCE_SEC, timestamps_sorted
+            )
+            if fallback is not None:
+                entry = fallback
         if not entry:
             avg_cx = source_width / 2.0
             avg_cy = source_height / 2.0
@@ -726,8 +806,13 @@ def compile_ce_video(ce_dir: str, global_end: float, config: dict, primary_camer
 
     logger.debug(f"Generated {len(assignments)} timeline points via EMA.")
 
-    # 3. One slice per assignment; generate with follow-track crop and smooth panning
+    # 3. One slice per assignment; then trim to action window (first/last detection ± pre/post roll)
     slices = assignments_to_slices(assignments, global_end)
+    slices = _trim_slices_to_action_window(slices, sidecars, global_end)
+    if not slices:
+        logger.warning("No slices remain after trimming to action window; skipping compilation.")
+        return None
+
     out_name = os.path.basename(os.path.abspath(ce_dir)) + "_summary.mp4"
     output_path = os.path.join(ce_dir, out_name)
     crop_smooth_alpha = float(config.get("COMPILATION_CROP_SMOOTH_EMA_ALPHA", 0.0))

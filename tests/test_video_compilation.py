@@ -9,6 +9,7 @@ from unittest.mock import MagicMock, patch, mock_open
 from frigate_buffer.services.video_compilation import (
     _encode_frames_via_ffmpeg,
     _run_pynv_compilation,
+    _trim_slices_to_action_window,
     assignments_to_slices,
     calculate_crop_at_time,
     calculate_segment_crop,
@@ -126,6 +127,62 @@ class TestAssignmentsToSlices(unittest.TestCase):
         self.assertEqual(result[2]["end_sec"], 6.0)
 
 
+class TestTrimSlicesToActionWindow(unittest.TestCase):
+    """Tests for _trim_slices_to_action_window (dynamic trimming to first/last detection ± pre/post roll)."""
+
+    def test_trims_to_action_window_and_clamps_overlapping_slices(self):
+        """First detection at 2s, last at 10s, global_end=20 → action [0, 13]; slices outside dropped, overlapping clamped."""
+        sidecars = {
+            "cam1": [
+                {"timestamp_sec": 2.0, "detections": [{"centerpoint": [100, 100], "area": 1.0}]},
+                {"timestamp_sec": 10.0, "detections": [{"centerpoint": [200, 200], "area": 1.0}]},
+            ],
+        }
+        slices = [
+            {"camera": "cam1", "start_sec": 0.0, "end_sec": 5.0},
+            {"camera": "cam1", "start_sec": 5.0, "end_sec": 15.0},
+            {"camera": "cam1", "start_sec": 15.0, "end_sec": 20.0},
+        ]
+        result = _trim_slices_to_action_window(slices, sidecars, global_end=20.0)
+        # action_start = max(0, 2-3)=0, action_end = min(20, 10+3)=13
+        self.assertEqual(len(result), 2)
+        self.assertEqual(result[0]["camera"], "cam1")
+        self.assertEqual(result[0]["start_sec"], 0.0)
+        self.assertEqual(result[0]["end_sec"], 5.0)
+        self.assertEqual(result[1]["start_sec"], 5.0)
+        self.assertEqual(result[1]["end_sec"], 13.0)
+        # Slice [15, 20] is entirely outside [0, 13] so dropped
+
+    def test_no_detections_keeps_full_range(self):
+        """When no sidecar has any entry with detections, no trimming (full 0..global_end)."""
+        sidecars = {"cam1": [{"timestamp_sec": 1.0, "detections": []}, {"timestamp_sec": 5.0, "detections": []}]}
+        slices = [{"camera": "cam1", "start_sec": 0.0, "end_sec": 10.0}]
+        result = _trim_slices_to_action_window(slices, sidecars, global_end=10.0)
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["start_sec"], 0.0)
+        self.assertEqual(result[0]["end_sec"], 10.0)
+
+    def test_discards_slice_entirely_after_action_end(self):
+        """Slice entirely after action_end is discarded."""
+        sidecars = {"cam1": [{"timestamp_sec": 1.0, "detections": [{"area": 1.0}]}]}
+        slices = [{"camera": "cam1", "start_sec": 20.0, "end_sec": 30.0}]
+        result = _trim_slices_to_action_window(slices, sidecars, global_end=30.0)
+        self.assertEqual(len(result), 0)
+
+    def test_discards_slice_entirely_before_action_start(self):
+        """Slice entirely before action_start is discarded when first detection is late."""
+        sidecars = {"cam1": [{"timestamp_sec": 10.0, "detections": [{"area": 1.0}]}]}
+        slices = [
+            {"camera": "cam1", "start_sec": 0.0, "end_sec": 5.0},
+            {"camera": "cam1", "start_sec": 7.0, "end_sec": 15.0},
+        ]
+        result = _trim_slices_to_action_window(slices, sidecars, global_end=20.0)
+        # action_start = 10-3 = 7, action_end = 13. First slice [0,5] entirely before 7 → dropped.
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["start_sec"], 7.0)
+        self.assertEqual(result[0]["end_sec"], 13.0)
+
+
 class TestCalculateCropAtTime(unittest.TestCase):
     """Tests for calculate_crop_at_time function."""
 
@@ -167,6 +224,54 @@ class TestCalculateCropAtTime(unittest.TestCase):
         )
         self.assertEqual(w, 1440)
         self.assertEqual(h, 1080)
+
+    def test_hold_last_known_crop_when_nearest_has_no_detections(self):
+        """When person leaves at t=4, query at t=6: nearest entry (t=6) has no detections; entry at t=4 has detections within 5s → crop holds at t=4 position, not center."""
+        sidecar = {
+            "entries": [
+                {"timestamp_sec": 4.0, "detections": [{"centerpoint": [800, 400], "area": 500.0}]},
+                {"timestamp_sec": 5.0, "detections": []},
+                {"timestamp_sec": 6.0, "detections": []},
+            ]
+        }
+        x, y, w, h = calculate_crop_at_time(sidecar, 6.0, 1920, 1080, 1440, 1080)
+        # Should use t=4 entry: center (800, 400), not frame center (960, 540)
+        expected_x = max(0, min(1920 - 1440, int(800 - 1440 / 2.0)))
+        expected_y = max(0, min(1080 - 1080, int(400 - 1080 / 2.0)))
+        self.assertEqual(x, expected_x)
+        self.assertEqual(y, expected_y)
+        self.assertEqual(w, 1440)
+        self.assertEqual(h, 1080)
+
+    def test_hold_crop_fallback_to_center_when_no_detections_within_threshold(self):
+        """When no entry with detections exists within 5s, crop remains center."""
+        sidecar = {
+            "entries": [
+                {"timestamp_sec": 0.0, "detections": [{"centerpoint": [200, 200], "area": 100.0}]},
+                {"timestamp_sec": 10.0, "detections": []},
+            ]
+        }
+        x, y, w, h = calculate_crop_at_time(sidecar, 10.0, 1920, 1080, 1440, 1080)
+        # t=0 is > 5s away from t=10, so fallback to center
+        self.assertEqual(x, 240)
+        self.assertEqual(y, 0)
+        self.assertEqual(w, 1440)
+        self.assertEqual(h, 1080)
+
+    def test_nearest_entry_has_detections_unchanged(self):
+        """When the nearest entry already has detections, behavior unchanged (no regression)."""
+        sidecar = {
+            "entries": [
+                {"timestamp_sec": 4.0, "detections": [{"centerpoint": [800, 400], "area": 500.0}]},
+                {"timestamp_sec": 6.0, "detections": [{"centerpoint": [1000, 500], "area": 500.0}]},
+            ]
+        }
+        x, y, w, h = calculate_crop_at_time(sidecar, 5.5, 1920, 1080, 1440, 1080)
+        # Nearest is t=6 (distance 0.5) with detections at (1000, 500)
+        expected_x = max(0, min(1920 - 1440, int(1000 - 1440 / 2.0)))
+        expected_y = max(0, min(1080 - 1080, int(500 - 1080 / 2.0)))
+        self.assertEqual(x, expected_x)
+        self.assertEqual(y, expected_y)
 
 
 class TestSmoothCropCentersEma(unittest.TestCase):
@@ -831,6 +936,43 @@ class TestCompileCeVideoConfig(unittest.TestCase):
         call_args = mock_build_dense.call_args[0]
         self.assertEqual(call_args[0], 2.5)
         self.assertEqual(call_args[1], 50)
+
+    @patch("frigate_buffer.services.video_compilation.generate_compilation_video")
+    @patch("frigate_buffer.services.video_compilation._trim_slices_to_action_window")
+    @patch("frigate_buffer.services.video_compilation.timeline_ema.build_phase1_assignments")
+    @patch("frigate_buffer.services.video_compilation.timeline_ema.build_dense_times")
+    @patch("frigate_buffer.services.query.resolve_clip_in_folder")
+    def test_returns_none_when_trim_leaves_no_slices(
+        self, mock_resolve, mock_build_dense, mock_build_assignments, mock_trim, mock_gen
+    ):
+        """When _trim_slices_to_action_window returns empty list, compile_ce_video returns None and does not call generate_compilation_video."""
+        mock_resolve.return_value = "cam1.mp4"
+        mock_build_dense.return_value = [0.0, 1.0, 2.0]
+        mock_build_assignments.return_value = [(0.0, "cam1"), (1.0, "cam1"), (2.0, "cam1")]
+        mock_trim.return_value = []
+        from frigate_buffer.services.video_compilation import compile_ce_video
+        config = {
+            "MAX_MULTI_CAM_FRAMES_SEC": 2,
+            "MAX_MULTI_CAM_FRAMES_MIN": 45,
+            "CAMERA_TIMELINE_ANALYSIS_MULTIPLIER": 2.0,
+            "CAMERA_TIMELINE_EMA_ALPHA": 0.4,
+            "CAMERA_TIMELINE_PRIMARY_BIAS_MULTIPLIER": 1.2,
+            "CAMERA_SWITCH_HYSTERESIS_MARGIN": 1.15,
+            "CAMERA_SWITCH_MIN_SEGMENT_FRAMES": 5,
+            "SUMMARY_TARGET_WIDTH": 1440,
+            "SUMMARY_TARGET_HEIGHT": 1080,
+        }
+        with patch("frigate_buffer.services.video_compilation.os.scandir") as mock_scandir:
+            with patch("frigate_buffer.services.video_compilation.os.path.isfile", return_value=True):
+                with patch("builtins.open", mock_open(read_data=json.dumps({"entries": [], "native_width": 1920, "native_height": 1080}))):
+                    mock_ent = MagicMock()
+                    mock_ent.is_dir.return_value = True
+                    mock_ent.name = "cam1"
+                    mock_ent.path = "/ce/cam1"
+                    mock_scandir.return_value.__enter__.return_value = [mock_ent]
+                    result = compile_ce_video("/ce", 3.0, config, None)
+        self.assertIsNone(result)
+        mock_gen.assert_not_called()
 
 
 class TestCompilationDecoderImport(unittest.TestCase):
