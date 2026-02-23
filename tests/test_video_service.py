@@ -10,8 +10,7 @@ from frigate_buffer.services.video import (
     BATCH_SIZE,
     _decoder_frame_count,
     _decoder_reader_ready,
-    _decoder_frame_count,
-    _decoder_reader_ready,
+    _run_detection_on_batch,
     ensure_detection_model_ready,
     get_detection_model_path,
 )
@@ -356,6 +355,45 @@ class TestDecoderFrameCount(unittest.TestCase):
             shape = ()
         result = _decoder_frame_count(ReaderNoLen(), 30.0, 0.0)
         self.assertEqual(result, 0)
+
+
+class TestRunDetectionOnBatch(unittest.TestCase):
+    """Tests for _run_detection_on_batch resize and bbox scale-back."""
+
+    def test_run_detection_on_batch_scales_bboxes_back_to_read_space(self):
+        """YOLO returns xyxy in resized space; detections are scaled back to decoder (read) space."""
+        try:
+            import torch
+        except ImportError:
+            self.skipTest("torch/numpy not available")
+        # Batch: 1 frame, 3 channels, read_h=1920, read_w=2560 -> target 1280x960, scale_x=2, scale_y=2
+        batch = torch.zeros((1, 3, 1920, 2560), dtype=torch.float32) * 0.5
+        mock_result = MagicMock()
+        # One box in resized space (1280x960): x1=100, y1=200, x2=300, y2=400
+        mock_result.boxes.xyxy = torch.tensor([[100.0, 200.0, 300.0, 400.0]])
+        mock_model = MagicMock(return_value=[mock_result])
+        out = _run_detection_on_batch(mock_model, batch, None, imgsz=1280)
+        self.assertEqual(len(out), 1)
+        self.assertEqual(len(out[0]), 1)
+        det = out[0][0]
+        self.assertEqual(det["label"], "person")
+        # Scaled to read space: x*2, y*2 -> [200, 400, 600, 800]
+        self.assertEqual(det["bbox"], [200.0, 400.0, 600.0, 800.0])
+        self.assertEqual(det["centerpoint"], [400.0, 600.0])
+        self.assertEqual(det["area"], 160000)
+
+    def test_run_detection_on_batch_small_batch_no_crash(self):
+        """Batch already 640x480 with imgsz=640 returns detections in read space without error."""
+        try:
+            import torch
+        except ImportError:
+            self.skipTest("torch not available")
+        batch = torch.zeros((2, 3, 480, 640), dtype=torch.float32)
+        mock_model = MagicMock(return_value=[MagicMock(boxes=MagicMock(xyxy=None)), MagicMock(boxes=MagicMock(xyxy=None))])
+        out = _run_detection_on_batch(mock_model, batch, None, imgsz=640)
+        self.assertEqual(len(out), 2)
+        self.assertEqual(out[0], [])
+        self.assertEqual(out[1], [])
 
 
 if __name__ == "__main__":

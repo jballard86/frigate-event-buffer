@@ -9,9 +9,10 @@ after each chunk (del + torch.cuda.empty_cache). GPU_LOCK serializes decoder ope
 from __future__ import annotations
 
 import json
+import logging
+import math
 import os
 import subprocess
-import logging
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
@@ -325,23 +326,43 @@ def _run_detection_on_batch(
 ) -> list[list[dict[str, Any]]]:
     """
     Run YOLO on a batch of frames (BCHW float32 [0,1]); return list of detection lists (one per frame).
+
+    Frames are resized on GPU to imgsz (aspect ratio, multiples of 32) before inference so that
+    Ultralytics receives a correctly sized tensor; bboxes are then scaled back to decoder (read)
+    space so the caller can pass them to _scale_detections_to_native.
     """
     import torch
+    import torch.nn.functional as F
 
+    batch_size = int(batch.shape[0])
+    read_h, read_w = int(batch.shape[2]), int(batch.shape[3])
     out: list[list[dict[str, Any]]] = []
     try:
         if batch.dtype == torch.uint8:
             batch = batch.float()
             batch.div_(255.0)
+        target_imgsz = max(320, int(imgsz))
+        scale = target_imgsz / max(read_h, read_w) if max(read_h, read_w) > 0 else 1.0
+        target_w = max(32, math.ceil((read_w * scale) / 32) * 32)
+        target_h = max(32, math.ceil((read_h * scale) / 32) * 32)
+        batch_resized = F.interpolate(
+            batch.float(), size=(target_h, target_w), mode="bilinear", align_corners=False
+        )
         logger.info("_run_detection_on_batch: calling model.predict (YOLO inference)")
         _flush_logger()
         results = model(
-            batch, device=device, verbose=False, classes=[_PERSON_CLASS_ID], imgsz=imgsz
+            batch_resized,
+            device=device,
+            verbose=False,
+            classes=[_PERSON_CLASS_ID],
+            imgsz=imgsz,
         )
         logger.info("_run_detection_on_batch: model.predict returned")
         _flush_logger()
+        scale_x = read_w / target_w if target_w > 0 else 1.0
+        scale_y = read_h / target_h if target_h > 0 else 1.0
         if not results:
-            return [[] for _ in range(batch.shape[0])]
+            return [[] for _ in range(batch_size)]
         for r in results:
             detections: list[dict[str, Any]] = []
             if r.boxes is not None and r.boxes.xyxy is not None:
@@ -357,7 +378,10 @@ def _run_detection_on_batch(
                 for i in range(len(xyxy)):
                     if len(xyxy[i]) < 4:
                         continue
-                    x1, y1, x2, y2 = float(xyxy[i][0]), float(xyxy[i][1]), float(xyxy[i][2]), float(xyxy[i][3])
+                    x1 = float(xyxy[i][0]) * scale_x
+                    y1 = float(xyxy[i][1]) * scale_y
+                    x2 = float(xyxy[i][2]) * scale_x
+                    y2 = float(xyxy[i][3]) * scale_y
                     area = int((x2 - x1) * (y2 - y1))
                     cx = (x1 + x2) / 2.0
                     cy = (y1 + y2) / 2.0
@@ -368,11 +392,11 @@ def _run_detection_on_batch(
                         "area": area,
                     })
             out.append(detections)
-        while len(out) < batch.shape[0]:
+        while len(out) < batch_size:
             out.append([])
     except Exception as e:
         logger.debug("Detection on batch failed: %s", e)
-        out = [[] for _ in range(batch.shape[0])]
+        out = [[] for _ in range(batch_size)]
     return out
 
 

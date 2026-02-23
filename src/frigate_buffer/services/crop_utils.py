@@ -78,7 +78,6 @@ def crop_around_center(
     """
     cx = int(center_x)
     cy = int(center_y)
-    logger.debug("Cropping frame (centerpoint)")
     return _crop_around_center(frame, cx, cy, target_w, target_h)
 
 

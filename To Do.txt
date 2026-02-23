@@ -1,0 +1,5 @@
+  - Stress-test YOLO batch size limits in video.py. Now that the GPU scales the tensors down before 
+    inference, monitor RTX 4060 VRAM usage and experiment with increasing BATCH_SIZE (from 4 to 8) to 
+    maximize speed without triggering an Out-of-Memory error during the initial batch.float() conversion.
+
+

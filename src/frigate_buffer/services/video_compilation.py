@@ -477,6 +477,12 @@ def _run_pynv_compilation(
                     src_indices[0], n_frames, cam, t0, t1,
                 )
 
+            # One log per slice with actionable info (not per-frame).
+            logger.debug(
+                "Compilation slice %s camera=%s: frame %sx%s, crop center (%.0f,%.0f)->(%.0f,%.0f), target %sx%s, n_frames=%s",
+                slice_idx, cam, iw, ih, start_cx, start_cy, end_cx, end_cy, target_w, target_h, n_frames,
+            )
+
             for i in range(n_frames):
                 frame = batch[i : i + 1]
                 t = output_times[i]
