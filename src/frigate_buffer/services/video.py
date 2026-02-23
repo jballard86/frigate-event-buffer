@@ -294,10 +294,10 @@ def _run_detection_on_frame(
             if xyxy is None:
                 continue
             try:
-                logger.info("_run_detection: converting xyxy tensor to CPU/numpy")
+                logger.debug("_run_detection: converting xyxy tensor to CPU/numpy")
                 _flush_logger()
                 xyxy = xyxy.cpu().numpy() if hasattr(xyxy, "cpu") else xyxy
-                logger.info("_run_detection: xyxy converted to numpy")
+                logger.debug("_run_detection: xyxy converted to numpy")
                 _flush_logger()
             except Exception:
                 pass
@@ -369,10 +369,10 @@ def _run_detection_on_batch(
             if r.boxes is not None and r.boxes.xyxy is not None:
                 xyxy = r.boxes.xyxy
                 try:
-                    logger.info("_run_detection_on_batch: converting xyxy tensor to CPU/numpy")
+                    logger.debug("_run_detection_on_batch: converting xyxy tensor to CPU/numpy")
                     _flush_logger()
                     xyxy = xyxy.cpu().numpy() if hasattr(xyxy, "cpu") else xyxy
-                    logger.info("_run_detection_on_batch: xyxy converted to numpy")
+                    logger.debug("_run_detection_on_batch: xyxy converted to numpy")
                     _flush_logger()
                 except Exception:
                     pass

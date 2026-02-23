@@ -22,6 +22,7 @@ from frigate_buffer.constants import (
     FRAME_MAX_WIDTH,
     GEMINI_PROXY_ANALYSIS_TIMEOUT,
     GEMINI_PROXY_QUICK_TITLE_TIMEOUT,
+    is_tensor,
 )
 from frigate_buffer.managers.file import write_ai_frame_analysis_multi_cam
 
@@ -210,8 +211,10 @@ class GeminiAnalysisService:
         """
         Encode a frame as JPEG base64 data URL.
         Accepts numpy HWC BGR (cv2) or torch.Tensor BCHW/CHW RGB (Phase 4 GPU pipeline).
+        GPU-sourced frames (tensors) are always encoded via the tensor path to avoid CPU
+        round-trip; only numpy HWC BGR uses the cv2 resize/encode path.
         """
-        if type(frame).__name__ == "Tensor":
+        if is_tensor(frame):
             return self._frame_tensor_to_base64_url(frame)
         h, w = frame.shape[:2]
         if w > FRAME_MAX_WIDTH:

@@ -14,7 +14,7 @@ The codebase largely adheres to the zero-copy GPU pipeline described in `MAP.md`
 
 ## 1. The CPU/GPU Boundary (Zero-Copy Violations)
 
-### 1.1 [LOW] YOLO bbox tensor → CPU/numpy inside detection path (`video.py`)
+### 1.1 [LOW] [ACCEPTED - BY DESIGN] YOLO bbox tensor → CPU/numpy inside detection path (`video.py`)
 
 **Location:** `src/frigate_buffer/services/video.py`  
 - `_run_detection_on_image`: ~298 — `xyxy = xyxy.cpu().numpy() if hasattr(xyxy, "cpu") else xyxy`  
@@ -26,7 +26,7 @@ The codebase largely adheres to the zero-copy GPU pipeline described in `MAP.md`
 
 ---
 
-### 1.2 [LOW] Compilation frame → numpy at FFmpeg stdin boundary (`video_compilation.py`)
+### 1.2 [LOW] [ACCEPTED - BY DESIGN] Compilation frame → numpy at FFmpeg stdin boundary (`video_compilation.py`)
 
 **Location:** `src/frigate_buffer/services/video_compilation.py` line 583  
 
@@ -41,7 +41,7 @@ frames_list.append(arr)
 
 ---
 
-### 1.3 [LOW] JPEG / file write boundaries (`ai_analyzer.py`, `file.py`, `quick_title_service.py`)
+### 1.3 [LOW] [ACCEPTED - BY DESIGN] JPEG / file write boundaries (`ai_analyzer.py`, `file.py`, `quick_title_service.py`)
 
 **Locations:**  
 - `ai_analyzer.py` ~251, ~257: `t.cpu()` then `encode_jpeg`; `jpeg_bytes.cpu().numpy().tobytes()` for base64.  
@@ -54,7 +54,7 @@ frames_list.append(arr)
 
 ---
 
-### 1.4 [LOW] `crop_utils`: motion mask and timestamp overlay (`crop_utils.py`)
+### 1.4 [LOW] [ACCEPTED - BY DESIGN] `crop_utils`: motion mask and timestamp overlay (`crop_utils.py`)
 
 **Locations:**  
 - ~263: `mask_cpu = thresh.squeeze().cpu().numpy()` then `cv2.findContours(mask_cpu, ...)`  
@@ -66,7 +66,7 @@ frames_list.append(arr)
 
 ---
 
-### 1.5 [MEDIUM] `ai_analyzer.py` numpy path: `cv2.resize` / `cv2.imencode` on full frame
+### 1.5 [MEDIUM] [DONE] `ai_analyzer.py` numpy path: `cv2.resize` / `cv2.imencode` on full frame
 
 **Location:** `src/frigate_buffer/services/ai_analyzer.py` ~216–220  
 
@@ -85,7 +85,7 @@ _, buf = cv2.imencode('.jpg', frame)
 
 ---
 
-### 1.6 [LOW] Debug logging in hot path (`video.py`)
+### 1.6 [LOW] [DONE] Debug logging in hot path (`video.py`)
 
 **Location:** `src/frigate_buffer/services/video.py` ~295–299 and ~370–374  
 

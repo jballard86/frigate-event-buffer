@@ -136,6 +136,20 @@ class TestFrameToBase64Url(unittest.TestCase):
         self.assertTrue(url.startswith("data:image/jpeg;base64,"))
         self.assertGreater(len(url), 50)
 
+    def test_frame_to_base64_url_tensor_delegates_to_tensor_path(self):
+        """Tensor input must use _frame_tensor_to_base64_url (GPU path), not cv2 path."""
+        try:
+            import torch
+        except ImportError:
+            self.skipTest("torch not available")
+        config = {"GEMINI": {"enabled": True, "proxy_url": "http://p", "api_key": "k"}}
+        service = GeminiAnalysisService(config)
+        t = torch.zeros((1, 3, 60, 80), dtype=torch.uint8)
+        with patch.object(service, "_frame_tensor_to_base64_url", return_value="data:image/jpeg;base64,MOCK") as mock_tensor_encode:
+            url = service._frame_to_base64_url(t)
+        mock_tensor_encode.assert_called_once_with(t)
+        self.assertEqual(url, "data:image/jpeg;base64,MOCK")
+
 
 class TestGeminiFrameCapAndLogging(unittest.TestCase):
     """Test rolling frame cap and API rate stats logging."""
