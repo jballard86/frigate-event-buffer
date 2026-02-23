@@ -17,3 +17,7 @@ NON_CAMERA_DIRS: frozenset[str] = frozenset({
 # Chunk size for HTTP streaming (e.g. proxy snapshot/latest.jpg, download iter_content).
 # Used so streaming responses do not load entire body into memory.
 HTTP_STREAM_CHUNK_SIZE: int = 8192
+
+# Frigate proxy request timeouts (seconds). Used by web/frigate_proxy for snapshot and latest.jpg.
+FRIGATE_PROXY_SNAPSHOT_TIMEOUT: int = 15
+FRIGATE_PROXY_LATEST_TIMEOUT: int = 10

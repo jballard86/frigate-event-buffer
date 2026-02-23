@@ -133,7 +133,17 @@ frigate-event-buffer/
 │       │   └── ai_analyzer_system_prompt.txt
 │       └── web/
 │           ├── __init__.py
+│           ├── frigate_proxy.py
+│           ├── path_helpers.py
+│           ├── report_helpers.py
 │           ├── server.py
+│           ├── routes/
+│           │   ├── __init__.py
+│           │   ├── api.py
+│           │   ├── daily_review.py
+│           │   ├── pages.py
+│           │   ├── proxy_routes.py
+│           │   └── test_routes.py
 │           ├── templates/
 │           │   ├── player.html
 │           │   ├── test_run.html
@@ -214,7 +224,7 @@ frigate-event-buffer/
 | `src/frigate_buffer/config.py` | Load/validate YAML + env via Voluptuous `CONFIG_SCHEMA`; flat keys (e.g. `MQTT_BROKER`, `GEMINI_PROXY_URL`, `MAX_EVENT_LENGTH_SECONDS`). Frame limits for AI: `multi_cam.max_multi_cam_frames_*` only. `single_camera_ce_close_delay_seconds` (0 = close single-cam CE as soon as event ends). Invalid config exits 1. | Used by `main.py`. |
 | `src/frigate_buffer/version.txt` | Version string read at startup; logged in main. | Package data; included by `COPY src/` in Dockerfile. |
 | `src/frigate_buffer/logging_utils.py` | `setup_logging()`, `ErrorBuffer` for stats dashboard. | Called from main; ErrorBuffer used by web/server and orchestrator. |
-| `src/frigate_buffer/constants.py` | Shared constants: `NON_CAMERA_DIRS` (frozenset of non-camera dir names), `HTTP_STREAM_CHUNK_SIZE` (8192). | Imported by file manager, query, server, frigate_export_watchdog. |
+| `src/frigate_buffer/constants.py` | Shared constants: `NON_CAMERA_DIRS`, `HTTP_STREAM_CHUNK_SIZE` (8192), `FRIGATE_PROXY_SNAPSHOT_TIMEOUT` (15), `FRIGATE_PROXY_LATEST_TIMEOUT` (10). | Imported by file manager, query, blueprints, frigate_proxy, frigate_export_watchdog. |
 
 ### Core coordinator & models
 
@@ -268,7 +278,11 @@ frigate-event-buffer/
 
 | Path/Name | Purpose | Dependencies/Interactions |
 |-----------|---------|---------------------------|
-| `src/frigate_buffer/web/server.py` | **create_app(orchestrator):** routes `/player`, `/stats-page`, `/daily-review`, `/test-multi-cam`, `/api/test-multi-cam/*`, `/api/events`, `/api/files`, `/api/events/<id>/snapshot.jpg` (proxy), **`/api/cameras/<camera>/latest.jpg`** (Frigate live frame proxy for initial notification), `/api/daily-review/*`, `/api/stats`, `/status`, timeline. Uses EventQueryService, path safety via file_manager. | Closes over orchestrator; uses query service, file_manager. |
+| `src/frigate_buffer/web/frigate_proxy.py` | **proxy_snapshot**, **proxy_camera_latest:** stream Frigate snapshot/latest.jpg; return Flask Response or (body, status). Validates camera name and allowed_cameras; 503 when Frigate URL not set, 502 on request failure. | Used by proxy_routes blueprint. |
+| `src/frigate_buffer/web/path_helpers.py` | **resolve_under_storage(storage_path, \*path_parts):** returns normalized absolute path iff it lies strictly under the real storage root; otherwise None. Single place for web path-safety checks (no path traversal). | Used by api and test_routes blueprints; by report_helpers for get_report_for_date. |
+| `src/frigate_buffer/web/report_helpers.py` | **daily_reports_dir**, **list_report_dates**, **get_report_for_date:** list/read daily report markdown from daily_reports/ (YYYY-MM-DD_report.md). Path safety via resolve_under_storage. | Used by daily_review blueprint. |
+| `src/frigate_buffer/web/server.py` | **create_app(orchestrator):** creates Flask app, registers before_request (request count), registers blueprints (pages, proxy, daily_review, api, test), returns app. No route definitions; thin shell. | Imports and registers blueprints from web.routes. |
+| `src/frigate_buffer/web/routes/` | **Blueprints:** `pages` (player, stats-page, daily-review, test-multi-cam), `proxy_routes` (snapshot, latest.jpg), `daily_review` (api/daily-review/*), `api` (cameras, events, delete, viewed, timeline, files, stats, status), `test_routes` (api/test-multi-cam/*). Each module exposes create_bp(orchestrator); routes close over orchestrator. | Registered by server.create_app. |
 | `src/frigate_buffer/web/templates/*.html` | Jinja2 templates for player, stats, daily report, timeline, test run. Player's AI Analysis tile: first line = event title (canned or quick AI) or "future screenshot analysis"; then scene. | Rendered by Flask. |
 | `src/frigate_buffer/web/static/*.js` | DOMPurify, Marked (min). | Served by Flask. |
 
@@ -292,7 +306,7 @@ frigate-event-buffer/
 5. **Event end (long/canceled):** Duration ≥ `max_event_length_seconds` → no clip export/AI; write canceled summary, notify HA, rename folder `-canceled`; cleanup later by retention.
 6. **Consolidated event (all events):** Every event is a CE (single- or multi-camera). At CE close: Lifecycle exports each camera clip, **VideoService.generate_detection_sidecars_for_cameras** (all cameras, including single) → `on_ce_ready_for_analysis` → **analyze_multi_clip_ce** (multi_clip_extractor with timeline_ema as sole camera-assignment logic) → `_handle_ce_analysis_result` → write summary/metadata at CE root, notify HA. Single-camera CE uses same pipeline (camera count 1).
 7. **Frigate review path (per-event only):** `_handle_review` used when GenAI data arrives via MQTT `frigate/reviews` (update state, write files, notify). Daily summary is no longer fetched from Frigate; the daily report page is fed only from **DailyReporterService** output (`daily_reports/YYYY-MM-DD_report.md`).
-8. **Web:** Flask uses **EventQueryService** to list events, stats, timeline; `resolve_clip_in_folder` for dynamic clip URLs; path safety via FileManager. Daily report UI reads markdown from `daily_reports/`; POST `/api/daily-review/generate` triggers on-demand report generation.
+8. **Web:** Flask (create_app registers blueprints) uses **EventQueryService** to list events, stats, timeline; `resolve_clip_in_folder` for dynamic clip URLs; path safety via path_helpers (web) and FileManager. Daily report UI reads markdown from `daily_reports/`; POST `/api/daily-review/generate` triggers on-demand report generation.
 9. **Scheduled:** Cleanup (retention), export watchdog (DELETE completed exports), daily reporter (aggregate + report prompt → proxy → markdown; then `cleanup_old_reports`). Config: **quick_title_delay_seconds** (e.g. 4), **quick_title_enabled** (when true and Gemini enabled, run quick-title pipeline).
 
 **Files touched in primary flow:** `orchestrator.py`, `services/mqtt_handler.py`, `services/lifecycle.py`, `services/quick_title_service.py`, `services/ai_analyzer.py`, `services/mqtt_client.py`, `managers/state.py`, `managers/file.py`, `managers/consolidation.py`, `services/notifier.py`, `services/download.py`, `services/query.py`, `web/server.py`.
@@ -324,10 +338,10 @@ Do not use PyPI for NeLux; the project vendors the wheel from `wheels/`.
 
 | Need | Location |
 |------|----------|
-| New **UI component / page** | Add route in `src/frigate_buffer/web/server.py`; template in `src/frigate_buffer/web/templates/`; static assets in `src/frigate_buffer/web/static/`. |
+| New **UI component / page** | Add route in the appropriate blueprint under `src/frigate_buffer/web/routes/` (e.g. pages.py); template in `src/frigate_buffer/web/templates/`; static assets in `src/frigate_buffer/web/static/`. |
 | New **business logic / service** | `src/frigate_buffer/services/` (or `managers/` if it is state/aggregation). Register and call from `orchestrator.py` (or from an existing service) as appropriate. |
 | New **utility function** (generic, no I/O) | `src/frigate_buffer/services/` (e.g. `crop_utils.py`) or a new module under `services/` if it fits a clear domain. |
-| New **API route** (REST) | Add in `src/frigate_buffer/web/server.py`; use EventQueryService or FileManager for data; never put business logic in server.py beyond delegation. |
+| New **API route** (REST) | Add in the appropriate blueprint under `src/frigate_buffer/web/routes/` (e.g. api.py or daily_review.py); use EventQueryService or FileManager for data; never put business logic in route handlers beyond delegation. |
 | New **config key** | Add to **CONFIG_SCHEMA** in `src/frigate_buffer/config.py` first; then add flat key in config merge; use in code via `config.get('KEY', default)`. |
 | New **standalone script** | `scripts/` at repo root. |
 | **Tests** | `tests/test_<module_or_feature>.py`; mirror structure under `src/frigate_buffer/` where it helps. |
