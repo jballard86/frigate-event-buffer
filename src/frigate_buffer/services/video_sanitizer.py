@@ -26,8 +26,8 @@ def sanitize_for_nelux(clip_path: str) -> Generator[str, None, None]:
     """
     Yield a path safe for NeLux VideoReader: either a sanitized temp file or the original.
 
-    Re-encodes the clip with FFmpeg (CUDA decode + scale_cuda, h264_nvenc profile high, bf=0)
-    into a temp file on RAM disk when possible. 100% GPU; I/P-only stream to avoid NVDEC buffer assertion. On FFmpeg failure, logs stderr and yields clip_path
+    Re-encodes the clip with FFmpeg (CUDA decode + scale_cuda, h264_nvenc profile high, GOP=1)
+    into a temp file on RAM disk when possible. 100% GPU; All-I-frame output (every frame a keyframe) so NeLux NVDEC does not hit "Slice overlaps with next" on strided/random access. On FFmpeg failure, logs stderr and yields clip_path
     so callers can attempt NeLux on the original and fail in a controlled way.
     Temp file is always removed in finally.
     """
@@ -37,27 +37,21 @@ def sanitize_for_nelux(clip_path: str) -> Generator[str, None, None]:
     os.close(fd)
     try:
         try:
-            subprocess.run(
-                [
-                    "ffmpeg",
-                    "-y",
-                    "-hwaccel", "cuda",
-                    "-hwaccel_output_format", "cuda",
-                    "-i", clip_path,
-                    "-vf", "scale_cuda=w='min(iw,4096)':h=-2",
-                    "-c:v", "h264_nvenc",
-                    "-preset", "p1",
-                    "-tune", "hq",
-                    "-profile:v", "high",
-                    "-bf", "0",
-                    "-b:v", "5M",
-                    "-an",
-                    temp_path,
-                ],
-                capture_output=True,
-                text=True,
-                check=True,
-            )
+            subprocess.run([
+                "ffmpeg", "-y",
+                "-hwaccel", "cuda",
+                "-hwaccel_output_format", "cuda",
+                "-i", clip_path,
+                "-vf", "scale_cuda=w='min(iw,4096)':h=-2",
+                "-c:v", "h264_nvenc",
+                "-preset", "p1",
+                "-tune", "hq",
+                "-profile:v", "high",
+                "-g", "1",
+                "-b:v", "10M",
+                "-an",
+                temp_path
+            ], capture_output=True, text=True, check=True)
             yield temp_path
         except subprocess.CalledProcessError as e:
             logger.warning(
