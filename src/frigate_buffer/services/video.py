@@ -1,8 +1,9 @@
 """
-Video service: NeLux NVDEC decode, YOLO detection, sidecar writing, GIF via FFmpeg.
+Video service: NeLux decode (CPU reader), YOLO detection, sidecar writing, GIF via FFmpeg.
 
-Decode is GPU-only via NeLux VideoReader; no CPU/ffmpegcv fallback. Frames are normalized
-to float32 [0,1] before YOLO. VRAM is released after each chunk (del + torch.cuda.empty_cache).
+Hybrid pipeline: sanitizer does GPU heavy lifting (FFmpeg CUDA/nvenc); NeLux VideoReader uses
+decode_accelerator='cpu' (num_threads=4) for stable frame reading from sanitized All-I output.
+Frames are normalized to float32 [0,1] before YOLO. VRAM is released after each chunk (del + torch.cuda.empty_cache).
 """
 
 from __future__ import annotations
@@ -20,7 +21,7 @@ from frigate_buffer.services.video_sanitizer import sanitize_for_nelux
 
 logger = logging.getLogger("frigate-buffer")
 
-# Serialize NeLux NVDEC access across threads to avoid C++ segfault on concurrent VideoReader/get_batch.
+# Serialize NeLux reader access across threads (VideoReader init and get_batch) for stable C++ state machine.
 GPU_LOCK = threading.Lock()
 
 
@@ -459,9 +460,8 @@ class VideoService:
                     _flush_logger()
                     reader = VideoReader(
                         safe_path,
-                        decode_accelerator="nvdec",
-                        cuda_device_index=cuda_device_index,
-                        num_threads=1,
+                        decode_accelerator="cpu",
+                        num_threads=4,
                     )
                     # Monkey-patch: If the wrapper is missing _decoder, point it to itself
                     if not hasattr(reader, "_decoder"):

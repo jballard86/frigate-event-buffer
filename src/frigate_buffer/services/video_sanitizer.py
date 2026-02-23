@@ -26,8 +26,8 @@ def sanitize_for_nelux(clip_path: str) -> Generator[str, None, None]:
     """
     Yield a path safe for NeLux VideoReader: either a sanitized temp file or the original.
 
-    Re-encodes the clip with FFmpeg (CUDA decode + scale_cuda, h264_nvenc profile high, GOP=1)
-    into a temp file on RAM disk when possible. 100% GPU; All-I-frame output (every frame a keyframe) so NeLux NVDEC does not hit "Slice overlaps with next" on strided/random access. On FFmpeg failure, logs stderr and yields clip_path
+    Re-encodes the clip with FFmpeg (CUDA decode + scale_cuda, h264_nvenc profile high, GOP=1, -b:v 30M)
+    into a temp file on RAM disk when possible. 100% GPU; All-I-frame output so the downstream CPU reader can decode frames without NVDEC. On FFmpeg failure, logs stderr and yields clip_path
     so callers can attempt NeLux on the original and fail in a controlled way.
     Temp file is always removed in finally.
     """
@@ -48,7 +48,7 @@ def sanitize_for_nelux(clip_path: str) -> Generator[str, None, None]:
                 "-tune", "hq",
                 "-profile:v", "high",
                 "-g", "1",
-                "-b:v", "10M",
+                "-b:v", "30M",
                 "-an",
                 temp_path
             ], capture_output=True, text=True, check=True)

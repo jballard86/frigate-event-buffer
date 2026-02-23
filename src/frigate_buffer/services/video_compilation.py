@@ -391,7 +391,7 @@ def _run_nelux_compilation(
     cuda_device_index: int = 0,
 ) -> None:
     """
-    Decode each slice with NeLux (NVDEC), crop with smooth panning in tensor space.
+    Decode each slice with NeLux (CPU decode, num_threads=4) for stability; crop with smooth panning in tensor space.
     Encode via FFmpeg h264_nvenc only (GPU); no CPU fallback. Output 20fps, no audio.
     """
     import torch  # required before nelux
@@ -409,9 +409,8 @@ def _run_nelux_compilation(
             with GPU_LOCK:
                 reader = VideoReader(
                     safe_path,
-                    decode_accelerator="nvdec",
-                    cuda_device_index=cuda_device_index,
-                    num_threads=1,
+                    decode_accelerator="cpu",
+                    num_threads=4,
                 )
                 if not hasattr(reader, "_decoder"):
                     reader._decoder = reader
