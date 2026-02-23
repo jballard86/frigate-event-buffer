@@ -14,15 +14,13 @@ import subprocess
 
 from frigate_buffer.constants import NVDEC_INIT_FAILURE_PREFIX
 from frigate_buffer.services import timeline_ema
-from frigate_buffer.services.video_sanitizer import sanitize_for_nelux
-from frigate_buffer.services.video import (
-    GPU_LOCK,
-    _get_video_metadata,
-    _nelux_frame_count,
-    _nelux_reader_ready,
-)
+from frigate_buffer.services.gpu_decoder import create_decoder
+from frigate_buffer.services.video import GPU_LOCK, _get_video_metadata
 
 logger = logging.getLogger("frigate-buffer")
+
+# Output frame rate for compilation (smooth panning samples at this rate).
+COMPILATION_OUTPUT_FPS = 20
 
 
 def convert_timeline_to_segments(timeline_points: list[tuple[float, str]], global_end: float) -> list[dict]:
@@ -381,7 +379,7 @@ def _resolve_clip_path(ce_dir: str, camera: str, resolve_clip_in_folder: object)
     return clip_path
 
 
-def _run_nelux_compilation(
+def _run_pynv_compilation(
     slices: list[dict],
     ce_dir: str,
     tmp_output_path: str,
@@ -391,11 +389,11 @@ def _run_nelux_compilation(
     cuda_device_index: int = 0,
 ) -> None:
     """
-    Decode each slice with NeLux (CPU decode, num_threads=1) for stability and to avoid async_lock; crop with smooth panning in tensor space.
+    Decode each slice with PyNvVideoCodec (gpu_decoder); crop with smooth panning in tensor space.
+    Uses PTS-based frame selection (get_index_from_time_in_seconds) to reduce variable frame rate jitter.
     Encode via FFmpeg h264_nvenc only (GPU); no CPU fallback. Output 20fps, no audio.
     """
-    import torch  # required before nelux
-    from nelux import VideoReader  # type: ignore[import-untyped]
+    import torch
 
     if not slices:
         return
@@ -405,92 +403,66 @@ def _run_nelux_compilation(
     for slice_idx, sl in enumerate(slices):
         cam = sl["camera"]
         clip_path = _resolve_clip_path(ce_dir, cam, resolve_clip_in_folder)
-        with sanitize_for_nelux(clip_path) as safe_path:
+        t0 = sl["start_sec"]
+        t1 = sl["end_sec"]
+        duration = t1 - t0
+        n_frames = max(1, round(duration * float(COMPILATION_OUTPUT_FPS)))
+        xs, ys, w, h = sl["crop_start"]
+        xe, ye, we, he = sl["crop_end"]
+        output_times = [t0 + i / float(COMPILATION_OUTPUT_FPS) for i in range(n_frames)]
+
+        try:
             with GPU_LOCK:
-                reader = VideoReader(
-                    safe_path,
-                    decode_accelerator="cpu",
-                    num_threads=1,
-                )
-                if not hasattr(reader, "_decoder"):
-                    reader._decoder = reader
-                if not _nelux_reader_ready(reader):
-                    logger.error(
-                        "%s: NeLux decoder not initialized for slice %s. path=%s Check GPU/drivers; container may restart.",
-                        NVDEC_INIT_FAILURE_PREFIX,
-                        slice_idx,
-                        clip_path,
-                    )
-                    logger.warning(
-                        "NeLux decoder not initialized for slice %s, skipping: %s",
-                        slice_idx,
-                        clip_path,
-                    )
-                    del reader
-                    continue
-                fps = float(reader.fps)
-                if fps <= 0:
-                    fps = 20.0
-                meta = _get_video_metadata(clip_path)
-                fallback_duration = meta[3] if meta else 0.0
-                frame_count = _nelux_frame_count(reader, fps, fallback_duration)
-                t0 = sl["start_sec"]
-                t1 = sl["end_sec"]
-                duration = t1 - t0
-                if frame_count <= 0 and duration > 0:
-                    frame_count = max(1, int(duration * fps))
-                n_frames = max(1, round(duration * 20.0))
-                xs, ys, w, h = sl["crop_start"]
-                xe, ye, we, he = sl["crop_end"]
-
-                # Output frame times at 20fps; map to source frame indices.
-                output_times = [t0 + i / 20.0 for i in range(n_frames)]
-                start_f = int(t0 * fps)
-                end_f = int(t1 * fps)
-                start_f = max(0, min(start_f, frame_count - 1))
-                end_f = max(0, min(end_f, frame_count))
-                if end_f <= start_f:
-                    end_f = start_f + 1
-                src_indices = [
-                    max(start_f, min(int(t * fps), end_f - 1)) for t in output_times
-                ]
-
-            if not src_indices:
-                continue
-
-            try:
-                with GPU_LOCK:
-                    batch = reader.get_batch(src_indices)
-                _, _, ih, iw = batch.shape
-                for i in range(n_frames):
-                    frame = batch[i : i + 1]
-                    t = output_times[i]
-                    t_rel = t - t0
-                    if duration <= 1e-6:
-                        x, y = xs, ys
-                    else:
-                        x = xs + (xe - xs) * (t_rel / duration)
-                        y = ys + (ye - ys) * (t_rel / duration)
-                    x = int(min(max(0, x), iw - w))
-                    y = int(min(max(0, y), ih - h))
-                    cropped = frame[:, :, y : y + h, x : x + w]
-                    # Resize to target size if crop dimensions differ (e.g. scaled-down source)
-                    if cropped.shape[2] != target_h or cropped.shape[3] != target_w:
-                        cropped = torch.nn.functional.interpolate(
-                            cropped.float(),
-                            size=(target_h, target_w),
-                            mode="bilinear",
-                            align_corners=False,
-                        ).byte()
-                    # BCHW -> HWC uint8 RGB for FFmpeg rawvideo
-                    arr = cropped[0].permute(1, 2, 0).cpu().numpy()
-                    frames_list.append(arr)
-            finally:
-                if reader is not None:
-                    try:
-                        del reader
-                    except Exception:
-                        pass
+                with create_decoder(clip_path, gpu_id=cuda_device_index) as ctx:
+                    frame_count = len(ctx)
+                    if frame_count <= 0:
+                        meta = _get_video_metadata(clip_path)
+                        fps = (meta[2] if meta and meta[2] > 0 else 30.0)
+                        frame_count = max(1, int((meta[3] if meta else duration) * fps))
+                    # PTS-based frame indices to reduce jitter (decoder time→index mapping).
+                    src_indices = [
+                        min(max(0, ctx.get_index_from_time_in_seconds(t)), frame_count - 1)
+                        for t in output_times
+                    ]
+                    if not src_indices:
+                        continue
+                    batch = ctx.get_frames(src_indices)
+            # Decoder context closed; batch is cloned so we can use it.
+            _, _, ih, iw = batch.shape
+            for i in range(n_frames):
+                frame = batch[i : i + 1]
+                t = output_times[i]
+                t_rel = t - t0
+                if duration <= 1e-6:
+                    x, y = xs, ys
+                else:
+                    x = xs + (xe - xs) * (t_rel / duration)
+                    y = ys + (ye - ys) * (t_rel / duration)
+                x = int(min(max(0, x), iw - w))
+                y = int(min(max(0, y), ih - h))
+                cropped = frame[:, :, y : y + h, x : x + w]
+                if cropped.shape[2] != target_h or cropped.shape[3] != target_w:
+                    cropped = torch.nn.functional.interpolate(
+                        cropped.float(),
+                        size=(target_h, target_w),
+                        mode="bilinear",
+                        align_corners=False,
+                    ).byte()
+                arr = cropped[0].permute(1, 2, 0).cpu().numpy()
+                frames_list.append(arr)
+            del batch
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except Exception as e:
+            logger.error(
+                "%s (decoder failed for slice %s). path=%s error=%s",
+                NVDEC_INIT_FAILURE_PREFIX,
+                slice_idx,
+                clip_path,
+                e,
+                exc_info=True,
+            )
+            logger.warning("Skipping slice %s (%s): %s", slice_idx, clip_path, e)
 
     if frames_list:
         _encode_frames_via_ffmpeg(frames_list, target_w, target_h, tmp_output_path)
@@ -503,9 +475,10 @@ def generate_compilation_video(
     target_w: int = 1440,
     target_h: int = 1080,
     crop_smooth_alpha: float = 0.0,
+    config: dict | None = None,
 ) -> None:
     """
-    Concatenates slices into a final 20fps cropped video. Decode and crop via NeLux (NVDEC) and PyTorch;
+    Concatenates slices into a final 20fps cropped video. Decode and crop via PyNvVideoCodec (gpu_decoder) and PyTorch;
     encode via FFmpeg h264_nvenc only (GPU; no CPU fallback). Smooth panning uses t/duration interpolation.
     Optional EMA smoothing of crop centers. No audio.
     """
@@ -559,15 +532,17 @@ def generate_compilation_video(
     if crop_smooth_alpha > 0:
         smooth_crop_centers_ema(slices, crop_smooth_alpha)
 
+    cuda_device_index = int(config.get("CUDA_DEVICE_INDEX", 0)) if config else 0
     tmp_output_path = output_path + ".tmp"
     try:
-        _run_nelux_compilation(
+        _run_pynv_compilation(
             slices=slices,
             ce_dir=ce_dir,
             tmp_output_path=tmp_output_path,
             target_w=target_w,
             target_h=target_h,
             resolve_clip_in_folder=resolve_clip_in_folder,
+            cuda_device_index=cuda_device_index,
         )
         if os.path.isfile(tmp_output_path) and os.path.getsize(tmp_output_path) > 0:
             os.rename(tmp_output_path, output_path)
@@ -691,6 +666,7 @@ def compile_ce_video(ce_dir: str, global_end: float, config: dict, primary_camer
             target_w=int(config.get("SUMMARY_TARGET_WIDTH", 1440)),
             target_h=int(config.get("SUMMARY_TARGET_HEIGHT", 1080)),
             crop_smooth_alpha=crop_smooth_alpha,
+            config=config,
         )
         return output_path
     except Exception as e:

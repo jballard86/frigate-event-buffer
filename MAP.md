@@ -32,22 +32,22 @@
 | **Frameworks** | Flask (web), paho-mqtt (MQTT), schedule (cron-like jobs) |
 | **Config** | YAML + env, validated with Voluptuous |
 | **Data / state** | In-memory (EventStateManager, ConsolidatedEventManager); filesystem for events, clips, timelines, daily reports |
-| **Video / AI** | **NeLux** (vendored wheel: NVDEC decode for sidecars and compilation); compilation **encode** via **FFmpeg h264_nvenc only** (GPU; no CPU fallback). Ultralytics YOLO (detection sidecars), subprocess FFmpeg for GIF and compilation encode; OpenAI-compatible Gemini proxy (HTTP) |
+| **Video / AI** | **PyNvVideoCodec** (gpu_decoder: NVDEC decode for sidecars, multi-clip extraction, and compilation); compilation **encode** via **FFmpeg h264_nvenc only** (GPU; no CPU fallback). Ultralytics YOLO (detection sidecars), subprocess FFmpeg for GIF and compilation encode; OpenAI-compatible Gemini proxy (HTTP) |
 | **Testing** | pytest (`pythonpath = ["src"]`) |
 
-### Video & AI pipeline: zero-copy NeLux/PyTorch (mandatory)
+### Video & AI pipeline: zero-copy PyNvVideoCodec/PyTorch (mandatory)
 
 The project uses a **zero-copy GPU pipeline** for all video decode and frame processing in the main path:
 
-- **Decode:** **NeLux** (NVDEC) only. Clips are optionally **sanitized** (GPU FFmpeg HEVC→H.264 in VRAM via `sanitize_for_nelux`) before NeLux decode so corrupted frames from the NVR do not crash the C++ engine; on sanitizer failure the original path is yielded and existing error handling applies. All `VideoReader` calls use **num_threads=1** to avoid FFmpeg internal frame-threading and the async_lock assertion when the GPU is under load (e.g. Frigate + this app). Frames are decoded directly into PyTorch CUDA tensors (BCHW). There is **no CPU decode fallback** and **no ffmpegcv** anywhere in the codebase.
-- **Detection sidecars:** NeLux decode → batched frames → float32 [0,1] normalization → YOLO → `del` batch + `torch.cuda.empty_cache()` after each batch. No ffmpegcv or subprocess FFmpeg for decode.
-- **Frame crops/resize:** All production frame manipulation uses **`crop_utils`** with **PyTorch tensors in BCHW**. NumPy/OpenCV (e.g. `cv2.resize`, `np.ndarray`) are allowed **only at boundaries** (e.g. decoding a single image from the network, or encoding tensor → JPEG for API/disk).
-- **Output encoding:** Tensor frames are encoded via `torchvision.io.encode_jpeg` for API (base64) and file writes; no CPU round-trip for the main pipeline.
+- **Decode:** **PyNvVideoCodec** (gpu_decoder) only. Clips are opened with **create_decoder(clip_path, gpu_id)**; frames are decoded directly into PyTorch CUDA tensors (BCHW). There is **no CPU decode fallback** and **no ffmpegcv** anywhere in the codebase. Decoder access is **single-threaded**: the app-wide **GPU_LOCK** (in video.py) is the only lock; it serializes **create_decoder** and every **get_frames** call across video, multi_clip_extractor, and video_compilation.
+- **Detection sidecars:** gpu_decoder decode → batched frames via **get_frames(indices)** → float32 [0,1] normalization → YOLO → `del` batch + `torch.cuda.empty_cache()` after each batch. No ffmpegcv or subprocess FFmpeg for decode.
+- **Frame crops/resize:** All production frame manipulation uses **`crop_utils`** with **PyTorch tensors in BCHW**. NumPy/OpenCV (e.g. `cv2.resize`, `np.ndarray`) are allowed **only at boundaries** (e.g. decoding a single image from the network, or encoding tensor → JPEG for API/disk, or tensor → numpy for FFmpeg rawvideo stdin).
+- **Output encoding:** Tensor frames are encoded via `torchvision.io.encode_jpeg` for API (base64) and file writes; compilation encodes HWC numpy (at encode boundary only) via FFmpeg h264_nvenc rawvideo stdin.
 
 **Explicit prohibitions (do not reintroduce):**
 
 - **ffmpegcv** — Forbidden. Do not add it to dependencies or use it for decode/capture.
-- **CPU-decoding fallbacks** — Forbidden. Do not add fallback paths that decode video on CPU (e.g. OpenCV `VideoCapture`, FFmpeg subprocess for decode, or ffmpegcv) when NeLux is used for the main pipeline. The only remaining FFmpeg use is **GIF generation** (subprocess), **video sanitizer** (CUDA decode + scale_cuda, h264_nvenc; 100% GPU/VRAM; temp in `/dev/shm` when available), and **ffprobe** for metadata.
+- **CPU-decoding fallbacks** — Forbidden. Do not add fallback paths that decode video on CPU (e.g. OpenCV `VideoCapture`, FFmpeg subprocess for decode, or ffmpegcv). The only remaining FFmpeg use is **GIF generation** (subprocess) and **ffprobe** for metadata.
 - **Production frame processing on NumPy in the core path** — Forbidden. New crop/resize logic in the GPU pipeline must use `crop_utils` (BCHW tensors). Legacy NumPy crop helpers were removed from ai_analyzer; production uses `crop_utils`.
 
 ---
@@ -76,12 +76,6 @@ frigate-event-buffer/
 ├── Dockerfile
 ├── pyproject.toml
 ├── requirements.txt
-├── wheels/
-│   ├── Create_NeLux_Wheel.md                      # Build NeLux wheel from source (Docker, FFmpeg 6.1, CUDA)
-│   ├── Update_NeLux_Wheel.md                      # Steps to update to a new NeLux version
-│   ├── Dockerfile.nelux                            # Builder image for compiling the NeLux wheel
-│   ├── NeLux_troubleshooting.md                    # Runtime/Docker troubleshooting: hollow VideoReader, ldd, LD_LIBRARY_PATH, NVDEC
-│   └── nelux-0.8.9-cp312-cp312-linux_x86_64.whl   # vendored; do not use PyPI
 ├── MAP.md
 ├── README.md
 ├── INSTALL.md
@@ -117,6 +111,7 @@ frigate-event-buffer/
 │       │   ├── __init__.py
 │       │   ├── ai_analyzer.py
 │       │   ├── gemini_proxy_client.py
+│       │   ├── gpu_decoder.py
 │       │   ├── multi_clip_extractor.py
 │       │   ├── timeline_ema.py
 │       │   ├── video.py
@@ -129,7 +124,6 @@ frigate-event-buffer/
 │       │   ├── ha_storage_stats.py
 │       │   ├── timeline.py
 │       │   ├── video_compilation.py
-│       │   ├── video_sanitizer.py
 │       │   ├── mqtt_handler.py
 │       │   ├── mqtt_client.py
 │       │   ├── crop_utils.py
@@ -189,7 +183,6 @@ frigate-event-buffer/
 │   ├── test_timeline_ema.py
 │   ├── test_url_masking.py
 │   ├── test_video_compilation.py
-│   ├── test_video_sanitizer.py
 │   ├── test_video_service.py
 │   ├── test_web_server_path_safety.py
 │   └── test_zone_filter.py
@@ -211,9 +204,8 @@ frigate-event-buffer/
 | `config.yaml` | User config: cameras, network, settings, HA, Gemini, multi_cam. | Read by `config.load_config()` at startup. |
 | `config.example.yaml` | Example config with all keys and comments. | Reference only. |
 | `pyproject.toml` | Package metadata, deps, `where = ["src"]`, pytest `pythonpath = ["src"]`, `requires-python = ">=3.12"`. | Used by `pip install -e .` and pytest. |
-| `requirements.txt` | Pip install list; **no ffmpegcv** (forbidden). Includes vendored NeLux wheel from `wheels/` (do not use PyPI). Zero-copy GPU pipeline only. | Referenced by Dockerfile. |
-| `wheels/` | Vendored NeLux wheel (`nelux-0.8.9-cp312-cp312-linux_x86_64.whl`) for zero-copy GPU compilation; built against FFmpeg 6.1 / Ubuntu 24.04. Vendored C++ shared libraries (`libyuv.so*`, `libspdlog.so*`) from the NeLux builder are tracked (`.gitignore` exceptions) so clone-and-build works; Dockerfile copies them into `/usr/lib/x86_64-linux-gnu/` so runtime ABI matches the wheel. Python 3.12; torch must be imported before nelux at runtime. Frame count is obtained from the reader when possible; if the reader's `len()` fails (e.g. missing `_decoder`), we fall back to ffprobe metadata (duration × fps). **Wheel build/update:** `wheels/Create_NeLux_Wheel.md` (build from source), `wheels/Update_NeLux_Wheel.md` (update version), `wheels/Dockerfile.nelux` (builder image). **Runtime/Docker issues:** `wheels/NeLux_troubleshooting.md` (hollow VideoReader, ldd, LD_LIBRARY_PATH, NVDEC in Docker). | Copied into image; wheel installed via requirements.txt; .so libs copied to container lib path. |
-| `Dockerfile` | Single-stage: base `nvidia/cuda:12.6.0-runtime-ubuntu24.04`; installs Python 3.12, FFmpeg 6.1 from distro; copies vendored libyuv and libspdlog (`wheels/libyuv.so*`, `wheels/libspdlog.so*`) into `/usr/lib/x86_64-linux-gnu/` for NeLux ABI match; sets `LD_LIBRARY_PATH` so NeLux native deps load at runtime (no distro libyuv/libspdlog packages or symlinks). NeLux wheel from `wheels/`; FFmpeg 6.1 and vendored libs required at runtime. Uses BuildKit (`# syntax=docker/dockerfile:1`); final `pip install .` uses `--mount=type=cache,target=/root/.cache/pip` for faster code-only rebuilds. Build arg `USE_GUI_OPENCV` (default `false`): when `false`, uninstalls opencv-python and reinstalls opencv-python-headless (no X11); when `true`, keeps GUI opencv for faster full rebuilds. Runs `python3 -m frigate_buffer.main`. | Build from repo root. |
+| `requirements.txt` | Pip install list; **no ffmpegcv** (forbidden). **PyNvVideoCodec** from PyPI for zero-copy GPU decode; no vendored wheels. | Referenced by Dockerfile. |
+| `Dockerfile` | Single-stage: base `nvidia/cuda:12.6.0-runtime-ubuntu24.04`; installs Python 3.12, FFmpeg from distro (GIF, ffprobe, h264_nvenc encode). **PyNvVideoCodec** from requirements.txt for NVDEC decode; no NeLux or vendored libs. Uses BuildKit (`# syntax=docker/dockerfile:1`); final `pip install .` uses `--mount=type=cache,target=/root/.cache/pip` for faster code-only rebuilds. Build arg `USE_GUI_OPENCV` (default `false`): when `false`, uninstalls opencv-python and reinstalls opencv-python-headless (no X11); when `true`, keeps GUI opencv for faster full rebuilds. Runs `python3 -m frigate_buffer.main`. | Build from repo root. |
 | `docker-compose.yaml` / `docker-compose.example.yaml` | Compose for local run; GPU, env, mounts. No `YOLO_CONFIG_DIR` needed—app uses storage for Ultralytics config and model cache. | Deployment. |
 | `MAP.md` | This file—architecture and context for AI. | Must be updated when structure or flows change. |
 
@@ -225,7 +217,7 @@ frigate-event-buffer/
 | `src/frigate_buffer/config.py` | Load/validate YAML + env via Voluptuous `CONFIG_SCHEMA`; flat keys (e.g. `MQTT_BROKER`, `GEMINI_PROXY_URL`, `MAX_EVENT_LENGTH_SECONDS`). Frame limits for AI: `multi_cam.max_multi_cam_frames_*` only. `single_camera_ce_close_delay_seconds` (0 = close single-cam CE as soon as event ends). Invalid config exits 1. | Used by `main.py`. |
 | `src/frigate_buffer/version.txt` | Version string read at startup; logged in main. | Package data; included by `COPY src/` in Dockerfile. |
 | `src/frigate_buffer/logging_utils.py` | `setup_logging()`, `ErrorBuffer` for stats dashboard. | Called from main; ErrorBuffer used by web/server and orchestrator. |
-| `src/frigate_buffer/constants.py` | Shared constants: `NON_CAMERA_DIRS`; `HTTP_STREAM_CHUNK_SIZE` (8192), `HTTP_DOWNLOAD_CHUNK_SIZE` (65536); `FRIGATE_PROXY_SNAPSHOT_TIMEOUT` (15), `FRIGATE_PROXY_LATEST_TIMEOUT` (10); `GEMINI_PROXY_QUICK_TITLE_TIMEOUT` (30), `GEMINI_PROXY_ANALYSIS_TIMEOUT` (60); `LOG_MAX_RESPONSE_BODY` (2000), `FRAME_MAX_WIDTH` (1280); `DEFAULT_STORAGE_STATS_MAX_AGE_SECONDS` (30 min); `ERROR_BUFFER_MAX_SIZE` (10); **`NVDEC_INIT_FAILURE_PREFIX`** (log prefix when NVDEC/NeLux init fails so crash-loop logs are searchable). Also `is_tensor()` helper for torch.Tensor checks. | Imported by file manager, query, blueprints, frigate_proxy, frigate_export_watchdog, download, ai_analyzer, ha_storage_stats, logging_utils, video, video_compilation, multi_clip_extractor; is_tensor by file, video, crop_utils. |
+| `src/frigate_buffer/constants.py` | Shared constants: `NON_CAMERA_DIRS`; `HTTP_STREAM_CHUNK_SIZE` (8192), `HTTP_DOWNLOAD_CHUNK_SIZE` (65536); `FRIGATE_PROXY_SNAPSHOT_TIMEOUT` (15), `FRIGATE_PROXY_LATEST_TIMEOUT` (10); `GEMINI_PROXY_QUICK_TITLE_TIMEOUT` (30), `GEMINI_PROXY_ANALYSIS_TIMEOUT` (60); `LOG_MAX_RESPONSE_BODY` (2000), `FRAME_MAX_WIDTH` (1280); `DEFAULT_STORAGE_STATS_MAX_AGE_SECONDS` (30 min); `ERROR_BUFFER_MAX_SIZE` (10); **`NVDEC_INIT_FAILURE_PREFIX`** (log prefix when NVDEC/decoder init fails so crash-loop logs are searchable). Also `is_tensor()` helper for torch.Tensor checks. | Imported by file manager, query, blueprints, frigate_proxy, frigate_export_watchdog, download, ai_analyzer, ha_storage_stats, logging_utils, video, video_compilation, multi_clip_extractor, gpu_decoder; is_tensor by file, video, crop_utils. |
 
 ### Core coordinator & models
 
@@ -249,9 +241,10 @@ frigate-event-buffer/
 |-----------|---------|---------------------------|
 | `src/frigate_buffer/services/ai_analyzer.py` | **GeminiAnalysisService:** uses **GeminiProxyClient** for HTTP; system prompt from file; parses native Gemini and OpenAI responses; returns analysis dict; writes `analysis_result.json`; rolling frame cap. `_frame_to_base64_url` and `send_to_proxy` accept numpy HWC BGR or torch.Tensor BCHW RGB; `generate_quick_title` accepts numpy or tensor. Legacy NumPy crop helpers removed; production uses crop_utils (BCHW). All analysis via `analyze_multi_clip_ce`; **generate_quick_title** (single image, quick_title_prompt.txt) for 3–6 word title shortly after event start. | Called by orchestrator, QuickTitleService; uses GeminiProxyClient, VideoService, FileManager. |
 | `src/frigate_buffer/services/gemini_proxy_client.py` | **GeminiProxyClient:** HTTP client for Gemini proxy (OpenAI-compatible `/v1/chat/completions`). POST with 2-attempt retry (second attempt: Accept-Encoding identity, Connection close). Used by GeminiAnalysisService for all proxy requests; no response parsing. | Used by ai_analyzer. |
-| `src/frigate_buffer/services/multi_clip_extractor.py` | Target-centric frame extraction for CE; requires detection sidecars (no HOG fallback when any camera lacks sidecar). Camera assignment uses **timeline_ema** (dense grid + EMA + hysteresis + segment merge). **NeLux** CPU decode: one **VideoReader** per camera with **decode_accelerator='cpu', num_threads=1**, **get_batch** per sample time; **ExtractedFrame.frame** is torch.Tensor BCHW RGB; `del` + `torch.cuda.empty_cache()` after each frame. Uses **GPU_LOCK** from video around VideoReader open and each get_batch. Uses **sanitize_for_nelux** (ExitStack) before opening VideoReaders. Open failure logs **NVDEC_INIT_FAILURE_PREFIX** at ERROR. Parallel sidecar JSON load only. Config: CUDA_DEVICE_INDEX, LOG_EXTRACTION_PHASE_TIMING. | Used by ai_analyzer, event_test_orchestrator. |
+| `src/frigate_buffer/services/gpu_decoder.py` | **GPU decoder service (PyNvVideoCodec):** Sole module that imports PyNvVideoCodec. Wraps **SimpleDecoder** with `use_device_memory=True`, `max_width=4096`, `OutputColorType.RGBP`. Context manager **create_decoder(clip_path, gpu_id)** yields **DecoderContext** with `frame_count`, **get_frames(indices)** → BCHW uint8 RGB tensor (zero-copy via DLPack), **get_frame_at_index**, **get_batch_frames**, **seek_to_index**, **get_index_from_time_in_seconds**. On init failure logs **NVDEC_INIT_FAILURE_PREFIX** and re-raises. Callers (video, multi_clip_extractor, video_compilation) must hold **GPU_LOCK** when using the decoder. | Used by video.py, multi_clip_extractor.py, video_compilation.py (Phase 2). |
+| `src/frigate_buffer/services/multi_clip_extractor.py` | Target-centric frame extraction for CE; requires detection sidecars (no HOG fallback when any camera lacks sidecar). Camera assignment uses **timeline_ema** (dense grid + EMA + hysteresis + segment merge). **gpu_decoder** (PyNvVideoCodec): one **create_decoder** per camera under **GPU_LOCK**, **get_frames([frame_idx])** per sample time; **ExtractedFrame.frame** is torch.Tensor BCHW RGB; `del` + `torch.cuda.empty_cache()` after each frame. Uses **GPU_LOCK** from video around decoder open and each get_frames. Open failure logs **NVDEC_INIT_FAILURE_PREFIX** and returns []. Parallel sidecar JSON load only. Config: CUDA_DEVICE_INDEX, LOG_EXTRACTION_PHASE_TIMING. | Used by ai_analyzer, event_test_orchestrator. |
 | `src/frigate_buffer/services/timeline_ema.py` | Core camera-assignment logic for multi-cam: dense time grid, EMA smoothing, hysteresis, and segment merge (including first-segment roll-forward). Sole path for which camera is chosen per sample time. | Used by multi_clip_extractor. |
-| `src/frigate_buffer/services/video.py` | **VideoService:** **Hybrid pipeline.** Sanitizer does GPU heavy lifting; **NeLux VideoReader** uses **decode_accelerator='cpu', num_threads=1** in `generate_detection_sidecar` for stable frame reading from sanitized All-I output (avoids NVDEC segfaults on strided access). Batched `get_batch` with **BATCH_SIZE=16**, float32/255 normalization for YOLO; `del` + `torch.cuda.empty_cache()` after each batch. **GPU_LOCK** serializes VideoReader init and get_batch app-wide (video_compilation, multi_clip_extractor use it). Uses **sanitize_for_nelux** before opening VideoReader (sanitizer not under lock). NeLux open or decoder-not-ready failures log **NVDEC_INIT_FAILURE_PREFIX** at ERROR before return. If reader is missing `_decoder`, monkey-patch `reader._decoder = reader`. `_nelux_frame_count(reader, fps, duration)` gets frame count from reader or ffprobe fallback. `get_detection_model_path(config)` (model under `STORAGE_PATH/yolo_models/`), `generate_detection_sidecar`, `generate_detection_sidecars_for_cameras` (shared YOLO + lock), `run_detection_on_image` (quick-title), `generate_gif_from_clip` (subprocess FFmpeg). Single `_get_video_metadata` ffprobe per clip. App-level sidecar lock injected by orchestrator. **Crash debugging:** aggressive INFO logging with `_flush_logger()` at sanitizer, VideoReader, frame count, batch request/return, tensor/YOLO steps. | Used by lifecycle, ai_analyzer, event_test. |
+| `src/frigate_buffer/services/video.py` | **VideoService:** **PyNvVideoCodec decode** via **gpu_decoder** (no sanitizer). `generate_detection_sidecar` opens clip with **create_decoder(clip_path, gpu_id)** under **GPU_LOCK**, gets frame count from `len(ctx)` or ffprobe fallback, batches with **BATCH_SIZE=16** via **ctx.get_frames(indices)** (BCHW uint8), float32/255 for YOLO; `del` + `torch.cuda.empty_cache()` after each batch. **GPU_LOCK** serializes decoder open and get_frames app-wide (video_compilation, multi_clip_extractor use it). Decoder open/decode failures log **NVDEC_INIT_FAILURE_PREFIX** and return False. `_decoder_frame_count` and `_decoder_reader_ready` support DecoderContext (used by video service). `get_detection_model_path(config)`, `generate_detection_sidecar`, `generate_detection_sidecars_for_cameras` (shared YOLO + lock), `run_detection_on_image`, `generate_gif_from_clip` (subprocess FFmpeg). Single `_get_video_metadata` ffprobe per clip. App-level sidecar lock injected by orchestrator. | Used by lifecycle, ai_analyzer, event_test. |
 | `src/frigate_buffer/services/lifecycle.py` | **EventLifecycleService:** event creation, event end (discard short, cancel long). On **new** event (is_new): Phase 1 canned title + `write_metadata_json`, initial notification with live frame via **latest.jpg** proxy (no snapshot download); starts quick-title delay thread (calls `on_quick_title_trigger` = QuickTitleService.run_quick_title). At CE close: export clips, sidecars, then `on_ce_ready_for_analysis`. | Orchestrator delegates; calls download, file_manager, video_service, orchestrator callbacks (`on_ce_ready_for_analysis`, `on_quick_title_trigger`). |
 | `src/frigate_buffer/services/download.py` | **DownloadService:** Frigate snapshot, export/clip download (dynamic clip names), `post_event_description`. | FileManager, lifecycle, orchestrator. |
 | `src/frigate_buffer/services/notifier.py` | **NotificationPublisher:** publish to `frigate/custom/notifications`; `clear_tag` for updates; timeline_callback = TimelineLogger.log_ha. | Orchestrator, lifecycle. |
@@ -263,9 +256,8 @@ frigate-event-buffer/
 | `src/frigate_buffer/services/timeline.py` | **TimelineLogger:** append HA/MQTT/Frigate API entries to `notification_timeline.json` via FileManager. | Orchestrator, notifier (timeline_callback). |
 | `src/frigate_buffer/services/mqtt_handler.py` | **MqttMessageHandler:** parses MQTT JSON, routes by topic (frigate/events, tracked_object_update, frigate/reviews); implements _handle_frigate_event, _handle_tracked_update, _handle_review, _fetch_and_store_review_summary. | Orchestrator builds handler and passes handler.on_message to MqttClientWrapper. |
 | `src/frigate_buffer/services/mqtt_client.py` | **MqttClientWrapper:** connect, subscribe, message callback (MqttMessageHandler.on_message). | Orchestrator wires handler.on_message as callback. |
-| `src/frigate_buffer/services/video_sanitizer.py` | **GPU video sanitizer (heavy lifting):** context manager `sanitize_for_nelux(clip_path)` re-encodes clips with FFmpeg (CUDA decode + scale_cuda for width cap, h264_nvenc profile high, **-g 1** All-I-frame, **-b:v 30M**, **-forced-idr 1**, **-bsf:v dump_extra**, **-movflags +faststart**) into a temp file (mkstemp in `/dev/shm` when available); 100% GPU/VRAM. Metadata-heavy stream for stable single-threaded CPU read (avoids async_lock and non-existing SPS). Yields temp path on success or original path on failure (log stderr); strict cleanup in `finally`. Output is H.264 only (NeLux HEVC bug); ultra-wide scaled in VRAM. | Used by video, video_compilation, multi_clip_extractor. |
 | `src/frigate_buffer/services/crop_utils.py` | Crop/resize and motion helpers: accept **PyTorch tensor BCHW only** (GPU pipeline). `center_crop`, `crop_around_center`, `full_frame_resize_to_target`, `crop_around_detections_with_padding`, `motion_crop` use tensor slicing and `torch.nn.functional.interpolate`; motion_crop casts to int16 before subtraction to avoid uint8 underflow; only the 1-bit mask is transferred to CPU for `cv2.findContours`. `draw_timestamp_overlay` accepts tensor or numpy, converts RGB→BGR at OpenCV boundary, returns numpy HWC BGR. | ai_analyzer, quick_title_service, multi_clip_extractor. |
-| `src/frigate_buffer/services/video_compilation.py` | Video compilation service. Generates a stitched, cropped, 20fps summary video for a CE lifecycle; uses the **same timeline config** as the frame timeline (MAX_MULTI_CAM_FRAMES_SEC, MAX_MULTI_CAM_FRAMES_MIN) and **one slice per assignment** so camera swapping matches the AI prompt timeline. Crop follows the tracked object with **smooth panning** (tensor crop with 0-based `t/duration` interpolation; optional EMA on crop center). On the **last slice of a camera run** (slice before a camera switch), crop is **held** (`crop_end = crop_start`). **NeLux** CPU decode per slice: **decode_accelerator='cpu', num_threads=1**; each slice opened via **sanitize_for_nelux** before VideoReader; uses **GPU_LOCK** from video around VideoReader + frame count and each get_batch; tensor crop (smooth pan). **Encode:** FFmpeg subprocess **h264_nvenc only** (GPU; no CPU fallback); **-thread_queue_size 512** before `-i pipe:0`; **-preset p1 -tune hq -rc vbr -cq 24**; rawvideo stdin; on failure, descriptive error logging (command, returncode, stderr). Init failures log **NVDEC_INIT_FAILURE_PREFIX** at ERROR. Reader monkey-patch: if `_decoder` missing, set `reader._decoder = reader`. 20fps, no audio, output MP4. **Import order:** `import torch` before `from nelux import VideoReader` (required by NeLux). | Used by lifecycle, orchestrator. |
+| `src/frigate_buffer/services/video_compilation.py` | Video compilation service. Generates a stitched, cropped, 20fps summary video for a CE lifecycle; uses the **same timeline config** as the frame timeline (MAX_MULTI_CAM_FRAMES_SEC, MAX_MULTI_CAM_FRAMES_MIN) and **one slice per assignment** so camera swapping matches the AI prompt timeline. Crop follows the tracked object with **smooth panning** (tensor crop with 0-based `t/duration` interpolation; optional EMA on crop center). On the **last slice of a camera run** (slice before a camera switch), crop is **held** (`crop_end = crop_start`). **PyNvVideoCodec decode** per slice via **gpu_decoder.create_decoder(clip_path, gpu_id)** under **GPU_LOCK**; PTS-based frame selection (**get_index_from_time_in_seconds(t)**) for smooth panning; **ctx.get_frames(indices)** → tensor crop (smooth pan), HWC uint8 RGB → FFmpeg. **generate_compilation_video** accepts optional **config** and passes **CUDA_DEVICE_INDEX** to the run function. On decoder failure for a slice: log **NVDEC_INIT_FAILURE_PREFIX** at ERROR, skip slice, continue. **Encode:** FFmpeg subprocess **h264_nvenc only** (GPU; no CPU fallback); **-thread_queue_size 512** before `-i pipe:0`; **-preset p1 -tune hq -rc vbr -cq 24**; rawvideo stdin; on failure, descriptive error logging. 20fps, no audio, output MP4. | Used by lifecycle, orchestrator. |
 | `src/frigate_buffer/services/report_prompt.txt` | Default prompt for daily report. | daily_reporter. |
 | `src/frigate_buffer/services/ai_analyzer_system_prompt.txt` | System prompt for Gemini proxy (multi-clip CE analysis). | ai_analyzer. |
 | `src/frigate_buffer/services/quick_title_prompt.txt` | System prompt for quick-title (single image, 3–6 word title only). | ai_analyzer. |
@@ -294,7 +286,7 @@ frigate-event-buffer/
 | Path/Name | Purpose | Dependencies/Interactions |
 |-----------|---------|---------------------------|
 | `tests/conftest.py` | Pytest fixtures. | All tests. |
-| `tests/test_*.py` | Unit tests for config, lifecycle, ai_analyzer (including proxy retry and frame analysis writing), ai_analyzer_integration (persistence, orchestrator handoff, error handling), video, video_compilation, video_sanitizer, multi_clip_extractor, query (including caching and read_timeline_merged), notifier (clear_tag and NotificationEvent compliance), download, file manager (path validation, cleanup, max event length, storage stats, timeline append), crop_utils, consolidation, daily_reporter, frigate_export_watchdog, ha_storage_stats, timeline, mqtt, state, zone_filter, etc. Tensor mocks in test_ai_analyzer and test_ai_analyzer_integration for write_ai_frame_analysis_multi_cam and analyze_multi_clip_ce with tensor ExtractedFrame; test_multi_clip_extractor for sequential get_batch. | Run with `pytest tests/`; `pythonpath = ["src"]`. Benchmark and verify scripts live in `scripts/`. |
+| `tests/test_*.py` | Unit tests for config, lifecycle, ai_analyzer (including proxy retry and frame analysis writing), ai_analyzer_integration (persistence, orchestrator handoff, error handling), video, video_compilation, multi_clip_extractor, gpu_decoder, query (including caching and read_timeline_merged), notifier (clear_tag and NotificationEvent compliance), download, file manager (path validation, cleanup, max event length, storage stats, timeline append), crop_utils, consolidation, daily_reporter, frigate_export_watchdog, ha_storage_stats, timeline, mqtt, state, zone_filter, etc. Tensor mocks in test_ai_analyzer and test_ai_analyzer_integration for write_ai_frame_analysis_multi_cam and analyze_multi_clip_ce with tensor ExtractedFrame; test_multi_clip_extractor for sequential get_frames. | Run with `pytest tests/`; `pythonpath = ["src"]`. Benchmark and verify scripts live in `scripts/`. |
 
 ---
 
@@ -321,21 +313,8 @@ frigate-event-buffer/
 ### Zero-copy GPU pipeline (mandatory)
 
 - **Do not** add or use **ffmpegcv** for video decode or capture.
-- **Do not** add **CPU-decoding fallbacks** (e.g. OpenCV VideoCapture or FFmpeg subprocess for decode) for the main pipeline; NeLux (NVDEC) is the only decode path. FFmpeg is allowed only for GIF generation and ffprobe metadata.
+- **Do not** add **CPU-decoding fallbacks** (e.g. OpenCV VideoCapture or FFmpeg subprocess for decode) for the main pipeline; PyNvVideoCodec (gpu_decoder) is the only decode path. FFmpeg is allowed only for GIF generation and ffprobe metadata.
 - **Production frame crops/resize** must use **`crop_utils`** with **BCHW tensors**. Do not add new NumPy/OpenCV-based crop or resize logic in the core frame path; use the existing tensor helpers in `crop_utils.py`. Legacy NumPy crop helpers were removed from ai_analyzer; use crop_utils for all production crops.
-
-### Wheel build and update
-
-When there are issues with the **NeLux wheel** (making, updating, or rebuilding it), use the docs in **`wheels/`**:
-
-| Need | File |
-|------|------|
-| Build wheel from source (first time or clean build) | `wheels/Create_NeLux_Wheel.md` |
-| Update to a new NeLux version | `wheels/Update_NeLux_Wheel.md` |
-| Builder image definition | `wheels/Dockerfile.nelux` |
-| Runtime/Docker troubleshooting (hollow VideoReader, ldd, LD_LIBRARY_PATH, NVDEC) | `wheels/NeLux_troubleshooting.md` |
-
-Do not use PyPI for NeLux; the project vendors the wheel from `wheels/`.
 
 ### File placement rules
 

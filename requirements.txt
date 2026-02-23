@@ -9,6 +9,4 @@ ultralytics>=8.0.0
 numpy
 torch
 torchvision
-# NeLux: vendored wheel (do not use PyPI). torch must be imported before nelux at runtime.
-# ultralytics pulls in torch; install wheel after so torch is present.
-./wheels/nelux-0.8.9-cp312-cp312-linux_x86_64.whl
+PyNvVideoCodec

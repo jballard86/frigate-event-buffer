@@ -87,6 +87,6 @@ class TestNvdecInitFailurePrefix(unittest.TestCase):
     """NVDEC init failure log prefix is searchable in crash-loop logs."""
 
     def test_prefix_is_non_empty_and_searchable(self):
-        """NVDEC_INIT_FAILURE_PREFIX is a fixed string used when NVDEC/NeLux init fails."""
+        """NVDEC_INIT_FAILURE_PREFIX is a fixed string used when NVDEC/decoder init fails."""
         self.assertEqual(NVDEC_INIT_FAILURE_PREFIX, "NVDEC hardware initialization failed")
         self.assertIn("NVDEC", NVDEC_INIT_FAILURE_PREFIX)

@@ -5,8 +5,9 @@ Requires detection sidecars (detection.json per camera) from generate_detection_
 Reads sidecars and picks the camera with largest person area per time step.
 If any camera lacks a sidecar, returns [] (no on-frame detector fallback). No Frigate metadata.
 
-Uses NeLux (CPU decode, num_threads=1) for stable frame reading and to avoid async_lock: one VideoReader per camera, get_batch per sample
-time. ExtractedFrame.frame is torch.Tensor BCHW RGB. No ffmpegcv fallback.
+Uses gpu_decoder (PyNvVideoCodec) for GPU decode: one decoder per camera, get_frames([frame_idx])
+per sample time. ExtractedFrame.frame is torch.Tensor BCHW RGB. GPU_LOCK serializes decoder
+access. No ffmpegcv fallback.
 """
 
 from __future__ import annotations
@@ -20,8 +21,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Callable
 
 from frigate_buffer.constants import NVDEC_INIT_FAILURE_PREFIX
+from frigate_buffer.services.gpu_decoder import create_decoder
 from frigate_buffer.services.video import GPU_LOCK
-from frigate_buffer.services.video_sanitizer import sanitize_for_nelux
 
 logger = logging.getLogger("frigate-buffer")
 
@@ -160,7 +161,7 @@ def extract_target_centric_frames(
     crop_height: int = 0,
     tracking_target_frame_percent: int = 40,
     primary_camera: str | None = None,
-    decode_second_camera_cpu_only: bool = False,  # Ignored: NeLux-only decode, no CPU path
+    decode_second_camera_cpu_only: bool = False,  # Ignored: GPU decode only (PyNvVideoCodec), no CPU path
     log_callback: Callable[[str], None] | None = None,
     config: dict[str, Any] | None = None,
     camera_timeline_analysis_multiplier: float = 2.0,
@@ -174,11 +175,11 @@ def extract_target_centric_frames(
     Extract time-ordered, target-centric frames from all clips under a CE folder.
 
     Uses the EMA pipeline (dense grid + EMA smoothing + hysteresis + segment merge)
-    to assign one camera per sample time from detection sidecars. NeLux decode: one VideoReader
-    per camera, single-threaded get_batch per sample time. ExtractedFrame.frame is torch.Tensor
-    BCHW RGB. When person area >= tracking_target_frame_percent of reference_area, uses full-frame
-    resize with letterbox and sets metadata is_full_frame_resize=True. Caps at max_frames_min.
-    Returns [] if any camera lacks detection.json or if NeLux/torch unavailable.
+    to assign one camera per sample time from detection sidecars. Decode via gpu_decoder
+    (PyNvVideoCodec): one decoder per camera, get_frames([frame_idx]) per sample time.
+    ExtractedFrame.frame is torch.Tensor BCHW RGB. When person area >= tracking_target_frame_percent
+    of reference_area, uses full-frame resize with letterbox and sets metadata is_full_frame_resize=True.
+    Caps at max_frames_min. Returns [] if any camera lacks detection.json or if torch unavailable.
 
     Optional config: LOG_EXTRACTION_PHASE_TIMING (bool), CUDA_DEVICE_INDEX (int, default 0).
     """
@@ -186,14 +187,9 @@ def extract_target_centric_frames(
         logger.warning("ExtractedFrame not available, skipping multi-clip extraction")
         return []
     try:
-        import torch  # required before nelux
+        import torch
     except ImportError:
         logger.warning("torch not available, skipping multi-clip extraction")
-        return []
-    try:
-        from nelux import VideoReader  # type: ignore[import-untyped]
-    except ImportError:
-        logger.warning("nelux not available, skipping multi-clip extraction")
         return []
 
     # Single scan: discover camera clips ce_folder/CameraName/*.mp4 (dynamic clip names)
@@ -261,73 +257,57 @@ def extract_target_centric_frames(
 
     cuda_device_index = int(config.get("CUDA_DEVICE_INDEX", 0)) if config else 0
     _t0_open = time.monotonic() if _log_phase_timing else None
-    readers: dict[str, Any] = {}
+    decoders: dict[str, Any] = {}  # camera -> DecoderContext
     durations: dict[str, float] = {}
     fps_per_cam: dict[str, float] = {}
     frame_count_per_cam: dict[str, int] = {}
     if log_callback:
-        log_callback("Opening clips (NeLux NVDEC).")
+        log_callback("Opening clips (PyNvVideoCodec NVDEC).")
     with contextlib.ExitStack() as stack:
-        safe_paths = [stack.enter_context(sanitize_for_nelux(p)) for _, p in clip_paths]
-        for (cam, path), safe_path in zip(clip_paths, safe_paths):
-            try:
-                with GPU_LOCK:
-                    reader = VideoReader(
-                        safe_path,
-                        decode_accelerator="cpu",
-                        num_threads=1,
-                    )
-                    # Monkey-patch: If the wrapper is missing _decoder, point it to itself
-                    if not hasattr(reader, "_decoder"):
-                        reader._decoder = reader
-                    fps = float(reader.fps) if getattr(reader, "fps", None) else 1.0
-                    if fps <= 0:
-                        fps = 1.0
-                    try:
-                        count = int(len(reader))
-                    except (AttributeError, TypeError, Exception):
-                        count = 0
-                    if count <= 0:
-                        path_meta = _get_fps_duration_from_path(path)
-                        if path_meta is not None:
-                            fps = path_meta[0]
-                            duration_sec = path_meta[1]
-                            count = max(1, int(duration_sec * fps))
-                        else:
-                            count = 1
-                    readers[cam] = reader
-                    fps_per_cam[cam] = fps
-                    frame_count_per_cam[cam] = count
-                    durations[cam] = count / fps if fps > 0 else 0.0
-            except Exception as e:
-                logger.error(
-                    "%s (VideoReader open failed). cam=%s path=%s error=%s Check GPU, drivers, and NeLux wheel; container may restart.",
-                    NVDEC_INIT_FAILURE_PREFIX,
-                    cam,
-                    path,
-                    e,
-                )
-                logger.warning(
-                    "NeLux VideoReader failed for %s (%s): %s",
-                    cam,
-                    path,
-                    e,
-                )
+        with GPU_LOCK:
+            for (cam, path) in clip_paths:
                 try:
+                    ctx = stack.enter_context(create_decoder(path, gpu_id=cuda_device_index))
+                except Exception as e:
+                    logger.error(
+                        "%s (decoder open failed). cam=%s path=%s error=%s Check GPU, drivers; container may restart.",
+                        NVDEC_INIT_FAILURE_PREFIX,
+                        cam,
+                        path,
+                        e,
+                    )
+                    logger.warning(
+                        "Decoder failed for %s (%s): %s",
+                        cam,
+                        path,
+                        e,
+                    )
                     if torch.cuda.is_available():
-                        logger.debug("CUDA memory: %s", torch.cuda.memory_summary(abbreviated=True))
-                except Exception:
-                    pass
-                for r in readers.values():
-                    try:
-                        if hasattr(r, "release"):
-                            r.release()
-                    except Exception:
-                        pass
-                return []
+                        try:
+                            logger.debug("CUDA memory: %s", torch.cuda.memory_summary(abbreviated=True))
+                        except Exception:
+                            pass
+                    return []
+                count = len(ctx)
+                path_meta = _get_fps_duration_from_path(path)
+                if path_meta is not None:
+                    fps = path_meta[0]
+                    duration_sec = path_meta[1]
+                    if count <= 0:
+                        count = max(1, int(duration_sec * fps))
+                else:
+                    fps = 30.0
+                    duration_sec = count / fps if count > 0 and fps > 0 else 0.0
+                if fps <= 0:
+                    fps = 1.0
+                decoders[cam] = ctx
+                fps_per_cam[cam] = fps
+                frame_count_per_cam[cam] = count
+                durations[cam] = count / fps if fps > 0 else 0.0
+
         if _log_phase_timing and _t0_open is not None and log_callback:
             log_callback(f"Opening clips: {time.monotonic() - _t0_open:.1f}s")
-        for cam in readers:
+        for cam in decoders:
             logger.info(
                 "Multi-clip open: camera=%s path=%s duration_sec=%.2f fps=%.2f",
                 cam,
@@ -336,16 +316,12 @@ def extract_target_centric_frames(
                 fps_per_cam.get(cam, 0),
             )
         if log_callback:
-            cams = ", ".join(sorted(readers.keys()))
-            log_callback(f"Decoding clips ({cams}): NeLux NVDEC.")
+            cams = ", ".join(sorted(decoders.keys()))
+            log_callback(f"Decoding clips ({cams}): PyNvVideoCodec NVDEC.")
         global_end = max(durations.values()) if durations else 0.0
-        if global_end <= 0 or not readers:
-            for r in readers.values():
-                try:
-                    if hasattr(r, "release"):
-                        r.release()
-                except Exception:
-                    pass
+        if global_end <= 0 or not decoders:
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
             return []
         use_sidecar = all_have_sidecar and len(sidecars) == len(clip_paths)
         if not use_sidecar:
@@ -355,12 +331,8 @@ def extract_target_centric_frames(
                 ce_folder_path,
                 missing_cameras,
             )
-            for r in readers.values():
-                try:
-                    if hasattr(r, "release"):
-                        r.release()
-                except Exception:
-                    pass
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
             return []
         if log_callback:
             log_callback("Creating extraction metadata (sidecar).")
@@ -406,21 +378,34 @@ def extract_target_centric_frames(
                 continue
             if T >= durations.get(best_camera, 0):
                 continue
-            reader = readers.get(best_camera)
-            if reader is None:
+            ctx = decoders.get(best_camera)
+            if ctx is None:
                 continue
-            fps = fps_per_cam.get(best_camera, 1.0)
             fcount = frame_count_per_cam.get(best_camera, 0)
-            frame_idx = min(max(0, round(T * fps)), fcount - 1) if fcount > 0 else 0
+            frame_idx = 0  # set before try so except can log it
             try:
                 with GPU_LOCK:
-                    batch = reader.get_batch([frame_idx])
+                    # PTS-based index to reduce variable frame rate jitter (decoder time→index mapping).
+                    frame_idx = (
+                        min(max(0, ctx.get_index_from_time_in_seconds(T)), fcount - 1)
+                        if fcount > 0
+                        else 0
+                    )
+                    batch = ctx.get_frames([frame_idx])
             except Exception as e:
-                logger.warning(
-                    "NeLux get_batch failed for camera %s at T=%.2f (frame_idx=%s): %s",
+                logger.error(
+                    "%s (decoder get_frames failed). cam=%s T=%.2f frame_idx=%s error=%s",
+                    NVDEC_INIT_FAILURE_PREFIX,
                     best_camera,
                     T,
                     frame_idx,
+                    e,
+                    exc_info=True,
+                )
+                logger.warning(
+                    "Decoder get_frames failed for camera %s at T=%.2f: %s",
+                    best_camera,
+                    T,
                     e,
                 )
                 dropped_cameras.add(best_camera)
@@ -484,12 +469,6 @@ def extract_target_centric_frames(
 
         if _log_phase_timing and _t0_read is not None and log_callback:
             log_callback(f"Reading frames: {time.monotonic() - _t0_read:.1f}s")
-        for r in readers.values():
-            try:
-                if hasattr(r, "release"):
-                    r.release()
-            except Exception:
-                pass
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
         return collected

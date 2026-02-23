@@ -2,26 +2,13 @@
 
 import json
 import os
-import sys
 import unittest
-from contextlib import contextmanager
 from unittest.mock import MagicMock, patch, mock_open
 
 
-def _fake_sanitize_for_nelux(path):
-    """Context manager that yields path (no FFmpeg)."""
-    @contextmanager
-    def cm():
-        yield path
-    return cm()
-
-# Fake nelux so we can patch VideoReader when the real wheel is not installed.
-if "nelux" not in sys.modules:
-    sys.modules["nelux"] = MagicMock()
-
 from frigate_buffer.services.video_compilation import (
     _encode_frames_via_ffmpeg,
-    _run_nelux_compilation,
+    _run_pynv_compilation,
     assignments_to_slices,
     calculate_crop_at_time,
     calculate_segment_crop,
@@ -29,6 +16,23 @@ from frigate_buffer.services.video_compilation import (
     generate_compilation_video,
     smooth_crop_centers_ema,
 )
+
+
+def _fake_create_decoder_context(frame_count: int = 200, height: int = 480, width: int = 640):
+    """Build a mock DecoderContext for _run_pynv_compilation tests."""
+    try:
+        import torch
+    except ImportError:
+        return None
+    mock_ctx = MagicMock()
+    mock_ctx.__len__ = lambda self: frame_count
+    # Called as ctx.get_index_from_time_in_seconds(t) -> one arg t
+    mock_ctx.get_index_from_time_in_seconds = lambda t: min(max(0, int(t * 20)), max(0, frame_count - 1))
+    # Called as ctx.get_frames(indices) -> one arg indices
+    mock_ctx.get_frames = lambda indices: torch.zeros(
+        (len(indices), 3, height, width), dtype=torch.uint8
+    )
+    return mock_ctx
 
 
 class TestConvertTimelineToSegments(unittest.TestCase):
@@ -277,7 +281,7 @@ class TestCalculateSegmentCrop(unittest.TestCase):
 
 
 class TestGenerateCompilationVideo(unittest.TestCase):
-    """Tests for generate_compilation_video function (NeLux GPU pipeline)."""
+    """Tests for generate_compilation_video function (PyNvVideoCodec GPU pipeline)."""
 
     def _sidecar_mock(self):
         return {
@@ -286,16 +290,16 @@ class TestGenerateCompilationVideo(unittest.TestCase):
             "entries": [],
         }
 
-    @patch("frigate_buffer.services.video_compilation._run_nelux_compilation")
+    @patch("frigate_buffer.services.video_compilation._run_pynv_compilation")
     @patch("frigate_buffer.services.video_compilation.os.path.isfile")
     @patch("frigate_buffer.services.video_compilation.os.rename")
     @patch("frigate_buffer.services.video_compilation.os.path.getsize")
     @patch("frigate_buffer.services.query.resolve_clip_in_folder")
     @patch("builtins.open", new_callable=mock_open)
-    def test_nelux_pipeline_writes_to_tmp_then_renames(
-        self, mock_file, mock_resolve, mock_getsize, mock_rename, mock_isfile, mock_run_nelux
+    def test_pynv_pipeline_writes_to_tmp_then_renames(
+        self, mock_file, mock_resolve, mock_getsize, mock_rename, mock_isfile, mock_run_pynv
     ):
-        """NeLux pipeline is called with tmp path; on success temp file is renamed to final output."""
+        """PyNv pipeline is called with tmp path; on success temp file is renamed to final output."""
         mock_resolve.return_value = "doorbell-123.mp4"
         mock_isfile.return_value = True
         mock_getsize.return_value = 1000
@@ -307,23 +311,23 @@ class TestGenerateCompilationVideo(unittest.TestCase):
 
         generate_compilation_video(segments, ce_dir, output_path)
 
-        mock_run_nelux.assert_called_once()
-        call_kw = mock_run_nelux.call_args[1]
+        mock_run_pynv.assert_called_once()
+        call_kw = mock_run_pynv.call_args[1]
         self.assertEqual(call_kw["tmp_output_path"], output_path + ".tmp")
         self.assertEqual(call_kw["target_w"], 1440)
         self.assertEqual(call_kw["target_h"], 1080)
         mock_rename.assert_called_once_with(output_path + ".tmp", output_path)
 
-    @patch("frigate_buffer.services.video_compilation._run_nelux_compilation")
+    @patch("frigate_buffer.services.video_compilation._run_pynv_compilation")
     @patch("frigate_buffer.services.video_compilation.os.path.isfile")
     @patch("frigate_buffer.services.video_compilation.os.rename")
     @patch("frigate_buffer.services.video_compilation.os.path.getsize")
     @patch("frigate_buffer.services.query.resolve_clip_in_folder")
     @patch("builtins.open", new_callable=mock_open)
-    def test_nelux_pipeline_receives_slices_and_target_resolution(
-        self, mock_file, mock_resolve, mock_getsize, mock_rename, mock_isfile, mock_run_nelux
+    def test_pynv_pipeline_receives_slices_and_target_resolution(
+        self, mock_file, mock_resolve, mock_getsize, mock_rename, mock_isfile, mock_run_pynv
     ):
-        """_run_nelux_compilation is invoked with correct slices and target dimensions."""
+        """_run_pynv_compilation is invoked with correct slices and target dimensions."""
         mock_resolve.return_value = "doorbell-123.mp4"
         mock_isfile.return_value = True
         mock_getsize.return_value = 1000
@@ -337,21 +341,21 @@ class TestGenerateCompilationVideo(unittest.TestCase):
             segments, ce_dir, output_path, target_w=1280, target_h=720
         )
 
-        call_kw = mock_run_nelux.call_args[1]
+        call_kw = mock_run_pynv.call_args[1]
         self.assertEqual(call_kw["target_w"], 1280)
         self.assertEqual(call_kw["target_h"], 720)
         self.assertEqual(len(call_kw["slices"]), 1)
         self.assertIn("crop_start", call_kw["slices"][0])
         self.assertIn("crop_end", call_kw["slices"][0])
 
-    @patch("frigate_buffer.services.video_compilation._run_nelux_compilation")
+    @patch("frigate_buffer.services.video_compilation._run_pynv_compilation")
     @patch("frigate_buffer.services.video_compilation.os.path.isfile")
     @patch("frigate_buffer.services.video_compilation.os.rename")
     @patch("frigate_buffer.services.video_compilation.os.path.getsize")
     @patch("frigate_buffer.services.query.resolve_clip_in_folder")
     @patch("builtins.open", new_callable=mock_open)
     def test_successful_completion_renames_temp_file(
-        self, mock_file, mock_resolve, mock_getsize, mock_rename, mock_isfile, mock_run_nelux
+        self, mock_file, mock_resolve, mock_getsize, mock_rename, mock_isfile, mock_run_pynv
     ):
         """On success, temp file is renamed to final output path."""
         mock_resolve.return_value = "doorbell-123.mp4"
@@ -368,14 +372,14 @@ class TestGenerateCompilationVideo(unittest.TestCase):
         tmp_output_path = output_path + ".tmp"
         mock_rename.assert_called_once_with(tmp_output_path, output_path)
 
-    @patch("frigate_buffer.services.video_compilation._run_nelux_compilation")
+    @patch("frigate_buffer.services.video_compilation._run_pynv_compilation")
     @patch("frigate_buffer.services.video_compilation.os.path.isfile")
     @patch("frigate_buffer.services.query.resolve_clip_in_folder")
     @patch("builtins.open", new_callable=mock_open)
     def test_compilation_failure_raises(
-        self, mock_file, mock_resolve, mock_isfile, mock_run_nelux
+        self, mock_file, mock_resolve, mock_isfile, mock_run_pynv
     ):
-        """When NeLux pipeline raises, generate_compilation_video re-raises."""
+        """When PyNv pipeline raises, generate_compilation_video re-raises."""
         mock_resolve.return_value = "doorbell-123.mp4"
         mock_isfile.return_value = True
         mock_file.return_value.read.return_value = json.dumps(self._sidecar_mock())
@@ -384,21 +388,21 @@ class TestGenerateCompilationVideo(unittest.TestCase):
         ce_dir = "/app/storage/events/test36"
         output_path = "/app/storage/events/test36/test36_summary.mp4"
 
-        mock_run_nelux.side_effect = RuntimeError("NeLux encode failed")
+        mock_run_pynv.side_effect = RuntimeError("PyNv encode failed")
 
         with self.assertRaises(RuntimeError):
             generate_compilation_video(segments, ce_dir, output_path)
 
-    @patch("frigate_buffer.services.video_compilation._run_nelux_compilation")
+    @patch("frigate_buffer.services.video_compilation._run_pynv_compilation")
     @patch("frigate_buffer.services.video_compilation.os.path.isfile")
     @patch("frigate_buffer.services.video_compilation.os.rename")
     @patch("frigate_buffer.services.video_compilation.os.path.getsize")
     @patch("frigate_buffer.services.query.resolve_clip_in_folder")
     @patch("builtins.open", new_callable=mock_open)
-    def test_multiple_slices_passed_to_nelux(
-        self, mock_file, mock_resolve, mock_getsize, mock_rename, mock_isfile, mock_run_nelux
+    def test_multiple_slices_passed_to_pynv(
+        self, mock_file, mock_resolve, mock_getsize, mock_rename, mock_isfile, mock_run_pynv
     ):
-        """Multiple slices are passed to _run_nelux_compilation (one segment per slice)."""
+        """Multiple slices are passed to _run_pynv_compilation (one segment per slice)."""
         mock_resolve.return_value = "doorbell.mp4"
         mock_isfile.return_value = True
         mock_getsize.return_value = 1000
@@ -417,7 +421,7 @@ class TestGenerateCompilationVideo(unittest.TestCase):
 
         generate_compilation_video(slices, ce_dir, output_path)
 
-        call_kw = mock_run_nelux.call_args[1]
+        call_kw = mock_run_pynv.call_args[1]
         self.assertEqual(len(call_kw["slices"]), 2)
         self.assertEqual(call_kw["slices"][0]["camera"], "doorbell")
         self.assertEqual(call_kw["slices"][0]["start_sec"], 0.0)
@@ -425,14 +429,14 @@ class TestGenerateCompilationVideo(unittest.TestCase):
         self.assertEqual(call_kw["slices"][1]["start_sec"], 5.0)
         self.assertEqual(call_kw["slices"][1]["end_sec"], 10.0)
 
-    @patch("frigate_buffer.services.video_compilation._run_nelux_compilation")
+    @patch("frigate_buffer.services.video_compilation._run_pynv_compilation")
     @patch("frigate_buffer.services.video_compilation.os.path.isfile")
     @patch("frigate_buffer.services.video_compilation.os.rename")
     @patch("frigate_buffer.services.video_compilation.os.path.getsize")
     @patch("frigate_buffer.services.query.resolve_clip_in_folder")
     @patch("builtins.open", new_callable=mock_open)
     def test_last_slice_of_camera_run_holds_crop(
-        self, mock_file, mock_resolve, mock_getsize, mock_rename, mock_isfile, mock_run_nelux
+        self, mock_file, mock_resolve, mock_getsize, mock_rename, mock_isfile, mock_run_pynv
     ):
         """Last slice before a camera switch must have crop_end == crop_start (smooth hold)."""
         mock_resolve.return_value = "cam.mp4"
@@ -453,31 +457,32 @@ class TestGenerateCompilationVideo(unittest.TestCase):
         generate_compilation_video(slices, ce_dir, output_path)
         self.assertEqual(slices[0]["crop_start"], slices[0]["crop_end"])
 
-    @patch("frigate_buffer.services.video_compilation.os.path.isfile")
-    @patch("frigate_buffer.services.video_compilation.sanitize_for_nelux", side_effect=_fake_sanitize_for_nelux)
+    @patch("frigate_buffer.services.video_compilation.GPU_LOCK", MagicMock())
+    @patch("frigate_buffer.services.video_compilation.create_decoder")
     @patch("frigate_buffer.services.video_compilation._encode_frames_via_ffmpeg")
     @patch("frigate_buffer.services.video_compilation._get_video_metadata")
-    @patch.object(sys.modules["nelux"], "VideoReader")
-    def test_run_nelux_compilation_uses_metadata_fallback_when_len_raises(
-        self, mock_video_reader_cls, mock_get_metadata, mock_encode_ffmpeg, mock_isfile, mock_sanitize,
+    @patch("frigate_buffer.services.video_compilation.os.path.isfile")
+    def test_run_pynv_compilation_uses_metadata_fallback_when_len_zero(
+        self, mock_isfile, mock_get_metadata, mock_encode_ffmpeg, mock_create_decoder
     ):
-        """When NeLux reader raises on len() (e.g. missing _decoder), frame count comes from _get_video_metadata and _run_nelux_compilation completes; encode via FFmpeg."""
+        """When decoder reports len 0, frame count uses _get_video_metadata fallback and _run_pynv_compilation completes; encode via FFmpeg."""
         try:
             import torch
         except ImportError:
             self.skipTest("torch not available")
         mock_isfile.return_value = True
         mock_get_metadata.return_value = (640, 480, 20.0, 10.0)
-        mock_reader = MagicMock()
-        mock_reader.fps = 20.0
-        mock_reader.__len__ = MagicMock(side_effect=AttributeError("'VideoReader' object has no attribute '_decoder'"))
-
-        def get_batch(indices):
-            return torch.zeros((len(indices), 3, 480, 640), dtype=torch.uint8)
-
-        mock_reader.get_batch.side_effect = get_batch
-        mock_reader._decoder = MagicMock()
-        mock_video_reader_cls.return_value = mock_reader
+        mock_ctx = _fake_create_decoder_context(frame_count=0, height=480, width=640)
+        if mock_ctx is None:
+            self.skipTest("torch not available")
+        mock_ctx.get_index_from_time_in_seconds = lambda t: min(int(t * 20), 39)
+        mock_ctx.get_frames = lambda indices: torch.zeros(
+            (len(indices), 3, 480, 640), dtype=torch.uint8
+        )
+        mock_cm = MagicMock()
+        mock_cm.__enter__ = MagicMock(return_value=mock_ctx)
+        mock_cm.__exit__ = MagicMock(return_value=None)
+        mock_create_decoder.return_value = mock_cm
 
         slices = [
             {
@@ -490,7 +495,7 @@ class TestGenerateCompilationVideo(unittest.TestCase):
         ]
         resolve_clip = MagicMock(return_value="doorbell-1.mp4")
 
-        _run_nelux_compilation(
+        _run_pynv_compilation(
             slices=slices,
             ce_dir="/ce",
             tmp_output_path="/out.mp4.tmp",
@@ -508,13 +513,12 @@ class TestGenerateCompilationVideo(unittest.TestCase):
         self.assertEqual(args[2], 1080)
         self.assertEqual(args[3], "/out.mp4.tmp")
 
-    @patch("frigate_buffer.services.video_compilation.sanitize_for_nelux", side_effect=_fake_sanitize_for_nelux)
+    @patch("frigate_buffer.services.video_compilation.GPU_LOCK", MagicMock())
+    @patch("frigate_buffer.services.video_compilation.create_decoder")
     @patch("frigate_buffer.services.video_compilation._encode_frames_via_ffmpeg")
     @patch("frigate_buffer.services.video_compilation.os.path.isfile")
-    @patch("frigate_buffer.services.video_compilation._get_video_metadata")
-    @patch.object(sys.modules["nelux"], "VideoReader")
-    def test_run_nelux_compilation_calls_ffmpeg_encode_with_h264_nvenc(
-        self, mock_video_reader_cls, mock_get_metadata, mock_isfile, mock_encode_ffmpeg, mock_sanitize
+    def test_run_pynv_compilation_calls_ffmpeg_encode_with_h264_nvenc(
+        self, mock_isfile, mock_encode_ffmpeg, mock_create_decoder
     ):
         """Compilation encode is via _encode_frames_via_ffmpeg (h264_nvenc only; no CPU fallback)."""
         try:
@@ -522,15 +526,13 @@ class TestGenerateCompilationVideo(unittest.TestCase):
         except ImportError:
             self.skipTest("torch not available")
         mock_isfile.return_value = True
-        mock_get_metadata.return_value = (640, 480, 20.0, 10.0)
-        mock_reader = MagicMock()
-        mock_reader.fps = 20.0
-        mock_reader._decoder = MagicMock()
-        mock_reader.__len__ = lambda self: 200
-        mock_reader.get_batch.side_effect = lambda indices: torch.zeros(
-            (len(indices), 3, 480, 640), dtype=torch.uint8
-        )
-        mock_video_reader_cls.return_value = mock_reader
+        mock_ctx = _fake_create_decoder_context(200, 480, 640)
+        if mock_ctx is None:
+            self.skipTest("torch not available")
+        mock_cm = MagicMock()
+        mock_cm.__enter__ = MagicMock(return_value=mock_ctx)
+        mock_cm.__exit__ = MagicMock(return_value=None)
+        mock_create_decoder.return_value = mock_cm
 
         slices = [
             {
@@ -543,7 +545,7 @@ class TestGenerateCompilationVideo(unittest.TestCase):
         ]
         resolve_clip = MagicMock(return_value="doorbell-1.mp4")
 
-        _run_nelux_compilation(
+        _run_pynv_compilation(
             slices=slices,
             ce_dir="/ce",
             tmp_output_path="/out.mp4.tmp",
@@ -559,32 +561,16 @@ class TestGenerateCompilationVideo(unittest.TestCase):
         self.assertEqual(args[2], 1080)
         self.assertEqual(args[3], "/out.mp4.tmp")
 
-    @patch("frigate_buffer.services.video_compilation.sanitize_for_nelux", side_effect=_fake_sanitize_for_nelux)
+    @patch("frigate_buffer.services.video_compilation.GPU_LOCK", MagicMock())
+    @patch("frigate_buffer.services.video_compilation.create_decoder")
     @patch("frigate_buffer.services.video_compilation._encode_frames_via_ffmpeg")
-    @patch("frigate_buffer.services.video_compilation._get_video_metadata")
     @patch("frigate_buffer.services.video_compilation.os.path.isfile")
-    @patch.object(sys.modules["nelux"], "VideoReader")
-    def test_run_nelux_compilation_monkey_patches_reader_when_no_decoder(
-        self, mock_video_reader_cls, mock_isfile, mock_get_metadata, mock_encode_ffmpeg, mock_sanitize
+    def test_run_pynv_compilation_skips_slice_on_decoder_failure(
+        self, mock_isfile, mock_encode_ffmpeg, mock_create_decoder
     ):
-        """When first VideoReader has no _decoder, we monkey-patch reader._decoder = reader and compilation proceeds; _encode_frames_via_ffmpeg is called."""
-        try:
-            import torch
-        except ImportError:
-            self.skipTest("torch not available")
+        """When create_decoder raises for a slice, that slice is skipped and encode is not called (no frames)."""
         mock_isfile.return_value = True
-        mock_get_metadata.return_value = (640, 480, 20.0, 10.0)
-        reader_no_decoder = MagicMock()
-        reader_no_decoder.fps = 20.0
-        reader_no_decoder.__len__ = lambda self: 200
-        reader_no_decoder.get_batch.side_effect = lambda indices: torch.zeros(
-            (len(indices), 3, 480, 640), dtype=torch.uint8
-        )
-        try:
-            del reader_no_decoder._decoder
-        except AttributeError:
-            pass
-        mock_video_reader_cls.return_value = reader_no_decoder
+        mock_create_decoder.side_effect = RuntimeError("NVDEC init failed")
 
         slices = [
             {
@@ -597,7 +583,7 @@ class TestGenerateCompilationVideo(unittest.TestCase):
         ]
         resolve_clip = MagicMock(return_value="doorbell-1.mp4")
 
-        _run_nelux_compilation(
+        _run_pynv_compilation(
             slices=slices,
             ce_dir="/ce",
             tmp_output_path="/out.mp4.tmp",
@@ -607,8 +593,7 @@ class TestGenerateCompilationVideo(unittest.TestCase):
             cuda_device_index=0,
         )
 
-        self.assertTrue(hasattr(reader_no_decoder, "_decoder"), "Monkey-patch should set _decoder")
-        mock_encode_ffmpeg.assert_called_once()
+        mock_encode_ffmpeg.assert_not_called()
 
 
 class TestEncodeFramesViaFfmpeg(unittest.TestCase):
@@ -705,21 +690,15 @@ class TestCompileCeVideoConfig(unittest.TestCase):
         self.assertEqual(call_args[1], 50)
 
 
-class TestNeluxImportOrder(unittest.TestCase):
-    """NeLux must be imported after torch at runtime; this test guards that contract."""
+class TestCompilationDecoderImport(unittest.TestCase):
+    """Compilation uses gpu_decoder.create_decoder (PyNvVideoCodec); this test guards the import."""
 
-    def test_torch_before_nelux_import_succeeds(self):
-        """Importing torch then nelux (or VideoReader) must succeed when both are installed."""
-        try:
-            import torch  # noqa: F401
-        except ImportError:
-            self.skipTest("torch not installed")
-        try:
-            from nelux import VideoReader  # noqa: F401
-        except ImportError:
-            self.skipTest("nelux not installed (e.g. Linux wheel not present on this host)")
-        # If we get here, the required order (torch then nelux) was respected and imports succeeded.
-        self.assertTrue(True)
+    def test_video_compilation_imports_create_decoder(self):
+        """video_compilation module uses create_decoder from gpu_decoder for decode."""
+        from frigate_buffer.services import video_compilation
+        self.assertTrue(hasattr(video_compilation, "create_decoder") or "create_decoder" in dir(video_compilation))
+        from frigate_buffer.services.gpu_decoder import create_decoder
+        self.assertIs(video_compilation.create_decoder, create_decoder)
 
 
 if __name__ == "__main__":

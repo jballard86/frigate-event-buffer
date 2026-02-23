@@ -1,8 +1,6 @@
 # syntax=docker/dockerfile:1
 # Build from repo root: docker build -t frigate-buffer:latest .
-# Base: Ubuntu 24.04 + CUDA 12.6 runtime for NVDEC/NVENC. FFmpeg 6.1 from distro. libyuv and libspdlog are vendored in wheels/ and copied into /usr/lib/x86_64-linux-gnu/; LD_LIBRARY_PATH set so NeLux native deps load at runtime.
-# NeLux wheel is vendored in wheels/ (built against FFmpeg 6.1 / Ubuntu 24.04); do not use PyPI.
-# Copy vendored C++ shared libraries from NeLux image to prevent ABI mismatch
+# Base: Ubuntu 24.04 + CUDA 12.6 runtime for NVDEC/NVENC. FFmpeg from distro. PyNvVideoCodec from PyPI. No vendored wheels.
 # Use BuildKit (default in Docker 23+) for pip cache on app install: faster code-only rebuilds.
 ARG USE_GUI_OPENCV=false
 FROM nvidia/cuda:12.6.0-runtime-ubuntu24.04
@@ -20,14 +18,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends software-proper
     && apt-get purge -y software-properties-common && apt-get autoremove -y --purge \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy vendored C++ shared libraries for NeLux (match wheel ABI)
-COPY wheels/libyuv.so* /usr/lib/x86_64-linux-gnu/
-COPY wheels/libspdlog.so* /usr/lib/x86_64-linux-gnu/
-
-# Refresh the Linux dynamic linker cache and set LD_LIBRARY_PATH so NeLux finds libyuv/libspdlog at runtime
-RUN ldconfig
-# Final library path to include PyTorch, NVIDIA, and system libs
-ENV LD_LIBRARY_PATH="/usr/local/lib/python3.12/dist-packages/torch/lib:/usr/local/lib/python3.12/dist-packages/nvidia/cuda_runtime/lib:/usr/local/lib/python3.12/dist-packages/nvidia/cudnn/lib:/usr/local/lib:/usr/lib/x86_64-linux-gnu:${LD_LIBRARY_PATH}"
+# Library path for PyTorch and NVIDIA runtimes.
+ENV LD_LIBRARY_PATH="/usr/local/lib/python3.12/dist-packages/torch/lib:/usr/local/lib/python3.12/dist-packages/nvidia/cuda_runtime/lib:/usr/local/lib/python3.12/dist-packages/nvidia/cudnn/lib:/usr/local/lib:${LD_LIBRARY_PATH}"
 
 # Prefer python3.12 for the rest of the build and runtime.
 RUN update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.12 1 \
@@ -36,7 +28,6 @@ RUN update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.12 1
 WORKDIR /app
 
 COPY requirements.txt .
-COPY wheels/ ./wheels/
 
 # Install deps; when USE_GUI_OPENCV=false, swap to opencv-python-headless (no X11).
 RUN if [ "$USE_GUI_OPENCV" = "true" ]; then \

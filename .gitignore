@@ -12,9 +12,6 @@ __pycache__/
 *.py[cod]
 *$py.class
 *.so
-# Vendored NeLux runtime libs (tracked so clone-and-build works)
-!wheels/libyuv.so*
-!wheels/libspdlog.so*
 .Python
 *.egg-info/
 dist/

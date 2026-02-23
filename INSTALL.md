@@ -7,8 +7,8 @@ Install and run via the command line only (no Dockge). Clone the repo so the **r
 ## Prerequisites
 
 - Docker (no compose required; we use `docker build` and `docker run` only).
-- For GPU decode (NVDEC): The image is based on `nvidia/cuda:12.6.0-runtime-ubuntu24.04` with FFmpeg 6.1 for hardware-accelerated decode (and NeLux compilation). At runtime you need an NVIDIA GPU, driver, and [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html) (e.g. `docker run --gpus all`). Set `NVIDIA_DRIVER_CAPABILITIES=compute,video,utility` so the container can use the GPU for decoding.
-- **Summary video compilation** uses the **NeLux** library (NVDEC decode, NVENC encode) for a zero-copy GPU pipeline. NeLux is **vendored** in `wheels/nelux-0.8.9-cp312-cp312-linux_x86_64.whl` (do not use PyPI). The image is built on Ubuntu 24.04 with FFmpeg 6.1; **libyuv** and **libspdlog** are vendored in `wheels/` (e.g. `libyuv.so*`, `libspdlog.so*` from the NeLux builder) and copied into the container so the NeLux native extension loads with matching ABI. Ensure the same GPU/driver and `NVIDIA_DRIVER_CAPABILITIES=compute,video,utility` are available so compilation can run on the GPU.
+- For GPU decode (NVDEC): The image is based on `nvidia/cuda:12.6.0-runtime-ubuntu24.04` with FFmpeg for GIF, ffprobe, and h264_nvenc encode. Video **decode** uses **PyNvVideoCodec** (from PyPI); no vendored wheels. At runtime you need an NVIDIA GPU, driver, and [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html) (e.g. `docker run --gpus all`). Set `NVIDIA_DRIVER_CAPABILITIES=compute,video,utility` so the container can use the GPU for NVDEC decode and NVENC encode.
+- **Summary video compilation** and detection sidecars use a **100% GPU-native pipeline**: **PyNvVideoCodec** (NVDEC decode) and FFmpeg **h264_nvenc** (encode). No CPU decode fallback; no vendored wheels or libyuv/libspdlog. Ensure the same GPU/driver and `NVIDIA_DRIVER_CAPABILITIES=compute,video,utility` are available.
 
 ---
 
@@ -61,7 +61,7 @@ git clone https://github.com/jballard86/frigate-event-buffer.git .
 - If it **already has a clone** (contains `.git`): `git pull` and continue from step 3.
 - If it's **not a git repo**: clone into a new folder instead (see first clone block above; use a different folder name if needed).
 
-You must have `Dockerfile`, `src/`, and `wheels/` (with the NeLux wheel file) in the current directory (repo root).
+You must have `Dockerfile` and `src/` in the current directory (repo root).
 
 ---
 
@@ -141,9 +141,9 @@ The app uses the storage volume for Ultralytics config and the YOLO model cache:
 
 Pull and build from repo root. Docker layer cache keeps rebuilds fast when only code changed.
 
-**After only code changes** (no changes to `requirements.txt` or `wheels/`): the heavy step (Python deps + OpenCV) is cached; only app copy and `pip install .` run, so build is typically **~1–2 minutes** with either command below. Using BuildKit (default in Docker 23+) caches pip wheels for the app install, which speeds repeated code-only builds further.
+**After only code changes** (no changes to `requirements.txt`): the heavy step (Python deps + OpenCV) is cached; only app copy and `pip install .` run, so build is typically **~1–2 minutes** with either command below. Using BuildKit (default in Docker 23+) caches pip wheels for the app install, which speeds repeated code-only builds further.
 
-**When the deps layer runs** (first build, or after changing `requirements.txt` or `wheels/`): use the dev build to avoid the slow OpenCV swap.
+**When the deps layer runs** (first build, or after changing `requirements.txt`): use the dev build to avoid the slow OpenCV swap.
 
 **Fast pull and build (development):** larger image (keeps GUI OpenCV); use when you want the quickest full rebuild or when you might change deps.
 
@@ -190,7 +190,6 @@ If `git pull` reports that local changes would be overwritten by merge (e.g. to 
 
 ## Troubleshooting
 
-- **FFmpeg / NVDEC decode issues** — The image is Ubuntu 24.04 with FFmpeg 6.1 (required by the NeLux wheel and for GIF generation). Video decode is **NeLux NVDEC only** (no CPU fallback). Rebuild from this repo (`docker build -t frigate-buffer:latest .`) and run with GPU access (`--gpus all` and NVIDIA env vars). Set **`NVIDIA_DRIVER_CAPABILITIES=compute,video,utility`** (the `video` capability is required for NVDEC). Check startup logs for decode-related errors; inside the container run `nvidia-smi` to confirm the GPU is visible.
+- **FFmpeg / NVDEC decode issues** — The image uses FFmpeg for GIF and ffprobe; video decode is **PyNvVideoCodec (NVDEC) only** (no CPU fallback). Rebuild from this repo (`docker build -t frigate-buffer:latest .`) and run with GPU access (`--gpus all` and NVIDIA env vars). Set **`NVIDIA_DRIVER_CAPABILITIES=compute,video,utility`** (the `video` capability is required for NVDEC). Check startup logs for decode-related errors (search for `NVDEC hardware initialization failed`); inside the container run `nvidia-smi` to confirm the GPU is visible.
 - **Build fails with "frigate_buffer" or "config.example" not found** — You are not in the repo root. `cd` to the directory that contains `Dockerfile` and `src/frigate_buffer/`.
-- **"NeLux get_batch failed" or reader errors** — Decode is GPU-only (NeLux). If readers fail, check GPU memory and driver; there is no CPU decode fallback. Reduce concurrent load or clip length if GPU memory is limited.
-- **`libyuv.so` or `libspdlog.so: cannot open shared object file`** — The NeLux wheel needs these native libs at runtime with unversioned names. The **Docker image** installs `libyuv0` and `libspdlog1.12` and creates symlinks (`libyuv.so` → `libyuv.so.0`, `libspdlog.so` → `libspdlog.so.1.12`) in `/usr/lib/x86_64-linux-gnu/`. Rebuild the image so the fix is included. For a **native (non-Docker)** install, install the distro packages and create the same symlinks so the loader finds the libraries.
+- **Decoder / get_frames errors** — Decode is GPU-only (PyNvVideoCodec). If decode fails, check GPU memory and driver; there is no CPU decode fallback. Reduce concurrent load or clip length if GPU memory is limited. Search logs for `NVDEC hardware initialization failed` for init failures.

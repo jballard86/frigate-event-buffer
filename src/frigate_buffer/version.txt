@@ -1,1 +1,1 @@
-1.1.1 NeLux Smites Thee
+1.1.1 PyNvVideoCodec Migration
