@@ -1,8 +1,8 @@
 """
 GPU-accelerated video sanitizer for NeLux.
 
-Re-encodes corrupted or non-compliant HEVC clips to clean HEVC in VRAM before
-NeLux decode, so the C++ engine never sees bad frames. Uses a context manager
+Re-encodes corrupted or non-compliant clips to clean H.264 (scale filter caps width
+at 4096px for panoramic; h264_nvenc) so NeLux never sees bad frames or HEVC. Uses a context manager
 to guarantee strict cleanup of temporary files (RAM disk when available).
 """
 
@@ -26,8 +26,8 @@ def sanitize_for_nelux(clip_path: str) -> Generator[str, None, None]:
     """
     Yield a path safe for NeLux VideoReader: either a sanitized temp file or the original.
 
-    Re-encodes the clip with FFmpeg (CUDA decode + hevc_nvenc) into a temp file
-    on RAM disk when possible. On FFmpeg failure, logs stderr and yields clip_path
+    Re-encodes the clip with FFmpeg (CUDA decode, scale min(iw,4096):-2, h264_nvenc)
+    into a temp file on RAM disk when possible. NeLux requires H.264; width > 4096 is scaled down. On FFmpeg failure, logs stderr and yields clip_path
     so callers can attempt NeLux on the original and fail in a controlled way.
     Temp file is always removed in finally.
     """
@@ -42,9 +42,9 @@ def sanitize_for_nelux(clip_path: str) -> Generator[str, None, None]:
                     "ffmpeg",
                     "-y",
                     "-hwaccel", "cuda",
-                    "-hwaccel_output_format", "cuda",
                     "-i", clip_path,
-                    "-c:v", "hevc_nvenc",
+                    "-vf", "scale='min(iw,4096)':-2",
+                    "-c:v", "h264_nvenc",
                     "-preset", "p1",
                     "-tune", "hq",
                     "-b:v", "5M",

@@ -112,6 +112,7 @@ cd /mnt/user/appdata/frigate-buffer
 docker stop frigate_buffer 2>/dev/null; docker rm frigate_buffer 2>/dev/null || true
 docker run -d --name frigate_buffer --restart unless-stopped \
   --network bridge \
+  --shm-size=1g \
   -p 5055:5055 \
   -v /mnt/user/appdata/frigate_buffer:/app/storage \
   -v /mnt/user/appdata/frigate_buffer/config.yaml:/app/config.yaml:ro \
@@ -123,7 +124,7 @@ docker run -d --name frigate_buffer --restart unless-stopped \
   -e RETENTION_DAYS=3 \
   -e LOG_LEVEL=INFO \
   -e NVIDIA_VISIBLE_DEVICES=all \
-  -e NVIDIA_DRIVER_CAPABILITIES=compute,video,utility \
+  -e NVIDIA_DRIVER_CAPABILITIES=all \
   -e LD_LIBRARY_PATH="/usr/local/lib/python3.12/dist-packages/torch/lib:/usr/local/lib/python3.12/dist-packages/nvidia/cuda_runtime/lib:/usr/local/lib/python3.12/dist-packages/nvidia/cudnn/lib:/usr/local/lib:/usr/lib/x86_64-linux-gnu" \
   --gpus all \
   frigate-buffer:latest

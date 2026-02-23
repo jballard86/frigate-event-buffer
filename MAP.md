@@ -47,7 +47,7 @@ The project uses a **zero-copy GPU pipeline** for all video decode and frame pro
 **Explicit prohibitions (do not reintroduce):**
 
 - **ffmpegcv** — Forbidden. Do not add it to dependencies or use it for decode/capture.
-- **CPU-decoding fallbacks** — Forbidden. Do not add fallback paths that decode video on CPU (e.g. OpenCV `VideoCapture`, FFmpeg subprocess for decode, or ffmpegcv) when NeLux is used for the main pipeline. The only remaining FFmpeg use is **GIF generation** (subprocess), **video sanitizer** (CUDA + hevc_nvenc, temp in `/dev/shm` when available), and **ffprobe** for metadata.
+- **CPU-decoding fallbacks** — Forbidden. Do not add fallback paths that decode video on CPU (e.g. OpenCV `VideoCapture`, FFmpeg subprocess for decode, or ffmpegcv) when NeLux is used for the main pipeline. The only remaining FFmpeg use is **GIF generation** (subprocess), **video sanitizer** (CUDA decode, scale min(iw,4096), h264_nvenc; temp in `/dev/shm` when available), and **ffprobe** for metadata.
 - **Production frame processing on NumPy in the core path** — Forbidden. New crop/resize logic in the GPU pipeline must use `crop_utils` (BCHW tensors). Legacy NumPy crop helpers were removed from ai_analyzer; production uses `crop_utils`.
 
 ---
@@ -89,7 +89,10 @@ frigate-event-buffer/
 ├── MULTI_CAM_PLAN.md
 │
 ├── scripts/
-│   (reserved for standalone scripts)
+│   ├── bench_post_download_pre_api.py          # Benchmark: post-download pre-API segment (run with pytest)
+│   ├── verify_gemini_proxy.py                  # Manual verification: Gemini proxy connectivity
+│   ├── README.md
+│   └── scripts_readme.md
 │
 ├── src/
 │   └── frigate_buffer/
@@ -159,42 +162,37 @@ frigate-event-buffer/
 ├── tests/
 │   ├── conftest.py
 │   ├── test_ai_analyzer.py
-│   ├── test_multi_clip_extractor.py
-│   ├── test_timeline_ema.py
-│   ├── test_video_service.py
+│   ├── test_ai_analyzer_integration.py
 │   ├── test_config_schema.py
-│   ├── test_notifier_clear_tag.py
-│   ├── test_daily_reporter.py
-│   ├── test_lifecycle_service.py
-│   ├── test_timeline.py
-│   ├── test_ai_frame_analysis_writing.py
-│   ├── test_max_event_length.py
-│   ├── test_cleanup_test_folders.py
 │   ├── test_constants.py
-│   ├── test_query_service.py
-│   ├── test_quick_title_service.py
-│   ├── test_event_test.py
-│   ├── test_download_service.py
-│   ├── test_crop_utils.py
-│   ├── test_web_server_path_safety.py
-│   ├── test_frigate_export_watchdog.py
-│   ├── test_ha_storage_stats.py
-│   ├── test_integration_step_5_6.py
-│   ├── test_notification_models.py
 │   ├── test_consolidation.py
-│   ├── test_file_manager_path_validation.py
-│   ├── test_storage_stats.py
-│   ├── test_ai_analyzer_proxy_fix.py
+│   ├── test_crop_utils.py
+│   ├── test_daily_reporter.py
+│   ├── test_download_service.py
+│   ├── test_event_test.py
+│   ├── test_file_manager.py
+│   ├── test_frigate_export_watchdog.py
+│   ├── test_frigate_proxy.py
+│   ├── test_ha_storage_stats.py
+│   ├── test_lifecycle_service.py
+│   ├── test_main_version.py
 │   ├── test_mqtt_auth.py
 │   ├── test_mqtt_handler.py
+│   ├── test_multi_clip_extractor.py
+│   ├── test_notifier.py
+│   ├── test_path_helpers.py
+│   ├── test_quick_title_service.py
+│   ├── test_query_service.py
+│   ├── test_report_helpers.py
 │   ├── test_state_manager.py
-│   ├── test_zone_filter.py
+│   ├── test_timeline.py
+│   ├── test_timeline_ema.py
 │   ├── test_url_masking.py
-│   ├── test_query_caching.py
-│   ├── test_main_version.py
-│   ├── test_optimization_expectations_temp.py
-│   ├── bench_post_download_pre_api.py
-│   └── verify_gemini_proxy.py
+│   ├── test_video_compilation.py
+│   ├── test_video_sanitizer.py
+│   ├── test_video_service.py
+│   ├── test_web_server_path_safety.py
+│   └── test_zone_filter.py
 │
 └── examples/
     └── home-assistant/
@@ -265,7 +263,7 @@ frigate-event-buffer/
 | `src/frigate_buffer/services/timeline.py` | **TimelineLogger:** append HA/MQTT/Frigate API entries to `notification_timeline.json` via FileManager. | Orchestrator, notifier (timeline_callback). |
 | `src/frigate_buffer/services/mqtt_handler.py` | **MqttMessageHandler:** parses MQTT JSON, routes by topic (frigate/events, tracked_object_update, frigate/reviews); implements _handle_frigate_event, _handle_tracked_update, _handle_review, _fetch_and_store_review_summary. | Orchestrator builds handler and passes handler.on_message to MqttClientWrapper. |
 | `src/frigate_buffer/services/mqtt_client.py` | **MqttClientWrapper:** connect, subscribe, message callback (MqttMessageHandler.on_message). | Orchestrator wires handler.on_message as callback. |
-| `src/frigate_buffer/services/video_sanitizer.py` | **GPU video sanitizer for NeLux:** context manager `sanitize_for_nelux(clip_path)` re-encodes clips with FFmpeg (CUDA decode + hevc_nvenc) into a temp file (mkstemp in `/dev/shm` when available); yields temp path on success or original path on failure (log stderr); strict cleanup in `finally`. Used so corrupted HEVC from the NVR does not crash NeLux. | Used by video, video_compilation, multi_clip_extractor. |
+| `src/frigate_buffer/services/video_sanitizer.py` | **GPU video sanitizer for NeLux:** context manager `sanitize_for_nelux(clip_path)` re-encodes clips with FFmpeg (CUDA decode, scale min(iw,4096):-2 for width cap, h264_nvenc) into a temp file (mkstemp in `/dev/shm` when available); yields temp path on success or original path on failure (log stderr); strict cleanup in `finally`. Output is H.264 only (NeLux HEVC bug); ultra-wide scaled down. Used so corrupted input from the NVR does not crash NeLux. | Used by video, video_compilation, multi_clip_extractor. |
 | `src/frigate_buffer/services/crop_utils.py` | Crop/resize and motion helpers: accept **PyTorch tensor BCHW only** (GPU pipeline). `center_crop`, `crop_around_center`, `full_frame_resize_to_target`, `crop_around_detections_with_padding`, `motion_crop` use tensor slicing and `torch.nn.functional.interpolate`; motion_crop casts to int16 before subtraction to avoid uint8 underflow; only the 1-bit mask is transferred to CPU for `cv2.findContours`. `draw_timestamp_overlay` accepts tensor or numpy, converts RGB→BGR at OpenCV boundary, returns numpy HWC BGR. | ai_analyzer, quick_title_service, multi_clip_extractor. |
 | `src/frigate_buffer/services/video_compilation.py` | Video compilation service. Generates a stitched, cropped, 20fps summary video for a CE lifecycle; uses the **same timeline config** as the frame timeline (MAX_MULTI_CAM_FRAMES_SEC, MAX_MULTI_CAM_FRAMES_MIN) and **one slice per assignment** so camera swapping matches the AI prompt timeline. Crop follows the tracked object with **smooth panning** (tensor crop with 0-based `t/duration` interpolation; optional EMA on crop center). On the **last slice of a camera run** (slice before a camera switch), crop is **held** (`crop_end = crop_start`). **NeLux** (vendored wheel): NVDEC decode per slice with **num_threads=1**; each slice opened via **sanitize_for_nelux** before VideoReader; tensor crop (smooth pan). **Encode:** FFmpeg subprocess **h264_nvenc only** (GPU; no CPU fallback); **-thread_queue_size 512** before `-i pipe:0`; **-preset p1 -tune hq -rc vbr -cq 24**; rawvideo stdin; on failure, descriptive error logging (command, returncode, stderr). NVDEC init failures log **NVDEC_INIT_FAILURE_PREFIX** at ERROR. Reader monkey-patch: if `_decoder` missing, set `reader._decoder = reader`. 20fps, no audio, output MP4. **Import order:** `import torch` before `from nelux import VideoReader` (required by NeLux). | Used by lifecycle, orchestrator. |
 | `src/frigate_buffer/services/report_prompt.txt` | Default prompt for daily report. | daily_reporter. |
@@ -296,7 +294,7 @@ frigate-event-buffer/
 | Path/Name | Purpose | Dependencies/Interactions |
 |-----------|---------|---------------------------|
 | `tests/conftest.py` | Pytest fixtures. | All tests. |
-| `tests/test_*.py` | Unit tests for config, orchestrator, lifecycle, ai_analyzer, video, query, notifier, download, file manager, cleanup, etc. **Phase 5:** tensor mocks in test_ai_frame_analysis_writing (write_ai_frame_analysis_multi_cam with tensor frames), test_integration_step_5_6 (analyze_multi_clip_ce with tensor ExtractedFrame), test_multi_clip_extractor (sequential get_batch: one call per extracted frame). | Run with `pytest tests/`; `pythonpath = ["src"]`. |
+| `tests/test_*.py` | Unit tests for config, lifecycle, ai_analyzer (including proxy retry and frame analysis writing), ai_analyzer_integration (persistence, orchestrator handoff, error handling), video, video_compilation, video_sanitizer, multi_clip_extractor, query (including caching and read_timeline_merged), notifier (clear_tag and NotificationEvent compliance), download, file manager (path validation, cleanup, max event length, storage stats, timeline append), crop_utils, consolidation, daily_reporter, frigate_export_watchdog, ha_storage_stats, timeline, mqtt, state, zone_filter, etc. Tensor mocks in test_ai_analyzer and test_ai_analyzer_integration for write_ai_frame_analysis_multi_cam and analyze_multi_clip_ce with tensor ExtractedFrame; test_multi_clip_extractor for sequential get_batch. | Run with `pytest tests/`; `pythonpath = ["src"]`. Benchmark and verify scripts live in `scripts/`. |
 
 ---
 
