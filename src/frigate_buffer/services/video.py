@@ -20,6 +20,9 @@ from frigate_buffer.services.video_sanitizer import sanitize_for_nelux
 
 logger = logging.getLogger("frigate-buffer")
 
+# Serialize NeLux NVDEC access across threads to avoid C++ segfault on concurrent VideoReader/get_batch.
+GPU_LOCK = threading.Lock()
+
 
 def _flush_logger() -> None:
     """Flush all logging handlers so logs are not lost on C++ segfault/abort."""
@@ -451,19 +454,53 @@ class VideoService:
             _flush_logger()
             reader = None
             try:
-                logger.info("generate_detection_sidecar: opening NeLux VideoReader safe_path=%s", safe_path)
-                _flush_logger()
-                reader = VideoReader(
-                    safe_path,
-                    decode_accelerator="nvdec",
-                    cuda_device_index=cuda_device_index,
-                    num_threads=1,
-                )
-                # Monkey-patch: If the wrapper is missing _decoder, point it to itself
-                if not hasattr(reader, "_decoder"):
-                    reader._decoder = reader
-                logger.info("generate_detection_sidecar: VideoReader initialized safe_path=%s", safe_path)
-                _flush_logger()
+                with GPU_LOCK:
+                    logger.info("generate_detection_sidecar: opening NeLux VideoReader safe_path=%s", safe_path)
+                    _flush_logger()
+                    reader = VideoReader(
+                        safe_path,
+                        decode_accelerator="nvdec",
+                        cuda_device_index=cuda_device_index,
+                        num_threads=1,
+                    )
+                    # Monkey-patch: If the wrapper is missing _decoder, point it to itself
+                    if not hasattr(reader, "_decoder"):
+                        reader._decoder = reader
+                    logger.info("generate_detection_sidecar: VideoReader initialized safe_path=%s", safe_path)
+                    _flush_logger()
+                    if not _nelux_reader_ready(reader):
+                        logger.error(
+                            "%s: NeLux decoder not initialized for clip. path=%s Check GPU/drivers; container may restart.",
+                            NVDEC_INIT_FAILURE_PREFIX,
+                            clip_path,
+                        )
+                        logger.warning(
+                            "NeLux decoder not initialized for clip, skipping sidecar: %s",
+                            clip_path,
+                        )
+                        try:
+                            if hasattr(reader, "release"):
+                                reader.release()
+                        except Exception:
+                            pass
+                        return False
+                    logger.info("generate_detection_sidecar: calling _nelux_frame_count fps_val=%s duration_sec=%s", fps_val, duration_sec)
+                    _flush_logger()
+                    frame_count = _nelux_frame_count(reader, fps_val, duration_sec)
+                    logger.info("generate_detection_sidecar: _nelux_frame_count returned frame_count=%s", frame_count)
+                    _flush_logger()
+                    fps = float(reader.fps) if getattr(reader, "fps", None) else fps_val
+                    if fps <= 0:
+                        fps = 30.0
+                    if frame_count <= 0 and duration_sec > 0:
+                        frame_count = int(duration_sec * fps)
+                    if frame_count <= 0:
+                        logger.warning("Could not determine frame count for %s", clip_path)
+                        return False
+                    interval = detection_frame_interval
+                    indices = list(range(0, frame_count, interval))
+                    if not indices:
+                        indices = [0]
             except Exception as e:
                 logger.error(
                     "%s (VideoReader open failed). path=%s error=%s Check GPU, drivers, and NeLux wheel; container may restart.",
@@ -484,42 +521,7 @@ class VideoService:
                         pass
                 return False
 
-            if not _nelux_reader_ready(reader):
-                logger.error(
-                    "%s: NeLux decoder not initialized for clip. path=%s Check GPU/drivers; container may restart.",
-                    NVDEC_INIT_FAILURE_PREFIX,
-                    clip_path,
-                )
-                logger.warning(
-                    "NeLux decoder not initialized for clip, skipping sidecar: %s",
-                    clip_path,
-                )
-                try:
-                    if hasattr(reader, "release"):
-                        reader.release()
-                except Exception:
-                    pass
-                return False
-
             try:
-                logger.info("generate_detection_sidecar: calling _nelux_frame_count fps_val=%s duration_sec=%s", fps_val, duration_sec)
-                _flush_logger()
-                frame_count = _nelux_frame_count(reader, fps_val, duration_sec)
-                logger.info("generate_detection_sidecar: _nelux_frame_count returned frame_count=%s", frame_count)
-                _flush_logger()
-                fps = float(reader.fps) if getattr(reader, "fps", None) else fps_val
-                if fps <= 0:
-                    fps = 30.0
-                if frame_count <= 0 and duration_sec > 0:
-                    frame_count = int(duration_sec * fps)
-                if frame_count <= 0:
-                    logger.warning("Could not determine frame count for %s", clip_path)
-                    return False
-
-                interval = detection_frame_interval
-                indices = list(range(0, frame_count, interval))
-                if not indices:
-                    indices = [0]
 
                 model_to_use = yolo_model
                 if model_to_use is None and detection_model:
@@ -546,7 +548,8 @@ class VideoService:
                     )
                     _flush_logger()
                     try:
-                        batch = reader.get_batch(chunk_indices)
+                        with GPU_LOCK:
+                            batch = reader.get_batch(chunk_indices)
                     except Exception as e:
                         logger.warning(
                             "NeLux get_batch failed: clip_path=%s indices=%s error=%s",

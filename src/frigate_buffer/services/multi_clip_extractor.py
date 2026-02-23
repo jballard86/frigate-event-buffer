@@ -20,6 +20,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Callable
 
 from frigate_buffer.constants import NVDEC_INIT_FAILURE_PREFIX
+from frigate_buffer.services.video import GPU_LOCK
 from frigate_buffer.services.video_sanitizer import sanitize_for_nelux
 
 logger = logging.getLogger("frigate-buffer")
@@ -270,34 +271,35 @@ def extract_target_centric_frames(
         safe_paths = [stack.enter_context(sanitize_for_nelux(p)) for _, p in clip_paths]
         for (cam, path), safe_path in zip(clip_paths, safe_paths):
             try:
-                reader = VideoReader(
-                    safe_path,
-                    decode_accelerator="nvdec",
-                    cuda_device_index=cuda_device_index,
-                    num_threads=1,
-                )
-                # Monkey-patch: If the wrapper is missing _decoder, point it to itself
-                if not hasattr(reader, "_decoder"):
-                    reader._decoder = reader
-                fps = float(reader.fps) if getattr(reader, "fps", None) else 1.0
-                if fps <= 0:
-                    fps = 1.0
-                try:
-                    count = int(len(reader))
-                except (AttributeError, TypeError, Exception):
-                    count = 0
-                if count <= 0:
-                    path_meta = _get_fps_duration_from_path(path)
-                    if path_meta is not None:
-                        fps = path_meta[0]
-                        duration_sec = path_meta[1]
-                        count = max(1, int(duration_sec * fps))
-                    else:
-                        count = 1
-                readers[cam] = reader
-                fps_per_cam[cam] = fps
-                frame_count_per_cam[cam] = count
-                durations[cam] = count / fps if fps > 0 else 0.0
+                with GPU_LOCK:
+                    reader = VideoReader(
+                        safe_path,
+                        decode_accelerator="nvdec",
+                        cuda_device_index=cuda_device_index,
+                        num_threads=1,
+                    )
+                    # Monkey-patch: If the wrapper is missing _decoder, point it to itself
+                    if not hasattr(reader, "_decoder"):
+                        reader._decoder = reader
+                    fps = float(reader.fps) if getattr(reader, "fps", None) else 1.0
+                    if fps <= 0:
+                        fps = 1.0
+                    try:
+                        count = int(len(reader))
+                    except (AttributeError, TypeError, Exception):
+                        count = 0
+                    if count <= 0:
+                        path_meta = _get_fps_duration_from_path(path)
+                        if path_meta is not None:
+                            fps = path_meta[0]
+                            duration_sec = path_meta[1]
+                            count = max(1, int(duration_sec * fps))
+                        else:
+                            count = 1
+                    readers[cam] = reader
+                    fps_per_cam[cam] = fps
+                    frame_count_per_cam[cam] = count
+                    durations[cam] = count / fps if fps > 0 else 0.0
             except Exception as e:
                 logger.error(
                     "%s (VideoReader open failed). cam=%s path=%s error=%s Check GPU, drivers, and NeLux wheel; container may restart.",
@@ -412,7 +414,8 @@ def extract_target_centric_frames(
             fcount = frame_count_per_cam.get(best_camera, 0)
             frame_idx = min(max(0, round(T * fps)), fcount - 1) if fcount > 0 else 0
             try:
-                batch = reader.get_batch([frame_idx])
+                with GPU_LOCK:
+                    batch = reader.get_batch([frame_idx])
             except Exception as e:
                 logger.warning(
                     "NeLux get_batch failed for camera %s at T=%.2f (frame_idx=%s): %s",
