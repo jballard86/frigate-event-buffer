@@ -18,6 +18,7 @@ from typing import Any, Sequence
 # Relative path under CE folder for detection sidecar (must match multi_clip_extractor)
 _DETECTION_SIDECAR_FILENAME = "detection.json"
 
+from frigate_buffer.constants import FRAME_MAX_WIDTH, LOG_MAX_RESPONSE_BODY
 from frigate_buffer.managers.file import write_ai_frame_analysis_multi_cam
 
 from frigate_buffer.services import crop_utils
@@ -67,13 +68,6 @@ def _log_proxy_failure(proxy_url: str, attempt: int, exc: Exception) -> None:
             "Proxy request failed on attempt %s/2: %s: %s. url=%s.%s",
             attempt, err_name, err_msg, proxy_url, hint,
         )
-
-
-# Max chars to log for proxy response body
-LOG_MAX_RESPONSE_BODY = 2000
-
-# Resize frame width for API (preserve aspect or fixed width)
-FRAME_MAX_WIDTH = 1280
 
 
 class GeminiAnalysisService:

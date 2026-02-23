@@ -13,6 +13,7 @@ import logging
 
 import requests
 
+from frigate_buffer.constants import HTTP_DOWNLOAD_CHUNK_SIZE, HTTP_STREAM_CHUNK_SIZE
 from frigate_buffer.services.video import VideoService
 
 logger = logging.getLogger('frigate-buffer')
@@ -98,7 +99,7 @@ class DownloadService:
             snapshot_path = os.path.join(folder_path, "snapshot.jpg")
             bytes_downloaded = 0
             with open(snapshot_path, 'wb') as f:
-                for chunk in response.iter_content(chunk_size=65536):
+                for chunk in response.iter_content(chunk_size=HTTP_DOWNLOAD_CHUNK_SIZE):
                     if chunk:
                         f.write(chunk)
                         bytes_downloaded += len(chunk)
@@ -257,7 +258,7 @@ class DownloadService:
             dl_resp.raise_for_status()
             bytes_downloaded = 0
             with open(final_path, "wb") as f:
-                for chunk in dl_resp.iter_content(chunk_size=8192):
+                for chunk in dl_resp.iter_content(chunk_size=HTTP_STREAM_CHUNK_SIZE):
                     if chunk:
                         f.write(chunk)
                         bytes_downloaded += len(chunk)
@@ -300,7 +301,7 @@ class DownloadService:
                         response.raise_for_status()
                         bytes_downloaded = 0
                         with open(final_path, "wb") as f:
-                            for chunk in response.iter_content(chunk_size=8192):
+                            for chunk in response.iter_content(chunk_size=HTTP_STREAM_CHUNK_SIZE):
                                 if chunk:
                                     f.write(chunk)
                                     bytes_downloaded += len(chunk)

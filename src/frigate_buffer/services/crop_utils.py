@@ -13,6 +13,8 @@ import logging
 from typing import Any, Union
 
 import cv2
+
+from frigate_buffer.constants import is_tensor
 import numpy as np
 
 logger = logging.getLogger("frigate-buffer")
@@ -22,12 +24,6 @@ logger = logging.getLogger("frigate-buffer")
 DEFAULT_MOTION_CROP_MIN_AREA_FRACTION = 0.001
 # Alternative: minimum area in pixels (e.g. 500). If both set, use the stricter.
 DEFAULT_MOTION_CROP_MIN_PX = 500
-
-
-def _is_tensor(x: Any) -> bool:
-    """True if x is a torch.Tensor (avoid importing torch at module level for tests)."""
-    cls = type(x).__name__
-    return cls == "Tensor"
 
 
 def _get_tensor_hw(tensor: Any) -> tuple[int, int]:
@@ -46,7 +42,7 @@ def center_crop(frame: Any, target_w: int, target_h: int) -> Any:
     import torch
     import torch.nn.functional as F
 
-    if not _is_tensor(frame):
+    if not is_tensor(frame):
         raise TypeError("center_crop expects torch.Tensor BCHW")
     h, w = _get_tensor_hw(frame)
     if target_w <= 0 or target_h <= 0:
@@ -93,7 +89,7 @@ def _crop_around_center(
     import torch
     import torch.nn.functional as F
 
-    if not _is_tensor(frame):
+    if not is_tensor(frame):
         raise TypeError("_crop_around_center expects torch.Tensor BCHW")
     h, w = _get_tensor_hw(frame)
     if target_w <= 0 or target_h <= 0:
@@ -142,7 +138,7 @@ def crop_around_detections_with_padding(
     frame: torch.Tensor BCHW. Returns BCHW tensor (variable size crop; no resize to fixed size).
     Each detection must have "bbox" as [x1, y1, x2, y2] in pixel coordinates.
     """
-    if not _is_tensor(frame):
+    if not is_tensor(frame):
         raise TypeError("crop_around_detections_with_padding expects torch.Tensor BCHW")
     h, w = _get_tensor_hw(frame)
     if not detections:
@@ -192,7 +188,7 @@ def full_frame_resize_to_target(frame: Any, target_w: int, target_h: int) -> Any
     import torch
     import torch.nn.functional as F
 
-    if not _is_tensor(frame):
+    if not is_tensor(frame):
         raise TypeError("full_frame_resize_to_target expects torch.Tensor BCHW")
     if target_w <= 0 or target_h <= 0:
         return frame
@@ -240,7 +236,7 @@ def motion_crop(
     """
     import torch
 
-    if not _is_tensor(frame):
+    if not is_tensor(frame):
         raise TypeError("motion_crop expects frame as torch.Tensor BCHW")
     _, c, h, w = frame.shape
     # Grayscale from RGB: 0.299*R + 0.587*G + 0.114*B (on GPU)
@@ -313,7 +309,7 @@ def draw_timestamp_overlay(
     For tensor: converts to HWC BGR at the OpenCV boundary, draws, returns numpy HWC BGR.
     For numpy: draws in-place (or copy if read-only) and returns the array.
     """
-    if _is_tensor(frame):
+    if is_tensor(frame):
         # BCHW RGB → HWC BGR for OpenCV
         if frame.dim() == 4:
             frame_np = frame[:, [2, 1, 0], :, :].permute(0, 2, 3, 1).squeeze(0).cpu().numpy()

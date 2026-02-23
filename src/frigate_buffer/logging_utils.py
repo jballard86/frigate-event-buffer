@@ -4,6 +4,8 @@ import logging
 import time
 import threading
 
+from frigate_buffer.constants import ERROR_BUFFER_MAX_SIZE
+
 logger = logging.getLogger('frigate-buffer')
 
 
@@ -45,7 +47,7 @@ class ErrorBufferHandler(logging.Handler):
             self.handleError(record)
 
 
-error_buffer = ErrorBuffer(max_size=10)
+error_buffer = ErrorBuffer(max_size=ERROR_BUFFER_MAX_SIZE)
 
 
 def setup_logging(log_level: str):

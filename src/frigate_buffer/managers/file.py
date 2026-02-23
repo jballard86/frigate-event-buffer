@@ -10,7 +10,7 @@ import logging
 from datetime import datetime
 from typing import Any, Union
 
-from frigate_buffer.constants import NON_CAMERA_DIRS
+from frigate_buffer.constants import NON_CAMERA_DIRS, is_tensor
 from frigate_buffer.models import EventState
 
 logger = logging.getLogger('frigate-buffer')
@@ -22,11 +22,6 @@ try:
     _CV2_AVAILABLE = True
 except ImportError:
     _CV2_AVAILABLE = False
-
-
-def _is_tensor(x: Any) -> bool:
-    """True if x is a torch.Tensor."""
-    return type(x).__name__ == "Tensor"
 
 
 def write_stitched_frame(frame_bgr: Union[Any, np.ndarray], filepath: str) -> bool:
@@ -42,7 +37,7 @@ def write_stitched_frame(frame_bgr: Union[Any, np.ndarray], filepath: str) -> bo
         logger.warning("Failed to create directory for %s: %s", filepath, e)
         return False
 
-    if _is_tensor(frame_bgr):
+    if is_tensor(frame_bgr):
         try:
             import torch
             from torchvision.io import encode_jpeg

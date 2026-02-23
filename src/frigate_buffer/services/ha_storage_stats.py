@@ -12,10 +12,9 @@ from typing import Any
 
 import requests
 
-logger = logging.getLogger("frigate-buffer")
+from frigate_buffer.constants import DEFAULT_STORAGE_STATS_MAX_AGE_SECONDS
 
-# Default cache TTL for storage stats (30 minutes).
-DEFAULT_STORAGE_STATS_MAX_AGE_SECONDS = 30 * 60
+logger = logging.getLogger("frigate-buffer")
 
 # Default timeout for Home Assistant state fetch (seconds).
 HA_STATE_TIMEOUT = 5

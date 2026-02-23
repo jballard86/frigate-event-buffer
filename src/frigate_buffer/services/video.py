@@ -15,6 +15,8 @@ import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
+from frigate_buffer.constants import is_tensor
+
 logger = logging.getLogger("frigate-buffer")
 
 # Chunk size for NeLux get_batch to protect 8GB VRAM when running YOLO.
@@ -22,11 +24,6 @@ BATCH_SIZE = 16
 
 # COCO class 0 = person; we restrict YOLO to this class only for sidecar.
 _PERSON_CLASS_ID = 0
-
-
-def _is_tensor(x: Any) -> bool:
-    """True if x is a torch.Tensor."""
-    return type(x).__name__ == "Tensor"
 
 
 def log_gpu_status() -> None:
@@ -239,7 +236,7 @@ def _run_detection_on_frame(
 
     detections: list[dict[str, Any]] = []
     try:
-        if _is_tensor(frame):
+        if is_tensor(frame):
             t = frame
             if t.dim() == 3:
                 t = t.unsqueeze(0)

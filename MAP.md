@@ -168,6 +168,7 @@ frigate-event-buffer/
 │   ├── test_ai_frame_analysis_writing.py
 │   ├── test_max_event_length.py
 │   ├── test_cleanup_test_folders.py
+│   ├── test_constants.py
 │   ├── test_query_service.py
 │   ├── test_quick_title_service.py
 │   ├── test_event_test.py
@@ -224,7 +225,7 @@ frigate-event-buffer/
 | `src/frigate_buffer/config.py` | Load/validate YAML + env via Voluptuous `CONFIG_SCHEMA`; flat keys (e.g. `MQTT_BROKER`, `GEMINI_PROXY_URL`, `MAX_EVENT_LENGTH_SECONDS`). Frame limits for AI: `multi_cam.max_multi_cam_frames_*` only. `single_camera_ce_close_delay_seconds` (0 = close single-cam CE as soon as event ends). Invalid config exits 1. | Used by `main.py`. |
 | `src/frigate_buffer/version.txt` | Version string read at startup; logged in main. | Package data; included by `COPY src/` in Dockerfile. |
 | `src/frigate_buffer/logging_utils.py` | `setup_logging()`, `ErrorBuffer` for stats dashboard. | Called from main; ErrorBuffer used by web/server and orchestrator. |
-| `src/frigate_buffer/constants.py` | Shared constants: `NON_CAMERA_DIRS`, `HTTP_STREAM_CHUNK_SIZE` (8192), `FRIGATE_PROXY_SNAPSHOT_TIMEOUT` (15), `FRIGATE_PROXY_LATEST_TIMEOUT` (10). | Imported by file manager, query, blueprints, frigate_proxy, frigate_export_watchdog. |
+| `src/frigate_buffer/constants.py` | Shared constants: `NON_CAMERA_DIRS`; `HTTP_STREAM_CHUNK_SIZE` (8192), `HTTP_DOWNLOAD_CHUNK_SIZE` (65536); `FRIGATE_PROXY_SNAPSHOT_TIMEOUT` (15), `FRIGATE_PROXY_LATEST_TIMEOUT` (10); `LOG_MAX_RESPONSE_BODY` (2000), `FRAME_MAX_WIDTH` (1280); `DEFAULT_STORAGE_STATS_MAX_AGE_SECONDS` (30 min); `ERROR_BUFFER_MAX_SIZE` (10). Also `is_tensor()` helper for torch.Tensor checks. | Imported by file manager, query, blueprints, frigate_proxy, frigate_export_watchdog, download, ai_analyzer, ha_storage_stats, logging_utils; is_tensor by file, video, crop_utils. |
 
 ### Core coordinator & models
 
