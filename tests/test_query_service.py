@@ -92,6 +92,23 @@ class TestEventQueryService(unittest.TestCase):
         self.assertIn("back_door", cameras)
         self.assertIn("clip.mp4", ev["hosted_clips"][0]["url"])
 
+    def test_consolidated_event_includes_summary_video_when_file_exists(self):
+        """When {ce_id}_summary.mp4 exists in the CE root, event has Summary video in hosted_clips and as hosted_clip."""
+        summary_basename = f"{self.ce_id}_summary.mp4"
+        with open(os.path.join(self.ce_dir, summary_basename), "w") as f:
+            f.write("dummy")
+        self.service._cache.clear()
+        self.service._event_cache.clear()
+        events = self.service.get_events("events")
+        self.assertEqual(len(events), 1)
+        ev = events[0]
+        self.assertIn("hosted_clips", ev)
+        summary_entries = [c for c in ev["hosted_clips"] if c.get("camera") == "Summary video"]
+        self.assertEqual(len(summary_entries), 1, "hosted_clips should include Summary video entry")
+        summary_url = summary_entries[0]["url"]
+        self.assertIn(f"/files/events/{self.ce_id}/{summary_basename}", summary_url)
+        self.assertEqual(ev["hosted_clip"], summary_url, "hosted_clip should be the summary URL when summary exists")
+
     def test_get_all_events(self):
         events, cameras = self.service.get_all_events()
         self.assertIn("front_door", cameras)

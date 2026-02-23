@@ -1,1 +1,1 @@
-1.1.1 PyNvVideoCodec Migration
+1.2.0 Smooth Tracking is Smooth

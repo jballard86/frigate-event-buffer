@@ -567,6 +567,94 @@ class TestGenerateCompilationVideo(unittest.TestCase):
         generate_compilation_video(slices, ce_dir, output_path)
         self.assertEqual(slices[0]["crop_start"], slices[0]["crop_end"])
 
+    @patch("frigate_buffer.services.video_compilation.logger")
+    @patch("frigate_buffer.services.video_compilation._run_pynv_compilation")
+    @patch("frigate_buffer.services.video_compilation.os.path.isfile")
+    @patch("frigate_buffer.services.video_compilation.os.rename")
+    @patch("frigate_buffer.services.video_compilation.os.path.getsize")
+    @patch("frigate_buffer.services.query.resolve_clip_in_folder")
+    def test_fallback_log_once_per_camera_no_detections(
+        self, mock_resolve, mock_getsize, mock_rename, mock_isfile, mock_run_pynv, mock_logger
+    ):
+        """When multiple slices have no detections at start/end, only one ERROR is logged per camera."""
+        mock_resolve.return_value = "doorbell.mp4"
+        mock_isfile.return_value = True
+        mock_getsize.return_value = 1000
+        # Sidecar has entries but with empty detections at slice boundaries (nearest to 0, 0.75, 1.5 will have no dets).
+        sidecars = {
+            "doorbell": {
+                "native_width": 1920,
+                "native_height": 1080,
+                "entries": [
+                    {"timestamp_sec": 0.0, "detections": []},
+                    {"timestamp_sec": 0.75, "detections": []},
+                    {"timestamp_sec": 1.5, "detections": []},
+                    {"timestamp_sec": 2.25, "detections": []},
+                ],
+            },
+        }
+        slices = [
+            {"camera": "doorbell", "start_sec": 0.0, "end_sec": 0.75},
+            {"camera": "doorbell", "start_sec": 0.75, "end_sec": 1.5},
+            {"camera": "doorbell", "start_sec": 1.5, "end_sec": 2.25},
+        ]
+        ce_dir = "/app/storage/events/test"
+        output_path = "/app/storage/events/test/test_summary.mp4"
+
+        generate_compilation_video(slices, ce_dir, output_path, sidecars=sidecars)
+
+        no_detection_calls = [
+            c for c in mock_logger.error.call_args_list
+            if c[0] and "no detections at slice start/end" in str(c[0][0])
+        ]
+        self.assertEqual(len(no_detection_calls), 1, "Expected exactly one ERROR per camera for no detections")
+        msg = no_detection_calls[0][0]
+        self.assertIn("doorbell", str(msg))
+        self.assertIn("in %s slices", msg[0])
+        self.assertEqual(msg[2], 3, "Expected slice count 3")
+        self.assertIn("fallback crop (center or nearby detection within 5s)", msg[0])
+
+    @patch("frigate_buffer.services.video_compilation.logger")
+    @patch("frigate_buffer.services.video_compilation._run_pynv_compilation")
+    @patch("frigate_buffer.services.video_compilation.os.path.isfile")
+    @patch("frigate_buffer.services.video_compilation.os.rename")
+    @patch("frigate_buffer.services.video_compilation.os.path.getsize")
+    @patch("frigate_buffer.services.query.resolve_clip_in_folder")
+    def test_fallback_log_once_per_camera_no_entries(
+        self, mock_resolve, mock_getsize, mock_rename, mock_isfile, mock_run_pynv, mock_logger
+    ):
+        """When multiple slices have no sidecar entries for a camera, only one ERROR is logged per camera."""
+        mock_resolve.return_value = "doorbell.mp4"
+        mock_isfile.return_value = True
+        mock_getsize.return_value = 1000
+        sidecars = {
+            "doorbell": {
+                "native_width": 1920,
+                "native_height": 1080,
+                "entries": [],
+            },
+        }
+        slices = [
+            {"camera": "doorbell", "start_sec": 0.0, "end_sec": 2.0},
+            {"camera": "doorbell", "start_sec": 2.0, "end_sec": 4.0},
+            {"camera": "doorbell", "start_sec": 4.0, "end_sec": 6.0},
+        ]
+        ce_dir = "/app/storage/events/test"
+        output_path = "/app/storage/events/test/test_summary.mp4"
+
+        generate_compilation_video(slices, ce_dir, output_path, sidecars=sidecars)
+
+        no_entries_calls = [
+            c for c in mock_logger.error.call_args_list
+            if c[0] and "no sidecar entries" in str(c[0][0])
+        ]
+        self.assertEqual(len(no_entries_calls), 1, "Expected exactly one ERROR per camera for no sidecar entries")
+        msg = no_entries_calls[0][0]
+        self.assertIn("doorbell", str(msg))
+        self.assertIn("in %s slices", msg[0])
+        self.assertEqual(msg[2], 3, "Expected slice count 3")
+        self.assertIn("using fallback crop", msg[0])
+
     @patch("frigate_buffer.services.video_compilation.GPU_LOCK", MagicMock())
     @patch("frigate_buffer.services.video_compilation.create_decoder")
     @patch("frigate_buffer.services.video_compilation.subprocess.Popen")

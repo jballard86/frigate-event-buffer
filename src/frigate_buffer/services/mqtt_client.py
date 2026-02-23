@@ -1,9 +1,14 @@
 """MQTT client wrapper: connection lifecycle, subscriptions, and message callback registration."""
 
 import logging
-from typing import Any, Callable
+import ssl
+from typing import TYPE_CHECKING, Any, Callable
 
 import paho.mqtt.client as mqtt
+
+if TYPE_CHECKING:
+    from paho.mqtt.client import ConnectFlags, DisconnectFlags
+    from paho.mqtt.reasoncodes import ReasonCode
 
 logger = logging.getLogger('frigate-buffer')
 
@@ -33,20 +38,33 @@ class MqttClientWrapper:
         self._on_message_callback = on_message_callback
         self.mqtt_connected = False
 
-        self._client = mqtt.Client(
-            mqtt.CallbackAPIVersion.VERSION2,
-            client_id=client_id,
-        )
+        # paho-mqtt 2.x: callback_api_version required; type stubs may not export CallbackAPIVersion
+        callback_api_version = getattr(mqtt, "CallbackAPIVersion", None)
+        if callback_api_version is not None:
+            self._client = mqtt.Client(callback_api_version.VERSION2, client_id=client_id)
+        else:
+            self._client = mqtt.Client(client_id=client_id)
         if username:
             self._client.username_pw_set(username, password)
+        if self._port == 8883:
+            logger.info("Configuring MQTT connection with TLS/SSL")
+            self._client.tls_set(cert_reqs=ssl.CERT_REQUIRED, tls_version=ssl.PROTOCOL_TLSv1_2)
         self._client.on_connect = self._on_connect
         self._client.on_disconnect = self._on_disconnect
         self._client.on_message = self._on_message
         self._client.reconnect_delay_set(min_delay=1, max_delay=120)
 
-    def _on_connect(self, client: mqtt.Client, userdata: Any, flags: dict, reason_code: int, properties: Any) -> None:
+    def _on_connect(
+        self,
+        client: mqtt.Client,
+        userdata: Any,
+        flags: "ConnectFlags",
+        reason_code: "ReasonCode",
+        properties: Any,
+    ) -> None:
         """Handle MQTT connection."""
-        if reason_code == 0:
+        rc = getattr(reason_code, "value", reason_code)
+        if rc == 0:
             self.mqtt_connected = True
             logger.info(f"Connected to MQTT broker {self._broker}")
 
@@ -54,13 +72,21 @@ class MqttClientWrapper:
                 client.subscribe(topic, qos)
                 logger.info(f"Subscribed to: {topic}")
         else:
-            logger.error(f"MQTT connection failed with code: {reason_code}")
+            logger.error(f"MQTT connection failed with code: {rc}")
 
-    def _on_disconnect(self, client: mqtt.Client, userdata: Any, flags: dict, reason_code: int, properties: Any) -> None:
+    def _on_disconnect(
+        self,
+        client: mqtt.Client,
+        userdata: Any,
+        flags: "DisconnectFlags",
+        reason_code: "ReasonCode",
+        properties: Any,
+    ) -> None:
         """Handle MQTT disconnection."""
         self.mqtt_connected = False
-        if reason_code != 0:
-            logger.warning(f"Unexpected MQTT disconnect (rc={reason_code}), reconnecting...")
+        rc = getattr(reason_code, "value", reason_code)
+        if rc != 0:
+            logger.warning(f"Unexpected MQTT disconnect (rc={rc}), reconnecting...")
         else:
             logger.info("MQTT disconnected")
 

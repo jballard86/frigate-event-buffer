@@ -486,8 +486,8 @@
              ${clips.length > 1 ? `
              <div class="clip-selector" style="margin-top:8px;">
                <label for="clipSelect" style="margin-right:6px;font-size:0.9rem;">Camera:</label>
-               <select id="clipSelect">${clips.map((c, i) =>
-                 `<option value="${escapeHtml(c.url)}" ${i === 0 ? 'selected' : ''}>${escapeHtml((c.camera || 'Camera').replace(/_/g, ' ').replace(/\b\w/g, ch => ch.toUpperCase()))}</option>`
+               <select id="clipSelect">${clips.map((c) =>
+                 `<option value="${escapeHtml(c.url)}" ${c.url === primaryClipUrl ? 'selected' : ''}>${escapeHtml((c.camera || 'Camera').replace(/_/g, ' ').replace(/\b\w/g, ch => ch.toUpperCase()))}</option>`
                ).join('')}</select>
              </div>` : ''}`
           : ev.has_snapshot

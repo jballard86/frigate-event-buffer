@@ -14,6 +14,7 @@ import math
 import os
 import subprocess
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
@@ -27,6 +28,8 @@ GPU_LOCK = threading.Lock()
 
 # In-memory cache for ffprobe results keyed by clip path (realpath when exists).
 # Reduces redundant subprocess I/O when the same clip is probed by sidecar, extraction, and compilation.
+# Bounded: clear when over this many entries so metadata for deleted clips does not stay in RAM forever.
+_METADATA_CACHE_MAX_SIZE = 500
 _METADATA_CACHE: dict[str, tuple[int, int, float, float] | None] = {}
 
 
@@ -50,6 +53,10 @@ BATCH_SIZE = 4
 
 # COCO class 0 = person; we restrict YOLO to this class only for sidecar.
 _PERSON_CLASS_ID = 0
+
+# Throttle YOLO inference logs to at most once per this many seconds (avoids log spam per batch).
+_YOLO_INFERENCE_LOG_INTERVAL = 5.0
+_last_yolo_inference_log_time: float = 0.0
 
 
 def log_gpu_status() -> None:
@@ -140,6 +147,8 @@ def _get_video_metadata(clip_path: str) -> tuple[int, int, float, float] | None:
     (sidecar, multi-clip extraction, compilation) do not re-run ffprobe.
     """
     cache_key = os.path.realpath(clip_path) if os.path.exists(clip_path) else clip_path
+    if len(_METADATA_CACHE) > _METADATA_CACHE_MAX_SIZE:
+        _METADATA_CACHE.clear()
     if cache_key in _METADATA_CACHE:
         return _METADATA_CACHE[cache_key]
     try:
@@ -344,6 +353,7 @@ def _run_detection_on_batch(
     Ultralytics receives a correctly sized tensor; bboxes are then scaled back to decoder (read)
     space so the caller can pass them to _scale_detections_to_native.
     """
+    global _last_yolo_inference_log_time
     import torch
     import torch.nn.functional as F
 
@@ -361,8 +371,12 @@ def _run_detection_on_batch(
         batch_resized = F.interpolate(
             batch, size=(target_h, target_w), mode="bilinear", align_corners=False
         )
-        logger.info("_run_detection_on_batch: calling model.predict (YOLO inference)")
-        _flush_logger()
+        now = time.monotonic()
+        should_log = (now - _last_yolo_inference_log_time) >= _YOLO_INFERENCE_LOG_INTERVAL
+        if should_log:
+            _last_yolo_inference_log_time = now
+            logger.debug("_run_detection_on_batch: calling model.predict (YOLO inference)")
+            _flush_logger()
         results = model(
             batch_resized,
             device=device,
@@ -370,8 +384,9 @@ def _run_detection_on_batch(
             classes=[_PERSON_CLASS_ID],
             imgsz=imgsz,
         )
-        logger.info("_run_detection_on_batch: model.predict returned")
-        _flush_logger()
+        if should_log:
+            logger.debug("_run_detection_on_batch: model.predict returned")
+            _flush_logger()
         scale_x = read_w / target_w if target_w > 0 else 1.0
         scale_y = read_h / target_h if target_h > 0 else 1.0
         if not results:

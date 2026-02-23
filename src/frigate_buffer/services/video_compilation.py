@@ -11,7 +11,7 @@ import json
 import logging
 import os
 import subprocess
-from collections import Counter
+from collections import Counter, defaultdict
 
 from frigate_buffer.constants import NVDEC_INIT_FAILURE_PREFIX
 from frigate_buffer.services import crop_utils
@@ -528,6 +528,7 @@ def _run_pynv_compilation(
 
     logged_cameras: set[str] = set()
     slices_per_cam = Counter(sl["camera"] for sl in slices)
+    missing_crop_by_cam: dict[str, list[tuple[float, float]]] = defaultdict(list)
     try:
         for slice_idx, sl in enumerate(slices):
             cam = sl["camera"]
@@ -537,10 +538,7 @@ def _run_pynv_compilation(
             duration = t1 - t0
             n_frames = max(1, round(duration * float(COMPILATION_OUTPUT_FPS)))
             if "crop_start" not in sl or "crop_end" not in sl:
-                logger.error(
-                    "Compilation fallback to center crop: slice %s missing crop_start/crop_end for camera=%s; output will be static.",
-                    slice_idx, cam,
-                )
+                missing_crop_by_cam[cam].append((t0, t1))
             crop_start = sl.get("crop_start")
             crop_end = sl.get("crop_end")
             output_times = [t0 + i / float(COMPILATION_OUTPUT_FPS) for i in range(n_frames)]
@@ -643,6 +641,13 @@ def _run_pynv_compilation(
                     pass
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
+        for cam, pairs in missing_crop_by_cam.items():
+            n = len(pairs)
+            first, last = pairs[0], pairs[-1]
+            logger.error(
+                "Compilation: slice missing crop_start/crop_end for camera=%s in %s slices (e.g. [%.2f, %.2f]–[%.2f, %.2f]); using fallback crop.",
+                cam, n, first[0], first[1], last[0], last[1],
+            )
     except BrokenPipeError:
         logger.error(
             "FFmpeg closed stdin (broken pipe). Command: %s. Check %s for stderr.",
@@ -739,6 +744,9 @@ def generate_compilation_video(
             timestamps = sorted(float(e.get("timestamp_sec") or 0) for e in entries)
             sidecar_timestamps[cam] = timestamps
 
+    no_entries_by_cam: dict[str, list[tuple[float, float]]] = defaultdict(list)
+    no_detections_by_cam: dict[str, list[tuple[float, float]]] = defaultdict(list)
+
     for i, sl in enumerate(slices):
         cam = sl["camera"]
         sidecar_data = sidecar_cache.get(cam) or {}
@@ -750,20 +758,14 @@ def generate_compilation_video(
         entries = sidecar_data.get("entries") or []
         # crop_start/crop_end are in native (sw, sh) space; stored on slice for decoder-space scaling in _run_pynv_compilation.
         if not entries:
-            logger.error(
-                "Compilation fallback to center crop: no sidecar entries for camera=%s slice [%.2f, %.2f]; output will be static.",
-                cam, t0, t1,
-            )
+            no_entries_by_cam[cam].append((t0, t1))
         else:
             entry0 = _nearest_entry_at_t(entries, t0, ts_sorted)
             entry1 = _nearest_entry_at_t(entries, t1, ts_sorted)
             dets0 = (entry0 or {}).get("detections") or []
             dets1 = (entry1 or {}).get("detections") or []
             if not dets0 or not dets1:
-                logger.error(
-                    "Compilation fallback to center crop: no detections in sidecar for camera=%s slice [%.2f, %.2f]; output will be static.",
-                    cam, t0, t1,
-                )
+                no_detections_by_cam[cam].append((t0, t1))
         sl["crop_start"] = calculate_crop_at_time(
             sidecar_data, t0, sw, sh, target_w, target_h, timestamps_sorted=ts_sorted
         )
@@ -777,6 +779,20 @@ def generate_compilation_video(
             )
         sl["native_width"] = sw
         sl["native_height"] = sh
+
+    for cam, pairs in no_entries_by_cam.items():
+        n = len(pairs)
+        first, last = pairs[0], pairs[-1]
+        logger.error(
+            "Compilation: no sidecar entries for camera=%s in %s slices (e.g. [%.2f, %.2f]–[%.2f, %.2f]); using fallback crop.",
+            cam, n, first[0], first[1], last[0], last[1],
+        )
+    for cam, pairs in no_detections_by_cam.items():
+        n = len(pairs)
+        logger.error(
+            "Compilation: no detections at slice start/end for camera=%s in %s slices; using fallback crop (center or nearby detection within 5s).",
+            cam, n,
+        )
 
     if crop_smooth_alpha > 0:
         smooth_crop_centers_ema(slices, crop_smooth_alpha)

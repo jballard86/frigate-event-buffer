@@ -368,10 +368,21 @@ class EventQueryService:
                     primary_snapshot = f"/files/events/{ce_id}/{cam}/snapshot.jpg"
                     break
 
+            # When the edited summary video exists in the CE root, add it to the dropdown and make it primary.
+            summary_basename = f"{ce_id}_summary.mp4"
+            summary_path = os.path.join(entry.path, summary_basename)
+            if os.path.isfile(summary_path):
+                summary_url = f"/files/events/{ce_id}/{summary_basename}"
+                hosted_clips.append({"camera": "Summary video", "url": summary_url})
+                primary_clip = summary_url
+
             has_clip = any(subdirs.get(cam, {}).get('has_clip') for cam in cameras)
+            has_summary = os.path.isfile(summary_path)
+            if has_summary:
+                has_clip = True
             has_snapshot = any(subdirs.get(cam, {}).get('has_snapshot') for cam in cameras)
 
-            # hosted_clip: only set when we have an actual clip; no fallback to non-existent file
+            # hosted_clip: only set when we have an actual clip (camera or summary); no fallback to non-existent file
             hosted_clip_url = primary_clip if has_clip else None
             hosted_snapshot_url = primary_snapshot if has_snapshot else (f"/files/events/{ce_id}/{cameras[0]}/snapshot.jpg" if cameras else None)
 

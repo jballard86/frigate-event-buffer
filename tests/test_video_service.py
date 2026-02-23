@@ -12,6 +12,7 @@ from frigate_buffer.services.video import (
     _decoder_reader_ready,
     _get_video_metadata,
     _METADATA_CACHE,
+    _METADATA_CACHE_MAX_SIZE,
     _run_detection_on_batch,
     ensure_detection_model_ready,
     get_detection_model_path,
@@ -134,6 +135,26 @@ class TestVideoService(unittest.TestCase):
         self.assertEqual(first, (1920, 1080, 30.0, 5.5))
         self.assertEqual(second, first)
         self.assertEqual(mock_run.call_count, 1, "ffprobe should be invoked only once; second call uses cache")
+
+    @patch("frigate_buffer.services.video.subprocess.run")
+    def test_get_video_metadata_clears_cache_when_over_max_size(self, mock_run):
+        """When cache size exceeds _METADATA_CACHE_MAX_SIZE, cache is cleared before lookup/insert."""
+        ffprobe_json = json.dumps({
+            "streams": [{"width": 640, "height": 480, "r_frame_rate": "30/1"}],
+            "format": {"duration": "2.0"},
+        }).encode("utf-8")
+        mock_run.return_value = MagicMock(returncode=0, stdout=ffprobe_json)
+        _METADATA_CACHE.clear()
+        # Fill cache over the limit so next _get_video_metadata triggers clear
+        for i in range(_METADATA_CACHE_MAX_SIZE + 1):
+            _METADATA_CACHE[f"/fake/path_{i}"] = (1920, 1080, 30.0, 1.0)
+        self.assertGreater(len(_METADATA_CACHE), _METADATA_CACHE_MAX_SIZE)
+        new_path = "/new/unique/clip.mp4"
+        result = _get_video_metadata(new_path)
+        self.assertEqual(result, (640, 480, 30.0, 2.0))
+        self.assertEqual(len(_METADATA_CACHE), 1, "cache should have been cleared and only new entry remains")
+        self.assertIn(new_path, _METADATA_CACHE)
+        _METADATA_CACHE.clear()
 
     def test_decoder_reader_ready(self):
         """_decoder_reader_ready returns True for DecoderContext (frame_count) or reader with _decoder."""
