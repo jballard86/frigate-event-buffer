@@ -124,6 +124,7 @@ docker run -d --name frigate_buffer --restart unless-stopped \
   -e LOG_LEVEL=INFO \
   -e NVIDIA_VISIBLE_DEVICES=all \
   -e NVIDIA_DRIVER_CAPABILITIES=compute,video,utility \
+  -e LD_LIBRARY_PATH="/usr/local/lib/python3.12/dist-packages/torch/lib:/usr/local/lib/python3.12/dist-packages/nvidia/cuda_runtime/lib:/usr/local/lib/python3.12/dist-packages/nvidia/cudnn/lib:/usr/local/lib:/usr/lib/x86_64-linux-gnu" \
   --gpus all \
   frigate-buffer:latest
 ```

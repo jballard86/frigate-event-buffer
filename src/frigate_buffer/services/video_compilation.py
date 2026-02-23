@@ -10,7 +10,7 @@ import bisect
 import json
 import logging
 import os
-import sys
+import subprocess
 
 from frigate_buffer.services import timeline_ema
 from frigate_buffer.services.video import (
@@ -280,6 +280,86 @@ def calculate_segment_crop(
     return (x, y, target_w, target_h)
 
 
+def _encode_frames_via_ffmpeg(
+    frames: list,
+    target_w: int,
+    target_h: int,
+    tmp_output_path: str,
+) -> None:
+    """
+    Encode a list of RGB frames to MP4 using FFmpeg with h264_nvenc only (GPU).
+
+    frames: list of numpy arrays (H, W, 3) uint8 RGB with H=target_h, W=target_w.
+    No CPU fallback; on failure logs full context and raises.
+    """
+    if not frames:
+        return
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-f", "rawvideo",
+        "-pix_fmt", "rgb24",
+        "-s", f"{target_w}x{target_h}",
+        "-r", "20",
+        "-i", "pipe:0",
+        "-c:v", "h264_nvenc",
+        "-an",
+        tmp_output_path,
+    ]
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+    except FileNotFoundError:
+        logger.error(
+            "Compilation encode failed: ffmpeg not found. "
+            "Compilation requires GPU encoding (h264_nvenc). No CPU fallback is provided. "
+            "Ensure FFmpeg is installed and available on PATH with NVENC support."
+        )
+        raise RuntimeError(
+            "ffmpeg not found; compilation encoding is GPU-only (h264_nvenc), no CPU fallback"
+        ) from None
+    assert proc.stdin is not None
+    try:
+        for arr in frames:
+            proc.stdin.write(arr.tobytes())
+        proc.stdin.close()
+    except Exception as e:
+        if proc.stderr:
+            stderr = proc.stderr.read().decode("utf-8", errors="replace")
+        else:
+            stderr = ""
+        logger.error(
+            "Compilation encode failed while writing frames: %s. "
+            "FFmpeg command: %s. stderr: %s. "
+            "Compilation encoding is GPU-only (h264_nvenc). No CPU fallback is provided.",
+            e,
+            " ".join(cmd),
+            stderr,
+        )
+        proc.wait()
+        raise
+    stdout, stderr = proc.communicate()
+    stderr_str = (stderr or b"").decode("utf-8", errors="replace")
+    if proc.returncode != 0:
+        logger.error(
+            "Compilation encode failed: FFmpeg exited with code %s. "
+            "Command: %s. stderr: %s. "
+            "Compilation encoding is GPU-only (h264_nvenc). No CPU fallback is provided. "
+            "Ensure an NVENC-capable GPU and drivers/FFmpeg with h264_nvenc support.",
+            proc.returncode,
+            " ".join(cmd),
+            stderr_str,
+        )
+        raise RuntimeError(
+            f"FFmpeg h264_nvenc encode failed (exit {proc.returncode}); "
+            "compilation is GPU-only, no CPU fallback"
+        )
+
+
 def _resolve_clip_path(ce_dir: str, camera: str, resolve_clip_in_folder: object) -> str:
     """Resolve clip path for a camera under ce_dir; raise FileNotFoundError if missing."""
     cam_dir = os.path.join(ce_dir, camera)
@@ -303,8 +383,8 @@ def _run_nelux_compilation(
     cuda_device_index: int = 0,
 ) -> None:
     """
-    Decode each slice with NeLux (NVDEC), crop with smooth panning in tensor space, encode (NVENC).
-    Frames stay on GPU (zero-copy). Output 20fps, no audio. Encoder created from first slice's reader.
+    Decode each slice with NeLux (NVDEC), crop with smooth panning in tensor space.
+    Encode via FFmpeg h264_nvenc only (GPU); no CPU fallback. Output 20fps, no audio.
     """
     import torch  # required before nelux
     from nelux import VideoReader  # type: ignore[import-untyped]
@@ -312,14 +392,16 @@ def _run_nelux_compilation(
     if not slices:
         return
 
-    # Resolve first slice clip and open reader for encoder creation (NeLux API requires reader.create_encoder).
     first_clip = _resolve_clip_path(ce_dir, slices[0]["camera"], resolve_clip_in_folder)
     first_reader = VideoReader(
         first_clip,
         decode_accelerator="nvdec",
         cuda_device_index=cuda_device_index,
     )
-    assert first_reader is not None  # NeLux VideoReader does not return None; narrows for type checker.
+    assert first_reader is not None
+    # Monkey-patch: If the wrapper is missing _decoder, point it to itself
+    if not hasattr(first_reader, "_decoder"):
+        first_reader._decoder = first_reader
 
     if not _nelux_reader_ready(first_reader):
         logger.warning(
@@ -328,22 +410,9 @@ def _run_nelux_compilation(
         )
         return
 
-    # On Linux use h264_nvenc only (no fallback to h264_mf). On Windows allow fallback if encoder= not supported.
-    if sys.platform == "win32":
-        try:
-            enc_ctx = first_reader.create_encoder(tmp_output_path, encoder="h264_nvenc")
-        except TypeError:
-            enc_ctx = first_reader.create_encoder(tmp_output_path)
-    else:
-        try:
-            enc_ctx = first_reader.create_encoder(tmp_output_path, encoder="h264_nvenc")
-        except TypeError as e:
-            raise RuntimeError(
-                "NeLux create_encoder must support encoder= on Linux for h264_nvenc"
-            ) from e
-    with enc_ctx as enc:
-        # Do not encode audio; output is -an equivalent.
-        for slice_idx, sl in enumerate(slices):
+    frames_list: list = []  # list of (target_h, target_w, 3) uint8 RGB numpy arrays
+
+    for slice_idx, sl in enumerate(slices):
             cam = sl["camera"]
             clip_path = _resolve_clip_path(ce_dir, cam, resolve_clip_in_folder)
             if slice_idx == 0:
@@ -354,6 +423,8 @@ def _run_nelux_compilation(
                     decode_accelerator="nvdec",
                     cuda_device_index=cuda_device_index,
                 )
+                if not hasattr(reader, "_decoder"):
+                    reader._decoder = reader
                 if not _nelux_reader_ready(reader):
                     logger.warning(
                         "NeLux decoder not initialized for slice %s, skipping: %s",
@@ -375,7 +446,6 @@ def _run_nelux_compilation(
                 duration = t1 - t0
                 if frame_count <= 0 and duration > 0:
                     frame_count = max(1, int(duration * fps))
-                # At least one frame for very short slices.
                 n_frames = max(1, round(duration * 20.0))
                 xs, ys, w, h = sl["crop_start"]
                 xe, ye, we, he = sl["crop_end"]
@@ -395,15 +465,12 @@ def _run_nelux_compilation(
                 if not src_indices:
                     continue
 
-                # NeLux decode: get_batch returns BCHW (N, 3, H, W). Decode in one batch when possible.
                 batch = reader.get_batch(src_indices)
-                # batch may be (N, 3, H, W); single frame from slice is batch[i].
                 _, _, ih, iw = batch.shape
                 for i in range(n_frames):
                     frame = batch[i : i + 1]
                     t = output_times[i]
                     t_rel = t - t0
-                    # Smooth pan: t/duration interpolation; clamp to bounds.
                     if duration <= 1e-6:
                         x, y = xs, ys
                     else:
@@ -411,14 +478,26 @@ def _run_nelux_compilation(
                         y = ys + (ye - ys) * (t_rel / duration)
                     x = int(min(max(0, x), iw - w))
                     y = int(min(max(0, y), ih - h))
-                    # BCHW: channel dim 1, spatial dims 2 (H), 3 (W). Crop via slicing.
                     cropped = frame[:, :, y : y + h, x : x + w]
-                    enc.encode_frame(cropped)
+                    # Resize to target size if crop dimensions differ (e.g. scaled-down source)
+                    if cropped.shape[2] != target_h or cropped.shape[3] != target_w:
+                        cropped = torch.nn.functional.interpolate(
+                            cropped.float(),
+                            size=(target_h, target_w),
+                            mode="bilinear",
+                            align_corners=False,
+                        ).byte()
+                    # BCHW -> HWC uint8 RGB for FFmpeg rawvideo
+                    arr = cropped[0].permute(1, 2, 0).cpu().numpy()
+                    frames_list.append(arr)
             finally:
                 if slice_idx != 0 and reader is not None:
                     del reader
 
     first_reader = None
+
+    if frames_list:
+        _encode_frames_via_ffmpeg(frames_list, target_w, target_h, tmp_output_path)
 
 
 def generate_compilation_video(
@@ -430,9 +509,9 @@ def generate_compilation_video(
     crop_smooth_alpha: float = 0.0,
 ) -> None:
     """
-    Concatenates slices into a final 20fps cropped video using NeLux (NVDEC decode, NVENC encode).
-    Decode and crop happen on GPU via PyTorch tensors; smooth panning uses t/duration interpolation.
-    Optional EMA smoothing of crop centers. No audio (-an equivalent).
+    Concatenates slices into a final 20fps cropped video. Decode and crop via NeLux (NVDEC) and PyTorch;
+    encode via FFmpeg h264_nvenc only (GPU; no CPU fallback). Smooth panning uses t/duration interpolation.
+    Optional EMA smoothing of crop centers. No audio.
     """
     logger.info(f"Starting compilation of {len(slices)} slices to {output_path}")
 

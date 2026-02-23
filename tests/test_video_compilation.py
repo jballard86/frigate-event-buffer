@@ -11,6 +11,7 @@ if "nelux" not in sys.modules:
     sys.modules["nelux"] = MagicMock()
 
 from frigate_buffer.services.video_compilation import (
+    _encode_frames_via_ffmpeg,
     _run_nelux_compilation,
     assignments_to_slices,
     calculate_crop_at_time,
@@ -444,19 +445,19 @@ class TestGenerateCompilationVideo(unittest.TestCase):
         self.assertEqual(slices[0]["crop_start"], slices[0]["crop_end"])
 
     @patch("frigate_buffer.services.video_compilation.os.path.isfile")
+    @patch("frigate_buffer.services.video_compilation._encode_frames_via_ffmpeg")
     @patch("frigate_buffer.services.video_compilation._get_video_metadata")
     @patch.object(sys.modules["nelux"], "VideoReader")
     def test_run_nelux_compilation_uses_metadata_fallback_when_len_raises(
-        self, mock_video_reader_cls, mock_get_metadata, mock_isfile
+        self, mock_video_reader_cls, mock_get_metadata, mock_encode_ffmpeg, mock_isfile,
     ):
-        """When NeLux reader raises on len() (e.g. missing _decoder), frame count comes from _get_video_metadata and _run_nelux_compilation completes without crashing."""
+        """When NeLux reader raises on len() (e.g. missing _decoder), frame count comes from _get_video_metadata and _run_nelux_compilation completes; encode via FFmpeg."""
         try:
             import torch
         except ImportError:
             self.skipTest("torch not available")
         mock_isfile.return_value = True
         mock_get_metadata.return_value = (640, 480, 20.0, 10.0)
-        mock_encoder = MagicMock()
         mock_reader = MagicMock()
         mock_reader.fps = 20.0
         mock_reader.__len__ = MagicMock(side_effect=AttributeError("'VideoReader' object has no attribute '_decoder'"))
@@ -466,8 +467,6 @@ class TestGenerateCompilationVideo(unittest.TestCase):
 
         mock_reader.get_batch.side_effect = get_batch
         mock_reader._decoder = MagicMock()
-        mock_reader.create_encoder.return_value.__enter__ = MagicMock(return_value=mock_encoder)
-        mock_reader.create_encoder.return_value.__exit__ = MagicMock(return_value=False)
         mock_video_reader_cls.return_value = mock_reader
 
         slices = [
@@ -492,23 +491,27 @@ class TestGenerateCompilationVideo(unittest.TestCase):
         )
 
         mock_get_metadata.assert_called()
-        mock_encoder.encode_frame.assert_called()
+        mock_encode_ffmpeg.assert_called_once()
+        args = mock_encode_ffmpeg.call_args[0]
+        self.assertEqual(len(args), 4)
+        self.assertEqual(args[1], 1440)
+        self.assertEqual(args[2], 1080)
+        self.assertEqual(args[3], "/out.mp4.tmp")
 
-    @patch("frigate_buffer.services.video_compilation.sys.platform", "linux")
+    @patch("frigate_buffer.services.video_compilation._encode_frames_via_ffmpeg")
     @patch("frigate_buffer.services.video_compilation.os.path.isfile")
     @patch("frigate_buffer.services.video_compilation._get_video_metadata")
     @patch.object(sys.modules["nelux"], "VideoReader")
-    def test_run_nelux_compilation_linux_uses_h264_nvenc_not_single_arg(
-        self, mock_video_reader_cls, mock_get_metadata, mock_isfile
+    def test_run_nelux_compilation_calls_ffmpeg_encode_with_h264_nvenc(
+        self, mock_video_reader_cls, mock_get_metadata, mock_isfile, mock_encode_ffmpeg
     ):
-        """On non-Windows we call create_encoder with encoder='h264_nvenc'; never single-arg (h264_mf default)."""
+        """Compilation encode is via _encode_frames_via_ffmpeg (h264_nvenc only; no CPU fallback)."""
         try:
             import torch
         except ImportError:
             self.skipTest("torch not available")
         mock_isfile.return_value = True
         mock_get_metadata.return_value = (640, 480, 20.0, 10.0)
-        mock_encoder = MagicMock()
         mock_reader = MagicMock()
         mock_reader.fps = 20.0
         mock_reader._decoder = MagicMock()
@@ -516,10 +519,6 @@ class TestGenerateCompilationVideo(unittest.TestCase):
         mock_reader.get_batch.side_effect = lambda indices: torch.zeros(
             (len(indices), 3, 480, 640), dtype=torch.uint8
         )
-        mock_reader.create_encoder.return_value.__enter__ = MagicMock(
-            return_value=mock_encoder
-        )
-        mock_reader.create_encoder.return_value.__exit__ = MagicMock(return_value=False)
         mock_video_reader_cls.return_value = mock_reader
 
         slices = [
@@ -543,23 +542,36 @@ class TestGenerateCompilationVideo(unittest.TestCase):
             cuda_device_index=0,
         )
 
-        mock_reader.create_encoder.assert_called_once()
-        call_args, call_kw = mock_reader.create_encoder.call_args
-        self.assertEqual(call_args[0], "/out.mp4.tmp")
-        self.assertEqual(call_kw.get("encoder"), "h264_nvenc")
-        self.assertEqual(len(call_args), 1, "On Linux must not use single-arg create_encoder")
+        mock_encode_ffmpeg.assert_called_once()
+        args = mock_encode_ffmpeg.call_args[0]
+        self.assertEqual(args[1], 1440)
+        self.assertEqual(args[2], 1080)
+        self.assertEqual(args[3], "/out.mp4.tmp")
 
+    @patch("frigate_buffer.services.video_compilation._encode_frames_via_ffmpeg")
+    @patch("frigate_buffer.services.video_compilation._get_video_metadata")
     @patch("frigate_buffer.services.video_compilation.os.path.isfile")
     @patch.object(sys.modules["nelux"], "VideoReader")
-    def test_run_nelux_compilation_returns_early_when_first_reader_has_no_decoder(
-        self, mock_video_reader_cls, mock_isfile
+    def test_run_nelux_compilation_monkey_patches_reader_when_no_decoder(
+        self, mock_video_reader_cls, mock_isfile, mock_get_metadata, mock_encode_ffmpeg
     ):
-        """When first VideoReader has no _decoder, _run_nelux_compilation returns without calling create_encoder."""
+        """When first VideoReader has no _decoder, we monkey-patch reader._decoder = reader and compilation proceeds; _encode_frames_via_ffmpeg is called."""
+        try:
+            import torch
+        except ImportError:
+            self.skipTest("torch not available")
         mock_isfile.return_value = True
+        mock_get_metadata.return_value = (640, 480, 20.0, 10.0)
         reader_no_decoder = MagicMock()
         reader_no_decoder.fps = 20.0
-        reader_no_decoder.create_encoder = MagicMock()
-        del reader_no_decoder._decoder
+        reader_no_decoder.__len__ = lambda self: 200
+        reader_no_decoder.get_batch.side_effect = lambda indices: torch.zeros(
+            (len(indices), 3, 480, 640), dtype=torch.uint8
+        )
+        try:
+            del reader_no_decoder._decoder
+        except AttributeError:
+            pass
         mock_video_reader_cls.return_value = reader_no_decoder
 
         slices = [
@@ -583,7 +595,42 @@ class TestGenerateCompilationVideo(unittest.TestCase):
             cuda_device_index=0,
         )
 
-        reader_no_decoder.create_encoder.assert_not_called()
+        self.assertTrue(hasattr(reader_no_decoder, "_decoder"), "Monkey-patch should set _decoder")
+        mock_encode_ffmpeg.assert_called_once()
+
+
+class TestEncodeFramesViaFfmpeg(unittest.TestCase):
+    """Tests for _encode_frames_via_ffmpeg: h264_nvenc only, descriptive error on failure."""
+
+    def test_encode_uses_h264_nvenc_in_command(self):
+        """FFmpeg is invoked with -c:v h264_nvenc (GPU only; no libx264)."""
+        import numpy as np
+        frames = [np.zeros((1080, 1440, 3), dtype=np.uint8)]
+        with patch("frigate_buffer.services.video_compilation.subprocess.Popen") as mock_popen:
+            proc = MagicMock()
+            proc.stdin = MagicMock()
+            proc.returncode = 0
+            proc.communicate.return_value = (b"", b"")
+            mock_popen.return_value = proc
+            _encode_frames_via_ffmpeg(frames, 1440, 1080, "/tmp/out.mp4")
+        call_args = mock_popen.call_args[0][0]
+        self.assertIn("h264_nvenc", call_args)
+        self.assertNotIn("libx264", call_args)
+
+    def test_encode_failure_raises_with_descriptive_message(self):
+        """On non-zero exit, RuntimeError is raised and message states GPU-only, no CPU fallback."""
+        import numpy as np
+        frames = [np.zeros((1080, 1440, 3), dtype=np.uint8)]
+        with patch("frigate_buffer.services.video_compilation.subprocess.Popen") as mock_popen:
+            proc = MagicMock()
+            proc.stdin = MagicMock()
+            proc.returncode = 1
+            proc.communicate.return_value = (b"", b"Encoder not found")
+            mock_popen.return_value = proc
+            with self.assertRaises(RuntimeError) as ctx:
+                _encode_frames_via_ffmpeg(frames, 1440, 1080, "/tmp/out.mp4")
+        self.assertIn("h264_nvenc", str(ctx.exception))
+        self.assertIn("no CPU fallback", str(ctx.exception))
 
 
 class TestCompileCeVideoConfig(unittest.TestCase):

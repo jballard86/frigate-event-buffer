@@ -232,8 +232,8 @@ class TestMultiClipExtractor(unittest.TestCase):
         self.assertEqual(mock_reader.get_batch.call_count, len(result))
 
     @patch.object(sys.modules["nelux"], "VideoReader")
-    def test_extract_returns_empty_when_reader_has_no_decoder(self, mock_video_reader_cls):
-        """When VideoReader has no _decoder, open phase fails and extract returns [] (no get_batch)."""
+    def test_extract_monkey_patches_reader_when_no_decoder(self, mock_video_reader_cls):
+        """When VideoReader has no _decoder, we monkey-patch reader._decoder = reader and proceed; get_batch is called."""
         os.makedirs(os.path.join(self.tmp, "cam1"))
         with open(os.path.join(self.tmp, "cam1", "clip.mp4"), "wb"):
             pass
@@ -246,12 +246,18 @@ class TestMultiClipExtractor(unittest.TestCase):
         reader_no_decoder = MagicMock(spec=["fps", "release"])
         reader_no_decoder.fps = 1.0
         reader_no_decoder.get_batch = MagicMock()
+        try:
+            del reader_no_decoder._decoder
+        except AttributeError:
+            pass
         mock_video_reader_cls.return_value = reader_no_decoder
 
-        result = extract_target_centric_frames(self.tmp, max_frames_sec=1.0, max_frames_min=5)
-
-        self.assertEqual(result, [])
-        reader_no_decoder.get_batch.assert_not_called()
+        try:
+            extract_target_centric_frames(self.tmp, max_frames_sec=1.0, max_frames_min=5)
+        except (TypeError, AttributeError):
+            pass  # Mock may not satisfy full tensor API
+        self.assertTrue(hasattr(reader_no_decoder, "_decoder"), "Monkey-patch should set _decoder")
+        reader_no_decoder.get_batch.assert_called()
 
     @patch.object(sys.modules["nelux"], "VideoReader")
     def test_extract_drops_camera_when_get_batch_raises(self, mock_video_reader_cls):

@@ -26,7 +26,8 @@ COPY wheels/libspdlog.so* /usr/lib/x86_64-linux-gnu/
 
 # Refresh the Linux dynamic linker cache and set LD_LIBRARY_PATH so NeLux finds libyuv/libspdlog at runtime
 RUN ldconfig
-ENV LD_LIBRARY_PATH="/usr/lib/x86_64-linux-gnu:/usr/local/lib:${LD_LIBRARY_PATH}"
+# Final library path to include PyTorch, NVIDIA, and system libs
+ENV LD_LIBRARY_PATH="/usr/local/lib/python3.12/dist-packages/torch/lib:/usr/local/lib/python3.12/dist-packages/nvidia/cuda_runtime/lib:/usr/local/lib/python3.12/dist-packages/nvidia/cudnn/lib:/usr/local/lib:/usr/lib/x86_64-linux-gnu:${LD_LIBRARY_PATH}"
 
 # Prefer python3.12 for the rest of the build and runtime.
 RUN update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.12 1 \

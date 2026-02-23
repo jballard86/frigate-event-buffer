@@ -425,6 +425,9 @@ class VideoService:
                 decode_accelerator="nvdec",
                 cuda_device_index=cuda_device_index,
             )
+            # Monkey-patch: If the wrapper is missing _decoder, point it to itself
+            if not hasattr(reader, "_decoder"):
+                reader._decoder = reader
         except Exception as e:
             logger.warning(
                 "NeLux failed to open clip for sidecar: path=%s error=%s",

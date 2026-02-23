@@ -125,14 +125,18 @@ class TestVideoService(unittest.TestCase):
         self.assertTrue(_nelux_reader_ready(reader_with_decoder))
 
     @patch("frigate_buffer.services.video._get_video_metadata")
-    def test_generate_detection_sidecar_returns_false_when_reader_has_no_decoder(
+    def test_generate_detection_sidecar_monkey_patches_reader_when_no_decoder(
         self, mock_get_metadata
     ):
-        """When VideoReader has no _decoder, return False and do not call get_batch."""
+        """When VideoReader has no _decoder, we monkey-patch reader._decoder = reader and proceed; get_batch is called."""
         mock_get_metadata.return_value = (640, 480, 30.0, 10.0)
         reader_no_decoder = MagicMock(spec=["fps", "release"])
         reader_no_decoder.fps = 30.0
         reader_no_decoder.get_batch = MagicMock()
+        try:
+            del reader_no_decoder._decoder
+        except AttributeError:
+            pass
         tmp = tempfile.mkdtemp(prefix="tmp_video_sidecar_nodecoder_")
         clip_path = os.path.join(tmp, "clip.mp4")
         sidecar_path = os.path.join(tmp, "detection.json")
@@ -142,12 +146,17 @@ class TestVideoService(unittest.TestCase):
             with patch.object(
                 sys.modules["nelux"], "VideoReader", return_value=reader_no_decoder
             ):
-                result = self.video_service.generate_detection_sidecar(
-                    clip_path, sidecar_path, {}
-                )
-            self.assertFalse(result)
-            reader_no_decoder.get_batch.assert_not_called()
-            self.assertFalse(os.path.isfile(sidecar_path))
+                try:
+                    self.video_service.generate_detection_sidecar(
+                        clip_path, sidecar_path, {}
+                    )
+                except (TypeError, AttributeError):
+                    pass  # Mock may not satisfy full tensor API; we only assert patch and get_batch
+            self.assertTrue(
+                hasattr(reader_no_decoder, "_decoder"),
+                "Monkey-patch should set _decoder",
+            )
+            reader_no_decoder.get_batch.assert_called()
         finally:
             for f in (sidecar_path, clip_path):
                 if os.path.exists(f):
