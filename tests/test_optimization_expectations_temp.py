@@ -102,11 +102,11 @@ class TestOpt4StorageStatsSkipWhenFresh(unittest.TestCase):
              patch("frigate_buffer.web.server.create_app"):
             pfm.return_value.compute_storage_stats.return_value = {}
             orch = StateAwareOrchestrator(config)
-            orch._cached_storage_stats_time = 1000.0
-            with patch("time.time", return_value=1000.0 + 60):  # 1 min later, still fresh
+            orch.stats_helper._cached_time = 1000.0  # cache was populated at t=1000
+            with patch("frigate_buffer.services.ha_storage_stats.time.time", return_value=1000.0 + 60):  # 1 min later, still fresh
                 orch._update_storage_stats()
             pfm.return_value.compute_storage_stats.assert_not_called()
-            with patch("time.time", return_value=1000.0 + 31 * 60):  # 31 min later
+            with patch("frigate_buffer.services.ha_storage_stats.time.time", return_value=1000.0 + 31 * 60):  # 31 min later
                 orch._update_storage_stats()
             pfm.return_value.compute_storage_stats.assert_called()
 

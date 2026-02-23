@@ -119,6 +119,13 @@ class TestStorageStats(unittest.TestCase):
         from frigate_buffer.web.server import create_app
         storage = tempfile.mkdtemp()
         self.addCleanup(lambda: __import__('shutil').rmtree(storage, ignore_errors=True))
+        storage_stats = {
+            "clips": 500 * 1024,
+            "snapshots": 100 * 1024,
+            "descriptions": 50 * 1024,
+            "total": 650 * 1024,
+            "by_camera": {"carport": {"clips": 500 * 1024, "snapshots": 100 * 1024, "descriptions": 50 * 1024, "total": 650 * 1024}},
+        }
         orch = SimpleNamespace(
             config={
                 "STORAGE_PATH": storage,
@@ -126,13 +133,8 @@ class TestStorageStats(unittest.TestCase):
                 "RETENTION_DAYS": 7,
                 "CLEANUP_INTERVAL_HOURS": 1,
             },
-            _cached_storage_stats={
-                "clips": 500 * 1024,
-                "snapshots": 100 * 1024,
-                "descriptions": 50 * 1024,
-                "total": 650 * 1024,
-                "by_camera": {"carport": {"clips": 500 * 1024, "snapshots": 100 * 1024, "descriptions": 50 * 1024, "total": 650 * 1024}},
-            },
+            get_storage_stats=lambda: storage_stats,
+            fetch_ha_state=lambda *args, **kwargs: None,
             _last_cleanup_time=None,
             _last_cleanup_deleted=0,
             _start_time=0,

@@ -602,7 +602,7 @@ def create_app(orchestrator):
         except Exception as e:
             logger.error(f"Error scanning events for stats: {e}")
 
-        storage_raw = orchestrator._cached_storage_stats
+        storage_raw = orchestrator.get_storage_stats()
         kb, mb = 1024, 1024 * 1024
         gb = 1024 * mb
 
@@ -650,8 +650,8 @@ def create_app(orchestrator):
             try:
                 cost_entity = orchestrator.config.get('HA_GEMINI_COST_ENTITY', 'input_number.gemini_daily_cost')
                 tokens_entity = orchestrator.config.get('HA_GEMINI_TOKENS_ENTITY', 'input_number.gemini_total_tokens')
-                cost_val = orchestrator._fetch_ha_state(ha_url, ha_token, cost_entity)
-                tokens_val = orchestrator._fetch_ha_state(ha_url, ha_token, tokens_entity)
+                cost_val = orchestrator.fetch_ha_state(ha_url, ha_token, cost_entity)
+                tokens_val = orchestrator.fetch_ha_state(ha_url, ha_token, tokens_entity)
                 gemini_cost = None
                 if cost_val is not None:
                     try:

@@ -5,18 +5,14 @@ Coordinates MQTT, file management, event consolidation, notifications, and the w
 """
 
 import os
-import json
 import time
 import logging
 import threading
 from datetime import date, datetime, timedelta
-from typing import Any
-
-import requests
 import schedule
 from urllib.parse import urlparse, urlunparse
 
-from frigate_buffer.models import EventState, EventPhase, _is_no_concerns
+from frigate_buffer.models import EventPhase
 from frigate_buffer.managers.file import FileManager
 from frigate_buffer.managers.state import EventStateManager
 from frigate_buffer.services.video import VideoService
@@ -34,28 +30,11 @@ from frigate_buffer.services.lifecycle import EventLifecycleService
 from frigate_buffer.services.ai_analyzer import GeminiAnalysisService
 from frigate_buffer.services.daily_reporter import DailyReporterService
 from frigate_buffer.services.frigate_export_watchdog import run_once as export_watchdog_run_once
-from frigate_buffer.services import crop_utils
-
-import cv2
-import numpy as np
+from frigate_buffer.services.ha_storage_stats import StorageStatsAndHaHelper
+from frigate_buffer.services.quick_title_service import QuickTitleService
+from frigate_buffer.services.mqtt_handler import MqttMessageHandler
 
 logger = logging.getLogger('frigate-buffer')
-
-
-def _numpy_bgr_to_tensor_bchw_rgb(arr: np.ndarray) -> Any:
-    """Phase 1 bridge: convert numpy HWC BGR to torch.Tensor BCHW RGB for crop_utils."""
-    import torch
-    rgb = arr[:, :, [2, 1, 0]].copy()
-    t = torch.from_numpy(rgb).permute(2, 0, 1).unsqueeze(0)
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    return t.to(device=device, dtype=torch.uint8)
-
-
-def _tensor_bchw_rgb_to_numpy_bgr(t: Any) -> np.ndarray:
-    """Phase 1 bridge: convert torch.Tensor BCHW RGB to numpy HWC BGR."""
-    if t.dim() == 4:
-        t = t.squeeze(0)
-    return t.permute(1, 2, 0).cpu().numpy()[:, :, [2, 1, 0]]
 
 
 class StateAwareOrchestrator:
@@ -92,12 +71,14 @@ class StateAwareOrchestrator:
 
         self.timeline_logger = TimelineLogger(self.file_manager, self.consolidated_manager)
 
+        self._mqtt_handler = None  # Set after lifecycle_service so handler can be built
+
         self.mqtt_wrapper = MqttClientWrapper(
             broker=config['MQTT_BROKER'],
             port=config['MQTT_PORT'],
             username=config.get('MQTT_USER'),
             password=config.get('MQTT_PASSWORD'),
-            on_message_callback=self._on_mqtt_message,
+            on_message_callback=lambda c, u, m: self._mqtt_handler.on_message(c, u, m) if getattr(self, '_mqtt_handler', None) else None,
         )
 
         self.notifier = NotificationPublisher(
@@ -144,7 +125,16 @@ class StateAwareOrchestrator:
 
         on_quick_title = None
         if self.ai_analyzer and config.get('QUICK_TITLE_ENABLED', True):
-            on_quick_title = self._on_quick_title_trigger
+            quick_title_svc = QuickTitleService(
+                config,
+                self.state_manager,
+                self.file_manager,
+                self.consolidated_manager,
+                self.video_service,
+                self.ai_analyzer,
+                self.notifier,
+            )
+            on_quick_title = quick_title_svc.run_quick_title
 
         self.lifecycle_service = EventLifecycleService(
             config,
@@ -161,6 +151,19 @@ class StateAwareOrchestrator:
 
         # Update callback after lifecycle service creation
         self.consolidated_manager.on_close_callback = self.lifecycle_service.finalize_consolidated_event
+
+        # MQTT handler: parses and dispatches messages; wired so wrapper calls it
+        self._mqtt_handler = MqttMessageHandler(
+            config,
+            self.state_manager,
+            self.zone_filter,
+            self.lifecycle_service,
+            self.timeline_logger,
+            self.notifier,
+            self.file_manager,
+            self.consolidated_manager,
+            self.download_service,
+        )
 
         # Daily reporter (AI report from analysis_result.json) - only when AI analyzer enabled
         if self.ai_analyzer:
@@ -181,16 +184,8 @@ class StateAwareOrchestrator:
         self._request_count = 0
         self._request_count_lock = threading.Lock()
 
-        # Cache for storage stats (full recompute at most every 30 min)
-        self._cached_storage_stats = {
-            'clips': 0,
-            'snapshots': 0,
-            'descriptions': 0,
-            'total': 0,
-            'by_camera': {}
-        }
-        self._cached_storage_stats_time: float | None = None
-        self._storage_stats_max_age_seconds = 30 * 60  # 30 minutes
+        # HA state fetch and storage-stats cache (stats page and scheduler)
+        self.stats_helper = StorageStatsAndHaHelper(config)
 
         # Last cleanup tracking delegated to lifecycle service via properties
 
@@ -210,235 +205,13 @@ class StateAwareOrchestrator:
     def _last_cleanup_deleted(self, value):
         self.lifecycle_service.last_cleanup_deleted = value
 
-    def _fetch_ha_state(self, ha_url: str, ha_token: str, entity_id: str):
-        """Fetch entity state from Home Assistant REST API. Returns state value or None on error."""
-        base = ha_url.rstrip('/')
-        path = "/states/" if base.endswith("/api") else "/api/states/"
-        url = f"{base}{path}{entity_id}"
-        try:
-            resp = requests.get(url, headers={"Authorization": f"Bearer {ha_token}"}, timeout=5)
-            if resp.ok:
-                data = resp.json()
-                return data.get("state")
-        except requests.RequestException as e:
-            logger.warning(f"Error fetching HA state for {entity_id} from {url}: {e}")
-        return None
+    def get_storage_stats(self) -> dict:
+        """Return cached storage stats for the stats page. See StorageStatsAndHaHelper.get()."""
+        return self.stats_helper.get()
 
-    def _on_mqtt_message(self, client, userdata, msg):
-        """Route incoming MQTT messages to appropriate handlers."""
-        logger.debug(f"MQTT message received: {msg.topic} ({len(msg.payload)} bytes)")
-
-        try:
-            payload = json.loads(msg.payload.decode('utf-8'))
-            topic = msg.topic
-
-            if topic == "frigate/events":
-                self._handle_frigate_event(payload)
-            elif "/tracked_object_update" in topic:
-                self._handle_tracked_update(payload, topic)
-            elif topic == "frigate/reviews":
-                self._handle_review(payload)
-
-        except json.JSONDecodeError as e:
-            logger.error(f"Invalid JSON in {msg.topic}: {e}")
-        except Exception as e:
-            logger.exception(f"Error processing message from {msg.topic}: {e}")
-
-    def _handle_frigate_event(self, payload: dict):
-        """Process frigate/events messages with camera/label filtering and Smart Zone Filtering."""
-        event_type = payload.get("type")
-        after_data = payload.get("after", {})
-
-        event_id = after_data.get("id")
-        camera = after_data.get("camera")
-        label = after_data.get("label")
-        sub_label = after_data.get("sub_label")
-        start_time = after_data.get("start_time", time.time())
-        entered_zones = after_data.get("entered_zones") or []
-        current_zones = after_data.get("current_zones") or []
-
-        if not event_id:
-            logger.debug("Skipping event: no event_id in payload")
-            return
-
-        camera_label_map = self.config.get('CAMERA_LABEL_MAP', {})
-
-        if camera_label_map:
-            if camera not in camera_label_map:
-                logger.debug(f"Filtered out event from camera '{camera}' (not configured)")
-                return
-
-            allowed_labels_for_camera = camera_label_map[camera]
-            if allowed_labels_for_camera and label not in allowed_labels_for_camera:
-                logger.debug(f"Filtered out '{label}' on '{camera}' (allowed: {allowed_labels_for_camera})")
-                return
-
-        match event_type:
-            case "end":
-                self._handle_event_end(
-                    event_id=event_id,
-                    end_time=after_data.get("end_time", time.time()),
-                    has_clip=after_data.get("has_clip", False),
-                    has_snapshot=after_data.get("has_snapshot", False),
-                    mqtt_payload=payload
-                )
-                return
-            case "new" | "update":
-                pass  # Fall through to Smart Zone Filtering path
-            case _:
-                logger.debug(f"Skipping frigate/events type: {event_type}")
-                return
-
-        # Already tracked - log MQTT to timeline, then return (no new creation)
-        event = self.state_manager.get_event(event_id)
-        if event:
-            folder = self.timeline_logger.folder_for_event(event)
-            if folder:
-                mqtt_type = payload.get("type", "update")
-                self.timeline_logger.log_mqtt(folder, "frigate/events", payload, f"Event {mqtt_type} (from Frigate)")
-            return
-
-        if not self.zone_filter.should_start_event(
-            camera, label or "", sub_label, entered_zones, current_zones
-        ):
-            logger.debug(
-                f"Ignoring {event_id} (smart zone filter: not in tracked zones, "
-                f"entered={entered_zones}, current={current_zones})"
-            )
-            return
-
-        self._handle_event_new(
-            event_id=event_id,
-            camera=camera,
-            label=label or "unknown",
-            start_time=start_time,
-            mqtt_payload=payload
-        )
-
-    def _handle_event_new(self, event_id: str, camera: str, label: str,
-                          start_time: float, mqtt_payload: dict | None = None):
-        """Handle new event detection (Phase 1). Delegates to lifecycle service."""
-        self.lifecycle_service.handle_event_new(event_id, camera, label, start_time, mqtt_payload)
-
-    def _handle_event_end(self, event_id: str, end_time: float,
-                          has_clip: bool, has_snapshot: bool,
-                          mqtt_payload: dict | None = None):
-        """Handle event end - trigger downloads/transcoding."""
-        # Skip duplicate "end" to avoid double clip export and double Gemini API call
-        event = self.state_manager.get_event(event_id)
-        if event and event.end_time is not None:
-            logger.debug("Duplicate event end for %s (already ended), skipping", event_id)
-            return
-
-        logger.info(f"Event ended: {event_id}")
-
-        event = self.state_manager.mark_event_ended(
-            event_id, end_time, has_clip, has_snapshot
-        )
-
-        if event and self.timeline_logger.folder_for_event(event) and mqtt_payload:
-            self.timeline_logger.log_mqtt(
-                self.timeline_logger.folder_for_event(event), "frigate/events",
-                mqtt_payload, "Event end (from Frigate)"
-            )
-
-        if not event or not event.folder_path:
-            logger.debug(f"Unknown event ended: {event_id}")
-            return
-
-        threading.Thread(
-            target=self._process_event_end,
-            args=(event,),
-            daemon=True
-        ).start()
-
-    def _process_event_end(self, event: EventState):
-        """Background processing when event ends. Delegates to lifecycle service."""
-        self.lifecycle_service.process_event_end(event)
-
-    def _on_quick_title_trigger(self, event_id: str, camera: str, label: str,
-                                ce_id: str, camera_folder_path: str,
-                                tag_override: str | None = None) -> None:
-        """Fetch live frame, run YOLO, crop around all detections with 10%% padding, get AI title, update state and notify."""
-        if not self.ai_analyzer:
-            return
-        frigate_url = (self.config.get('FRIGATE_URL') or '').rstrip('/')
-        if not frigate_url:
-            logger.debug("Quick title skipped: no Frigate URL")
-            return
-        url = f"{frigate_url}/api/{camera}/latest.jpg"
-        try:
-            resp = requests.get(url, timeout=10)
-            resp.raise_for_status()
-            arr = np.frombuffer(resp.content, dtype=np.uint8)
-            image_bgr = cv2.imdecode(arr, cv2.IMREAD_COLOR)
-            if image_bgr is None:
-                logger.warning("Quick title: failed to decode latest.jpg for %s", camera)
-                return
-        except requests.RequestException as e:
-            logger.warning("Quick title: failed to fetch latest.jpg for %s: %s", camera, e)
-            return
-        detections = self.video_service.run_detection_on_image(image_bgr, self.config)
-        if detections:
-            # Phase 4: keep tensor for proxy; generate_quick_title accepts numpy or tensor
-            image_tensor = _numpy_bgr_to_tensor_bchw_rgb(image_bgr)
-            cropped_tensor = crop_utils.crop_around_detections_with_padding(
-                image_tensor, detections, padding_fraction=0.1
-            )
-            image_to_send = cropped_tensor
-        else:
-            image_to_send = image_bgr
-        title = self.ai_analyzer.generate_quick_title(image_to_send, camera, label)
-        if not title or not title.strip():
-            logger.debug("Quick title: no title returned for %s", event_id)
-            return
-        event = self.state_manager.get_event(event_id)
-        if not event:
-            logger.debug("Quick title: event %s no longer in state", event_id)
-            return
-        self.state_manager.set_genai_metadata(
-            event_id,
-            title,
-            event.genai_description or "",
-            event.severity or "detection",
-            event.threat_level,
-            scene=event.genai_scene,
-        )
-        event = self.state_manager.get_event(event_id)
-        if event and event.folder_path:
-            self.file_manager.write_metadata_json(event.folder_path, event)
-        self.consolidated_manager.update_best(event_id, title=title)
-        ce = self.consolidated_manager.get_by_frigate_event(event_id)
-        primary = self.state_manager.get_event(ce.primary_event_id) if ce and ce.primary_event_id else event
-        media_folder = (
-            os.path.join(ce.folder_path, self.file_manager.sanitize_camera_name(ce.primary_camera or ""))
-            if ce and ce.primary_camera else (camera_folder_path if ce else camera_folder_path)
-        )
-        if not ce:
-            media_folder = camera_folder_path
-        notify_target = type('NotifyTarget', (), {
-            'event_id': ce_id if ce else event_id,
-            'camera': ce.camera if ce else camera,
-            'label': ce.label if ce else label,
-            'folder_path': media_folder,
-            'created_at': ce.start_time if ce else event.created_at,
-            'end_time': ce.end_time if ce else event.end_time,
-            'phase': EventPhase.FINALIZED,
-            'genai_title': title,
-            'genai_description': ce.best_description if ce else (event.genai_description or ""),
-            'ai_description': None,
-            'review_summary': None,
-            'threat_level': ce.best_threat_level if ce else event.threat_level,
-            'severity': ce.severity if ce else (event.severity or "detection"),
-            'snapshot_downloaded': getattr(primary, 'snapshot_downloaded', False) if primary else False,
-            'clip_downloaded': getattr(primary, 'clip_downloaded', False) if primary else False,
-            'image_url_override': getattr(primary, 'image_url_override', None) if primary else None,
-        })()
-        self.notifier.publish_notification(
-            notify_target, "snapshot_ready",
-            tag_override=tag_override or f"frigate_{ce_id if ce else event_id}"
-        )
-        logger.info("Quick title applied for %s: %s", event_id, title[:50])
+    def fetch_ha_state(self, ha_url: str, ha_token: str, entity_id: str) -> str | None:
+        """Fetch entity state from Home Assistant. Delegates to stats_helper."""
+        return self.stats_helper.fetch_ha_state(ha_url, ha_token, entity_id)
 
     def _handle_analysis_result(self, event_id: str, result: dict):
         """Handle returned analysis from GeminiAnalysisService: update state, write files, POST to Frigate, notify HA."""
@@ -569,229 +342,6 @@ class StateAwareOrchestrator:
             except (ValueError, OSError) as e:
                 logger.debug("Could not append CE to daily aggregate for %s: %s", ce_id, e)
 
-    def _handle_tracked_update(self, payload: dict, topic: str):
-        """Handle tracked_object_update: AI description (Phase 2) or per-frame metadata (frame_time, box, area, score)."""
-        parts = topic.split("/")
-        camera = parts[1] if len(parts) >= 2 else "unknown"
-        event_id = payload.get("id")
-
-        # Per-frame metadata: store box/score/area for smart cropping (only for known events)
-        if event_id:
-            after = payload.get("after") or payload.get("before") or {}
-            has_frame_data = (
-                after.get("frame_time") is not None
-                or "box" in after
-                or after.get("area") is not None
-                or after.get("score") is not None
-            )
-            if has_frame_data and self.state_manager.get_event(event_id):
-                region = after.get("region")
-                fw = (region[2] - region[0]) if isinstance(region, (list, tuple)) and len(region) >= 4 else None
-                fh = (region[3] - region[1]) if isinstance(region, (list, tuple)) and len(region) >= 4 else None
-                self.state_manager.add_frame_metadata(
-                    event_id,
-                    frame_time=float(after.get("frame_time") or 0),
-                    box=after.get("box"),
-                    area=float(after.get("area") or 0),
-                    score=float(after.get("score") or 0),
-                    frame_width=fw,
-                    frame_height=fh,
-                )
-
-        # AI description (Phase 2)
-        update_type = payload.get("type")
-        if update_type and update_type != "description":
-            return
-
-        description = payload.get("description")
-        if not event_id or not description:
-            return
-
-        event = self.state_manager.get_event(event_id)
-        if event and self.timeline_logger.folder_for_event(event):
-            self.timeline_logger.log_mqtt(
-                self.timeline_logger.folder_for_event(event), topic,
-                payload, "Tracked object update (AI description)"
-            )
-
-        logger.info(f"Tracked update for {event_id}: {description[:50]}..." if len(str(description)) > 50 else f"Tracked update for {event_id}: {description}")
-
-        if self.state_manager.set_ai_description(event_id, description):
-            event = self.state_manager.get_event(event_id)
-            if event:
-                if event.folder_path:
-                    self.file_manager.write_summary(event.folder_path, event)
-                self.notifier.publish_notification(event, "described")
-
-    def _handle_review(self, payload: dict):
-        """Handle review/genai update (Phase 3)."""
-        event_type = payload.get("type")
-
-        match event_type:
-            case "update" | "end" | "genai":
-                pass  # Process below
-            case _:
-                logger.debug(f"Skipping review with type: {event_type}")
-                return
-
-        review_data = payload.get("after", {}) or payload.get("before", {})
-        data = review_data.get("data", {})
-        detections = data.get("detections", [])
-        severity = review_data.get("severity", "detection")
-        genai = data.get("metadata") or data.get("genai") or {}
-
-        logger.debug(f"Processing review: type={event_type}, {len(detections)} detections, severity={severity}")
-
-        for event_id in detections:
-            event = self.state_manager.get_event(event_id)
-            if event and self.timeline_logger.folder_for_event(event):
-                self.timeline_logger.log_mqtt(
-                    self.timeline_logger.folder_for_event(event), "frigate/reviews",
-                    payload, f"Review update (type={event_type})"
-                )
-            title = genai.get("title")
-            description = genai.get("shortSummary") or genai.get("description")
-            scene = genai.get("scene")
-            threat_level = int(genai.get("potential_threat_level", 0))
-
-            if title or description:
-                logger.info(f"Review for {event_id}: title={title or 'N/A'}, threat_level={threat_level}")
-            else:
-                logger.debug(f"Review for {event_id}: title=N/A, threat_level={threat_level}")
-
-            if not title and not description:
-                logger.debug(f"Skipping finalization for {event_id}: no GenAI data yet")
-                continue
-
-            if self.state_manager.set_genai_metadata(
-                event_id,
-                title,
-                description,
-                severity,
-                threat_level,
-                scene=scene
-            ):
-                event = self.state_manager.get_event(event_id)
-                if event:
-                    self.consolidated_manager.update_best(
-                        event_id, title=title, description=description, threat_level=threat_level
-                    )
-
-                    if event.folder_path:
-                        event.summary_written = self.file_manager.write_summary(
-                            event.folder_path, event
-                        )
-                        self.file_manager.write_metadata_json(event.folder_path, event)
-
-                    ce = self.consolidated_manager.get_by_frigate_event(event_id)
-                    if ce and ce.finalized_sent:
-                        logger.debug(f"Suppressing finalized for {event_id} (CE {ce.consolidated_id} already sent)")
-                    else:
-                        if ce:
-                            ce.finalized_sent = True
-                            primary = self.state_manager.get_event(ce.primary_event_id)
-                            media_folder = os.path.join(ce.folder_path, self.file_manager.sanitize_camera_name(ce.primary_camera or "")) if ce.primary_camera else ce.folder_path
-                            if primary:
-                                ce.snapshot_downloaded = primary.snapshot_downloaded
-                                ce.clip_downloaded = primary.clip_downloaded
-                            notify_target = type('NotifyTarget', (), {
-                                'event_id': ce.consolidated_id, 'camera': ce.camera, 'label': ce.label,
-                                'folder_path': primary.folder_path if primary else media_folder,
-                                'created_at': ce.start_time, 'end_time': ce.end_time, 'phase': ce.phase,
-                                'genai_title': ce.best_title, 'genai_description': ce.best_description,
-                                'ai_description': None, 'review_summary': None,
-                                'threat_level': ce.best_threat_level, 'severity': ce.severity,
-                                'snapshot_downloaded': ce.snapshot_downloaded,
-                                'clip_downloaded': ce.clip_downloaded,
-                                'image_url_override': getattr(primary, 'image_url_override', None) if primary else None,
-                            })()
-                        else:
-                            notify_target = event
-                        self.notifier.publish_notification(notify_target, "finalized",
-                                                          tag_override=f"frigate_{ce.consolidated_id}" if ce else None)
-
-                    if not ce:
-                        threading.Thread(
-                            target=self._fetch_and_store_review_summary,
-                            args=(event,),
-                            daemon=True
-                        ).start()
-
-    def _fetch_and_store_review_summary(self, event: EventState):
-        """Background: fetch review summary from Frigate API, store, notify, then cleanup."""
-        try:
-            max_wait = 30
-            waited = 0
-            while event.end_time is None and waited < max_wait:
-                time.sleep(2)
-                waited += 2
-
-            if event.end_time is None:
-                logger.warning(f"No end_time for {event.event_id} after {max_wait}s, using created_at + 60s as fallback")
-                effective_end = event.created_at + 60
-            else:
-                effective_end = event.end_time
-
-            time.sleep(5)
-
-            padding_before = self.config.get('SUMMARY_PADDING_BEFORE', 15)
-            padding_after = self.config.get('SUMMARY_PADDING_AFTER', 15)
-
-            padded_start = int(event.created_at - padding_before)
-            padded_end = int(effective_end + padding_after)
-            url = f"{self.config.get('FRIGATE_URL', '')}/api/review/summarize/start/{padded_start}/end/{padded_end}"
-            params = {
-                "start": padded_start,
-                "end": padded_end,
-                "padding_before": padding_before,
-                "padding_after": padding_after
-            }
-
-            if self.timeline_logger.folder_for_event(event):
-                self.timeline_logger.log_frigate_api(
-                    self.timeline_logger.folder_for_event(event), "out",
-                    "Review summarize request (to Frigate API)",
-                    {"url": url, "params": params}
-                )
-
-            summary = self.download_service.fetch_review_summary(
-                event.created_at, effective_end,
-                padding_before, padding_after
-            )
-
-            if self.timeline_logger.folder_for_event(event):
-                self.timeline_logger.log_frigate_api(
-                    self.timeline_logger.folder_for_event(event), "in",
-                    "Review summarize response (from Frigate API)",
-                    {"url": url, "params": params, "response": summary or "(empty or error)"}
-                )
-
-            if summary:
-                self.state_manager.set_review_summary(event.event_id, summary)
-
-                write_folder = self.timeline_logger.folder_for_event(event) or event.folder_path
-                if write_folder:
-                    event.review_summary_written = self.file_manager.write_review_summary(
-                        write_folder, summary
-                    )
-                    self.file_manager.write_summary(write_folder, event)
-                    self.file_manager.write_metadata_json(write_folder, event)
-
-                if not _is_no_concerns(summary):
-                    self.notifier.publish_notification(event, "summarized")
-                else:
-                    logger.info(f"Skipping summarized notification for {event.event_id} (no concerns)")
-            else:
-                logger.warning(f"No review summary obtained for {event.event_id}")
-
-        except Exception as e:
-            logger.exception(f"Error fetching review summary for {event.event_id}: {e}")
-        finally:
-            threading.Timer(
-                60.0,
-                lambda eid=event.event_id: self.state_manager.remove_event(eid)
-            ).start()
-
     def _run_scheduler(self):
         """Background thread for scheduled tasks."""
         cleanup_hours = self.config.get('CLEANUP_INTERVAL_HOURS', 1)
@@ -821,18 +371,8 @@ class StateAwareOrchestrator:
         logger.info(f"API stats (5m): {count} requests, {active} active events, MQTT {'connected' if self.mqtt_wrapper.mqtt_connected else 'disconnected'}")
 
     def _update_storage_stats(self):
-        """Update cached storage stats (background task). Skip if cache is fresh (< 30 min)."""
-        now = time.time()
-        if self._cached_storage_stats_time is not None and (now - self._cached_storage_stats_time) < self._storage_stats_max_age_seconds:
-            logger.debug("Skipping storage stats update (cache still fresh)")
-            return
-        logger.debug("Updating storage stats...")
-        try:
-            self._cached_storage_stats = self.file_manager.compute_storage_stats()
-            self._cached_storage_stats_time = now
-            logger.debug("Storage stats updated")
-        except Exception as e:
-            logger.error(f"Failed to update storage stats: {e}")
+        """Update cached storage stats (background task). Delegates to stats_helper."""
+        self.stats_helper.update(self.file_manager)
 
     def _daily_report_job(self):
         """Generate yesterday's AI daily report from analysis_result.json. Runs at configured hour (default 1am)."""
