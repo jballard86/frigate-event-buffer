@@ -466,7 +466,15 @@
     const filter = filterSelect.value;
     btnMarkAll.style.display = (filter === 'saved' || filter === 'test_events') ? 'none' : '';
 
+    const testOpt = document.querySelector('#filterSelect option[value="test_events"]');
     if (events.length === 0) {
+      // When no events, still show "Test events" so user can select it to view test runs.
+      if (!testOpt) {
+        const opt = document.createElement('option');
+        opt.value = 'test_events';
+        opt.textContent = 'Test events';
+        filterSelect.appendChild(opt);
+      }
       const filterLabel = filter === 'reviewed' ? 'reviewed' : filter === 'unreviewed' ? 'unreviewed' : filter === 'saved' ? 'saved' : filter === 'test_events' ? 'test' : '';
       mainContent.innerHTML = `
         <div class="empty-state">
@@ -481,7 +489,6 @@
     const eventPath = getEventPath(ev);
 
     // Add or remove "Test events" filter option based on current event being consolidated.
-    const testOpt = document.querySelector('#filterSelect option[value="test_events"]');
     if (ev.consolidated && !testOpt) {
       const opt = document.createElement('option');
       opt.value = 'test_events';

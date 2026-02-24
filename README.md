@@ -1,14 +1,28 @@
-# Frigate Event Buffer
+# Frigate Cinematic AI & Notification Buffer
 
-State-aware orchestrator for **Frigate NVR**: buffers events, sends Ring-style sequential notifications to Home Assistant, optional AI analysis (Gemini), and a built-in event viewer. Tracks events through NEW → DESCRIBED → FINALIZED → SUMMARIZED and keeps a configurable rolling evidence locker (default 3 days).
+**Target:** Frigate 0.17+ users who want advanced event descriptions, tiered Home Assistant notifications, multi-camera GenAI review, and a dynamic cinematic event player.
 
-**Target:** Frigate 0.17+ users who want event Descriptions, HA notifications, optional GenAI review, and an event player.
+This project is a state-aware, GPU-accelerated companion app for **Frigate NVR** that acts as a smart buffer between your cameras and Home Assistant. It transforms raw, multi-camera security footage into cinematic highlight reels and delivers tiered, narrative-driven notifications to eliminate alert fatigue.
+
+---
+
+## 🌟 Key Features
+
+- **Cinematic Summary Videos:** Instead of static, wide-angle clips, the built-in video engine acts like a live film editor. It uses YOLO to dynamically crop and smooth-pan to track a subject across the timeline. If a person walks from the doorbell to the carport, the video automatically cuts to the best camera angle, generating a single, seamless tracking shot of the entire event.
+- **Multi-Camera AI Narratives:** While Frigate's built-in GenAI typically analyzes single-camera snapshots, this orchestrator buffers the whole event. It feeds Gemini a chronological timeline of motion-aware frames across **multiple** cameras, resulting in a complete, structured story (e.g., *"Subject walked up the driveway, checked the porch, and left via the street"*).
+- **Tiered "Ring-Style" Notifications:** Events are managed through a state machine (**NEW** → **DESCRIBED** → **FINALIZED** → **SUMMARIZED**) that sends a single, continuously updating alert to Home Assistant.
+  - **Instant Ping:** A near-instant, simple notification the second an event starts.
+  - **AI Update (Silent):** Once the event ends, the orchestrator pulls the multi-cam timeline, runs the AI analysis, and silently updates the HA notification with the full narrative description.
+  - **Video Payload (Silent):** 30–60 seconds later, once the GPU finishes stitching and panning the video, it is silently attached to the notification for immediate review.
+- **Daily Narrative Reports:** Gemini automatically turns the day’s compiled AI event results into a human-readable, narrative Markdown digest of activity around your property.
+- **Built-in Event Viewer:** Includes a self-hosted web server that feeds a custom, interactive Event Viewer card directly into Home Assistant via iframe, displaying the narrative and the tracked video side-by-side.
+- **Rolling Evidence Locker:** Automatically manages its own storage (default 3 days) without touching your core Frigate recordings.
 
 ---
 
 ## Quick start
 
-- **Docker (recommended):** See **[INSTALL.md](INSTALL.md)** for clone, build, config, and run. No compose required; `docker build` + `docker run` with GPU and env vars.
+- **Docker (recommended):** See for clone, build, config, and run. No compose required; `docker build` + `docker run` with GPU and env vars.
 - **Layout:** Repo root must have `Dockerfile` and `src/`. If you only see `frigate_buffer/` at root, run `git checkout main && git pull`.
 
 ---
@@ -20,30 +34,26 @@ State-aware orchestrator for **Frigate NVR**: buffers events, sends Ring-style s
 Copy from `.env.example` and set at least:
 
 
-| Variable         | Description                                                       |
-| ---------------- | ----------------------------------------------------------------- |
-| `FRIGATE_URL`    | Frigate NVR URL, e.g. `http://192.168.1.100:5000`                 |
-| `MQTT_BROKER`    | MQTT broker IP or hostname                                        |
-| `MQTT_PORT`      | Usually `1883` (or `8883` for TLS)                                |
-| `GEMINI_API_KEY` | From [Google AI Studio](https://aistudio.google.com/) if using AI |
-| `HA_TOKEN`       | Home Assistant long-lived access token                            |
-| `HA_URL`         | Home Assistant URL, e.g. `http://192.168.1.100:8123`              |
-| `STORAGE_ROOT`   | Where clips/analysis are stored (e.g. `./storage`)                |
+|                  |                                                      |
+| ---------------- | ---------------------------------------------------- |
+| **Variable**     | **Description**                                      |
+| `FRIGATE_URL`    | Frigate NVR URL, e.g. `http://192.168.1.100:5000`    |
+| `MQTT_BROKER`    | MQTT broker IP or hostname                           |
+| `MQTT_PORT`      | Usually `1883` (or `8883` for TLS)                   |
+| `GEMINI_API_KEY` | From if using AI                                     |
+| `HA_TOKEN`       | Home Assistant long-lived access token               |
+| `HA_URL`         | Home Assistant URL, e.g. `http://192.168.1.100:8123` |
+| `STORAGE_ROOT`   | Where clips/analysis are stored (e.g. `./storage`)   |
 
 
 Optional: `MQTT_USER`, `MQTT_PASSWORD`, `GEMINI_PROXY_URL` (custom proxy). See `.env.example` for the full list.
 
 ### 2. App config (`config.yaml`)
 
-```bash
-cp config.example.yaml config.yaml
-# Edit config.yaml: cameras, retention, network, optional Gemini/multi_cam
-```
-
-- `**cameras`:** List cameras and labels to process; optional `event_filters` (tracked zones, exceptions).
-- `**settings`:** `retention_days`, `log_level`, `gemini_frames_per_hour_cap`, etc.
-- `**network`:** `mqtt_broker`, `mqtt_port`, `frigate_url`, `buffer_ip`, `flask_port`, `storage_path`. Env vars override these.
-- **Optional:** `gemini` / `gemini_proxy`, `multi_cam`, `ha` (for stats-page API usage).
+- **cameras**: List cameras and labels to process; optional `event_filters` (tracked zones, exceptions).
+- **settings**: `retention_days`, `log_level`, `gemini_frames_per_hour_cap`, etc.
+- **network**: `mqtt_broker`, `mqtt_port`, `frigate_url`, `buffer_ip`, `flask_port`, `storage_path`. Env vars override these.
+- **Optional**: `gemini` / `gemini_proxy`, `multi_cam`, `ha` (for stats-page API usage).
 
 Paths in `docker run` must match where you put `config.yaml` and storage (see INSTALL.md).
 
@@ -55,7 +65,7 @@ If you use Compose, copy from `docker-compose.example.yaml` (if present) to `doc
 
 ## Requirements
 
-- **Docker** (and for GPU: NVIDIA GPU, driver, [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html), e.g. `docker run --gpus all` with `NVIDIA_DRIVER_CAPABILITIES=compute,video,utility`).
+- **Docker** (and for GPU: NVIDIA GPU, driver, , e.g. `docker run --gpus all` with `NVIDIA_DRIVER_CAPABILITIES=compute,video,utility`).
 - **Frigate** 0.17+ and **MQTT**; **Home Assistant** for notifications. Optional: **Gemini API** (or proxy) for AI analysis.
 
 ---
@@ -68,7 +78,8 @@ If you use Compose, copy from `docker-compose.example.yaml` (if present) to `doc
 
 ## Docs
 
-- **[INSTALL.md](INSTALL.md)** — Full install: clone, config, build, run, update, troubleshooting.
+- — Full install: clone, config, build, run, update, troubleshooting.
 - **MAP.md** — Project layout and architecture (for contributors/agents).
 - **examples/home-assistant/** — Sample HA notification automation and dashboard YAML.
 
+Would you like me to help you draft the **INSTALL.md** to complete the documentation set?
