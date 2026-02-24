@@ -3,7 +3,4 @@
     maximize speed without triggering an Out-of-Memory error during the initial batch.float() conversion.
         -make batch size configurable in config.yaml
 
-  - check for CPU bound tasks and fix
-
-  - check entire video/frame pipeline for performance improvements, duplicated workloads, etc
-
+  - pushover notification option

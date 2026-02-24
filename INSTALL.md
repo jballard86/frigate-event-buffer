@@ -112,23 +112,28 @@ If a container named `frigate_buffer` already exists, stop and remove it first: 
 
 ```bash
 cd /mnt/user/appdata/frigate-buffer
+# Stop and remove the existing container if it exists
 docker stop frigate_buffer 2>/dev/null; docker rm frigate_buffer 2>/dev/null || true
-docker run -d --name frigate_buffer --restart unless-stopped \
+# Run the new container with full NVIDIA GPU passthrough and capabilities
+docker run -d \
+  --name frigate_buffer \
+  --restart unless-stopped \
   --network bridge \
   --shm-size=1g \
   -p 5055:5055 \
-  -v /mnt/user/appdata/frigate_buffer:/app/storage \
-  -v /mnt/user/appdata/frigate_buffer/config.yaml:/app/config.yaml:ro \
+  -v /path/to/your/storage:/app/storage \
+  -v /path/to/your/config.yaml:/app/config.yaml:ro \
   -v /etc/localtime:/etc/localtime:ro \
-  -e HA_IP=YOUR_HOME_ASSISTANT_IP \
-  -e FRIGATE_URL=http://REDACTED_LOCAL_IP:5000 \
-  -e MQTT_BROKER=REDACTED_LOCAL_IP \
+  -e HA_IP=<YOUR_HA_IP> \
+  -e FRIGATE_URL=http://<YOUR_FRIGATE_IP>:5000 \
+  -e MQTT_BROKER=<YOUR_MQTT_BROKER_IP> \
   -e MQTT_PORT=1883 \
   -e RETENTION_DAYS=3 \
   -e LOG_LEVEL=INFO \
   -e NVIDIA_VISIBLE_DEVICES=all \
   -e NVIDIA_DRIVER_CAPABILITIES=all \
-  --gpus all \
+  --runtime=nvidia \
+  --gpus '"device=all,capabilities=gpu,compute,utility,video"' \  # ALL alone will not work
   frigate-buffer:latest
 ```
 

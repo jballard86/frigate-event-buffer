@@ -1,0 +1,39 @@
+services:
+  frigate_buffer:
+    container_name: frigate_buffer
+    # Tells Docker where to find your code and Dockerfile
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        - USE_GUI_OPENCV=true
+    image: frigate-buffer:latest
+    restart: unless-stopped
+    network_mode: bridge
+    shm_size: 1gb
+    ports:
+      - 5055:5055
+    env_file:
+      - ../../appdata/frigate_buffer/.env
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=all
+      # This helps your Python code know it's running in Docker
+      - DOCKER_ENV=true
+    volumes:
+      - /mnt/user/appdata/frigate_buffer:/app/storage
+      - /mnt/user/appdata/frigate_buffer/config.yaml:/app/config.yaml:ro
+      - /etc/localtime:/etc/localtime:ro
+    runtime: nvidia
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities:
+                - gpu
+                - video
+                - compute
+                - utility
+networks: {}
