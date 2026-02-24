@@ -563,6 +563,321 @@ class EventQueryService:
         self._set_cache(cache_key, result)
         return result
 
+    def get_saved_events(self, camera: str | None = None) -> list[dict[str, Any]]:
+        """
+        List events under storage_path/saved/ (user-kept events).
+        Optional camera filters to saved/camera only. Each event dict has saved=True
+        and file URLs under /files/saved/<camera>/<subdir>/...
+        """
+        cache_key = "saved_events" if camera is None else f"saved_events_{camera}"
+        cached = self._get_cached(cache_key)
+        if cached is not None:
+            return cached
+
+        saved_path = os.path.join(self.storage_path, "saved")
+        all_events: list[dict[str, Any]] = []
+
+        if not os.path.isdir(saved_path):
+            self._set_cache(cache_key, all_events)
+            return all_events
+
+        try:
+            top_dirs = os.listdir(saved_path)
+            if camera is not None:
+                top_dirs = [d for d in top_dirs if d == camera]
+            for camera_name in top_dirs:
+                camera_path = os.path.join(saved_path, camera_name)
+                if not os.path.isdir(camera_path):
+                    continue
+                entries = []
+                try:
+                    with os.scandir(camera_path) as it:
+                        entries = sorted([e for e in it if e.is_dir()], key=lambda e: e.name, reverse=True)
+                except OSError:
+                    continue
+                for entry in entries:
+                    subdir = entry.name
+                    content_mtime = entry.stat().st_mtime
+                    data = self._get_event_cached(entry.path, content_mtime)
+                    subdirs_map = data.get("subdirs", {})
+                    if camera_name == "events" and subdirs_map:
+                        event_dict = self._build_saved_consolidated_event_dict(
+                            entry.path, subdir, data, content_mtime
+                        )
+                    else:
+                        event_dict = self._build_saved_single_cam_event_dict(
+                            camera_name, subdir, data
+                        )
+                    if event_dict is not None:
+                        event_dict["saved"] = True
+                        all_events.append(event_dict)
+        except Exception as e:
+            logger.error("Error listing saved events: %s", e)
+
+        all_events.sort(key=lambda x: x["timestamp"], reverse=True)
+        self._set_cache(cache_key, all_events)
+        return all_events
+
+    def _build_saved_consolidated_event_dict(
+        self, folder_path: str, ce_id: str, data: dict[str, Any], content_mtime: float
+    ) -> dict[str, Any] | None:
+        """Build event dict for a saved consolidated event (saved/events/ce_id)."""
+        subdirs = data.get("subdirs", {})
+        cameras = sorted(list(subdirs.keys()))
+        if not cameras:
+            return None
+        parts = ce_id.split("_", 1)
+        ts = parts[0] if len(parts) > 0 else "0"
+        summary_text = data.get("summary_text", "Analysis pending...")
+        metadata = data.get("metadata", {}) or {}
+        timeline = data.get("timeline", {})
+        review_summary = data.get("review_summary")
+        viewed = data.get("viewed", False)
+        parsed = self._parse_summary(summary_text)
+        genai_entries = self._extract_genai_entries(timeline)
+        if not metadata and cameras:
+            for cam in cameras:
+                cam_meta = subdirs.get(cam, {}).get("metadata")
+                if cam_meta:
+                    metadata = cam_meta
+                    break
+        files_prefix = "saved/events"
+        primary_clip = primary_snapshot = None
+        hosted_clips: list[dict[str, str]] = []
+        for cam in cameras:
+            cam_data = subdirs.get(cam, {})
+            clip_basename = cam_data.get("clip_basename")
+            if cam_data.get("has_clip") and clip_basename:
+                url = f"/files/{files_prefix}/{ce_id}/{cam}/{clip_basename}"
+                if primary_clip is None:
+                    primary_clip = url
+                hosted_clips.append({"camera": cam, "url": url})
+        for cam in cameras:
+            if subdirs.get(cam, {}).get("has_snapshot"):
+                primary_snapshot = f"/files/{files_prefix}/{ce_id}/{cam}/snapshot.jpg"
+                break
+        summary_basename = f"{ce_id}_summary.mp4"
+        summary_path = os.path.join(folder_path, summary_basename)
+        if os.path.isfile(summary_path):
+            summary_url = f"/files/{files_prefix}/{ce_id}/{summary_basename}"
+            hosted_clips.append({"camera": "Summary video", "url": summary_url})
+            primary_clip = summary_url
+        has_clip = any(subdirs.get(c, {}).get("has_clip") for c in cameras) or os.path.isfile(summary_path)
+        has_snapshot = any(subdirs.get(c, {}).get("has_snapshot") for c in cameras)
+        hosted_clip_url = primary_clip if has_clip else None
+        hosted_snapshot_url = primary_snapshot if has_snapshot else (f"/files/{files_prefix}/{ce_id}/{cameras[0]}/snapshot.jpg" if cameras else None)
+        event_ended = self._event_ended_in_timeline(timeline)
+        try:
+            ts_float = float(ts)
+            ongoing = not has_clip and (time.time() - ts_float) < 5400 and not event_ended
+        except (ValueError, TypeError):
+            ongoing = not has_clip and not event_ended
+        cameras_with_zones = self._extract_cameras_zones_from_timeline(timeline)
+        if not cameras_with_zones and cameras:
+            cameras_with_zones = [{"camera": c, "zones": []} for c in cameras]
+        end_ts = self._extract_end_timestamp_from_timeline(timeline) or metadata.get("end_time")
+        event_dict: dict[str, Any] = {
+            "event_id": ce_id,
+            "camera": "events",
+            "subdir": ce_id,
+            "timestamp": ts,
+            "summary": summary_text,
+            "title": metadata.get("genai_title") or parsed.get("Title"),
+            "description": metadata.get("genai_description") or parsed.get("Description") or parsed.get("AI Description"),
+            "scene": metadata.get("genai_scene") or parsed.get("Scene"),
+            "label": metadata.get("label") or parsed.get("Label", "unknown"),
+            "severity": metadata.get("severity") or parsed.get("Severity"),
+            "threat_level": metadata.get("threat_level", 0),
+            "review_summary": review_summary,
+            "has_clip": has_clip,
+            "has_snapshot": has_snapshot,
+            "viewed": viewed,
+            "hosted_clip": hosted_clip_url,
+            "hosted_snapshot": hosted_snapshot_url,
+            "hosted_clips": hosted_clips,
+            "cameras": cameras,
+            "cameras_with_zones": cameras_with_zones,
+            "consolidated": True,
+            "ongoing": ongoing,
+            "genai_entries": genai_entries,
+        }
+        if end_ts is not None:
+            event_dict["end_timestamp"] = end_ts
+        return event_dict
+
+    def _build_saved_single_cam_event_dict(
+        self, camera_name: str, subdir: str, data: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Build event dict for a saved single-camera event (saved/camera/subdir)."""
+        parts = subdir.split("_", 1)
+        ts = parts[0] if len(parts) > 0 else "0"
+        eid = parts[1] if len(parts) > 1 else subdir
+        summary_text = data.get("summary_text", "Analysis pending...")
+        metadata = data.get("metadata", {}) or {}
+        timeline = data.get("timeline", {})
+        review_summary = data.get("review_summary")
+        has_clip = data.get("has_clip", False)
+        has_snapshot = data.get("has_snapshot", False)
+        viewed = data.get("viewed", False)
+        parsed = self._parse_summary(summary_text)
+        event_ended = self._event_ended_in_timeline(timeline)
+        try:
+            ts_float = float(ts)
+            ongoing = not has_clip and (time.time() - ts_float) < 5400 and not event_ended
+        except (ValueError, TypeError):
+            ongoing = not has_clip and not event_ended
+        genai_entries = self._extract_genai_entries(timeline)
+        cameras_with_zones = self._extract_cameras_zones_from_timeline(timeline)
+        if not cameras_with_zones:
+            cameras_with_zones = [{"camera": camera_name, "zones": []}]
+        end_ts = self._extract_end_timestamp_from_timeline(timeline) or metadata.get("end_time")
+        clip_basename = data.get("clip_basename")
+        files_prefix = f"saved/{camera_name}"
+        clip_url = f"/files/{files_prefix}/{subdir}/{clip_basename}" if (has_clip and clip_basename) else None
+        legacy_hosted_clips = [{"camera": camera_name, "url": clip_url}] if has_clip else []
+        event_dict: dict[str, Any] = {
+            "event_id": eid,
+            "camera": camera_name,
+            "subdir": subdir,
+            "timestamp": ts,
+            "summary": summary_text,
+            "title": metadata.get("genai_title") or parsed.get("Title"),
+            "description": metadata.get("genai_description") or parsed.get("Description") or parsed.get("AI Description"),
+            "scene": metadata.get("genai_scene") or parsed.get("Scene"),
+            "label": metadata.get("label") or parsed.get("Label", "unknown"),
+            "severity": metadata.get("severity") or parsed.get("Severity"),
+            "threat_level": metadata.get("threat_level", 0),
+            "review_summary": review_summary,
+            "has_clip": has_clip,
+            "has_snapshot": has_snapshot,
+            "viewed": viewed,
+            "hosted_clip": clip_url,
+            "hosted_snapshot": f"/files/{files_prefix}/{subdir}/snapshot.jpg" if has_snapshot else None,
+            "hosted_clips": legacy_hosted_clips,
+            "cameras_with_zones": cameras_with_zones,
+            "ongoing": ongoing,
+            "genai_entries": genai_entries,
+        }
+        if end_ts is not None:
+            event_dict["end_timestamp"] = end_ts
+        return event_dict
+
+    def get_test_events(self) -> list[dict[str, Any]]:
+        """
+        List only test run events (events/test1, events/test2, ...).
+        Same event dict shape as consolidated events; used when filter=test_events.
+        """
+        cache_key = "test_events"
+        cached = self._get_cached(cache_key)
+        if cached is not None:
+            return cached
+
+        events_dir = os.path.join(self.storage_path, "events")
+        events_list: list[dict[str, Any]] = []
+        if not os.path.isdir(events_dir):
+            self._set_cache(cache_key, events_list)
+            return events_list
+
+        entries = []
+        try:
+            with os.scandir(events_dir) as it:
+                entries = sorted([e for e in it if e.is_dir() and re.match(r"^test\d+$", e.name)], key=lambda e: e.name, reverse=True)
+        except OSError:
+            pass
+
+        for entry in entries:
+            ce_id = entry.name
+            content_mtime = entry.stat().st_mtime
+            try:
+                with os.scandir(entry.path) as it:
+                    for child in it:
+                        if child.is_dir() and not child.name.startswith("."):
+                            try:
+                                content_mtime = max(content_mtime, child.stat().st_mtime)
+                            except OSError:
+                                pass
+            except OSError:
+                pass
+            data = self._get_event_cached(entry.path, content_mtime)
+            subdirs = data.get("subdirs", {})
+            cameras = sorted(list(subdirs.keys()))
+            if not cameras:
+                continue
+            ts = "0"
+            summary_text = data.get("summary_text", "Analysis pending...")
+            metadata = data.get("metadata", {}) or {}
+            timeline = data.get("timeline", {})
+            review_summary = data.get("review_summary")
+            viewed = data.get("viewed", False)
+            parsed = self._parse_summary(summary_text)
+            genai_entries = self._extract_genai_entries(timeline)
+            if not metadata and cameras:
+                for cam in cameras:
+                    cam_meta = subdirs.get(cam, {}).get("metadata")
+                    if cam_meta:
+                        metadata = cam_meta
+                        break
+            primary_clip = primary_snapshot = None
+            hosted_clips = []
+            for cam in cameras:
+                cam_data = subdirs.get(cam, {})
+                clip_basename = cam_data.get("clip_basename")
+                if cam_data.get("has_clip") and clip_basename:
+                    url = f"/files/events/{ce_id}/{cam}/{clip_basename}"
+                    if primary_clip is None:
+                        primary_clip = url
+                    hosted_clips.append({"camera": cam, "url": url})
+            for cam in cameras:
+                if subdirs.get(cam, {}).get("has_snapshot"):
+                    primary_snapshot = f"/files/events/{ce_id}/{cam}/snapshot.jpg"
+                    break
+            summary_basename = f"{ce_id}_summary.mp4"
+            summary_path = os.path.join(entry.path, summary_basename)
+            if os.path.isfile(summary_path):
+                hosted_clips.append({"camera": "Summary video", "url": f"/files/events/{ce_id}/{summary_basename}"})
+                primary_clip = f"/files/events/{ce_id}/{summary_basename}"
+            has_clip = any(subdirs.get(c, {}).get("has_clip") for c in cameras) or os.path.isfile(summary_path)
+            has_snapshot = any(subdirs.get(c, {}).get("has_snapshot") for c in cameras)
+            hosted_clip_url = primary_clip if has_clip else None
+            hosted_snapshot_url = primary_snapshot if has_snapshot else (f"/files/events/{ce_id}/{cameras[0]}/snapshot.jpg" if cameras else None)
+            event_ended = self._event_ended_in_timeline(timeline)
+            ongoing = not has_clip and not event_ended
+            cameras_with_zones = self._extract_cameras_zones_from_timeline(timeline)
+            if not cameras_with_zones and cameras:
+                cameras_with_zones = [{"camera": c, "zones": []} for c in cameras]
+            end_ts = self._extract_end_timestamp_from_timeline(timeline) or metadata.get("end_time")
+            event_dict = {
+                "event_id": ce_id,
+                "camera": "events",
+                "subdir": ce_id,
+                "timestamp": ts,
+                "summary": summary_text,
+                "title": metadata.get("genai_title") or parsed.get("Title"),
+                "description": metadata.get("genai_description") or parsed.get("Description") or parsed.get("AI Description"),
+                "scene": metadata.get("genai_scene") or parsed.get("Scene"),
+                "label": metadata.get("label") or parsed.get("Label", "unknown"),
+                "severity": metadata.get("severity") or parsed.get("Severity"),
+                "threat_level": metadata.get("threat_level", 0),
+                "review_summary": review_summary,
+                "has_clip": has_clip,
+                "has_snapshot": has_snapshot,
+                "viewed": viewed,
+                "hosted_clip": hosted_clip_url,
+                "hosted_snapshot": hosted_snapshot_url,
+                "hosted_clips": hosted_clips,
+                "cameras": cameras,
+                "cameras_with_zones": cameras_with_zones,
+                "consolidated": True,
+                "ongoing": ongoing,
+                "genai_entries": genai_entries,
+            }
+            if end_ts is not None:
+                event_dict["end_timestamp"] = end_ts
+            events_list.append(event_dict)
+
+        self._set_cache(cache_key, events_list)
+        return events_list
+
     def get_cameras(self) -> list[str]:
         """List available cameras from storage."""
         cache_key = "cameras"

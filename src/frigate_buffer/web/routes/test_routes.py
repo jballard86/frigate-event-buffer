@@ -22,7 +22,12 @@ def create_bp(orchestrator):
         subdir = request.args.get("subdir", "").strip()
         if not subdir:
             return jsonify({"error": "Missing subdir"}), 400
-        source_path = resolve_under_storage(storage_path, "events", subdir)
+        # Support source under saved/ (e.g. subdir=saved/events/ce_id) for TEST from saved events.
+        if "/" in subdir:
+            path_parts = subdir.split("/")
+            source_path = resolve_under_storage(storage_path, *path_parts)
+        else:
+            source_path = resolve_under_storage(storage_path, "events", subdir)
         if source_path is None or not os.path.isdir(source_path):
             return jsonify({"error": "Invalid or missing event folder"}), 404
         try:

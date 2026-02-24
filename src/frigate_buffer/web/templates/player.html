@@ -275,8 +275,9 @@
       <option value="unreviewed">Unreviewed</option>
       <option value="all">All Events</option>
       <option value="reviewed">Reviewed</option>
+      <option value="saved">Saved</option>
     </select>
-    <button class="btn-mark-all" id="btnMarkAll">Mark All Reviewed</button>
+    <button class="btn-mark-all" id="btnMarkAll" style="display:none;">Mark All Reviewed</button>
     <a href="/stats-page"><button>Stats</button></a>
     <a href="/daily-review"><button>Daily Review</button></a>
   </div>
@@ -374,10 +375,15 @@
     }
   }
 
-  async function deleteEvent(camera, subdir) {
+  function getEventPath(ev) {
+    if (ev.saved) return 'saved/' + (ev.camera || '') + '/' + (ev.subdir || '');
+    return (ev.camera || '') + '/' + (ev.subdir || '');
+  }
+
+  async function deleteEvent(eventPath) {
     if (!confirm('Delete this event? This cannot be undone.')) return;
     try {
-      const resp = await fetch(`/delete/${camera}/${subdir}`, { method: 'POST' });
+      const resp = await fetch('/delete/' + eventPath.split('/').map(encodeURIComponent).join('/'), { method: 'POST' });
       if (resp.ok) {
         events.splice(currentIndex, 1);
         if (currentIndex >= events.length) currentIndex = Math.max(0, events.length - 1);
@@ -390,9 +396,27 @@
     }
   }
 
-  async function markViewed(camera, subdir) {
+  async function keepEvent(ev) {
+    const keepPath = (ev.camera || '') + '/' + (ev.subdir || '');
     try {
-      await fetch(`/viewed/${camera}/${subdir}`, { method: 'POST' });
+      const resp = await fetch('/keep/' + keepPath.split('/').map(encodeURIComponent).join('/'), { method: 'POST' });
+      const data = resp.ok ? await resp.json().catch(() => ({})) : {};
+      if (resp.ok) {
+        events.splice(currentIndex, 1);
+        if (currentIndex >= events.length) currentIndex = Math.max(0, events.length - 1);
+        showFlash('Event saved');
+        render();
+      } else {
+        alert(data.message || 'Failed to keep event.');
+      }
+    } catch (e) {
+      alert('Error: ' + e.message);
+    }
+  }
+
+  async function markViewed(eventPath) {
+    try {
+      await fetch('/viewed/' + eventPath.split('/').map(encodeURIComponent).join('/'), { method: 'POST' });
       // If viewing unreviewed, remove from list; otherwise update in place
       if (filterSelect.value === 'unreviewed') {
         events.splice(currentIndex, 1);
@@ -440,17 +464,33 @@
   // --- Render ---
   function render() {
     const filter = filterSelect.value;
+    btnMarkAll.style.display = (filter === 'saved' || filter === 'test_events') ? 'none' : '';
+
     if (events.length === 0) {
+      const filterLabel = filter === 'reviewed' ? 'reviewed' : filter === 'unreviewed' ? 'unreviewed' : filter === 'saved' ? 'saved' : filter === 'test_events' ? 'test' : '';
       mainContent.innerHTML = `
         <div class="empty-state">
           <h2>No Events Found</h2>
-          <p>No ${filter === 'reviewed' ? 'reviewed' : filter === 'unreviewed' ? 'unreviewed' : ''} events${cameraSelect.value ? ' for this camera' : ''}.</p>
+          <p>No ${filterLabel} events${cameraSelect.value ? ' for this camera' : ''}.</p>
           <p style="margin-top:16px;"><a href="/stats-page" style="color:#e94560;">View Stats</a></p>
         </div>`;
       return;
     }
 
     const ev = events[currentIndex];
+    const eventPath = getEventPath(ev);
+
+    // Add or remove "Test events" filter option based on current event being consolidated.
+    const testOpt = document.querySelector('#filterSelect option[value="test_events"]');
+    if (ev.consolidated && !testOpt) {
+      const opt = document.createElement('option');
+      opt.value = 'test_events';
+      opt.textContent = 'Test events';
+      filterSelect.appendChild(opt);
+    } else if (!ev.consolidated && testOpt) {
+      if (filterSelect.value === 'test_events') filterSelect.value = 'all';
+      testOpt.remove();
+    }
     const ts = ev.timestamp ? new Date(parseInt(ev.timestamp) * 1000) : null;
     const endTs = ev.end_timestamp != null ? new Date(Math.round(parseFloat(ev.end_timestamp) * 1000)) : null;
     const dateStr = ts ? ts.toLocaleDateString() : 'Unknown';
@@ -483,13 +523,7 @@
                src="${escapeHtml(primaryClipUrl)}">
                Your browser does not support the video tag.
              </video>
-             ${clips.length > 1 ? `
-             <div class="clip-selector" style="margin-top:8px;">
-               <label for="clipSelect" style="margin-right:6px;font-size:0.9rem;">Camera:</label>
-               <select id="clipSelect">${clips.map((c) =>
-                 `<option value="${escapeHtml(c.url)}" ${c.url === primaryClipUrl ? 'selected' : ''}>${escapeHtml((c.camera || 'Camera').replace(/_/g, ' ').replace(/\b\w/g, ch => ch.toUpperCase()))}</option>`
-               ).join('')}</select>
-             </div>` : ''}`
+             ${clips.length > 1 ? '' : ''}`
           : ev.has_snapshot
             ? `<img src="${ev.hosted_snapshot}" alt="Snapshot">`
             : `<div class="no-video">No media available</div>`
@@ -504,12 +538,19 @@
         <span class="event-counter">${currentIndex + 1} / ${events.length}${ev.viewed ? '<span class="viewed-badge">Reviewed</span>' : ''}${ev.ongoing ? '<span class="ongoing-badge">Event ongoing</span>' : ''}</span>
         <div class="nav-buttons">
           ${!ev.viewed ? `<button class="btn-success" id="btnMarkReviewed">Reviewed</button>` : ''}
-          ${ev.has_clip ? `<a id="btnDownloadLink" href="${escapeHtml(primaryClipUrl)}" download style="text-decoration:none;"><button class="btn-download">Download</button></a>` : ''}
-          <a href="/events/${escapeHtml(ev.camera)}/${escapeHtml(subdir)}/timeline" style="text-decoration:none;"><button>View Timeline</button></a>
-          ${ev.consolidated
-            ? `<a href="/test-multi-cam?subdir=${encodeURIComponent(subdir)}" target="_blank" rel="noopener" style="text-decoration:none;"><button class="btn-success">TEST</button></a>`
-            : ''}
-          <button class="btn-danger" id="btnDelete">Delete</button>
+          ${clips.length > 1 ? `<select id="clipSelectNav">${clips.map((c) =>
+            `<option value="${escapeHtml(c.url)}" ${c.url === primaryClipUrl ? 'selected' : ''}>${escapeHtml((c.camera || 'Camera').replace(/_/g, ' ').replace(/\b\w/g, ch => ch.toUpperCase()))}</option>`
+          ).join('')}</select>` : ''}
+          <div class="dropdown-wrapper" style="position:relative;display:inline-block;">
+            <button id="btnActionsDropdown">Actions &#9662;</button>
+            <div id="actionsMenu" class="actions-menu" style="display:none;position:absolute;right:0;top:100%;margin-top:4px;background:#16213e;border:1px solid #0f3460;border-radius:6px;min-width:140px;z-index:50;box-shadow:0 4px 12px rgba(0,0,0,0.3);">
+              ${ev.has_clip ? `<a id="actionDownload" href="${escapeHtml(primaryClipUrl)}" download style="display:block;padding:8px 12px;color:#e0e0e0;text-decoration:none;font-size:0.85rem;">Download</a>` : ''}
+              ${!ev.saved ? `<button type="button" id="actionKeep" style="display:block;width:100%;text-align:left;padding:8px 12px;background:transparent;border:none;color:#e0e0e0;cursor:pointer;font-size:0.85rem;">Keep</button>` : ''}
+              <a href="/events/${escapeHtml(eventPath)}/timeline" style="display:block;padding:8px 12px;color:#e0e0e0;text-decoration:none;font-size:0.85rem;">View Timeline</a>
+              ${ev.consolidated ? `<a id="actionTest" href="/test-multi-cam?subdir=${encodeURIComponent(ev.saved && ev.camera === 'events' ? 'saved/events/' + subdir : subdir)}" target="_blank" rel="noopener" style="display:block;padding:8px 12px;color:#e0e0e0;text-decoration:none;font-size:0.85rem;">TEST</a>` : ''}
+              <button type="button" id="actionDelete" class="btn-danger" style="display:block;width:100%;text-align:left;padding:8px 12px;border:none;cursor:pointer;font-size:0.85rem;border-radius:0;">Delete</button>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -549,14 +590,29 @@
     // Bind navigation
     const btnNewer = document.getElementById('btnNewer');
     const btnOlder = document.getElementById('btnOlder');
-    const btnDelete = document.getElementById('btnDelete');
     const btnMarkReviewed = document.getElementById('btnMarkReviewed');
     const video = document.getElementById('videoPlayer');
 
     if (btnNewer) btnNewer.addEventListener('click', () => { if (currentIndex > 0) { currentIndex--; render(); } });
     if (btnOlder) btnOlder.addEventListener('click', () => { if (currentIndex < events.length - 1) { currentIndex++; render(); } });
-    if (btnDelete) btnDelete.addEventListener('click', () => deleteEvent(ev.camera, subdir));
-    if (btnMarkReviewed) btnMarkReviewed.addEventListener('click', () => markViewed(ev.camera, subdir));
+    const btnActionsDropdown = document.getElementById('btnActionsDropdown');
+    const actionsMenu = document.getElementById('actionsMenu');
+    if (btnActionsDropdown && actionsMenu) {
+      btnActionsDropdown.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const open = actionsMenu.style.display !== 'block';
+        actionsMenu.style.display = open ? 'block' : 'none';
+        if (open) {
+          const closeOnce = () => { actionsMenu.style.display = 'none'; document.removeEventListener('click', closeOnce); };
+          setTimeout(() => document.addEventListener('click', closeOnce), 0);
+        }
+      });
+    }
+    const actionKeep = document.getElementById('actionKeep');
+    if (actionKeep) actionKeep.addEventListener('click', () => { keepEvent(ev); if (actionsMenu) actionsMenu.style.display = 'none'; });
+    const actionDelete = document.getElementById('actionDelete');
+    if (actionDelete) actionDelete.addEventListener('click', () => { deleteEvent(eventPath); if (actionsMenu) actionsMenu.style.display = 'none'; });
+    if (btnMarkReviewed) btnMarkReviewed.addEventListener('click', () => markViewed(eventPath));
 
     // Track video playing state for auto-refresh
     if (video) {
@@ -565,13 +621,13 @@
       video.addEventListener('ended', () => { videoPlaying = false; });
     }
 
-    // Clip selector: switch video src and download link when user picks another camera
-    const clipSelect = document.getElementById('clipSelect');
-    if (clipSelect) {
-      clipSelect.addEventListener('change', () => {
-        const url = clipSelect.value;
+    // Clip selector (in nav): switch video src and download link when user picks another camera
+    const clipSelectNav = document.getElementById('clipSelectNav');
+    if (clipSelectNav) {
+      clipSelectNav.addEventListener('change', () => {
+        const url = clipSelectNav.value;
         if (video) video.src = url;
-        const dl = document.getElementById('btnDownloadLink');
+        const dl = document.getElementById('actionDownload');
         if (dl) dl.href = url;
       });
     }
@@ -614,13 +670,13 @@
   }
 
   // --- Init ---
-  // Honor ?filter=all from URL (e.g. "View most recent notification" link)
+  // Honor ?filter= from URL (all, saved, test_events, etc.)
   const urlParams = new URLSearchParams(window.location.search);
   const urlFilter = urlParams.get('filter');
   const urlCamera = urlParams.get('camera');
   const urlSubdir = urlParams.get('subdir');
-  if (urlFilter === 'all') {
-    filterSelect.value = 'all';
+  if (urlFilter && ['all', 'reviewed', 'unreviewed', 'saved', 'test_events'].includes(urlFilter)) {
+    filterSelect.value = urlFilter;
   }
   // Only set camera from URL when NOT coming back from timeline (no subdir) - preserves event count
   if (urlCamera && !urlSubdir) {

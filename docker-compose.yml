@@ -20,6 +20,7 @@ services:
       - NVIDIA_DRIVER_CAPABILITIES=all
       # This helps your Python code know it's running in Docker
       - DOCKER_ENV=true
+      - LOG_LEVEL=INFO
     volumes:
       - /mnt/user/appdata/frigate_buffer:/app/storage
       - /mnt/user/appdata/frigate_buffer/config.yaml:/app/config.yaml:ro

@@ -33,6 +33,10 @@ def create_bp(orchestrator):
             return [e for e in events if e.get("viewed")]
         if f == "all":
             return events
+        if f == "saved":
+            return events  # Already the saved list from get_saved_events
+        if f == "test_events":
+            return events  # Already the test list from get_test_events
         return [e for e in events if not e.get("viewed")]
 
     def _maybe_cleanup():
@@ -58,6 +62,16 @@ def create_bp(orchestrator):
     @bp.route("/events/<camera>")
     def list_camera_events(camera):
         _maybe_cleanup()
+        f = request.args.get("filter", "unreviewed")
+        if f == "saved":
+            sanitized = file_manager.sanitize_camera_name(camera)
+            events = query_service.get_saved_events(camera=sanitized)
+            cameras_found = list({e.get("camera") for e in events}) if events else [sanitized]
+            return jsonify({"camera": sanitized, "events": events, "cameras": sorted(cameras_found), "total_count": len(events)})
+        if f == "test_events":
+            events = query_service.get_test_events()
+            events = [e for e in events if e.get("camera") == camera]
+            return jsonify({"camera": camera, "events": events, "cameras": [camera], "total_count": len(events)})
         sanitized = file_manager.sanitize_camera_name(camera)
         events = _filter_events(query_service.get_events(sanitized))
         return jsonify({"camera": sanitized, "events": events})
@@ -65,6 +79,31 @@ def create_bp(orchestrator):
     @bp.route("/events")
     def list_events():
         _maybe_cleanup()
+        f = request.args.get("filter", "unreviewed")
+        if f == "saved":
+            try:
+                events = query_service.get_saved_events(camera=None)
+                cameras_found = sorted({e.get("camera") for e in events if e.get("camera")})
+            except Exception as e:
+                logger.error("Error listing saved events: %s", e)
+                return jsonify({"error": str(e)}), 500
+            return jsonify({
+                "cameras": cameras_found,
+                "total_count": len(events),
+                "events": events,
+            })
+        if f == "test_events":
+            try:
+                events = query_service.get_test_events()
+                cameras_found = ["events"] if events else []
+            except Exception as e:
+                logger.error("Error listing test events: %s", e)
+                return jsonify({"error": str(e)}), 500
+            return jsonify({
+                "cameras": cameras_found,
+                "total_count": len(events),
+                "events": events,
+            })
         try:
             all_events, cameras_found = query_service.get_all_events()
         except Exception as e:
@@ -77,9 +116,38 @@ def create_bp(orchestrator):
             "events": filtered,
         })
 
+    @bp.route("/keep/<path:event_path>", methods=["POST"])
+    def keep_event(event_path):
+        """Move event folder to saved/ (excluded from retention). Source must not be under saved/."""
+        path_parts = event_path.split("/")
+        if not path_parts:
+            return jsonify({"status": "error", "message": "Invalid path"}), 400
+        if path_parts[0] == "saved":
+            return jsonify({"status": "error", "message": "Event is already saved"}), 400
+        source_path = resolve_under_storage(storage_path, *path_parts)
+        if source_path is None or not os.path.isdir(source_path):
+            return jsonify({"status": "error", "message": "Event not found or invalid path"}), 404
+        # Destination: saved/<camera>/<subdir> or saved/events/<ce_id>
+        dest_path = resolve_under_storage(storage_path, "saved", *path_parts)
+        if dest_path is None:
+            return jsonify({"status": "error", "message": "Invalid destination path"}), 400
+        if os.path.exists(dest_path):
+            return jsonify({"status": "error", "message": "Saved event already exists"}), 409
+        try:
+            dest_parent = os.path.dirname(dest_path)
+            os.makedirs(dest_parent, exist_ok=True)
+            shutil.move(source_path, dest_path)
+            logger.info("Kept event: %s -> saved/%s", event_path, event_path)
+            return jsonify({"status": "success", "message": f"Moved to saved/{event_path}"}), 200
+        except Exception as e:
+            logger.error("Error keeping event %s: %s", event_path, e)
+            return jsonify({"status": "error", "message": str(e)}), 500
+
     @bp.route("/delete/<path:subdir>", methods=["POST"])
     def delete_event(subdir):
-        folder_path = resolve_under_storage(storage_path, subdir)
+        # Support multi-segment paths (e.g. saved/camera/subdir) for cross-platform resolve.
+        path_parts = subdir.split("/")
+        folder_path = resolve_under_storage(storage_path, *path_parts) if path_parts else None
         if folder_path is not None:
             if os.path.exists(folder_path) and os.path.isdir(folder_path):
                 try:
@@ -92,9 +160,10 @@ def create_bp(orchestrator):
             return jsonify({"status": "error", "message": "Folder not found"}), 404
         return jsonify({"status": "error", "message": "Invalid folder or path"}), 400
 
-    @bp.route("/viewed/<camera>/<subdir>", methods=["POST"])
-    def mark_viewed(camera, subdir):
-        folder_path = resolve_under_storage(storage_path, camera, subdir)
+    @bp.route("/viewed/<path:event_path>", methods=["POST"])
+    def mark_viewed(event_path):
+        path_parts = event_path.split("/")
+        folder_path = resolve_under_storage(storage_path, *path_parts) if path_parts else None
         if folder_path is None:
             return jsonify({"status": "error", "message": "Invalid path"}), 400
         if not os.path.isdir(folder_path):
@@ -106,9 +175,10 @@ def create_bp(orchestrator):
         except Exception as e:
             return jsonify({"status": "error", "message": str(e)}), 500
 
-    @bp.route("/viewed/<camera>/<subdir>", methods=["DELETE"])
-    def unmark_viewed(camera, subdir):
-        folder_path = resolve_under_storage(storage_path, camera, subdir)
+    @bp.route("/viewed/<path:event_path>", methods=["DELETE"])
+    def unmark_viewed(event_path):
+        path_parts = event_path.split("/")
+        folder_path = resolve_under_storage(storage_path, *path_parts) if path_parts else None
         if folder_path is None:
             return jsonify({"status": "error", "message": "Invalid path"}), 400
         viewed_path = os.path.join(folder_path, ".viewed")
@@ -141,9 +211,12 @@ def create_bp(orchestrator):
             return jsonify({"status": "error", "message": str(e)}), 500
         return jsonify({"status": "success", "marked": count}), 200
 
-    @bp.route("/events/<camera>/<subdir>/timeline")
-    def event_timeline(camera, subdir):
-        folder_path = resolve_under_storage(storage_path, camera, subdir)
+    @bp.route("/events/<path:event_path>/timeline")
+    def event_timeline(event_path):
+        path_parts = event_path.split("/")
+        folder_path = resolve_under_storage(storage_path, *path_parts) if path_parts else None
+        camera = path_parts[0] if len(path_parts) >= 1 else ""
+        subdir = "/".join(path_parts[1:]) if len(path_parts) > 1 else (path_parts[0] if path_parts else "")
         if folder_path is None:
             return "Invalid path", 400
         if not os.path.isdir(folder_path):
@@ -223,9 +296,11 @@ def create_bp(orchestrator):
             first_ai_analysis_zip_path=first_ai_analysis_zip_path,
         )
 
-    @bp.route("/events/<camera>/<subdir>/timeline/download")
-    def event_timeline_download(camera, subdir):
-        folder_path = resolve_under_storage(storage_path, camera, subdir)
+    @bp.route("/events/<path:event_path>/timeline/download")
+    def event_timeline_download(event_path):
+        path_parts = event_path.split("/")
+        folder_path = resolve_under_storage(storage_path, *path_parts) if path_parts else None
+        subdir = path_parts[-1] if len(path_parts) >= 2 else (path_parts[0] if path_parts else "")
         if folder_path is None:
             return "Invalid path", 400
         if not os.path.isdir(folder_path):
@@ -244,7 +319,8 @@ def create_bp(orchestrator):
 
     @bp.route("/files/<path:filename>")
     def serve_file(filename):
-        safe_path = resolve_under_storage(storage_path, filename)
+        path_parts = filename.split("/")
+        safe_path = resolve_under_storage(storage_path, *path_parts) if path_parts else None
         if safe_path is None:
             return "File not found", 404
         return send_from_directory(os.path.realpath(storage_path), filename)
