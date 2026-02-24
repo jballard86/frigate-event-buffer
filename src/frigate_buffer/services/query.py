@@ -100,6 +100,10 @@ class EventQueryService:
             'data': data
         }
 
+    def evict_cache(self, key: str) -> None:
+        """Remove a key from the list cache so the next request refetches. Used for test_events after Send prompt to AI."""
+        self._cache.pop(key, None)
+
     def _get_event_cached(self, folder_path: str, mtime: float) -> dict[str, Any]:
         """Get parsed event data from cache if valid, otherwise parse and cache (LRU eviction when over cap)."""
         if folder_path in self._event_cache:
@@ -254,9 +258,11 @@ class EventQueryService:
         return False
 
     def _extract_end_timestamp_from_timeline(self, timeline_data: dict[str, Any]) -> float | None:
-        """Return the first end_time from timeline entries (payload.after.end_time), or None.
-        Used so the player can show event end time and duration when available."""
+        """Return the first end_time from timeline entries (payload.after.end_time for Frigate,
+        or data.end_time for test_ai_prompt entries). Used so the player can show event end time
+        and duration. Regular events only have Frigate entries; test events may have test_ai_prompt."""
         for e in (timeline_data or {}).get('entries', []):
+            # Frigate event end (regular events only)
             payload = (e.get('data') or {}).get('payload') or {}
             after = payload.get('after') or {}
             end_time = after.get('end_time')
@@ -264,7 +270,15 @@ class EventQueryService:
                 try:
                     return float(end_time)
                 except (TypeError, ValueError):
-                    continue
+                    pass
+            # Test-event-only: Send prompt to AI writes this source
+            if e.get('source') == 'test_ai_prompt':
+                end_time = (e.get('data') or {}).get('end_time')
+                if end_time is not None:
+                    try:
+                        return float(end_time)
+                    except (TypeError, ValueError):
+                        pass
         return None
 
     def _extract_cameras_zones_from_timeline(self, timeline_data: dict[str, Any]) -> list[dict[str, Any]]:
@@ -781,7 +795,11 @@ class EventQueryService:
         entries = []
         try:
             with os.scandir(events_dir) as it:
-                entries = sorted([e for e in it if e.is_dir() and re.match(r"^test\d+$", e.name)], key=lambda e: e.name, reverse=True)
+                entries = sorted(
+                    [e for e in it if e.is_dir() and re.match(r"^test\d+$", e.name)],
+                    key=lambda e: e.stat().st_mtime,
+                    reverse=True,
+                )
         except OSError:
             pass
 
@@ -803,7 +821,8 @@ class EventQueryService:
             cameras = sorted(list(subdirs.keys()))
             if not cameras:
                 continue
-            ts = "0"
+            # Use folder mtime as event date so test events show correct date/length (regular events unchanged)
+            ts = str(int(content_mtime))
             summary_text = data.get("summary_text", "Analysis pending...")
             metadata = data.get("metadata", {}) or {}
             timeline = data.get("timeline", {})

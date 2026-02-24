@@ -47,6 +47,28 @@ class ErrorBufferHandler(logging.Handler):
             self.handleError(record)
 
 
+class StreamCaptureHandler(logging.Handler):
+    """
+    Captures log records into a list for the test-run SSE stream. Skips records
+    from MQTT modules so the test page does not show MQTT traffic.
+    """
+
+    def __init__(self, *, captured: list[str]):
+        super().__init__(level=logging.DEBUG)
+        self._captured = captured
+        self.setFormatter(logging.Formatter("%(levelname)s - %(message)s"))
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            if (record.module or "") in ("mqtt_handler", "mqtt_client"):
+                return
+            if "mqtt" in (record.pathname or ""):
+                return
+            self._captured.append(self.format(record))
+        except Exception:
+            self.handleError(record)
+
+
 error_buffer = ErrorBuffer(max_size=ERROR_BUFFER_MAX_SIZE)
 
 # Thread-safe flag: when True, MQTT review handler skips specific DEBUG logs

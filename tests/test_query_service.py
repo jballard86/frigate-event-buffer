@@ -312,6 +312,97 @@ class TestQueryCaching(unittest.TestCase):
         self.assertLessEqual(len(svc._event_cache), 3, "event cache must not exceed max size")
 
 
+class TestExtractEndTimestampFromTimeline(unittest.TestCase):
+    """_extract_end_timestamp_from_timeline: Frigate payload.after.end_time and test_ai_prompt data.end_time (test events only)."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(lambda: shutil.rmtree(self.tmp, ignore_errors=True))
+        self.service = EventQueryService(self.tmp)
+
+    def test_returns_none_for_empty_timeline(self):
+        self.assertIsNone(self.service._extract_end_timestamp_from_timeline({"entries": []}))
+
+    def test_returns_end_time_from_frigate_payload_after(self):
+        """Regular events: end_time from payload.after (unchanged behavior)."""
+        timeline = {
+            "entries": [
+                {"source": "frigate_mqtt", "data": {"payload": {"after": {"end_time": 1700000000.5}}}},
+            ]
+        }
+        self.assertEqual(self.service._extract_end_timestamp_from_timeline(timeline), 1700000000.5)
+
+    def test_returns_end_time_from_test_ai_prompt_entry(self):
+        """Test events only: end_time from source=test_ai_prompt and data.end_time."""
+        timeline = {
+            "entries": [
+                {"source": "test_ai_prompt", "data": {"title": "Test", "end_time": 1700000100.0}},
+            ]
+        }
+        self.assertEqual(self.service._extract_end_timestamp_from_timeline(timeline), 1700000100.0)
+
+    def test_frigate_takes_precedence_over_test_ai_prompt_when_both_present(self):
+        """When both Frigate and test_ai_prompt have end_time, first in list wins (Frigate first)."""
+        timeline = {
+            "entries": [
+                {"source": "frigate_mqtt", "data": {"payload": {"after": {"end_time": 1700000000.0}}}},
+                {"source": "test_ai_prompt", "data": {"end_time": 1700000100.0}},
+            ]
+        }
+        self.assertEqual(self.service._extract_end_timestamp_from_timeline(timeline), 1700000000.0)
+
+
+class TestEvictCache(unittest.TestCase):
+    """evict_cache removes a key so next request refetches (e.g. test_events after Send prompt to AI)."""
+
+    def test_evict_cache_removes_key(self):
+        storage = tempfile.mkdtemp()
+        self.addCleanup(lambda: shutil.rmtree(storage, ignore_errors=True))
+        svc = EventQueryService(storage, cache_ttl=60)
+        svc._set_cache("test_events", [{"id": "old"}])
+        self.assertIsNotNone(svc._get_cached("test_events"))
+        svc.evict_cache("test_events")
+        self.assertIsNone(svc._get_cached("test_events"))
+
+
+class TestGetTestEventsSortAndTimestamp(unittest.TestCase):
+    """get_test_events: sorted by folder mtime desc; timestamp from content_mtime (test events only)."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(lambda: shutil.rmtree(self.tmp, ignore_errors=True))
+        self.events_dir = os.path.join(self.tmp, "events")
+        os.makedirs(self.events_dir, exist_ok=True)
+        self.service = EventQueryService(self.tmp)
+
+    def test_get_test_events_sorted_by_mtime_desc_and_timestamp_from_mtime(self):
+        # Create test1 and test2 with different mtimes (test2 older)
+        test1 = os.path.join(self.events_dir, "test1")
+        test2 = os.path.join(self.events_dir, "test2")
+        os.makedirs(test1)
+        os.makedirs(os.path.join(test1, "cam1"))
+        with open(os.path.join(test1, "cam1", "clip.mp4"), "w") as f:
+            f.write("x")
+        os.makedirs(test2)
+        os.makedirs(os.path.join(test2, "cam1"))
+        with open(os.path.join(test2, "cam1", "clip.mp4"), "w") as f:
+            f.write("x")
+        # Make test2 older (e.g. 100s ago); set mtime on folder and contents so content_mtime is t_old
+        t_old = time.time() - 100
+        os.utime(test2, (t_old, t_old))
+        os.utime(os.path.join(test2, "cam1"), (t_old, t_old))
+        os.utime(os.path.join(test2, "cam1", "clip.mp4"), (t_old, t_old))
+        events = self.service.get_test_events()
+        self.assertEqual(len(events), 2)
+        # First event should be the one with newer mtime (test1)
+        self.assertEqual(events[0]["event_id"], "test1")
+        self.assertEqual(events[1]["event_id"], "test2")
+        # Timestamp should be content_mtime (not "0")
+        self.assertNotEqual(events[0]["timestamp"], "0")
+        self.assertNotEqual(events[1]["timestamp"], "0")
+        self.assertEqual(int(events[1]["timestamp"]), int(t_old))
+
+
 class TestReadTimelineMerged(unittest.TestCase):
     """read_timeline_merged merges base notification_timeline.json and append JSONL."""
 

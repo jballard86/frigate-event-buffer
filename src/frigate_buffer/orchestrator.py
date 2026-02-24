@@ -33,6 +33,7 @@ from frigate_buffer.services.frigate_export_watchdog import run_once as export_w
 from frigate_buffer.services.ha_storage_stats import StorageStatsAndHaHelper
 from frigate_buffer.services.quick_title_service import QuickTitleService
 from frigate_buffer.services.mqtt_handler import MqttMessageHandler
+from frigate_buffer.services.query import EventQueryService
 
 logger = logging.getLogger('frigate-buffer')
 
@@ -172,6 +173,9 @@ class StateAwareOrchestrator:
             )
         else:
             self.daily_reporter = None
+
+        # Query service for event lists (shared so test_routes can evict test_events cache)
+        self.query_service = EventQueryService(config['STORAGE_PATH'])
 
         # Flask app (lazy import to avoid circular deps)
         from frigate_buffer.web.server import create_app

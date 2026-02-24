@@ -527,6 +527,7 @@ def _run_pynv_compilation(
     assert proc is not None and proc.stdin is not None
 
     logged_cameras: set[str] = set()
+    logged_stutter_cameras: set[str] = set()  # One INFO per camera per event for stutter/missing frames.
     slices_per_cam = Counter(sl["camera"] for sl in slices)
     missing_crop_by_cam: dict[str, list[tuple[float, float]]] = defaultdict(list)
     try:
@@ -563,6 +564,13 @@ def _run_pynv_compilation(
                         if not src_indices:
                             continue
                         batch = ctx.get_frames(src_indices)
+                        if batch.shape[0] == 0:
+                            logger.error(
+                                "Compilation: decoder returned 0 frames for slice %s (post-decode, not hardware init). Skipping slice. path=%s",
+                                slice_idx,
+                                clip_path,
+                            )
+                            continue
                 # Decoder context closed; batch is cloned so we can use it.
                 _, _, ih, iw = batch.shape
                 sw = sl.get("native_width") or iw
@@ -593,10 +601,28 @@ def _run_pynv_compilation(
                     end_cy = ih / 2.0
 
                 if len(src_indices) > 1 and len(set(src_indices)) == 1:
-                    logger.error(
+                    logger.debug(
                         "Compilation static frame: decoder returned same frame index %s for all %s frames for camera=%s slice [%.2f, %.2f]; check decoder/time mapping.",
                         src_indices[0], n_frames, cam, t0, t1,
                     )
+                    if cam not in logged_stutter_cameras:
+                        logger.info(
+                            "Possible stutter or missing frames from %s, check original file for confirmation. path=%s",
+                            cam, clip_path,
+                        )
+                        logged_stutter_cameras.add(cam)
+
+                if batch.shape[0] < n_frames:
+                    logger.debug(
+                        "Compilation: decoder returned fewer frames than requested for camera=%s slice [%.2f, %.2f] (%s of %s; post-decode). Repeating last frame.",
+                        cam, t0, t1, batch.shape[0], n_frames,
+                    )
+                    if cam not in logged_stutter_cameras:
+                        logger.info(
+                            "Possible stutter or missing frames from %s, check original file for confirmation. path=%s",
+                            cam, clip_path,
+                        )
+                        logged_stutter_cameras.add(cam)
 
                 # One log per camera per compilation run (avoids flooding when many slices).
                 if cam not in logged_cameras:
@@ -608,7 +634,8 @@ def _run_pynv_compilation(
                     logged_cameras.add(cam)
 
                 for i in range(n_frames):
-                    frame = batch[i : i + 1]
+                    safe_i = min(i, batch.shape[0] - 1)
+                    frame = batch[safe_i : safe_i + 1]
                     t = output_times[i]
                     t_progress = (t - t0) / duration if duration > 1e-6 else 0.0
                     current_cx = start_cx + t_progress * (end_cx - start_cx)

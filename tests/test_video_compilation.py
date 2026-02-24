@@ -832,6 +832,185 @@ class TestGenerateCompilationVideo(unittest.TestCase):
     @patch("frigate_buffer.services.video_compilation.create_decoder")
     @patch("frigate_buffer.services.video_compilation.subprocess.Popen")
     @patch("builtins.open", new_callable=mock_open)
+    @patch("frigate_buffer.services.video_compilation.logger")
+    @patch("frigate_buffer.services.video_compilation._get_video_metadata")
+    @patch("frigate_buffer.services.video_compilation.os.path.isfile")
+    def test_run_pynv_compilation_skips_slice_when_decoder_returns_zero_frames(
+        self, mock_isfile, mock_get_metadata, mock_logger, mock_open_fn, mock_popen, mock_create_decoder
+    ):
+        """When get_frames returns 0 frames (post-decode), slice is skipped; log is clear it is not hardware init."""
+        try:
+            import torch
+        except ImportError:
+            self.skipTest("torch not available")
+        mock_isfile.return_value = True
+        mock_get_metadata.return_value = (640, 480, 20.0, 2.0)
+        mock_ctx = _fake_create_decoder_context(200, height=480, width=640)
+        if mock_ctx is None:
+            self.skipTest("torch not available")
+        mock_ctx.get_frames = lambda indices: torch.empty(0, 3, 480, 640, dtype=torch.uint8)
+        mock_cm = MagicMock()
+        mock_cm.__enter__ = MagicMock(return_value=mock_ctx)
+        mock_cm.__exit__ = MagicMock(return_value=None)
+        mock_create_decoder.return_value = mock_cm
+        proc = MagicMock()
+        proc.stdin = MagicMock()
+        proc.returncode = 0
+        mock_popen.return_value = proc
+
+        slices = [
+            {
+                "camera": "doorbell",
+                "start_sec": 0.0,
+                "end_sec": 2.0,
+                "crop_start": (0, 0, 320, 240),
+                "crop_end": (0, 0, 320, 240),
+            },
+        ]
+        resolve_clip = MagicMock(return_value="doorbell-1.mp4")
+
+        _run_pynv_compilation(
+            slices=slices,
+            ce_dir="/ce",
+            tmp_output_path="/out.mp4.tmp",
+            target_w=1440,
+            target_h=1080,
+            resolve_clip_in_folder=resolve_clip,
+            cuda_device_index=0,
+        )
+
+        self.assertEqual(proc.stdin.write.call_count, 0)
+        error_calls = [c for c in mock_logger.error.call_args_list if c[0]]
+        self.assertGreater(len(error_calls), 0)
+        msg = str(error_calls[0][0][0])
+        self.assertIn("0 frames", msg)
+        self.assertIn("Skipping slice", msg)
+        self.assertIn("post-decode", msg)
+        self.assertIn("not hardware init", msg)
+
+    @patch("frigate_buffer.services.video_compilation.GPU_LOCK", MagicMock())
+    @patch("frigate_buffer.services.video_compilation.create_decoder")
+    @patch("frigate_buffer.services.video_compilation.subprocess.Popen")
+    @patch("builtins.open", new_callable=mock_open)
+    @patch("frigate_buffer.services.video_compilation.crop_utils.crop_around_center")
+    @patch("frigate_buffer.services.video_compilation._get_video_metadata")
+    @patch("frigate_buffer.services.video_compilation.os.path.isfile")
+    def test_run_pynv_compilation_repeats_last_frame_when_decoder_returns_fewer_frames(
+        self, mock_isfile, mock_get_metadata, mock_crop_around_center, mock_open_fn, mock_popen, mock_create_decoder
+    ):
+        """When get_frames returns fewer frames than requested (e.g. de-dup), repeat last frame; no IndexError."""
+        try:
+            import torch
+        except ImportError:
+            self.skipTest("torch not available")
+        mock_isfile.return_value = True
+        mock_get_metadata.return_value = (640, 480, 20.0, 2.0)
+        mock_ctx = _fake_create_decoder_context(200, height=480, width=640)
+        if mock_ctx is None:
+            self.skipTest("torch not available")
+        mock_ctx.get_frames = lambda indices: torch.zeros((1, 3, 480, 640), dtype=torch.uint8)
+        mock_cm = MagicMock()
+        mock_cm.__enter__ = MagicMock(return_value=mock_ctx)
+        mock_cm.__exit__ = MagicMock(return_value=None)
+        mock_create_decoder.return_value = mock_cm
+        mock_crop_around_center.side_effect = lambda frame, cx, cy, tw, th: torch.zeros(
+            (1, 3, th, tw), dtype=torch.uint8
+        )
+        proc = MagicMock()
+        proc.stdin = MagicMock()
+        proc.returncode = 0
+        mock_popen.return_value = proc
+
+        slices = [
+            {
+                "camera": "doorbell",
+                "start_sec": 0.0,
+                "end_sec": 2.0,
+                "crop_start": (0, 0, 320, 240),
+                "crop_end": (0, 0, 320, 240),
+            },
+        ]
+        resolve_clip = MagicMock(return_value="doorbell-1.mp4")
+
+        _run_pynv_compilation(
+            slices=slices,
+            ce_dir="/ce",
+            tmp_output_path="/out.mp4.tmp",
+            target_w=1440,
+            target_h=1080,
+            resolve_clip_in_folder=resolve_clip,
+            cuda_device_index=0,
+        )
+
+        n_frames_expected = 40
+        self.assertEqual(proc.stdin.write.call_count, n_frames_expected)
+
+    @patch("frigate_buffer.services.video_compilation.GPU_LOCK", MagicMock())
+    @patch("frigate_buffer.services.video_compilation.create_decoder")
+    @patch("frigate_buffer.services.video_compilation.subprocess.Popen")
+    @patch("builtins.open", new_callable=mock_open)
+    @patch("frigate_buffer.services.video_compilation.logger")
+    @patch("frigate_buffer.services.video_compilation.crop_utils.crop_around_center")
+    @patch("frigate_buffer.services.video_compilation._get_video_metadata")
+    @patch("frigate_buffer.services.video_compilation.os.path.isfile")
+    def test_run_pynv_compilation_logs_info_once_per_camera_when_fewer_frames(
+        self, mock_isfile, mock_get_metadata, mock_crop_around_center, mock_logger, mock_open_fn, mock_popen, mock_create_decoder
+    ):
+        """When decoder returns fewer frames than requested, log DEBUG and one INFO per camera per event."""
+        try:
+            import torch
+        except ImportError:
+            self.skipTest("torch not available")
+        mock_isfile.return_value = True
+        mock_get_metadata.return_value = (640, 480, 20.0, 2.0)
+        mock_ctx = _fake_create_decoder_context(200, height=480, width=640)
+        if mock_ctx is None:
+            self.skipTest("torch not available")
+        mock_ctx.get_frames = lambda indices: torch.zeros((1, 3, 480, 640), dtype=torch.uint8)
+        mock_cm = MagicMock()
+        mock_cm.__enter__ = MagicMock(return_value=mock_ctx)
+        mock_cm.__exit__ = MagicMock(return_value=None)
+        mock_create_decoder.return_value = mock_cm
+        mock_crop_around_center.side_effect = lambda frame, cx, cy, tw, th: torch.zeros(
+            (1, 3, th, tw), dtype=torch.uint8
+        )
+        proc = MagicMock()
+        proc.stdin = MagicMock()
+        proc.returncode = 0
+        mock_popen.return_value = proc
+        resolve_clip = MagicMock(return_value="/path/doorbell-1.mp4")
+        slices = [
+            {
+                "camera": "doorbell",
+                "start_sec": 0.0,
+                "end_sec": 2.0,
+                "crop_start": (0, 0, 320, 240),
+                "crop_end": (0, 0, 320, 240),
+            },
+        ]
+
+        _run_pynv_compilation(
+            slices=slices,
+            ce_dir="/ce",
+            tmp_output_path="/out.mp4.tmp",
+            target_w=1440,
+            target_h=1080,
+            resolve_clip_in_folder=resolve_clip,
+            cuda_device_index=0,
+        )
+
+        info_calls = [
+            c for c in mock_logger.info.call_args_list
+            if c[0] and "Possible stutter or missing frames" in (str(c[0][0]) if c[0] else "")
+        ]
+        self.assertEqual(len(info_calls), 1, "Expected exactly one INFO per camera per event")
+        self.assertIn("doorbell", str(info_calls[0]))
+        self.assertIn("/path/doorbell-1.mp4", str(info_calls[0]))
+
+    @patch("frigate_buffer.services.video_compilation.GPU_LOCK", MagicMock())
+    @patch("frigate_buffer.services.video_compilation.create_decoder")
+    @patch("frigate_buffer.services.video_compilation.subprocess.Popen")
+    @patch("builtins.open", new_callable=mock_open)
     @patch("frigate_buffer.services.video_compilation.crop_utils.crop_around_center")
     @patch("frigate_buffer.services.video_compilation._get_video_metadata")
     @patch("frigate_buffer.services.video_compilation.os.path.isfile")
@@ -911,7 +1090,7 @@ class TestGenerateCompilationVideo(unittest.TestCase):
     def test_run_pynv_compilation_logs_error_when_all_src_indices_identical(
         self, mock_isfile, mock_logger, mock_open_fn, mock_popen, mock_create_decoder
     ):
-        """When decoder returns same frame index for all times, log at ERROR level (static frame)."""
+        """When decoder returns same frame index for all times, log at DEBUG and INFO once per camera (static frame)."""
         try:
             import torch
         except ImportError:
@@ -956,14 +1135,24 @@ class TestGenerateCompilationVideo(unittest.TestCase):
             cuda_device_index=0,
         )
 
-        error_calls = [
-            c for c in mock_logger.error.call_args_list
+        debug_calls = [
+            c for c in mock_logger.debug.call_args_list
             if c[0] and "static frame" in (str(c[0][0]) if c[0] else "")
         ]
         self.assertGreater(
-            len(error_calls), 0,
-            "Expected at least one ERROR log for static frame (same index for all frames)",
+            len(debug_calls), 0,
+            "Expected at least one DEBUG log for static frame (same index for all frames)",
         )
+        info_calls = [
+            c for c in mock_logger.info.call_args_list
+            if c[0] and "Possible stutter or missing frames" in (str(c[0][0]) if c[0] else "")
+        ]
+        self.assertGreater(
+            len(info_calls), 0,
+            "Expected at least one INFO log for stutter/missing frames (once per camera per event)",
+        )
+        self.assertIn("doorbell", str(info_calls[0]))
+        self.assertIn("doorbell-1.mp4", str(info_calls[0]))
 
     @patch("frigate_buffer.services.video_compilation.GPU_LOCK", MagicMock())
     @patch("frigate_buffer.services.video_compilation.create_decoder")

@@ -25,7 +25,7 @@ def create_bp(orchestrator):
     allowed_cameras = orchestrator.config.get("ALLOWED_CAMERAS", [])
     state_manager = orchestrator.state_manager
     file_manager = orchestrator.file_manager
-    query_service = EventQueryService(storage_path)
+    query_service = orchestrator.query_service
 
     def _filter_events(events: list) -> list:
         f = request.args.get("filter", "unreviewed")

@@ -12,6 +12,8 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
+from frigate_buffer.services.query import EventQueryService
+
 
 class TestWebServerPathSafety(unittest.TestCase):
     """Verify path traversal attempts return 400/404 and do not expose files outside storage.
@@ -29,6 +31,7 @@ class TestWebServerPathSafety(unittest.TestCase):
             _request_count=0,
             state_manager=SimpleNamespace(),
             file_manager=SimpleNamespace(),
+            query_service=EventQueryService(self.storage),
         )
         self.app = create_app(self.orchestrator)
         self.client = self.app.test_client()

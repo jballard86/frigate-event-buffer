@@ -14,6 +14,7 @@ frame access must be serialized by the app-wide GPU_LOCK in video.py.
 from __future__ import annotations
 
 import logging
+import warnings
 from contextlib import contextmanager
 from typing import Any, Iterator
 
@@ -57,7 +58,23 @@ class DecoderContext:
         if not indices:
             # Return empty tensor with 4 dims for BCHW (device from decoder).
             return torch.empty((0, 3, 0, 0), dtype=torch.uint8, device="cuda")
-        raw_frames = self._decoder.get_batch_frames_by_index(indices)
+        # PyNvVideoCodec emits UserWarning when duplicate indices are passed (e.g. stutter in source).
+        # Re-log at DEBUG and suppress default WARNING so logs stay clean at INFO.
+        with warnings.catch_warnings(record=True):
+            warnings.simplefilter("always", UserWarning)
+            old_showwarning = warnings.showwarning
+
+            def _showwarning(message, category, filename, lineno, file=None, line=None):
+                if category is UserWarning and "Duplicates" in str(message):
+                    logger.debug("PyNvVideoCodec: %s", message)
+                    return
+                old_showwarning(message, category, filename, lineno, file, line)
+
+            warnings.showwarning = _showwarning
+            try:
+                raw_frames = self._decoder.get_batch_frames_by_index(indices)
+            finally:
+                warnings.showwarning = old_showwarning
         # Each frame supports __dlpack__; RGBP gives (3, H, W).
         tensors = [torch.from_dlpack(f) for f in raw_frames]
         # Stack to BCHW. Cloning avoids sharing memory with decoder's internal buffer

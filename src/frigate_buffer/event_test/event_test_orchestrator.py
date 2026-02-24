@@ -16,6 +16,7 @@ import threading
 import logging
 from typing import Any, Iterator
 
+from frigate_buffer.logging_utils import StreamCaptureHandler
 from frigate_buffer.services.query import read_timeline_merged
 
 logger = logging.getLogger("frigate-buffer")
@@ -56,7 +57,7 @@ def _yield_error(msg: str) -> dict[str, Any]:
     return {"type": "error", "message": msg}
 
 
-def run_test_pipeline(
+def _run_test_pipeline_inner(
     source_folder_path: str,
     storage_path: str,
     file_manager: Any,
@@ -66,11 +67,8 @@ def run_test_pipeline(
     config: dict[str, Any],
 ) -> Iterator[dict[str, Any]]:
     """
-    Run the post-download pipeline on a copy of the source event. Yields events for SSE:
-    {"type": "log", "message": "..."} | {"type": "done", "test_run_id", "ai_request_url"} | {"type": "error", "message": "..."}.
-
-    Steps: validate source -> allocate testN -> copy source -> delete detection.json ->
-    generate detection sidecar per camera -> build payload (writes frames) -> write system_prompt.txt and ai_request.html.
+    Inner pipeline: same steps as run_test_pipeline. Yields log/done/error events.
+    Used by run_test_pipeline with a capture handler so Python log output is also streamed.
     """
     events_dir = os.path.join(storage_path, "events")
     if not os.path.isdir(events_dir):
@@ -151,6 +149,7 @@ def run_test_pipeline(
     yield _yield_log("Copied source to test folder")
 
     # 4. Timeline (for log)
+    entries: list[Any] = []
     try:
         merged = read_timeline_merged(test_folder_path)
         entries = merged.get("entries") or []
@@ -197,20 +196,16 @@ def run_test_pipeline(
     yield _yield_log("Generating hardware-accelerated compilation video...")
     try:
         from frigate_buffer.services.video_compilation import compile_ce_video
-        prev_level = logging.getLogger("frigate-buffer").level
-        logging.getLogger("frigate-buffer").setLevel(logging.DEBUG)
-        
+
         # We estimate global_end from timeline
         events_end_ts_list = [e.get("data", {}).get("after", {}).get("end_time") for e in entries if e.get("data", {}).get("after", {}).get("end_time")]
         fallback_end = (max(events_end_ts_list) - ce_start_time) if events_end_ts_list and ce_start_time else 60.0
-        
+
         comp_output = compile_ce_video(test_folder_path, fallback_end, config)
         if comp_output:
             yield _yield_log(f"Compilation finished at: {comp_output}")
         else:
             yield _yield_log("Compilation failed (see generic console logs).")
-            
-        logging.getLogger("frigate-buffer").setLevel(prev_level)
     except Exception as e:
         yield _yield_log(f"Compilation hook error: {e}")
 
@@ -277,6 +272,44 @@ def run_test_pipeline(
         return
 
     yield _yield_done(test_run_id, f"{base_url}/ai_request.html")
+
+
+def run_test_pipeline(
+    source_folder_path: str,
+    storage_path: str,
+    file_manager: Any,
+    download_service: Any,
+    video_service: Any,
+    ai_analyzer: Any,
+    config: dict[str, Any],
+) -> Iterator[dict[str, Any]]:
+    """
+    Run the post-download pipeline on a copy of the source event. Yields events for SSE:
+    {"type": "log", "message": "..."} | {"type": "done", "test_run_id", "ai_request_url"} | {"type": "error", "message": "..."}.
+
+    Attaches a logging handler so all non-MQTT Python log output is also streamed to the test run page.
+    """
+    captured_logs: list[str] = []
+    handler = StreamCaptureHandler(captured=captured_logs)
+    frigate_logger = logging.getLogger("frigate-buffer")
+    frigate_logger.addHandler(handler)
+    try:
+        for ev in _run_test_pipeline_inner(
+            source_folder_path,
+            storage_path,
+            file_manager,
+            download_service,
+            video_service,
+            ai_analyzer,
+            config,
+        ):
+            while captured_logs:
+                yield _yield_log(captured_logs.pop(0))
+            yield ev
+        while captured_logs:
+            yield _yield_log(captured_logs.pop(0))
+    finally:
+        frigate_logger.removeHandler(handler)
 
 
 def _html_escape(s: str) -> str:

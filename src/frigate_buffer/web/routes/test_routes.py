@@ -3,6 +3,7 @@
 import json
 import os
 import re
+import time
 
 from flask import Blueprint, Response, jsonify, request
 
@@ -100,6 +101,42 @@ def create_bp(orchestrator):
         result = orchestrator.ai_analyzer.send_to_proxy(system_prompt, frames)
         if result is None:
             return jsonify({"error": "Proxy request failed"}), 502
+
+        # Persist to test event only: timeline entry, summary, metadata (regular events unchanged)
+        title = result.get("title") or ""
+        description = result.get("shortSummary") or result.get("description") or ""
+        scene = result.get("scene") or ""
+        threat_level = int(result.get("potential_threat_level", 0))
+        label = "unknown"
+        start_time = os.path.getmtime(test_path)
+        end_time = time.time()
+        file_manager.append_timeline_entry(
+            test_path,
+            {
+                "source": "test_ai_prompt",
+                "direction": "out",
+                "label": "Send prompt to AI (test)",
+                "data": {
+                    "title": title,
+                    "shortSummary": description,
+                    "scene": scene,
+                    "end_time": end_time,
+                    "start_time": start_time,
+                },
+            },
+        )
+        if title or description:
+            file_manager.write_ce_summary(
+                test_path, test_run, title, description, scene=scene,
+                threat_level=threat_level, label=label, start_time=start_time,
+            )
+            file_manager.write_ce_metadata_json(
+                test_path, test_run, title, description, scene=scene,
+                threat_level=threat_level, label=label, camera="events",
+                start_time=start_time, end_time=end_time,
+            )
+        orchestrator.query_service.evict_cache("test_events")
+
         return jsonify(result)
 
     return bp

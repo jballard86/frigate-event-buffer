@@ -30,15 +30,16 @@
       <p><a id="aiRequestLink" href="" target="_blank" rel="noopener noreferrer">View AI request (frames and prompt)</a></p>
     </div>
   </div>
+<script type="application/json" id="test-run-subdir">{{ subdir|tojson }}</script>
 <script>
 (function() {
-  const subdir = {{ subdir|tojson }};
+  const eventSubdir = JSON.parse(document.getElementById('test-run-subdir').textContent);
   const logArea = document.getElementById('logArea');
   const linkBox = document.getElementById('linkBox');
   const aiRequestLink = document.getElementById('aiRequestLink');
-  if (!subdir) return;
+  if (!eventSubdir) return;
   logArea.textContent = 'Connecting...\n';
-  const url = '/api/test-multi-cam/stream?subdir=' + encodeURIComponent(subdir);
+  const url = '/api/test-multi-cam/stream?subdir=' + encodeURIComponent(eventSubdir);
   const es = new EventSource(url);
   es.onmessage = function(e) {
     try {
