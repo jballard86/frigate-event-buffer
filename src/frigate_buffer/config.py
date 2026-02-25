@@ -73,6 +73,12 @@ CONFIG_SCHEMA = Schema({
         Optional('gemini_cost_entity'): str, # HA entity ID for Gemini cost (e.g. input_number.gemini_daily_cost).
         Optional('gemini_tokens_entity'): str,  # HA entity ID for Gemini token count (e.g. input_number.gemini_total_tokens).
     },
+    # Notifications: optional per-provider config. If absent, legacy behavior (HA MQTT enabled).
+    Optional('notifications'): {
+        Optional('home_assistant'): {
+            Optional('enabled'): bool,  # When False, NotificationDispatcher omits HA MQTT provider; ha block (stats page) unchanged.
+        }
+    },
     # Gemini proxy for main-app clip AI analysis; optional; API key often via env (GEMINI_API_KEY).
     Optional('gemini'): {
         Optional('proxy_url'): str,   # URL of OpenAI-compatible proxy (e.g. for Gemini); no Google fallback if unset.
@@ -171,6 +177,9 @@ def load_config() -> dict:
         'HA_TOKEN': None,
         'HA_GEMINI_COST_ENTITY': 'input_number.gemini_daily_cost',
         'HA_GEMINI_TOKENS_ENTITY': 'input_number.gemini_total_tokens',
+
+        # Notifications: when True, orchestrator adds HomeAssistantMqttProvider; default True (legacy behavior).
+        'NOTIFICATIONS_HOME_ASSISTANT_ENABLED': True,
 
         # Filtering defaults (empty = allow all)
         'ALLOWED_CAMERAS': [],
@@ -300,6 +309,11 @@ def load_config() -> dict:
                     config['HA_TOKEN'] = ha_cfg.get('token') or config['HA_TOKEN']
                     config['HA_GEMINI_COST_ENTITY'] = ha_cfg.get('gemini_cost_entity', config['HA_GEMINI_COST_ENTITY'])
                     config['HA_GEMINI_TOKENS_ENTITY'] = ha_cfg.get('gemini_tokens_entity', config['HA_GEMINI_TOKENS_ENTITY'])
+
+                if 'notifications' in yaml_config:
+                    notif = yaml_config['notifications']
+                    if 'home_assistant' in notif:
+                        config['NOTIFICATIONS_HOME_ASSISTANT_ENABLED'] = bool(notif['home_assistant'].get('enabled', True))
 
                 if 'gemini' in yaml_config:
                     gemini_cfg = yaml_config['gemini']

@@ -95,6 +95,7 @@
   .entry-source.frigate_mqtt { background: #1a4a1a; color: #7dde7d; }
   .entry-source.frigate_api { background: #4a3a1a; color: #deb87d; }
   .entry-source.ha_notification { background: #3a2a4a; color: #c8a8e8; }
+  .entry-source.notification_dispatch { background: #2a3a4a; color: #a8c8e8; }
   .entry-source.test_ai_prompt { background: #2a3a4a; color: #a8c8e8; }
 
   .entry-direction {
@@ -146,7 +147,7 @@
   <div class="timeline-intro">
     <strong>Event:</strong> {{ event_id }} &bull; <strong>Camera:</strong> {{ camera }}
     <br>
-    Data received from Frigate, sent to Frigate API, responses, and data sent to Home Assistant.
+    Data received from Frigate, sent to Frigate API, responses, and notifications (e.g. Home Assistant).
     {% if export_duration_seconds is not none and export_file_list %}
     <br>
     Export took {{ "%.1f"|format(export_duration_seconds) }}s. Files: {{ export_file_list | join(", ") }}.
@@ -162,7 +163,7 @@
       <span class="entry-direction {{ e.get('direction', '') }}">{{ e.get('direction', '') }}</span>
       <span class="entry-label">{{ e.get('label', '') }}</span>
     </div>
-    <div class="entry-data">{{ e.get('data', e) | tojson(indent=2) }}</div>
+    <div class="entry-data">{{ (e.get('data') or {}) | tojson(indent=2) }}</div>
   </div>
   {% endfor %}
   {% else %}

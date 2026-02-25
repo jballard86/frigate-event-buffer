@@ -54,7 +54,7 @@ The project uses a **zero-copy GPU pipeline** for all video decode and frame pro
 
 ## 2. Architectural Pattern
 
-- **Design:** **Orchestrator-centric service layer.** One central coordinator (`StateAwareOrchestrator`) owns MQTT routing, event/CE handling, and scheduling; it delegates to managers (state, file, consolidation, zone filter), services (lifecycle, download, notifier, timeline, AI analyzer, daily reporter, export watchdog), and the Flask app.
+- **Design:** **Orchestrator-centric service layer.** One central coordinator (`StateAwareOrchestrator`) owns MQTT routing, event/CE handling, and scheduling; it delegates to managers (state, file, consolidation, zone filter), services (lifecycle, download, notifications, timeline, AI analyzer, daily reporter, export watchdog), and the Flask app.
 - **Separation of concerns:**
   - **Logic in `src/`:** Core package is `src/frigate_buffer/` (orchestrator, managers, services, config, models). Only `main.py` is the library entry point; run with `python -m frigate_buffer.main`.
   - **Web:** Flask app, templates, and static assets live under `src/frigate_buffer/web/`. The server is created by `create_app(orchestrator)` and closes over the orchestrator; it does not own business logic.
@@ -121,7 +121,14 @@ frigate-event-buffer/
 │       │   ├── video.py
 │       │   ├── lifecycle.py
 │       │   ├── download.py
-│       │   ├── notifier.py
+│       │   ├── notifications/
+│       │   │   ├── __init__.py
+│       │   │   ├── base.py
+│       │   │   ├── dispatcher.py
+│       │   │   ├── ADDING_PROVIDERS.md
+│       │   │   └── providers/
+│       │   │       ├── __init__.py
+│       │   │       └── ha_mqtt.py
 │       │   ├── query.py
 │       │   ├── daily_reporter.py
 │       │   ├── frigate_export_watchdog.py
@@ -178,7 +185,7 @@ frigate-event-buffer/
 │   ├── test_mqtt_auth.py
 │   ├── test_mqtt_handler.py
 │   ├── test_multi_clip_extractor.py
-│   ├── test_notifier.py
+│   ├── test_notifications.py
 │   ├── test_path_helpers.py
 │   ├── test_quick_title_service.py
 │   ├── test_query_service.py
@@ -232,7 +239,7 @@ frigate-event-buffer/
 | Path/Name | Purpose | Dependencies/Interactions |
 |-----------|---------|---------------------------|
 | `src/frigate_buffer/orchestrator.py` | **StateAwareOrchestrator:** Wires **MqttMessageHandler** (callback to MqttClientWrapper), lifecycle callbacks, `on_ce_ready_for_analysis` → ai_analyzer.analyze_multi_clip_ce, `_handle_analysis_result` (per-event review path) / `_handle_ce_analysis_result`, scheduler (cleanup, export watchdog, daily reporter), `create_app(orchestrator)`. Holds **StorageStatsAndHaHelper** (`stats_helper`) and **EventQueryService** (`query_service`, shared so test_routes can evict test_events cache); exposes `get_storage_stats()` and `fetch_ha_state()` for the stats page. Post-refactor ~487 LOC. | Wires MqttMessageHandler, MqttClientWrapper, SmartZoneFilter, TimelineLogger, all managers, lifecycle, ai_analyzer, Flask, ha_storage_stats, quick_title_service, query_service. |
-| `src/frigate_buffer/models.py` | Pydantic/data models: `EventPhase`, `EventState`, `ConsolidatedEvent`, `FrameMetadata`, `NotificationEvent` protocol; helpers for CE IDs and "no concerns". | Used by orchestrator, managers, notifier, query. |
+| `src/frigate_buffer/models.py` | Pydantic/data models: `EventPhase`, `EventState`, `ConsolidatedEvent`, `FrameMetadata`, `NotificationEvent` protocol; helpers for CE IDs and "no concerns". | Used by orchestrator, managers, notifications, query. |
 
 ### Managers
 
@@ -255,13 +262,13 @@ frigate-event-buffer/
 | `src/frigate_buffer/services/video.py` | **VideoService:** **PyNvVideoCodec decode** via **gpu_decoder** (no sanitizer). `generate_detection_sidecar` opens clip with **create_decoder(clip_path, gpu_id)** under **GPU_LOCK**, gets frame count from `len(ctx)` or ffprobe fallback, batches with **BATCH_SIZE=4** via **ctx.get_frames(indices)** (BCHW uint8), float32/255 then **_run_detection_on_batch** (GPU resize to DETECTION_IMGSZ, aspect ratio, 32-multiple; YOLO; bbox scale-back to decoder space); `del` + `torch.cuda.empty_cache()` after each batch. **GPU_LOCK** serializes decoder open and get_frames app-wide (video_compilation, multi_clip_extractor use it). Decoder open/decode failures log **NVDEC_INIT_FAILURE_PREFIX** and return False. `_decoder_frame_count` and `_decoder_reader_ready` support DecoderContext (used by video service). `get_detection_model_path(config)`, `generate_detection_sidecar`, `generate_detection_sidecars_for_cameras` (shared YOLO + lock), `run_detection_on_image`, `generate_gif_from_clip` (subprocess FFmpeg). Single `_get_video_metadata` ffprobe per clip; results cached in _METADATA_CACHE by path. App-level sidecar lock injected by orchestrator. | Used by lifecycle, ai_analyzer, event_test. |
 | `src/frigate_buffer/services/lifecycle.py` | **EventLifecycleService:** event creation, event end (discard short, cancel long). On **new** event (is_new): Phase 1 canned title + `write_metadata_json`, initial notification with live frame via **latest.jpg** proxy (no snapshot download); starts quick-title delay thread (calls `on_quick_title_trigger` = QuickTitleService.run_quick_title). At CE close: export clips, sidecars, then `on_ce_ready_for_analysis`. | Orchestrator delegates; calls download, file_manager, video_service, orchestrator callbacks (`on_ce_ready_for_analysis`, `on_quick_title_trigger`). |
 | `src/frigate_buffer/services/download.py` | **DownloadService:** Frigate snapshot, export/clip download (dynamic clip names), `post_event_description`. | FileManager, lifecycle, orchestrator. |
-| `src/frigate_buffer/services/notifier.py` | **NotificationPublisher:** publish to `frigate/custom/notifications`; `clear_tag` for updates; timeline_callback = TimelineLogger.log_ha. | Orchestrator, lifecycle. |
+| `src/frigate_buffer/services/notifications/` | **Notification system:** **base.py** defines `BaseNotificationProvider`, `NotificationResult`; **dispatcher.py** provides **NotificationDispatcher** (rate limit, queue, `publish_notification`, `send_overflow`, calls `TimelineLogger.log_dispatch_results`); **providers/ha_mqtt.py** provides **HomeAssistantMqttProvider** (HA payload, MQTT publish, clear_tag, `mark_last_event_ended`). Config: `NOTIFICATIONS_HOME_ASSISTANT_ENABLED` (optional `notifications.home_assistant.enabled`). **ADDING_PROVIDERS.md** in this directory is the canonical guide for adding new providers (e.g. Pushover, Discord, Email): provider pattern, contract, mock examples, and UI/timeline rules. | Orchestrator builds dispatcher via _create_notifier(); lifecycle, mqtt_handler, quick_title_service call notifier.publish_notification. |
 | `src/frigate_buffer/services/query.py` | **EventQueryService:** read event data from filesystem with TTL and per-folder caching; `resolve_clip_in_folder`; list events, timeline merge; **`evict_cache(key)`** to invalidate list cache (e.g. `test_events` after Send prompt to AI). **`get_saved_events(camera=None)`** lists events under `saved/` (same dict shape, `saved: True`, file URLs under `/files/saved/...`). **`get_test_events()`** lists only test run events (`events/test1`, `events/test2`, ...), **sorted by folder mtime descending** (newest first); test event **timestamp** = folder content_mtime so player shows correct date; **`_extract_end_timestamp_from_timeline`** returns end_time from Frigate `payload.after.end_time` or from **test-event-only** entries with `source == "test_ai_prompt"` and `data.end_time`. For consolidated events, when `{ce_id}_summary.mp4` exists in the CE root, adds a "Summary video" entry to `hosted_clips` and sets `hosted_clip` to that URL. Excludes non-camera dirs (`NON_CAMERA_DIRS`: ultralytics, yolo_models, daily_reports, daily_reviews, **saved**) from `get_cameras()` and `get_all_events()`. | Flask server (events, stats, player); orchestrator holds shared instance for cache eviction. |
 | `src/frigate_buffer/services/quick_title_service.py` | **QuickTitleService:** quick-title pipeline: fetch Frigate latest.jpg, YOLO detection, crop_utils crop, AI title via GeminiAnalysisService.generate_quick_title, state/metadata/CE update, notify. Used as `on_quick_title_trigger` by lifecycle. | Orchestrator instantiates when AI analyzer and QUICK_TITLE_ENABLED; lifecycle calls run_quick_title. |
 | `src/frigate_buffer/services/daily_reporter.py` | **DailyReporterService:** scheduled; aggregate analysis_result (or daily_reports aggregate JSONL), report prompt, send_text_prompt, write `daily_reports/YYYY-MM-DD_report.md`; `cleanup_old_reports(retention_days)`. Single source for daily report UI. | Scheduled by orchestrator; web server reads markdown from daily_reports/. |
 | `src/frigate_buffer/services/frigate_export_watchdog.py` | Parse timeline for export_id, verify clip exists, DELETE Frigate `/api/export/{id}`; 404/422 = already removed. | Scheduled by orchestrator. |
 | `src/frigate_buffer/services/ha_storage_stats.py` | **StorageStatsAndHaHelper:** storage-stats cache (update from FileManager.compute_storage_stats, get with 30 min TTL) and `fetch_ha_state(ha_url, ha_token, entity_id)` for Home Assistant REST API. Used by orchestrator (scheduler) and Flask stats route. | Orchestrator creates it; server calls `orchestrator.get_storage_stats()` and `orchestrator.fetch_ha_state()`. |
-| `src/frigate_buffer/services/timeline.py` | **TimelineLogger:** append HA/MQTT/Frigate API entries to `notification_timeline.json` via FileManager. | Orchestrator, notifier (timeline_callback). |
+| `src/frigate_buffer/services/timeline.py` | **TimelineLogger:** append HA/MQTT/Frigate API and **notification_dispatch** entries to `notification_timeline.json` via FileManager. **log_dispatch_results(event, status, results)** used by NotificationDispatcher. | Orchestrator, notifications dispatcher. |
 | `src/frigate_buffer/services/mqtt_handler.py` | **MqttMessageHandler:** parses MQTT JSON, routes by topic (frigate/events, tracked_object_update, frigate/reviews); implements _handle_frigate_event, _handle_tracked_update, _handle_review, _fetch_and_store_review_summary. When **should_suppress_review_debug_logs()** is True (TEST stream active), skips three DEBUG logs: "Processing review:", "Review for … title=N/A", "Skipping finalization for … no GenAI data yet". | Orchestrator builds handler and passes handler.on_message to MqttClientWrapper. |
 | `src/frigate_buffer/services/mqtt_client.py` | **MqttClientWrapper:** connect, subscribe, message callback (MqttMessageHandler.on_message). TLS/SSL configured automatically when port is 8883 (cert required, TLS 1.2). | Orchestrator wires handler.on_message as callback. |
 | `src/frigate_buffer/services/crop_utils.py` | Crop/resize and motion helpers: accept **PyTorch tensor BCHW only** (GPU pipeline). `center_crop`, `crop_around_center`, **`crop_around_center_to_size`** (crop at variable size then bicubic resize to fixed output; used by video_compilation for dynamic zoom), `full_frame_resize_to_target`, `crop_around_detections_with_padding`, `motion_crop` use tensor slicing and `torch.nn.functional.interpolate`; motion_crop casts to int16 before subtraction to avoid uint8 underflow; only the 1-bit mask is transferred to CPU for `cv2.findContours`. `draw_timestamp_overlay` accepts tensor or numpy, converts RGB→BGR at OpenCV boundary, returns numpy HWC BGR. | ai_analyzer, quick_title_service, multi_clip_extractor, video_compilation. |
@@ -294,7 +301,7 @@ frigate-event-buffer/
 | Path/Name | Purpose | Dependencies/Interactions |
 |-----------|---------|---------------------------|
 | `tests/conftest.py` | Pytest fixtures. | All tests. |
-| `tests/test_*.py` | Unit tests for config, lifecycle, ai_analyzer (including proxy retry and frame analysis writing), ai_analyzer_integration (persistence, orchestrator handoff, error handling), video, video_compilation, multi_clip_extractor, gpu_decoder, query (including caching and read_timeline_merged), notifier (clear_tag and NotificationEvent compliance), download, file manager (path validation, cleanup, max event length, storage stats, timeline append), crop_utils, consolidation, daily_reporter, frigate_export_watchdog, ha_storage_stats, timeline, mqtt, state, zone_filter, etc. Tensor mocks in test_ai_analyzer and test_ai_analyzer_integration for write_ai_frame_analysis_multi_cam and analyze_multi_clip_ce with tensor ExtractedFrame; test_multi_clip_extractor for sequential get_frames. | Run with `pytest tests/`; `pythonpath = ["src"]`. Benchmark and verify scripts live in `scripts/`. |
+| `tests/test_*.py` | Unit tests for config, lifecycle, ai_analyzer (including proxy retry and frame analysis writing), ai_analyzer_integration (persistence, orchestrator handoff, error handling), video, video_compilation, multi_clip_extractor, gpu_decoder, query (including caching and read_timeline_merged), **notifications** (dispatcher, HA provider, event compliance), download, file manager (path validation, cleanup, max event length, storage stats, timeline append), crop_utils, consolidation, daily_reporter, frigate_export_watchdog, ha_storage_stats, timeline, mqtt, state, zone_filter, etc. Tensor mocks in test_ai_analyzer and test_ai_analyzer_integration for write_ai_frame_analysis_multi_cam and analyze_multi_clip_ce with tensor ExtractedFrame; test_multi_clip_extractor for sequential get_frames. | Run with `pytest tests/`; `pythonpath = ["src"]`. Benchmark and verify scripts live in `scripts/`. |
 
 ---
 
@@ -312,7 +319,7 @@ frigate-event-buffer/
 8. **Web:** Flask (create_app registers blueprints) uses **EventQueryService** to list events, stats, timeline; `resolve_clip_in_folder` for dynamic clip URLs; path safety via path_helpers (web) and FileManager. Daily report UI reads markdown from `daily_reports/`; POST `/api/daily-review/generate` triggers on-demand report generation.
 9. **Scheduled:** Cleanup (retention), export watchdog (DELETE completed exports), daily reporter (aggregate + report prompt → proxy → markdown; then `cleanup_old_reports`). Config: **quick_title_delay_seconds** (e.g. 4), **quick_title_enabled** (when true and Gemini enabled, run quick-title pipeline).
 
-**Files touched in primary flow:** `orchestrator.py`, `services/mqtt_handler.py`, `services/lifecycle.py`, `services/quick_title_service.py`, `services/ai_analyzer.py`, `services/mqtt_client.py`, `managers/state.py`, `managers/file.py`, `managers/consolidation.py`, `services/notifier.py`, `services/download.py`, `services/query.py`, `web/server.py`.
+**Files touched in primary flow:** `orchestrator.py`, `services/mqtt_handler.py`, `services/lifecycle.py`, `services/quick_title_service.py`, `services/ai_analyzer.py`, `services/mqtt_client.py`, `managers/state.py`, `managers/file.py`, `managers/consolidation.py`, `services/notifications/` (dispatcher, providers/ha_mqtt), `services/download.py`, `services/query.py`, `services/timeline.py`, `web/server.py`.
 
 ---
 
@@ -333,6 +340,7 @@ frigate-event-buffer/
 | New **utility function** (generic, no I/O) | `src/frigate_buffer/services/` (e.g. `crop_utils.py`) or a new module under `services/` if it fits a clear domain. |
 | New **API route** (REST) | Add in the appropriate blueprint under `src/frigate_buffer/web/routes/` (e.g. api.py or daily_review.py); use EventQueryService or FileManager for data; never put business logic in route handlers beyond delegation. |
 | New **config key** | Add to **CONFIG_SCHEMA** in `src/frigate_buffer/config.py` first; then add flat key in config merge; use in code via `config.get('KEY', default)`. |
+| New **notification provider** | Add provider under `src/frigate_buffer/services/notifications/providers/`; implement `BaseNotificationProvider`; register in config and `orchestrator._create_notifier()`. **See `services/notifications/ADDING_PROVIDERS.md`** for the provider contract, flow diagram, and mock examples. |
 | New **standalone script** | `scripts/` at repo root. |
 | **Tests** | `tests/test_<module_or_feature>.py`; mirror structure under `src/frigate_buffer/` where it helps. |
 

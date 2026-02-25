@@ -40,6 +40,35 @@ class TimelineLogger:
                 "data": payload
             })
 
+    def log_dispatch_results(
+        self,
+        event: Optional[Any],
+        status: str,
+        results: list[dict],
+    ) -> None:
+        """Log generic notification dispatch result (who was notified and when).
+
+        Used by NotificationDispatcher. Appends one timeline entry with source
+        'notification_dispatch'. data is generic: event_phase + results list.
+        Does not require HA-shaped payload; old ha_notification entries remain valid.
+        """
+        folder = self.folder_for_event(event) if event else None
+        if not folder and event and hasattr(event, "folder_path"):
+            folder = getattr(event, "folder_path", None)
+        if not folder:
+            return
+        # Human-readable summary of which providers succeeded
+        parts = [f"{r.get('provider', '?')}: {r.get('status', '?')}" for r in results if isinstance(r, dict)]
+        label = f"Notification: {status}"
+        if parts:
+            label += " — " + "; ".join(parts)
+        self._file_manager.append_timeline_entry(folder, {
+            "source": "notification_dispatch",
+            "direction": "out",
+            "label": label,
+            "data": {"event_phase": status, "results": results},
+        })
+
     def log_mqtt(self, folder_path: str, topic: str, payload: dict, label: str) -> None:
         """Log MQTT payload from Frigate to event timeline."""
         if folder_path:

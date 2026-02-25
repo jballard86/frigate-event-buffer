@@ -129,5 +129,33 @@ class TestTimelineLogger(unittest.TestCase):
         self.logger.log_frigate_api(None, "in", "label", {})
         self.mock_file_manager.append_timeline_entry.assert_not_called()
 
+    def test_log_dispatch_results_success(self):
+        """Test log_dispatch_results appends generic notification_dispatch entry."""
+        mock_event = MagicMock()
+        mock_event.event_id = "ev_123"
+        mock_event.folder_path = "/path/to/event"
+        self.mock_consolidated_manager.get_by_frigate_event.return_value = None
+
+        results = [
+            {"provider": "HA_MQTT", "status": "success"},
+            {"provider": "OTHER", "status": "failure", "message": "timeout"},
+        ]
+        self.logger.log_dispatch_results(mock_event, "finalized", results)
+
+        self.mock_file_manager.append_timeline_entry.assert_called_once_with(
+            "/path/to/event",
+            {
+                "source": "notification_dispatch",
+                "direction": "out",
+                "label": "Notification: finalized — HA_MQTT: success; OTHER: failure",
+                "data": {"event_phase": "finalized", "results": results},
+            },
+        )
+
+    def test_log_dispatch_results_no_folder(self):
+        """Test log_dispatch_results does nothing when event has no folder."""
+        self.logger.log_dispatch_results(None, "finalized", [])
+        self.mock_file_manager.append_timeline_entry.assert_not_called()
+
 if __name__ == '__main__':
     unittest.main()

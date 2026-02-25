@@ -173,7 +173,7 @@ class TestIntegrationStep6OrchestratorHandoff(unittest.TestCase):
             "GEMINI": {"enabled": False},
         }
         with patch("frigate_buffer.orchestrator.MqttClientWrapper"), \
-             patch("frigate_buffer.orchestrator.NotificationPublisher"), \
+             patch("frigate_buffer.orchestrator.NotificationDispatcher"), \
              patch("frigate_buffer.orchestrator.EventLifecycleService"):
             orch = StateAwareOrchestrator(config)
         orch.flask_app = MagicMock()

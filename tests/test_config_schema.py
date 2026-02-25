@@ -34,6 +34,72 @@ class TestConfigSchema(unittest.TestCase):
     @patch('builtins.open', new_callable=mock_open)
     @patch('os.path.exists')
     @patch('frigate_buffer.config.yaml.safe_load')
+    def test_notifications_block_optional_legacy_default(self, mock_yaml_load, mock_exists, mock_file):
+        """When notifications block is absent, NOTIFICATIONS_HOME_ASSISTANT_ENABLED is True (legacy behavior)."""
+        valid_yaml = {
+            'cameras': [{'name': 'cam1'}],
+            'network': {
+                'mqtt_broker': 'localhost',
+                'frigate_url': 'http://frigate',
+                'buffer_ip': 'localhost',
+                'storage_path': '/tmp',
+            },
+        }
+        mock_exists.return_value = True
+        mock_yaml_load.return_value = valid_yaml
+
+        config = load_config()
+        self.assertTrue(config['NOTIFICATIONS_HOME_ASSISTANT_ENABLED'])
+
+    @patch('builtins.open', new_callable=mock_open)
+    @patch('os.path.exists')
+    @patch('frigate_buffer.config.yaml.safe_load')
+    def test_notifications_home_assistant_enabled_false(self, mock_yaml_load, mock_exists, mock_file):
+        """When notifications.home_assistant.enabled is False, NOTIFICATIONS_HOME_ASSISTANT_ENABLED is False."""
+        valid_yaml = {
+            'cameras': [{'name': 'cam1'}],
+            'network': {
+                'mqtt_broker': 'localhost',
+                'frigate_url': 'http://frigate',
+                'buffer_ip': 'localhost',
+                'storage_path': '/tmp',
+            },
+            'notifications': {
+                'home_assistant': {'enabled': False},
+            },
+        }
+        mock_exists.return_value = True
+        mock_yaml_load.return_value = valid_yaml
+
+        config = load_config()
+        self.assertFalse(config['NOTIFICATIONS_HOME_ASSISTANT_ENABLED'])
+
+    @patch('builtins.open', new_callable=mock_open)
+    @patch('os.path.exists')
+    @patch('frigate_buffer.config.yaml.safe_load')
+    def test_notifications_home_assistant_enabled_default_true(self, mock_yaml_load, mock_exists, mock_file):
+        """When notifications.home_assistant is present but enabled omitted, default is True."""
+        valid_yaml = {
+            'cameras': [{'name': 'cam1'}],
+            'network': {
+                'mqtt_broker': 'localhost',
+                'frigate_url': 'http://frigate',
+                'buffer_ip': 'localhost',
+                'storage_path': '/tmp',
+            },
+            'notifications': {
+                'home_assistant': {},
+            },
+        }
+        mock_exists.return_value = True
+        mock_yaml_load.return_value = valid_yaml
+
+        config = load_config()
+        self.assertTrue(config['NOTIFICATIONS_HOME_ASSISTANT_ENABLED'])
+
+    @patch('builtins.open', new_callable=mock_open)
+    @patch('os.path.exists')
+    @patch('frigate_buffer.config.yaml.safe_load')
     def test_minimum_event_seconds_config(self, mock_yaml_load, mock_exists, mock_file):
         """minimum_event_seconds from settings is merged into config as MINIMUM_EVENT_SECONDS."""
         valid_yaml = {

@@ -23,7 +23,10 @@ from frigate_buffer.services.download import (
 )
 from frigate_buffer.managers.consolidation import ConsolidatedEventManager
 from frigate_buffer.managers.zone_filter import SmartZoneFilter
-from frigate_buffer.services.notifier import NotificationPublisher
+from frigate_buffer.services.notifications import (
+    NotificationDispatcher,
+    HomeAssistantMqttProvider,
+)
 from frigate_buffer.services.timeline import TimelineLogger
 from frigate_buffer.services.mqtt_client import MqttClientWrapper
 from frigate_buffer.services.lifecycle import EventLifecycleService
@@ -82,14 +85,7 @@ class StateAwareOrchestrator:
             on_message_callback=lambda c, u, m: self._mqtt_handler.on_message(c, u, m) if getattr(self, '_mqtt_handler', None) else None,
         )
 
-        self.notifier = NotificationPublisher(
-            self.mqtt_wrapper.client,
-            config['BUFFER_IP'],
-            config['FLASK_PORT'],
-            config.get('FRIGATE_URL', ''),
-            storage_path=config['STORAGE_PATH']
-        )
-        self.notifier.timeline_callback = self.timeline_logger.log_ha
+        self.notifier = self._create_notifier()
 
         self.zone_filter = SmartZoneFilter(config)
 
@@ -192,6 +188,24 @@ class StateAwareOrchestrator:
         self.stats_helper = StorageStatsAndHaHelper(config)
 
         # Last cleanup tracking delegated to lifecycle service via properties
+
+    def _create_notifier(self) -> NotificationDispatcher:
+        """Build notification dispatcher with providers enabled by config."""
+        providers: list = []
+        if self.config.get("NOTIFICATIONS_HOME_ASSISTANT_ENABLED", True):
+            providers.append(
+                HomeAssistantMqttProvider(
+                    self.mqtt_wrapper.client,
+                    self.config["BUFFER_IP"],
+                    self.config["FLASK_PORT"],
+                    self.config.get("FRIGATE_URL", ""),
+                    storage_path=self.config["STORAGE_PATH"],
+                )
+            )
+        return NotificationDispatcher(
+            providers=providers,
+            timeline_logger=self.timeline_logger,
+        )
 
     @property
     def _last_cleanup_time(self):
