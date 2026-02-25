@@ -187,13 +187,8 @@ class EventLifecycleService:
                     activity_time=time.time(),
                     end_time=event.end_time or event.created_at
                 )
-                # Single-camera CE: use configured delay (0 = close as soon as event ends).
-                delay = None
-                if len(ce.cameras) == 1:
-                    delay = self.config.get('SINGLE_CAMERA_CE_CLOSE_DELAY_SECONDS', 0)
-                    if delay is not None:
-                        delay = max(0, int(delay))
-                self.consolidated_manager.schedule_close_timer(ce.consolidated_id, delay_seconds=delay)
+                # All CEs use event_gap_seconds for close (no separate single-camera path).
+                self.consolidated_manager.schedule_close_timer(ce.consolidated_id, delay_seconds=None)
                 self.file_manager.write_summary(self.timeline_logger.folder_for_event(event) or event.folder_path, event)
 
                 self.run_cleanup()

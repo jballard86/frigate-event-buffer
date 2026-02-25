@@ -1,4 +1,4 @@
-"""Test blueprint: /api/test-multi-cam/stream and /api/test-multi-cam/send."""
+"""Test blueprint: /api/test-multi-cam/prepare, stream, video-request, send."""
 
 import json
 import os
@@ -7,9 +7,23 @@ import time
 
 from flask import Blueprint, Response, jsonify, request
 
-from frigate_buffer.event_test.event_test_orchestrator import run_test_pipeline
+from frigate_buffer.event_test.event_test_orchestrator import (
+    get_export_time_range_from_folder,
+    prepare_test_folder,
+    resolve_canonical_camera_name,
+    run_test_pipeline,
+    run_test_pipeline_from_folder,
+)
 from frigate_buffer.logging_utils import set_suppress_review_debug_logs
 from frigate_buffer.web.path_helpers import resolve_under_storage
+
+
+def _resolve_source_path(storage_path: str, subdir: str) -> str | None:
+    """Resolve subdir to absolute source path (supports saved/events/ce_id or events/ce_id)."""
+    if "/" in subdir:
+        path_parts = subdir.split("/")
+        return resolve_under_storage(storage_path, *path_parts)
+    return resolve_under_storage(storage_path, "events", subdir)
 
 
 def create_bp(orchestrator):
@@ -17,43 +31,150 @@ def create_bp(orchestrator):
     bp = Blueprint("test", __name__, url_prefix="/api/test-multi-cam")
     storage_path = orchestrator.config["STORAGE_PATH"]
     file_manager = orchestrator.file_manager
+    config = orchestrator.config
+    download_service = orchestrator.download_service
 
-    @bp.route("/stream")
-    def test_multi_cam_stream():
+    @bp.route("/prepare")
+    def test_multi_cam_prepare():
+        """Copy source event into events/testN (copy only). Returns test_run_id or error."""
         subdir = request.args.get("subdir", "").strip()
         if not subdir:
             return jsonify({"error": "Missing subdir"}), 400
-        # Support source under saved/ (e.g. subdir=saved/events/ce_id) for TEST from saved events.
-        if "/" in subdir:
-            path_parts = subdir.split("/")
-            source_path = resolve_under_storage(storage_path, *path_parts)
-        else:
-            source_path = resolve_under_storage(storage_path, "events", subdir)
+        source_path = _resolve_source_path(storage_path, subdir)
         if source_path is None or not os.path.isdir(source_path):
             return jsonify({"error": "Invalid or missing event folder"}), 404
         try:
-            with os.scandir(source_path) as it:
-                has_subdir = any(e.is_dir() for e in it)
-            if not has_subdir:
-                return jsonify({"error": "Event folder has no camera subdirs"}), 400
-        except OSError:
-            return jsonify({"error": "Cannot read event folder"}), 400
+            test_run_id, _ = prepare_test_folder(source_path, storage_path, file_manager)
+            return jsonify({"test_run_id": test_run_id})
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 400
+
+    @bp.route("/stream")
+    def test_multi_cam_stream():
+        test_run = request.args.get("test_run", "").strip()
+        subdir = request.args.get("subdir", "").strip()
+        if test_run:
+            if not re.match(r"^test\d+$", test_run):
+                return jsonify({"error": "Invalid test_run"}), 400
+            test_path = resolve_under_storage(storage_path, "events", test_run)
+            if test_path is None or not os.path.isdir(test_path):
+                return jsonify({"error": "Test run folder not found"}), 404
+            source_path = test_path
+            run_from_folder = True
+        elif subdir:
+            source_path = _resolve_source_path(storage_path, subdir)
+            if source_path is None or not os.path.isdir(source_path):
+                return jsonify({"error": "Invalid or missing event folder"}), 404
+            try:
+                with os.scandir(source_path) as it:
+                    if not any(e.is_dir() for e in it):
+                        return jsonify({"error": "Event folder has no camera subdirs"}), 400
+            except OSError:
+                return jsonify({"error": "Cannot read event folder"}), 400
+            run_from_folder = False
+        else:
+            return jsonify({"error": "Missing subdir or test_run"}), 400
 
         def generate():
             set_suppress_review_debug_logs(True)
             try:
-                for ev in run_test_pipeline(
-                    source_path,
-                    storage_path,
-                    file_manager,
-                    orchestrator.download_service,
-                    orchestrator.video_service,
-                    orchestrator.ai_analyzer,
-                    orchestrator.config,
-                ):
+                if run_from_folder:
+                    stream = run_test_pipeline_from_folder(
+                        source_path,
+                        file_manager,
+                        orchestrator.video_service,
+                        orchestrator.ai_analyzer,
+                        config,
+                    )
+                else:
+                    stream = run_test_pipeline(
+                        source_path,
+                        storage_path,
+                        file_manager,
+                        download_service,
+                        orchestrator.video_service,
+                        orchestrator.ai_analyzer,
+                        config,
+                    )
+                for ev in stream:
                     yield f"data: {json.dumps(ev)}\n\n"
                     if ev.get("type") in ("done", "error"):
                         break
+            finally:
+                set_suppress_review_debug_logs(False)
+
+        return Response(
+            generate(),
+            mimetype="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+
+    @bp.route("/video-request")
+    def test_multi_cam_video_request():
+        """Delete clips in test folder and request new ones via Frigate Export API. Streams SSE."""
+        test_run = request.args.get("test_run", "").strip()
+        if not test_run or not re.match(r"^test\d+$", test_run):
+            return jsonify({"error": "Invalid test_run"}), 400
+        test_path = resolve_under_storage(storage_path, "events", test_run)
+        if test_path is None or not os.path.isdir(test_path):
+            return jsonify({"error": "Test run folder not found"}), 404
+        if not config.get("FRIGATE_URL"):
+            return jsonify({"error": "FRIGATE_URL not configured"}), 503
+        export_before = config.get("EXPORT_BUFFER_BEFORE", 5)
+        export_after = config.get("EXPORT_BUFFER_AFTER", 30)
+
+        try:
+            global_start, global_end = get_export_time_range_from_folder(test_path, config)
+        except Exception as e:
+            return jsonify({"error": f"Could not get export time range: {e}"}), 400
+
+        try:
+            with os.scandir(test_path) as it:
+                all_subdirs = [e.name for e in it if e.is_dir() and not e.name.startswith(".")]
+        except OSError:
+            return jsonify({"error": "Cannot read test folder"}), 400
+        camera_subdirs = list(all_subdirs)
+
+        def generate():
+            set_suppress_review_debug_logs(True)
+            try:
+                for cam in camera_subdirs:
+                    cam_folder = os.path.join(test_path, cam)
+                    if not os.path.isdir(cam_folder):
+                        continue
+                    for name in os.listdir(cam_folder):
+                        if name.lower().endswith(".mp4"):
+                            try:
+                                os.remove(os.path.join(cam_folder, name))
+                                yield f"data: {json.dumps({'type': 'log', 'message': f'Deleted clip for {cam}'})}\n\n"
+                            except OSError:
+                                pass
+                    sidecar = os.path.join(cam_folder, "detection.json")
+                    if os.path.isfile(sidecar):
+                        try:
+                            os.remove(sidecar)
+                        except OSError:
+                            pass
+                rep_id = test_run
+                for cam in camera_subdirs:
+                    cam_folder = os.path.join(test_path, cam)
+                    canonical_camera = resolve_canonical_camera_name(cam, config, file_manager)
+                    yield f"data: {json.dumps({'type': 'log', 'message': f'Clip export for {cam} (video request)...'})}\n\n"
+                    result = download_service.export_and_download_clip(
+                        rep_id,
+                        cam_folder,
+                        canonical_camera,
+                        global_start,
+                        global_end,
+                        export_before,
+                        export_after,
+                    )
+                    ok = result.get("success", False)
+                    msg = f"Clip export response for {cam}: {'success' if ok else 'failed'}"
+                    yield f"data: {json.dumps({'type': 'log', 'message': msg})}\n\n"
+                yield f"data: {json.dumps({'type': 'done'})}\n\n"
+            except Exception as e:
+                yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
             finally:
                 set_suppress_review_debug_logs(False)
 

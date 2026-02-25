@@ -4,3 +4,20 @@
         -make batch size configurable in config.yaml
 
   - pushover notification option
+
+  - if event starts with a car, have yolo track the car for that portion of the ai and video sumary, 
+    but priortize people once they are in Frame
+
+  - Determine if a person is the same individual across different camera views without making 
+    assumptions
+    - Cross-Camera Tracking   
+        - Detection & Local Tracking:
+            - Model: YOLO26m (for high-speed inference on 4060).
+            - Tracker: StrongSORT or DeepOCSORT (for temporal consistency).
+        - Re-Identification (Re-ID):
+            - Encoder: OSNet or FastReID to generate 512/1024-dimensional embeddings.
+            - Gallery: Centralized embedding database with a 5-minute rolling expiration.
+        - Cross-Camera Logic:
+            - Verification: Cosine similarity matching across camera streams.
+            - Topology Constraints: Filter matches based on travel time and camera adjacency.
+

@@ -400,14 +400,12 @@ class GeminiAnalysisService:
         """
         if not os.path.isdir(ce_folder_path):
             return (None, "CE folder not found")
-        max_frames_sec = float(self.config.get("MAX_MULTI_CAM_FRAMES_SEC", 1))
-        max_frames_min = int(self.config.get("MAX_MULTI_CAM_FRAMES_MIN", 60))
         if log_callback is None:
             logger.info("Creating frame timeline")
         frames_raw = extract_target_centric_frames(
             ce_folder_path,
-            max_frames_sec=max_frames_sec,
-            max_frames_min=max_frames_min,
+            max_frames_sec=self.max_frames_sec,
+            max_frames_min=self.max_frames_min,
             crop_width=self.crop_width,
             crop_height=self.crop_height,
             tracking_target_frame_percent=int(self.config.get("TRACKING_TARGET_FRAME_PERCENT", 40)),

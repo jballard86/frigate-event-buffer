@@ -91,6 +91,24 @@ class TestDrawTimestampOverlay(unittest.TestCase):
         self.assertEqual(result.shape, (100, 100, 3))
 
 
+class TestCropAroundCenterToSize(unittest.TestCase):
+    """Tests for crop_around_center_to_size (variable crop, fixed output; used by video_compilation)."""
+
+    def test_crop_around_center_to_size_returns_bchw_output_shape(self):
+        if not _TORCH_AVAILABLE:
+            self.skipTest("torch not available")
+        frame = _bchw_tensor(480, 640)
+        result = crop_utils.crop_around_center_to_size(
+            frame, 320, 240, 320, 240, 1440, 1080
+        )
+        self.assertEqual(result.shape, (1, 3, 1080, 1440))
+
+    def test_crop_around_center_to_size_rejects_numpy(self):
+        frame = np.zeros((100, 100, 3), dtype=np.uint8)
+        with self.assertRaises(TypeError):
+            crop_utils.crop_around_center_to_size(frame, 50, 50, 50, 50, 100, 100)
+
+
 class TestCenterCrop(unittest.TestCase):
     """Tests for center_crop with tensor BCHW."""
 

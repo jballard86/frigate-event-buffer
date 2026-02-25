@@ -16,6 +16,7 @@ from frigate_buffer.services.video_compilation import (
     convert_timeline_to_segments,
     generate_compilation_video,
     smooth_crop_centers_ema,
+    smooth_zoom_ema,
 )
 
 
@@ -273,6 +274,51 @@ class TestCalculateCropAtTime(unittest.TestCase):
         self.assertEqual(x, expected_x)
         self.assertEqual(y, expected_y)
 
+    def test_zoom_uses_content_area_when_tracking_target_frame_percent_set(self):
+        """When tracking_target_frame_percent > 0 and detections exist, crop (w,h) is derived from content area and target percent."""
+        sidecar = {
+            "entries": [
+                {
+                    "timestamp_sec": 1.0,
+                    "detections": [
+                        {"bbox": [100, 100, 200, 200], "area": 10000.0}
+                    ]
+                }
+            ]
+        }
+        x, y, w, h = calculate_crop_at_time(
+            sidecar, 1.0, 1920, 1080, 1440, 1080,
+            tracking_target_frame_percent=40,
+        )
+        # Content = bbox + 10% padding; desired crop area = content / 0.4; aspect 1440/1080.
+        # Crop (w,h) should be clamped to [0.4*1920, 1920] and [0.4*1080, 1080], and even.
+        self.assertGreater(w, 0)
+        self.assertLessEqual(w, 1920)
+        self.assertGreater(h, 0)
+        self.assertLessEqual(h, 1080)
+        self.assertEqual(w % 2, 0)
+        self.assertEqual(h % 2, 0)
+        self.assertGreaterEqual(w, int(1920 * 0.4))
+        self.assertGreaterEqual(h, int(1080 * 0.4))
+        self.assertGreaterEqual(x, 0)
+        self.assertLessEqual(x + w, 1920)
+        self.assertGreaterEqual(y, 0)
+        self.assertLessEqual(y + h, 1080)
+
+    def test_no_zoom_when_tracking_target_frame_percent_zero(self):
+        """When tracking_target_frame_percent=0, crop size is fixed target_w x target_h."""
+        sidecar = {
+            "entries": [
+                {"timestamp_sec": 1.0, "detections": [{"bbox": [100, 100, 200, 200], "area": 10000.0}]}
+            ]
+        }
+        x, y, w, h = calculate_crop_at_time(
+            sidecar, 1.0, 1920, 1080, 1440, 1080,
+            tracking_target_frame_percent=0,
+        )
+        self.assertEqual(w, 1440)
+        self.assertEqual(h, 1080)
+
 
 class TestSmoothCropCentersEma(unittest.TestCase):
     """Tests for smooth_crop_centers_ema function."""
@@ -298,6 +344,43 @@ class TestSmoothCropCentersEma(unittest.TestCase):
         xs0, ys0, _, _ = slices[0]["crop_start"]
         xs1, ys1, _, _ = slices[1]["crop_start"]
         self.assertLess(xs1, 100)
+
+
+class TestSmoothZoomEma(unittest.TestCase):
+    """Tests for smooth_zoom_ema function."""
+
+    def test_alpha_zero_or_one_does_not_change_zoom(self):
+        """Alpha 0 or 1 leaves zoom dimensions unchanged (or no-op)."""
+        slices = [
+            {"crop_start": (0, 0, 800, 450), "crop_end": (0, 0, 800, 450), "native_width": 1920, "native_height": 1080},
+        ]
+        orig_w, orig_h = slices[0]["crop_start"][2], slices[0]["crop_start"][3]
+        smooth_zoom_ema(slices, 0.0, 1440, 1080)
+        self.assertEqual(slices[0]["crop_start"][2], orig_w)
+        self.assertEqual(slices[0]["crop_start"][3], orig_h)
+        smooth_zoom_ema(slices, 1.0, 1440, 1080)
+        self.assertEqual(slices[0]["crop_start"][2], orig_w)
+        self.assertEqual(slices[0]["crop_start"][3], orig_h)
+
+    def test_smooth_zoom_ema_updates_crop_size_in_place(self):
+        """smooth_zoom_ema updates (w,h) on each slice; dimensions stay even and in bounds."""
+        slices = [
+            {"crop_start": (100, 50, 960, 540), "crop_end": (120, 60, 960, 540), "native_width": 1920, "native_height": 1080},
+            {"crop_start": (200, 100, 800, 450), "crop_end": (220, 110, 800, 450), "native_width": 1920, "native_height": 1080},
+        ]
+        smooth_zoom_ema(slices, 0.3, 1440, 1080)
+        for sl in slices:
+            xs, ys, w, h = sl["crop_start"]
+            self.assertGreater(w, 0)
+            self.assertLessEqual(w, 1920)
+            self.assertGreater(h, 0)
+            self.assertLessEqual(h, 1080)
+            self.assertEqual(w % 2, 0)
+            self.assertEqual(h % 2, 0)
+            self.assertGreaterEqual(xs, 0)
+            self.assertLessEqual(xs + w, 1920)
+            self.assertGreaterEqual(ys, 0)
+            self.assertLessEqual(ys + h, 1080)
 
 
 class TestCalculateSegmentCrop(unittest.TestCase):
@@ -892,11 +975,11 @@ class TestGenerateCompilationVideo(unittest.TestCase):
     @patch("frigate_buffer.services.video_compilation.create_decoder")
     @patch("frigate_buffer.services.video_compilation.subprocess.Popen")
     @patch("builtins.open", new_callable=mock_open)
-    @patch("frigate_buffer.services.video_compilation.crop_utils.crop_around_center")
+    @patch("frigate_buffer.services.video_compilation.crop_utils.crop_around_center_to_size")
     @patch("frigate_buffer.services.video_compilation._get_video_metadata")
     @patch("frigate_buffer.services.video_compilation.os.path.isfile")
     def test_run_pynv_compilation_repeats_last_frame_when_decoder_returns_fewer_frames(
-        self, mock_isfile, mock_get_metadata, mock_crop_around_center, mock_open_fn, mock_popen, mock_create_decoder
+        self, mock_isfile, mock_get_metadata, mock_crop_to_size, mock_open_fn, mock_popen, mock_create_decoder
     ):
         """When get_frames returns fewer frames than requested (e.g. de-dup), repeat last frame; no IndexError."""
         try:
@@ -913,8 +996,8 @@ class TestGenerateCompilationVideo(unittest.TestCase):
         mock_cm.__enter__ = MagicMock(return_value=mock_ctx)
         mock_cm.__exit__ = MagicMock(return_value=None)
         mock_create_decoder.return_value = mock_cm
-        mock_crop_around_center.side_effect = lambda frame, cx, cy, tw, th: torch.zeros(
-            (1, 3, th, tw), dtype=torch.uint8
+        mock_crop_to_size.side_effect = lambda frame, cx, cy, cw, ch, out_w, out_h: torch.zeros(
+            (1, 3, out_h, out_w), dtype=torch.uint8
         )
         proc = MagicMock()
         proc.stdin = MagicMock()
@@ -928,6 +1011,8 @@ class TestGenerateCompilationVideo(unittest.TestCase):
                 "end_sec": 2.0,
                 "crop_start": (0, 0, 320, 240),
                 "crop_end": (0, 0, 320, 240),
+                "native_width": 640,
+                "native_height": 480,
             },
         ]
         resolve_clip = MagicMock(return_value="doorbell-1.mp4")
@@ -950,11 +1035,11 @@ class TestGenerateCompilationVideo(unittest.TestCase):
     @patch("frigate_buffer.services.video_compilation.subprocess.Popen")
     @patch("builtins.open", new_callable=mock_open)
     @patch("frigate_buffer.services.video_compilation.logger")
-    @patch("frigate_buffer.services.video_compilation.crop_utils.crop_around_center")
+    @patch("frigate_buffer.services.video_compilation.crop_utils.crop_around_center_to_size")
     @patch("frigate_buffer.services.video_compilation._get_video_metadata")
     @patch("frigate_buffer.services.video_compilation.os.path.isfile")
     def test_run_pynv_compilation_logs_info_once_per_camera_when_fewer_frames(
-        self, mock_isfile, mock_get_metadata, mock_crop_around_center, mock_logger, mock_open_fn, mock_popen, mock_create_decoder
+        self, mock_isfile, mock_get_metadata, mock_crop_to_size, mock_logger, mock_open_fn, mock_popen, mock_create_decoder
     ):
         """When decoder returns fewer frames than requested, log DEBUG and one INFO per camera per event."""
         try:
@@ -971,8 +1056,8 @@ class TestGenerateCompilationVideo(unittest.TestCase):
         mock_cm.__enter__ = MagicMock(return_value=mock_ctx)
         mock_cm.__exit__ = MagicMock(return_value=None)
         mock_create_decoder.return_value = mock_cm
-        mock_crop_around_center.side_effect = lambda frame, cx, cy, tw, th: torch.zeros(
-            (1, 3, th, tw), dtype=torch.uint8
+        mock_crop_to_size.side_effect = lambda frame, cx, cy, cw, ch, out_w, out_h: torch.zeros(
+            (1, 3, out_h, out_w), dtype=torch.uint8
         )
         proc = MagicMock()
         proc.stdin = MagicMock()
@@ -986,6 +1071,8 @@ class TestGenerateCompilationVideo(unittest.TestCase):
                 "end_sec": 2.0,
                 "crop_start": (0, 0, 320, 240),
                 "crop_end": (0, 0, 320, 240),
+                "native_width": 640,
+                "native_height": 480,
             },
         ]
 
@@ -1011,13 +1098,13 @@ class TestGenerateCompilationVideo(unittest.TestCase):
     @patch("frigate_buffer.services.video_compilation.create_decoder")
     @patch("frigate_buffer.services.video_compilation.subprocess.Popen")
     @patch("builtins.open", new_callable=mock_open)
-    @patch("frigate_buffer.services.video_compilation.crop_utils.crop_around_center")
+    @patch("frigate_buffer.services.video_compilation.crop_utils.crop_around_center_to_size")
     @patch("frigate_buffer.services.video_compilation._get_video_metadata")
     @patch("frigate_buffer.services.video_compilation.os.path.isfile")
     def test_run_pynv_compilation_uses_crop_utils_and_outputs_target_resolution(
-        self, mock_isfile, mock_get_metadata, mock_crop_around_center, mock_open_fn, mock_popen, mock_create_decoder
+        self, mock_isfile, mock_get_metadata, mock_crop_to_size, mock_open_fn, mock_popen, mock_create_decoder
     ):
-        """_run_pynv_compilation uses crop_utils.crop_around_center and passes target_w/target_h; frames streamed to FFmpeg are target resolution."""
+        """_run_pynv_compilation uses crop_utils.crop_around_center_to_size (variable crop, fixed output); frames streamed to FFmpeg are target resolution."""
         try:
             import torch
         except ImportError:
@@ -1035,8 +1122,9 @@ class TestGenerateCompilationVideo(unittest.TestCase):
         mock_cm.__enter__ = MagicMock(return_value=mock_ctx)
         mock_cm.__exit__ = MagicMock(return_value=None)
         mock_create_decoder.return_value = mock_cm
-        mock_crop_around_center.side_effect = lambda frame, cx, cy, tw, th: torch.zeros(
-            (1, 3, th, tw), dtype=torch.uint8
+        # crop_around_center_to_size(frame, cx, cy, crop_w, crop_h, output_w, output_h)
+        mock_crop_to_size.side_effect = lambda frame, cx, cy, cw, ch, out_w, out_h: torch.zeros(
+            (1, 3, out_h, out_w), dtype=torch.uint8
         )
         proc = MagicMock()
         proc.stdin = MagicMock()
@@ -1067,10 +1155,10 @@ class TestGenerateCompilationVideo(unittest.TestCase):
             cuda_device_index=0,
         )
 
-        mock_crop_around_center.assert_called()
-        args = mock_crop_around_center.call_args[0]
-        self.assertEqual(args[3], target_w)
-        self.assertEqual(args[4], target_h)
+        mock_crop_to_size.assert_called()
+        args = mock_crop_to_size.call_args[0]
+        self.assertEqual(args[5], target_w, "output_w should be target_w")
+        self.assertEqual(args[6], target_h, "output_h should be target_h")
         mock_popen.assert_called_once()
         # 2 s at 20 fps = 40 frames; each write is one frame (target_h * target_w * 3 bytes)
         self.assertEqual(proc.stdin.write.call_count, 40)
@@ -1362,6 +1450,96 @@ class TestCompileCeVideoConfig(unittest.TestCase):
                     result = compile_ce_video("/ce", 3.0, config, None)
         self.assertIsNone(result)
         mock_gen.assert_not_called()
+
+    @patch("frigate_buffer.services.video_compilation.generate_compilation_video")
+    @patch("frigate_buffer.services.video_compilation.timeline_ema.build_phase1_assignments")
+    @patch("frigate_buffer.services.video_compilation.timeline_ema.build_dense_times")
+    @patch("frigate_buffer.services.query.resolve_clip_in_folder")
+    def test_extends_global_end_when_sidecar_longer_than_requested_window(
+        self, mock_resolve, mock_build_dense, mock_build_assignments, mock_gen
+    ):
+        """When sidecar content is longer than passed global_end, compile_ce_video extends timeline to sidecar duration."""
+        mock_resolve.return_value = "cam1.mp4"
+        mock_build_dense.return_value = [0.0, 2.0, 4.0]
+        mock_build_assignments.return_value = [(0.0, "cam1"), (2.0, "cam1"), (4.0, "cam1")]
+        # Sidecar with last entry at 87s (longer than requested 50s)
+        sidecar_data = {
+            "entries": [
+                {"timestamp_sec": 0, "detections": []},
+                {"timestamp_sec": 87.0, "detections": [{"label": "person", "area": 1000}]},
+            ],
+            "native_width": 1920,
+            "native_height": 1080,
+        }
+        from frigate_buffer.services.video_compilation import compile_ce_video
+        config = {
+            "MAX_MULTI_CAM_FRAMES_SEC": 2,
+            "MAX_MULTI_CAM_FRAMES_MIN": 45,
+            "CAMERA_TIMELINE_ANALYSIS_MULTIPLIER": 2.0,
+            "CAMERA_TIMELINE_EMA_ALPHA": 0.4,
+            "CAMERA_TIMELINE_PRIMARY_BIAS_MULTIPLIER": 1.2,
+            "CAMERA_SWITCH_HYSTERESIS_MARGIN": 1.15,
+            "CAMERA_SWITCH_MIN_SEGMENT_FRAMES": 5,
+            "SUMMARY_TARGET_WIDTH": 1440,
+            "SUMMARY_TARGET_HEIGHT": 1080,
+        }
+        with patch("frigate_buffer.services.video_compilation.os.scandir") as mock_scandir:
+            with patch("frigate_buffer.services.video_compilation.os.path.isfile", return_value=True):
+                with patch("builtins.open", mock_open(read_data=json.dumps(sidecar_data))):
+                    mock_ent = MagicMock()
+                    mock_ent.is_dir.return_value = True
+                    mock_ent.name = "cam1"
+                    mock_ent.path = "/ce/cam1"
+                    mock_scandir.return_value.__enter__.return_value = [mock_ent]
+                    compile_ce_video("/ce", 50.0, config, None)
+        # build_dense_times(step_sec, max_frames_min, multiplier, global_end) -> global_end should be 87
+        call_args = mock_build_dense.call_args[0]
+        self.assertEqual(call_args[3], 87.0, "global_end should extend to sidecar last timestamp")
+
+    @patch("frigate_buffer.services.video_compilation.generate_compilation_video")
+    @patch("frigate_buffer.services.video_compilation.timeline_ema.build_phase1_assignments")
+    @patch("frigate_buffer.services.video_compilation.timeline_ema.build_dense_times")
+    @patch("frigate_buffer.services.query.resolve_clip_in_folder")
+    def test_keeps_global_end_when_sidecar_shorter_than_requested_window(
+        self, mock_resolve, mock_build_dense, mock_build_assignments, mock_gen
+    ):
+        """When sidecar content is shorter than passed global_end, compile_ce_video keeps caller global_end."""
+        mock_resolve.return_value = "cam1.mp4"
+        mock_build_dense.return_value = [0.0, 2.0, 4.0]
+        mock_build_assignments.return_value = [(0.0, "cam1"), (2.0, "cam1"), (4.0, "cam1")]
+        # Sidecar with last entry at 20s (shorter than requested 50s)
+        sidecar_data = {
+            "entries": [
+                {"timestamp_sec": 0, "detections": []},
+                {"timestamp_sec": 20.0, "detections": [{"label": "person", "area": 1000}]},
+            ],
+            "native_width": 1920,
+            "native_height": 1080,
+        }
+        from frigate_buffer.services.video_compilation import compile_ce_video
+        config = {
+            "MAX_MULTI_CAM_FRAMES_SEC": 2,
+            "MAX_MULTI_CAM_FRAMES_MIN": 45,
+            "CAMERA_TIMELINE_ANALYSIS_MULTIPLIER": 2.0,
+            "CAMERA_TIMELINE_EMA_ALPHA": 0.4,
+            "CAMERA_TIMELINE_PRIMARY_BIAS_MULTIPLIER": 1.2,
+            "CAMERA_SWITCH_HYSTERESIS_MARGIN": 1.15,
+            "CAMERA_SWITCH_MIN_SEGMENT_FRAMES": 5,
+            "SUMMARY_TARGET_WIDTH": 1440,
+            "SUMMARY_TARGET_HEIGHT": 1080,
+        }
+        with patch("frigate_buffer.services.video_compilation.os.scandir") as mock_scandir:
+            with patch("frigate_buffer.services.video_compilation.os.path.isfile", return_value=True):
+                with patch("builtins.open", mock_open(read_data=json.dumps(sidecar_data))):
+                    mock_ent = MagicMock()
+                    mock_ent.is_dir.return_value = True
+                    mock_ent.name = "cam1"
+                    mock_ent.path = "/ce/cam1"
+                    mock_scandir.return_value.__enter__.return_value = [mock_ent]
+                    compile_ce_video("/ce", 50.0, config, None)
+        # global_end should remain 50 (max(50, 20) = 50)
+        call_args = mock_build_dense.call_args[0]
+        self.assertEqual(call_args[3], 50.0, "global_end should remain caller value when sidecar is shorter")
 
 
 class TestCompilationDecoderImport(unittest.TestCase):

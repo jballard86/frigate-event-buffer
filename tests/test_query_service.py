@@ -323,6 +323,16 @@ class TestExtractEndTimestampFromTimeline(unittest.TestCase):
     def test_returns_none_for_empty_timeline(self):
         self.assertIsNone(self.service._extract_end_timestamp_from_timeline({"entries": []}))
 
+    def test_returns_none_when_no_entries_have_end_time(self):
+        """Entries present but all end_time null or missing → None."""
+        timeline = {
+            "entries": [
+                {"source": "frigate_mqtt", "data": {"payload": {"after": {"end_time": None}}}},
+                {"source": "frigate_mqtt", "data": {"payload": {"after": {}}}},
+            ]
+        }
+        self.assertIsNone(self.service._extract_end_timestamp_from_timeline(timeline))
+
     def test_returns_end_time_from_frigate_payload_after(self):
         """Regular events: end_time from payload.after (unchanged behavior)."""
         timeline = {
@@ -341,15 +351,26 @@ class TestExtractEndTimestampFromTimeline(unittest.TestCase):
         }
         self.assertEqual(self.service._extract_end_timestamp_from_timeline(timeline), 1700000100.0)
 
-    def test_frigate_takes_precedence_over_test_ai_prompt_when_both_present(self):
-        """When both Frigate and test_ai_prompt have end_time, first in list wins (Frigate first)."""
+    def test_returns_max_when_multiple_frigate_entries_have_different_end_times(self):
+        """Multiple Frigate event-end entries: result is the latest (max) end_time."""
+        timeline = {
+            "entries": [
+                {"source": "frigate_mqtt", "data": {"payload": {"after": {"end_time": 1700000000.0}}}},
+                {"source": "frigate_mqtt", "data": {"payload": {"after": {"end_time": 1700000050.0}}}},
+                {"source": "frigate_mqtt", "data": {"payload": {"after": {"end_time": 1700000025.0}}}},
+            ]
+        }
+        self.assertEqual(self.service._extract_end_timestamp_from_timeline(timeline), 1700000050.0)
+
+    def test_returns_max_when_frigate_and_test_ai_prompt_both_have_end_time(self):
+        """When both Frigate and test_ai_prompt have end_time, result is the latest (max)."""
         timeline = {
             "entries": [
                 {"source": "frigate_mqtt", "data": {"payload": {"after": {"end_time": 1700000000.0}}}},
                 {"source": "test_ai_prompt", "data": {"end_time": 1700000100.0}},
             ]
         }
-        self.assertEqual(self.service._extract_end_timestamp_from_timeline(timeline), 1700000000.0)
+        self.assertEqual(self.service._extract_end_timestamp_from_timeline(timeline), 1700000100.0)
 
 
 class TestEvictCache(unittest.TestCase):

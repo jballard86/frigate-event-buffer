@@ -20,17 +20,19 @@ def build_dense_times(
     global_end: float,
 ) -> list[float]:
     """
-    Build a denser sample-time grid for Phase 1 analysis.
+    Build a sample-time grid for Phase 1 analysis.
 
-    step_sec is the base interval; we use step_sec / analysis_multiplier.
-    Cap length at max_frames_min * analysis_multiplier (with a sensible upper bound).
+    step_sec is the target interval between frames (max_frames_sec from config).
+    We generate at most max_frames_min sample times so the frame count respects
+    both the interval and the cap. analysis_multiplier is kept for API compatibility;
+    if <= 0 we return [] for backward compatibility.
     """
-    if step_sec <= 0 or analysis_multiplier <= 0 or global_end <= 0:
+    if step_sec <= 0 or global_end <= 0:
         return []
-    step_analysis = step_sec / analysis_multiplier
-    if step_analysis <= 0:
-        step_analysis = step_sec
-    cap = min(int(max_frames_min * analysis_multiplier), max(1000, max_frames_min * 3))
+    if analysis_multiplier <= 0:
+        return []
+    step_analysis = step_sec
+    cap = max(1, max_frames_min)
     times: list[float] = []
     t = 0.0
     while t <= global_end and len(times) < cap:

@@ -16,15 +16,23 @@
   .link-box a { color: #e94560; }
   .link-box p { margin: 8px 0; }
   .no-subdir { color: #888; }
+  .btn-row { margin: 12px 0; display: flex; gap: 12px; flex-wrap: wrap; }
+  .btn-row button { padding: 8px 16px; background: #0f3460; border: 1px solid #533483; border-radius: 6px; color: #e0e0e0; cursor: pointer; font-size: 0.9rem; }
+  .btn-row button:hover:not(:disabled) { background: #16213e; }
+  .btn-row button:disabled { opacity: 0.6; cursor: not-allowed; }
 </style>
 </head>
 <body>
   <div class="header">
     <h1>Test multi-cam pipeline</h1>
-    <p class="no-subdir">{% if subdir %}Event: <strong>{{ subdir }}</strong>{% else %}Open this page from the player TEST button (select a consolidated event with clips ready).{% endif %}</p>
+    <p class="no-subdir" id="headerText">{% if subdir %}Event: <strong>{{ subdir }}</strong>{% else %}Open this page from the player TEST button (select a consolidated event with clips ready).{% endif %}</p>
+  </div>
+  <div id="btnRow" class="btn-row" style="display: none;">
+    <button type="button" id="btnStartTest">Start the test</button>
+    <button type="button" id="btnVideoRequest">Video request</button>
   </div>
   <div id="logContainer">
-    <div class="log-area" id="logArea">{% if subdir %}Connecting...{% else %}No event selected. Use the TEST button on the player for a consolidated event.{% endif %}</div>
+    <div class="log-area" id="logArea">{% if subdir %}Copying...{% else %}No event selected. Use the TEST button on the player for a consolidated event.{% endif %}</div>
     <div class="link-box" id="linkBox" style="display: none;">
       <p><strong>Done.</strong></p>
       <p><a id="aiRequestLink" href="" target="_blank" rel="noopener noreferrer">View AI request (frames and prompt)</a></p>
@@ -37,44 +45,86 @@
   const logArea = document.getElementById('logArea');
   const linkBox = document.getElementById('linkBox');
   const aiRequestLink = document.getElementById('aiRequestLink');
-  if (!eventSubdir) return;
-  logArea.textContent = 'Connecting...\n';
-  const url = '/api/test-multi-cam/stream?subdir=' + encodeURIComponent(eventSubdir);
-  const es = new EventSource(url);
-  es.onmessage = function(e) {
-    try {
-      const ev = JSON.parse(e.data);
-      if (ev.type === 'log') {
-        logArea.appendChild(document.createTextNode(ev.message + '\n'));
-        logArea.scrollTop = logArea.scrollHeight;
-      } else if (ev.type === 'done') {
-        logArea.appendChild(document.createElement('span')).className = 'done';
-        logArea.lastChild.textContent = 'Done.\n';
-        aiRequestLink.href = ev.ai_request_url || ('/files/events/' + ev.test_run_id + '/ai_request.html');
-        aiRequestLink.textContent = 'View AI request (frames and prompt)';
-        linkBox.style.display = 'block';
+  const btnRow = document.getElementById('btnRow');
+  const btnStartTest = document.getElementById('btnStartTest');
+  const btnVideoRequest = document.getElementById('btnVideoRequest');
+  const headerText = document.getElementById('headerText');
+
+  function appendLog(msg, isError) {
+    const el = isError ? document.createElement('span') : document.createTextNode(msg + '\n');
+    if (isError) { el.className = 'err'; el.textContent = msg + '\n'; }
+    logArea.appendChild(el);
+    logArea.scrollTop = logArea.scrollHeight;
+  }
+
+  function setButtonsEnabled(enabled) {
+    btnStartTest.disabled = !enabled;
+    btnVideoRequest.disabled = !enabled;
+  }
+
+  function connectStream(url, onDone) {
+    setButtonsEnabled(false);
+    const es = new EventSource(url);
+    es.onmessage = function(e) {
+      try {
+        const ev = JSON.parse(e.data);
+        if (ev.type === 'log') {
+          appendLog(ev.message, false);
+        } else if (ev.type === 'done') {
+          appendLog('Done.', false);
+          if (ev.ai_request_url) {
+            aiRequestLink.href = ev.ai_request_url;
+            aiRequestLink.textContent = 'View AI request (frames and prompt)';
+            linkBox.style.display = 'block';
+          }
+          es.close();
+          setButtonsEnabled(true);
+          if (onDone) onDone();
+        } else if (ev.type === 'error') {
+          appendLog('Error: ' + (ev.message || 'Unknown'), true);
+          es.close();
+          setButtonsEnabled(true);
+          if (onDone) onDone();
+        }
+      } catch (err) {
+        appendLog('Parse error: ' + err.message, true);
         es.close();
-      } else if (ev.type === 'error') {
-        const span = document.createElement('span');
-        span.className = 'err';
-        span.textContent = 'Error: ' + (ev.message || 'Unknown') + '\n';
-        logArea.appendChild(span);
-        logArea.scrollTop = logArea.scrollHeight;
-        es.close();
+        setButtonsEnabled(true);
       }
-    } catch (err) {
-      logArea.appendChild(document.createElement('span')).className = 'err';
-      logArea.lastChild.textContent = 'Parse error: ' + err.message + '\n';
+    };
+    es.onerror = function() {
+      if (linkBox.style.display !== 'block') appendLog('Connection error or stream ended.', true);
       es.close();
-    }
-  };
-  es.onerror = function() {
-    if (linkBox.style.display !== 'block') {
-      logArea.appendChild(document.createElement('span')).className = 'err';
-      logArea.lastChild.textContent = 'Connection error or stream ended.\n';
-    }
-    es.close();
-  };
+      setButtonsEnabled(true);
+    };
+  }
+
+  if (!eventSubdir) return;
+
+  logArea.textContent = 'Copying...\n';
+  fetch('/api/test-multi-cam/prepare?subdir=' + encodeURIComponent(eventSubdir))
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      if (data.error) {
+        logArea.textContent = 'Error: ' + data.error + '\n';
+        return;
+      }
+      const testRunId = data.test_run_id;
+      logArea.textContent = 'Event: ' + eventSubdir + '\nTest run: ' + testRunId + '\n';
+      if (headerText) headerText.innerHTML = 'Event: <strong>' + eventSubdir + '</strong> &middot; Test run: <strong>' + testRunId + '</strong>';
+      btnRow.style.display = 'flex';
+      btnStartTest.onclick = function() {
+        appendLog('Starting test pipeline...', false);
+        connectStream('/api/test-multi-cam/stream?test_run=' + encodeURIComponent(testRunId));
+      };
+      btnVideoRequest.onclick = function() {
+        appendLog('Video request (Frigate Export API)...', false);
+        connectStream('/api/test-multi-cam/video-request?test_run=' + encodeURIComponent(testRunId));
+      };
+    })
+    .catch(function(e) {
+      logArea.textContent = 'Error: ' + e.message + '\n';
+    });
 })();
 </script>
 </body>

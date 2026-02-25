@@ -9,24 +9,25 @@ from frigate_buffer.services.timeline_ema import (
 
 
 class TestBuildDenseTimes:
-    """build_dense_times produces a denser grid with a cap."""
+    """build_dense_times produces a grid with step_sec interval and max_frames_min cap."""
 
     def test_returns_empty_for_invalid_inputs(self):
         assert build_dense_times(0, 60, 2, 10.0) == []
         assert build_dense_times(1, 60, 0, 10.0) == []
         assert build_dense_times(1, 60, 2, 0) == []
 
-    def test_step_is_divided_by_multiplier(self):
-        # step_sec=1, multiplier=2 => step_analysis=0.5; global_end=2 => 0, 0.5, 1, 1.5, 2
+    def test_step_is_interval_cap_limits_count(self):
+        # step_sec=1, cap=60, global_end=2 => times 0, 1, 2 (interval 1s, at most 60)
         times = build_dense_times(1.0, 60, 2.0, 2.0)
-        assert len(times) >= 4
+        assert len(times) == 3
         assert times[0] == 0.0
-        assert times[1] == 0.5
-        assert times[-1] <= 2.0
+        assert times[1] == 1.0
+        assert times[-1] == 2.0
 
     def test_respects_cap(self):
+        # step_sec=0.1, cap=10, global_end=100 => at most 10 times (0, 0.1, ..., 0.9)
         times = build_dense_times(0.1, 10, 3.0, 100.0)
-        assert len(times) <= 10 * 3 + 100  # cap is min(30, max(1000, 30)) = 30
+        assert len(times) <= 10
         assert times[0] == 0.0
 
 

@@ -13,7 +13,7 @@ import os
 import subprocess
 from collections import Counter, defaultdict
 
-from frigate_buffer.constants import NVDEC_INIT_FAILURE_PREFIX
+from frigate_buffer.constants import NVDEC_INIT_FAILURE_PREFIX, ZOOM_CONTENT_PADDING, ZOOM_MIN_FRAME_FRACTION
 from frigate_buffer.services import crop_utils
 from frigate_buffer.services import timeline_ema
 from frigate_buffer.services.gpu_decoder import create_decoder
@@ -178,6 +178,103 @@ def _nearest_entry_with_detections_at_t(
     )
 
 
+def _content_area_and_center(
+    detections: list[dict],
+    source_width: int,
+    source_height: int,
+    padding: float = ZOOM_CONTENT_PADDING,
+) -> tuple[float, float, float]:
+    """
+    Compute union of detection bboxes expanded by padding, and area-weighted center.
+    Returns (content_area, center_x, center_y). If no valid detections, returns (0, frame_center_x, frame_center_y).
+    """
+    if not detections or source_width <= 0 or source_height <= 0:
+        return (0.0, source_width / 2.0, source_height / 2.0)
+    x1_min = float(source_width)
+    y1_min = float(source_height)
+    x2_max = 0.0
+    y2_max = 0.0
+    weighted_cx_sum: float = 0.0
+    weighted_cy_sum: float = 0.0
+    total_area: float = 0.0
+    for det in detections:
+        area = float(det.get("area", 1.0))
+        if area <= 0:
+            area = 1.0
+        box = det.get("box") or det.get("bbox")
+        if isinstance(box, (list, tuple)) and len(box) >= 4:
+            x1, y1, x2, y2 = float(box[0]), float(box[1]), float(box[2]), float(box[3])
+            x1_min = min(x1_min, x1)
+            y1_min = min(y1_min, y1)
+            x2_max = max(x2_max, x2)
+            y2_max = max(y2_max, y2)
+            cx = (x1 + x2) / 2.0
+            cy = (y1 + y2) / 2.0
+            weighted_cx_sum += cx * area
+            weighted_cy_sum += cy * area
+            total_area += area
+        else:
+            cp = det.get("centerpoint")
+            if isinstance(cp, (list, tuple)) and len(cp) >= 2:
+                cx, cy = float(cp[0]), float(cp[1])
+                weighted_cx_sum += cx * area
+                weighted_cy_sum += cy * area
+                total_area += area
+    if x1_min >= x2_max or y1_min >= y2_max or total_area <= 0:
+        return (0.0, source_width / 2.0, source_height / 2.0)
+    bw = x2_max - x1_min
+    bh = y2_max - y1_min
+    pad_w = max(bw * padding, 1.0)
+    pad_h = max(bh * padding, 1.0)
+    content_x1 = max(0.0, x1_min - pad_w)
+    content_y1 = max(0.0, y1_min - pad_h)
+    content_x2 = min(float(source_width), x2_max + pad_w)
+    content_y2 = min(float(source_height), y2_max + pad_h)
+    content_area = (content_x2 - content_x1) * (content_y2 - content_y1)
+    if total_area > 0:
+        cx_avg = weighted_cx_sum / total_area
+        cy_avg = weighted_cy_sum / total_area
+    else:
+        cx_avg = source_width / 2.0
+        cy_avg = source_height / 2.0
+    return (content_area, cx_avg, cy_avg)
+
+
+def _zoom_crop_size(
+    content_area: float,
+    source_width: int,
+    source_height: int,
+    target_percent: int,
+    target_w: int,
+    target_h: int,
+) -> tuple[int, int]:
+    """
+    Compute crop (w, h) from content area and target frame percent, with aspect ratio target_w/target_h.
+    Clamps to [ZOOM_MIN_FRAME_FRACTION * source, source] and returns even dimensions.
+    """
+    import math
+    if content_area <= 0 or target_percent <= 0 or target_w <= 0 or target_h <= 0:
+        return (target_w, target_h)
+    if source_width <= 0 or source_height <= 0:
+        return (target_w, target_h)
+    desired_crop_area = content_area / (target_percent / 100.0)
+    aspect = target_w / target_h
+    crop_w_f = math.sqrt(desired_crop_area * aspect)
+    crop_h_f = math.sqrt(desired_crop_area / aspect)
+    min_w = max(1, int(source_width * ZOOM_MIN_FRAME_FRACTION))
+    min_h = max(1, int(source_height * ZOOM_MIN_FRAME_FRACTION))
+    crop_w = max(min_w, min(source_width, int(crop_w_f)))
+    crop_h = max(min_h, min(source_height, int(crop_h_f)))
+    crop_w = max(1, (crop_w & ~1))
+    crop_h = max(1, (crop_h & ~1))
+    if crop_w > source_width or crop_h > source_height:
+        crop_w = min(crop_w, source_width)
+        crop_h = min(crop_h, source_height)
+        crop_w = max(1, (crop_w & ~1))
+        crop_h = max(1, (crop_h & ~1))
+    return (crop_w, crop_h)
+
+
 def calculate_crop_at_time(
     sidecar_data: dict,
     t_sec: float,
@@ -187,17 +284,22 @@ def calculate_crop_at_time(
     target_h: int = 1080,
     *,
     timestamps_sorted: list[float] | None = None,
+    tracking_target_frame_percent: int = 0,
 ) -> tuple[int, int, int, int]:
     """
     Compute crop (x, y, w, h) at a single timestamp from the nearest sidecar entry.
-    Uses area-weighted center of detections. Returns clamped rect.
+    Uses area-weighted center of detections. When tracking_target_frame_percent > 0 and
+    detections exist, crop size is derived from content (bbox + padding) vs target percent
+    for dynamic zoom; otherwise uses fixed target_w/target_h. Returns clamped rect.
     If timestamps_sorted is provided (same order as sidecar entries), lookup is O(log n).
     Time O(log(entries)) with bisect, O(entries) without; space O(1).
     """
     entries = sidecar_data.get("entries") or []
+    content_area: float = 0.0
     if not entries:
         avg_cx = source_width / 2.0
         avg_cy = source_height / 2.0
+        use_zoom = False
     else:
         entry = _nearest_entry_at_t(entries, t_sec, timestamps_sorted)
         # Hold last-known crop: if nearest entry has no detections (e.g. person left frame),
@@ -211,44 +313,116 @@ def calculate_crop_at_time(
         if not entry:
             avg_cx = source_width / 2.0
             avg_cy = source_height / 2.0
+            use_zoom = False
         else:
-            weighted_cx_sum: float = 0.0
-            weighted_cy_sum: float = 0.0
-            total_area: float = 0.0
-            for det in entry.get("detections") or []:
-                area = float(det.get("area", 1.0))
-                if area <= 0:
-                    area = 1.0
-                cp = det.get("centerpoint")
-                if isinstance(cp, (list, tuple)) and len(cp) >= 2:
-                    weighted_cx_sum += float(cp[0]) * area
-                    weighted_cy_sum += float(cp[1]) * area
-                    total_area += area
-                else:
-                    box = det.get("box") or det.get("bbox")
-                    if isinstance(box, (list, tuple)) and len(box) >= 4:
-                        cx = (float(box[0]) + float(box[2])) / 2.0
-                        cy = (float(box[1]) + float(box[3])) / 2.0
-                        weighted_cx_sum += cx * area
-                        weighted_cy_sum += cy * area
-                        total_area += area
-            if total_area > 0:
-                avg_cx = weighted_cx_sum / total_area
-                avg_cy = weighted_cy_sum / total_area
+            dets = entry.get("detections") or []
+            if tracking_target_frame_percent > 0 and dets:
+                content_area, avg_cx, avg_cy = _content_area_and_center(
+                    dets, source_width, source_height
+                )
+                use_zoom = content_area > 0
             else:
-                avg_cx = source_width / 2.0
-                avg_cy = source_height / 2.0
+                weighted_cx_sum: float = 0.0
+                weighted_cy_sum: float = 0.0
+                total_area: float = 0.0
+                for det in dets:
+                    area = float(det.get("area", 1.0))
+                    if area <= 0:
+                        area = 1.0
+                    cp = det.get("centerpoint")
+                    if isinstance(cp, (list, tuple)) and len(cp) >= 2:
+                        weighted_cx_sum += float(cp[0]) * area
+                        weighted_cy_sum += float(cp[1]) * area
+                        total_area += area
+                    else:
+                        box = det.get("box") or det.get("bbox")
+                        if isinstance(box, (list, tuple)) and len(box) >= 4:
+                            cx = (float(box[0]) + float(box[2])) / 2.0
+                            cy = (float(box[1]) + float(box[3])) / 2.0
+                            weighted_cx_sum += cx * area
+                            weighted_cy_sum += cy * area
+                            total_area += area
+                if total_area > 0:
+                    avg_cx = weighted_cx_sum / total_area
+                    avg_cy = weighted_cy_sum / total_area
+                else:
+                    avg_cx = source_width / 2.0
+                    avg_cy = source_height / 2.0
+                use_zoom = False
 
-    if source_width < target_w or source_height < target_h:
-        scale = min(source_width / target_w, source_height / target_h)
-        target_w = int(target_w * scale)
-        target_h = int(target_h * scale)
+    if use_zoom:
+        crop_w, crop_h = _zoom_crop_size(
+            content_area, source_width, source_height,
+            tracking_target_frame_percent, target_w, target_h,
+        )
+    else:
+        if source_width < target_w or source_height < target_h:
+            scale = min(source_width / target_w, source_height / target_h)
+            target_w = int(target_w * scale)
+            target_h = int(target_h * scale)
+        crop_w, crop_h = target_w, target_h
 
-    x = int(avg_cx - target_w / 2.0)
-    y = int(avg_cy - target_h / 2.0)
-    x = max(0, min(source_width - target_w, x))
-    y = max(0, min(source_height - target_h, y))
-    return (x, y, target_w, target_h)
+    x = int(avg_cx - crop_w / 2.0)
+    y = int(avg_cy - crop_h / 2.0)
+    x = max(0, min(source_width - crop_w, x))
+    y = max(0, min(source_height - crop_h, y))
+    return (x, y, crop_w, crop_h)
+
+
+def smooth_zoom_ema(
+    slices: list[dict],
+    alpha: float,
+    target_w: int,
+    target_h: int,
+) -> None:
+    """
+    Smooth zoom (crop size) in-place with EMA so zoom changes are fluid, not snapping.
+    Slices must have crop_start, crop_end as (x, y, w, h) and native_width, native_height.
+    Derives a zoom scalar from crop area / frame area, runs EMA, then recomputes (w, h)
+    from smoothed zoom with aspect ratio target_w/target_h and clamps. Reclamps (x, y)
+    so the crop stays within source bounds after size change.
+    """
+    import math
+    if alpha <= 0 or alpha >= 1 or not slices or target_w <= 0 or target_h <= 0:
+        return
+    aspect = target_w / target_h
+    smooth_zoom_s: float = 0.0
+    smooth_zoom_e: float = 0.0
+    for idx, sl in enumerate(slices):
+        xs, ys, ws, hs = sl.get("crop_start", (0, 0, 1440, 1080))
+        xe, ye, we, he = sl.get("crop_end", (0, 0, 1440, 1080))
+        sw = int(sl.get("native_width") or 0)
+        sh = int(sl.get("native_height") or 0)
+        if sw <= 0 or sh <= 0:
+            continue
+        frame_area = sw * sh
+        zoom_s = math.sqrt((ws * hs) / frame_area) if frame_area > 0 else 1.0
+        zoom_e = math.sqrt((we * he) / frame_area) if frame_area > 0 else 1.0
+        zoom_s = max(ZOOM_MIN_FRAME_FRACTION, min(1.0, zoom_s))
+        zoom_e = max(ZOOM_MIN_FRAME_FRACTION, min(1.0, zoom_e))
+        if idx == 0:
+            smooth_zoom_s, smooth_zoom_e = zoom_s, zoom_e
+        else:
+            smooth_zoom_s = alpha * zoom_s + (1.0 - alpha) * smooth_zoom_s
+            smooth_zoom_e = alpha * zoom_e + (1.0 - alpha) * smooth_zoom_e
+        crop_area_s = (smooth_zoom_s ** 2) * frame_area
+        crop_area_e = (smooth_zoom_e ** 2) * frame_area
+        nw_s = max(1, min(sw, int(math.sqrt(crop_area_s * aspect))))
+        nh_s = max(1, min(sh, int(math.sqrt(crop_area_s / aspect))))
+        nw_e = max(1, min(sw, int(math.sqrt(crop_area_e * aspect))))
+        nh_e = max(1, min(sh, int(math.sqrt(crop_area_e / aspect))))
+        nw_s, nh_s = max(1, (nw_s & ~1)), max(1, (nh_s & ~1))
+        nw_e, nh_e = max(1, (nw_e & ~1)), max(1, (nh_e & ~1))
+        cx_s = xs + ws / 2.0
+        cy_s = ys + hs / 2.0
+        cx_e = xe + we / 2.0
+        cy_e = ye + he / 2.0
+        new_xs = max(0, min(sw - nw_s, int(cx_s - nw_s / 2.0)))
+        new_ys = max(0, min(sh - nh_s, int(cy_s - nh_s / 2.0)))
+        new_xe = max(0, min(sw - nw_e, int(cx_e - nw_e / 2.0)))
+        new_ye = max(0, min(sh - nh_e, int(cy_e - nh_e / 2.0)))
+        sl["crop_start"] = (new_xs, new_ys, nw_s, nh_s)
+        sl["crop_end"] = (new_xe, new_ye, nw_e, nh_e)
 
 
 def smooth_crop_centers_ema(
@@ -258,6 +432,7 @@ def smooth_crop_centers_ema(
     Smooth crop center trajectory in-place with single-pass EMA to reduce detection jitter.
     Slices must have "crop_start" and "crop_end" as (x, y, w, h). Updates those with
     smoothed (x, y) derived from EMA of center (cx, cy) = (x + w/2, y + h/2).
+    Clamps center so the crop stays within native_width/native_height (avoids out-of-bounds after zoom).
     Time O(n), space O(1) for EMA state.
     """
     if alpha <= 0 or alpha >= 1 or not slices:
@@ -269,6 +444,8 @@ def smooth_crop_centers_ema(
     for idx, sl in enumerate(slices):
         xs, ys, ws, hs = sl.get("crop_start", (0, 0, 1440, 1080))
         xe, ye, we, he = sl.get("crop_end", (0, 0, 1440, 1080))
+        sw = int(sl.get("native_width") or 0)
+        sh = int(sl.get("native_height") or 0)
         cx_s = xs + ws / 2.0
         cy_s = ys + hs / 2.0
         cx_e = xe + we / 2.0
@@ -281,6 +458,11 @@ def smooth_crop_centers_ema(
             smooth_cy_s = alpha * cy_s + (1.0 - alpha) * smooth_cy_s
             smooth_cx_e = alpha * cx_e + (1.0 - alpha) * smooth_cx_e
             smooth_cy_e = alpha * cy_e + (1.0 - alpha) * smooth_cy_e
+        if sw > 0 and sh > 0:
+            smooth_cx_s = max(ws / 2.0, min(sw - ws / 2.0, smooth_cx_s))
+            smooth_cy_s = max(hs / 2.0, min(sh - hs / 2.0, smooth_cy_s))
+            smooth_cx_e = max(we / 2.0, min(sw - we / 2.0, smooth_cx_e))
+            smooth_cy_e = max(he / 2.0, min(sh - he / 2.0, smooth_cy_e))
         sl["crop_start"] = (
             int(smooth_cx_s - ws / 2.0),
             int(smooth_cy_s - hs / 2.0),
@@ -640,10 +822,20 @@ def _run_pynv_compilation(
                     t_progress = (t - t0) / duration if duration > 1e-6 else 0.0
                     current_cx = start_cx + t_progress * (end_cx - start_cx)
                     current_cy = start_cy + t_progress * (end_cy - start_cy)
-                    current_cx = int(current_cx)
-                    current_cy = int(current_cy)
-                    cropped = crop_utils.crop_around_center(
-                        frame, current_cx, current_cy, target_w, target_h
+                    if crop_start and crop_end:
+                        current_w_d = max(2, int(w_d + t_progress * (we_d - w_d)) & ~1)
+                        current_h_d = max(2, int(h_d + t_progress * (he_d - h_d)) & ~1)
+                        current_w_d = min(iw, max(1, current_w_d))
+                        current_h_d = min(ih, max(1, current_h_d))
+                    else:
+                        current_w_d = min(iw, target_w)
+                        current_h_d = min(ih, target_h)
+                    current_cx_int = int(current_cx)
+                    current_cy_int = int(current_cy)
+                    cropped = crop_utils.crop_around_center_to_size(
+                        frame, current_cx_int, current_cy_int,
+                        current_w_d, current_h_d,
+                        target_w, target_h,
                     )
                     arr = cropped[0].permute(1, 2, 0).cpu().numpy()
                     proc.stdin.write(arr.tobytes())
@@ -793,8 +985,10 @@ def generate_compilation_video(
             dets1 = (entry1 or {}).get("detections") or []
             if not dets0 or not dets1:
                 no_detections_by_cam[cam].append((t0, t1))
+        tracking_target_frame_percent = int(config.get("TRACKING_TARGET_FRAME_PERCENT", 40)) if config else 40
         sl["crop_start"] = calculate_crop_at_time(
-            sidecar_data, t0, sw, sh, target_w, target_h, timestamps_sorted=ts_sorted
+            sidecar_data, t0, sw, sh, target_w, target_h, timestamps_sorted=ts_sorted,
+            tracking_target_frame_percent=tracking_target_frame_percent,
         )
         # Last slice of a camera run: hold crop (no pan to switch-time position) to avoid panning away from the person at the cut.
         is_last_of_run = (i + 1 < len(slices)) and (slices[i + 1]["camera"] != cam)
@@ -802,7 +996,8 @@ def generate_compilation_video(
             sl["crop_end"] = sl["crop_start"]
         else:
             sl["crop_end"] = calculate_crop_at_time(
-                sidecar_data, t1, sw, sh, target_w, target_h, timestamps_sorted=ts_sorted
+                sidecar_data, t1, sw, sh, target_w, target_h, timestamps_sorted=ts_sorted,
+                tracking_target_frame_percent=tracking_target_frame_percent,
             )
         sl["native_width"] = sw
         sl["native_height"] = sh
@@ -820,6 +1015,10 @@ def generate_compilation_video(
             "Compilation: no detections at slice start/end for camera=%s in %s slices; using fallback crop (center or nearby detection within 5s).",
             cam, n,
         )
+
+    zoom_smooth_alpha = float(config.get("COMPILATION_ZOOM_SMOOTH_EMA_ALPHA", 0.25)) if config else 0.25
+    if zoom_smooth_alpha > 0:
+        smooth_zoom_ema(slices, zoom_smooth_alpha, target_w, target_h)
 
     if crop_smooth_alpha > 0:
         smooth_crop_centers_ema(slices, crop_smooth_alpha)
@@ -906,6 +1105,22 @@ def compile_ce_video(ce_dir: str, global_end: float, config: dict, primary_camer
     if not sidecar_cache:
         logger.warning(f"No sidecars available in {ce_dir} for compilation.")
         return None
+
+    # Use actual clip/sidecar duration when longer than requested window, so the summary
+    # covers full content on disk (avoids truncation when export window is shorter than clip).
+    actual_duration_sec = 0.0
+    for cam in sidecar_cache:
+        entries = sidecar_cache[cam].get("entries") or []
+        if entries:
+            last_ts = float(entries[-1].get("timestamp_sec") or 0)
+            actual_duration_sec = max(actual_duration_sec, last_ts)
+    if actual_duration_sec > global_end:
+        logger.info(
+            "Compilation: extending timeline from %.1fs to %.1fs (sidecar content longer than requested window).",
+            global_end,
+            actual_duration_sec,
+        )
+    global_end = max(global_end, actual_duration_sec)
 
     native_sizes = {cam: (sidecar_cache[cam]["native_width"], sidecar_cache[cam]["native_height"]) for cam in sidecar_cache}
 

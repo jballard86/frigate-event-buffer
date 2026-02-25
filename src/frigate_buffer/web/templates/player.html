@@ -538,13 +538,15 @@
       </div>
 
       <div class="nav-bar">
-        <div class="nav-buttons">
+        <div class="nav-buttons" style="align-items: center;">
           <button id="btnNewer" ${currentIndex <= 0 ? 'disabled' : ''}>&#9664; Newer</button>
+          <span class="event-counter">${currentIndex + 1} / ${events.length}${ev.viewed ? '<span class="viewed-badge">Reviewed</span>' : ''}${ev.ongoing ? '<span class="ongoing-badge">Event ongoing</span>' : ''}</span>
           <button id="btnOlder" ${currentIndex >= events.length - 1 ? 'disabled' : ''}>Older &#9654;</button>
         </div>
-        <span class="event-counter">${currentIndex + 1} / ${events.length}${ev.viewed ? '<span class="viewed-badge">Reviewed</span>' : ''}${ev.ongoing ? '<span class="ongoing-badge">Event ongoing</span>' : ''}</span>
+        <div style="flex: 1; display: flex; justify-content: center;">
+          ${!ev.viewed ? `<button class="btn-success" id="btnMarkReviewed">Click to Review</button>` : ''}
+        </div>
         <div class="nav-buttons">
-          ${!ev.viewed ? `<button class="btn-success" id="btnMarkReviewed">Reviewed</button>` : ''}
           ${clips.length > 1 ? `<select id="clipSelectNav">${clips.map((c) =>
             `<option value="${escapeHtml(c.url)}" ${c.url === primaryClipUrl ? 'selected' : ''}>${escapeHtml((c.camera || 'Camera').replace(/_/g, ' ').replace(/\b\w/g, ch => ch.toUpperCase()))}</option>`
           ).join('')}</select>` : ''}

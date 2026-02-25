@@ -88,9 +88,6 @@ settings:
   # quick_title_delay_seconds: 4
   # quick_title_enabled: true  # When true and Gemini enabled, run quick-title pipeline; initial notification uses latest.jpg.
 
-  # When a consolidated event has one camera, delay (seconds) before closing; 0 = close as soon as event ends.
-  # single_camera_ce_close_delay_seconds: 0
-
   # Consolidated event series
   # Time since last event before the next one starts a NEW consolidated group.
   # If no events for 120s, the next event is new. If an event occurs within
@@ -154,6 +151,8 @@ network:
 #   camera_switch_hysteresis_margin: 1.15    # new camera must exceed current by this (1.15 = 15%) to switch
 #   # Final output
 #   camera_timeline_final_yolo_drop_no_person: false   # true = drop no-person frames; false = keep all, tag in metadata
+#   # Compilation dynamic zoom: EMA smoothing for zoom (separate from pan/tilt; lower = smoother, more cinematic)
+#   compilation_zoom_smooth_ema_alpha: 0.25
 
 
 # Optional: Gemini proxy (extended) - model params for proxy calls (e.g. multi-cam)

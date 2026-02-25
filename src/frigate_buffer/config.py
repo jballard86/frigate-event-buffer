@@ -58,7 +58,6 @@ CONFIG_SCHEMA = Schema({
         Optional('max_event_length_seconds'): int,             # Events with duration >= this are canceled: no AI/decode, folder renamed with "-canceled", notification sent; default 120 (2 min).
         Optional('export_buffer_before'): int,                  # Seconds to include before event start in exported clip.
         Optional('export_buffer_after'): int,                    # Seconds to include after event end in exported clip.
-        Optional('single_camera_ce_close_delay_seconds'): int,  # When CE has one camera, delay (s) before close; 0 = close as soon as event ends. Multi-cam uses event_gap_seconds.
         Optional('gemini_max_concurrent_analyses'): int,        # Max concurrent Gemini clip analyses (throttling).
         Optional('save_ai_frames'): bool,                        # Whether to save extracted AI analysis frames to disk.
         Optional('create_ai_analysis_zip'): bool,               # Whether to create a zip of AI analysis assets (e.g. for multi-cam).
@@ -105,6 +104,7 @@ CONFIG_SCHEMA = Schema({
         Optional('merge_frame_timeout_sec'): int,                       # Timeout (seconds) when merge waits for a camera frame; on timeout camera is dropped from active pool; default 10.
         Optional('tracking_target_frame_percent'): int,                 # When person area >= this % of reference area, use full-frame resize; default 40.
         Optional('person_area_debug'): bool,                             # Draw person area (px²) on frame bottom-right when true; default false.
+        Optional('compilation_zoom_smooth_ema_alpha'): Any(int, float), # EMA alpha for compilation zoom smoothing (0–1); lower = smoother zoom; default 0.25.
     },
     # Extended Gemini proxy options (e.g. for multi_cam); model params; single API key via GEMINI_API_KEY, URL here or env.
     Optional('gemini_proxy'): {
@@ -159,7 +159,6 @@ def load_config() -> dict:
         'MAX_EVENT_LENGTH_SECONDS': 120,
         'EXPORT_BUFFER_BEFORE': 5,
         'EXPORT_BUFFER_AFTER': 30,
-        'SINGLE_CAMERA_CE_CLOSE_DELAY_SECONDS': 0,
         'GEMINI_MAX_CONCURRENT_ANALYSES': 3,
         'SAVE_AI_FRAMES': True,
         'CREATE_AI_ANALYSIS_ZIP': True,
@@ -206,6 +205,7 @@ def load_config() -> dict:
         'MERGE_FRAME_TIMEOUT_SEC': 10,
         'TRACKING_TARGET_FRAME_PERCENT': 40,
         'PERSON_AREA_DEBUG': False,
+        'COMPILATION_ZOOM_SMOOTH_EMA_ALPHA': 0.25,
 
         # Gemini proxy (extended): Single API Key (GEMINI_API_KEY only). Default URL "" (no Google fallback).
         'GEMINI_PROXY_URL': '',
@@ -276,7 +276,6 @@ def load_config() -> dict:
                     config['MAX_EVENT_LENGTH_SECONDS'] = settings.get('max_event_length_seconds', config['MAX_EVENT_LENGTH_SECONDS'])
                     config['EXPORT_BUFFER_BEFORE'] = settings.get('export_buffer_before', config['EXPORT_BUFFER_BEFORE'])
                     config['EXPORT_BUFFER_AFTER'] = settings.get('export_buffer_after', config['EXPORT_BUFFER_AFTER'])
-                    config['SINGLE_CAMERA_CE_CLOSE_DELAY_SECONDS'] = settings.get('single_camera_ce_close_delay_seconds', config.get('SINGLE_CAMERA_CE_CLOSE_DELAY_SECONDS', 0))
                     config['GEMINI_MAX_CONCURRENT_ANALYSES'] = settings.get('gemini_max_concurrent_analyses', config.get('GEMINI_MAX_CONCURRENT_ANALYSES', 3))
                     config['SAVE_AI_FRAMES'] = settings.get('save_ai_frames', config.get('SAVE_AI_FRAMES', True))
                     config['CREATE_AI_ANALYSIS_ZIP'] = settings.get('create_ai_analysis_zip', config.get('CREATE_AI_ANALYSIS_ZIP', True))
@@ -334,6 +333,7 @@ def load_config() -> dict:
                     config['MERGE_FRAME_TIMEOUT_SEC'] = int(mc.get('merge_frame_timeout_sec', config['MERGE_FRAME_TIMEOUT_SEC']))
                     config['TRACKING_TARGET_FRAME_PERCENT'] = int(mc.get('tracking_target_frame_percent', config['TRACKING_TARGET_FRAME_PERCENT']))
                     config['PERSON_AREA_DEBUG'] = bool(mc.get('person_area_debug', config['PERSON_AREA_DEBUG']))
+                    config['COMPILATION_ZOOM_SMOOTH_EMA_ALPHA'] = float(mc.get('compilation_zoom_smooth_ema_alpha', config['COMPILATION_ZOOM_SMOOTH_EMA_ALPHA']))
                 if 'gemini_proxy' in yaml_config:
                     gp = yaml_config['gemini_proxy']
                     config['GEMINI_PROXY_URL'] = gp.get('url', config['GEMINI_PROXY_URL']) or ''

@@ -47,6 +47,11 @@ ERROR_BUFFER_MAX_SIZE: int = 10
 # NVDEC/decoder init failure: log this prefix so crash-loop logs are searchable before container restart.
 NVDEC_INIT_FAILURE_PREFIX: str = "NVDEC hardware initialization failed"
 
+# Video compilation dynamic zoom: min crop size as fraction of frame (max zoom-in); crop window never smaller than this.
+ZOOM_MIN_FRAME_FRACTION: float = 0.4
+# Video compilation dynamic zoom: padding around bounding box (e.g. 0.10 = bbox + 10%).
+ZOOM_CONTENT_PADDING: float = 0.10
+
 
 def is_tensor(x: Any) -> bool:
     """True if x is a torch.Tensor; avoids importing torch at module level for tests."""

@@ -126,6 +126,66 @@ def _crop_around_center(
     return crop
 
 
+def crop_around_center_to_size(
+    frame: Any,
+    center_x: float | int,
+    center_y: float | int,
+    crop_w: int,
+    crop_h: int,
+    output_w: int,
+    output_h: int,
+) -> Any:
+    """
+    Crop a region of size (crop_w, crop_h) centered at (center_x, center_y), clamped to frame
+    bounds, then resize to (output_w, output_h). Used for compilation with variable zoom;
+    output size is fixed for the encoder.
+
+    frame: torch.Tensor BCHW. Returns BCHW tensor of shape (B, C, output_h, output_w).
+    Uses bicubic interpolation for the resize step (sharper when downscaling).
+    """
+    import torch
+    import torch.nn.functional as F
+
+    if not is_tensor(frame):
+        raise TypeError("crop_around_center_to_size expects torch.Tensor BCHW")
+    h, w = _get_tensor_hw(frame)
+    if crop_w <= 0 or crop_h <= 0 or output_w <= 0 or output_h <= 0:
+        return frame
+    cx = int(center_x)
+    cy = int(center_y)
+    x1 = cx - crop_w // 2
+    y1 = cy - crop_h // 2
+    x2 = x1 + crop_w
+    y2 = y1 + crop_h
+    if x1 < 0:
+        x2 -= x1
+        x1 = 0
+    if y1 < 0:
+        y2 -= y1
+        y1 = 0
+    if x2 > w:
+        x1 -= x2 - w
+        x2 = w
+    if y2 > h:
+        y1 -= y2 - h
+        y2 = h
+    x1, y1 = max(0, x1), max(0, y1)
+    x2, y2 = min(w, x2), min(h, y2)
+    crop = frame[:, :, y1:y2, x1:x2]
+    if crop.numel() == 0:
+        return center_crop(frame, output_w, output_h)
+    if crop.shape[2] != output_h or crop.shape[3] != output_w:
+        crop = F.interpolate(
+            crop.float(),
+            size=(output_h, output_w),
+            mode="bicubic",
+            align_corners=False,
+        )
+        if frame.dtype == torch.uint8:
+            crop = crop.clamp(0, 255).round().to(torch.uint8)
+    return crop
+
+
 def crop_around_detections_with_padding(
     frame: Any,
     detections: list[dict[str, Any]],

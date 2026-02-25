@@ -130,8 +130,7 @@ class ConsolidatedEventManager:
     def schedule_close_timer(self, ce_id: str, delay_seconds: float | None = None) -> None:
         """Schedule or reschedule the close timer for this CE. When it fires, CE is closed.
 
-        delay_seconds: If set, use this delay instead of event_gap_seconds (e.g. 0 for
-        single-camera CE to close as soon as the event ends). None = use event_gap_seconds.
+        delay_seconds: If set, use this delay instead of event_gap_seconds. None = use event_gap_seconds.
         """
         with self._lock:
             if ce_id not in self._events:

@@ -258,9 +258,11 @@ class EventQueryService:
         return False
 
     def _extract_end_timestamp_from_timeline(self, timeline_data: dict[str, Any]) -> float | None:
-        """Return the first end_time from timeline entries (payload.after.end_time for Frigate,
+        """Return the latest end_time from timeline entries (payload.after.end_time for Frigate,
         or data.end_time for test_ai_prompt entries). Used so the player can show event end time
-        and duration. Regular events only have Frigate entries; test events may have test_ai_prompt."""
+        and duration. We use the maximum so consolidated events and multiple event-end MQTT messages
+        show the true span. Regular events only have Frigate entries; test events may have test_ai_prompt."""
+        end_times: list[float] = []
         for e in (timeline_data or {}).get('entries', []):
             # Frigate event end (regular events only)
             payload = (e.get('data') or {}).get('payload') or {}
@@ -268,7 +270,7 @@ class EventQueryService:
             end_time = after.get('end_time')
             if end_time is not None:
                 try:
-                    return float(end_time)
+                    end_times.append(float(end_time))
                 except (TypeError, ValueError):
                     pass
             # Test-event-only: Send prompt to AI writes this source
@@ -276,10 +278,10 @@ class EventQueryService:
                 end_time = (e.get('data') or {}).get('end_time')
                 if end_time is not None:
                     try:
-                        return float(end_time)
+                        end_times.append(float(end_time))
                     except (TypeError, ValueError):
                         pass
-        return None
+        return max(end_times) if end_times else None
 
     def _extract_cameras_zones_from_timeline(self, timeline_data: dict[str, Any]) -> list[dict[str, Any]]:
         """Extract cameras and zones from frigate_mqtt entries in notification_timeline.json."""
