@@ -724,7 +724,7 @@ class EventQueryService:
     def _build_saved_single_cam_event_dict(
         self, camera_name: str, subdir: str, data: dict[str, Any]
     ) -> dict[str, Any]:
-        """Build event dict for a saved single-camera event (saved/camera/subdir)."""
+        """Build event dict for a saved CE folder with one camera (saved/camera/subdir). Pipeline is always CE; this is folder layout only."""
         parts = subdir.split("_", 1)
         ts = parts[0] if len(parts) > 0 else "0"
         eid = parts[1] if len(parts) > 1 else subdir

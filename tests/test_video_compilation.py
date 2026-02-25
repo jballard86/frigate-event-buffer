@@ -11,6 +11,7 @@ from frigate_buffer.services.video_compilation import (
     _run_pynv_compilation,
     _trim_slices_to_action_window,
     assignments_to_slices,
+    BATCH_SIZE,
     calculate_crop_at_time,
     calculate_segment_crop,
     convert_timeline_to_segments,
@@ -967,9 +968,79 @@ class TestGenerateCompilationVideo(unittest.TestCase):
         self.assertGreater(len(error_calls), 0)
         msg = str(error_calls[0][0][0])
         self.assertIn("0 frames", msg)
-        self.assertIn("Skipping slice", msg)
-        self.assertIn("post-decode", msg)
-        self.assertIn("not hardware init", msg)
+        self.assertIn("Skipping chunk", msg)
+
+    @patch("frigate_buffer.services.video_compilation.GPU_LOCK", MagicMock())
+    @patch("frigate_buffer.services.video_compilation.create_decoder")
+    @patch("frigate_buffer.services.video_compilation.subprocess.Popen")
+    @patch("builtins.open", new_callable=mock_open)
+    @patch("frigate_buffer.services.video_compilation._get_video_metadata")
+    @patch("frigate_buffer.services.video_compilation.os.path.isfile")
+    def test_run_pynv_compilation_chunks_decode_and_calls_empty_cache_per_chunk(
+        self, mock_isfile, mock_get_metadata, mock_open_fn, mock_popen, mock_create_decoder
+    ):
+        """get_frames is called in chunks of BATCH_SIZE; empty_cache after each chunk and in finally."""
+        try:
+            import torch
+        except ImportError:
+            self.skipTest("torch not available")
+        mock_isfile.return_value = True
+        # 1.0 s at 20 fps = 20 frames → 5 chunks of 4 (BATCH_SIZE)
+        mock_get_metadata.return_value = (640, 480, 20.0, 1.0)
+        get_frames_calls = []
+
+        def record_get_frames(indices):
+            get_frames_calls.append(list(indices))
+            return torch.zeros((len(indices), 3, 480, 640), dtype=torch.uint8)
+
+        mock_ctx = _fake_create_decoder_context(200, height=480, width=640)
+        if mock_ctx is None:
+            self.skipTest("torch not available")
+        mock_ctx.get_frames = record_get_frames
+        mock_cm = MagicMock()
+        mock_cm.__enter__ = MagicMock(return_value=mock_ctx)
+        mock_cm.__exit__ = MagicMock(return_value=None)
+        mock_create_decoder.return_value = mock_cm
+        proc = MagicMock()
+        proc.stdin = MagicMock()
+        proc.returncode = 0
+        mock_popen.return_value = proc
+
+        slices = [
+            {
+                "camera": "doorbell",
+                "start_sec": 0.0,
+                "end_sec": 1.0,
+                "crop_start": (0, 0, 320, 240),
+                "crop_end": (0, 0, 320, 240),
+            },
+        ]
+        resolve_clip = MagicMock(return_value="doorbell-1.mp4")
+
+        with patch("torch.cuda.is_available", return_value=True), patch(
+            "torch.cuda.empty_cache", MagicMock()
+        ) as mock_empty_cache:
+            _run_pynv_compilation(
+                slices=slices,
+                ce_dir="/ce",
+                tmp_output_path="/out.mp4.tmp",
+                target_w=1440,
+                target_h=1080,
+                resolve_clip_in_folder=resolve_clip,
+                cuda_device_index=0,
+            )
+
+        # 20 frames in chunks of BATCH_SIZE (4) → 5 chunk calls
+        self.assertGreater(len(get_frames_calls), 1, "get_frames should be called multiple times per slice")
+        self.assertEqual(len(get_frames_calls), 5, "20 frames / BATCH_SIZE=4 → 5 chunks")
+        self.assertEqual(get_frames_calls[0], [0, 1, 2, 3])
+        self.assertEqual(get_frames_calls[1], [4, 5, 6, 7])
+        self.assertEqual(get_frames_calls[2], [8, 9, 10, 11])
+        self.assertEqual(get_frames_calls[3], [12, 13, 14, 15])
+        self.assertEqual(get_frames_calls[4], [16, 17, 18, 19])
+        # empty_cache: once after each of 5 chunks + once in slice finally = 6
+        self.assertEqual(mock_empty_cache.call_count, 6)
+        self.assertEqual(proc.stdin.write.call_count, 20)
 
     @patch("frigate_buffer.services.video_compilation.GPU_LOCK", MagicMock())
     @patch("frigate_buffer.services.video_compilation.create_decoder")

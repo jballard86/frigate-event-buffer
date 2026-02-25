@@ -479,7 +479,7 @@ class GeminiAnalysisService:
         """
         Target-centric multi-clip analysis for consolidated events.
         Extracts frames from full clips via object detection, sends to Gemini, saves to CE root.
-        Handles both single-camera and multi-camera CEs (len(cameras) == 1 or more); same pipeline.
+        Handles CEs with one or more cameras (len(cameras) >= 1); same pipeline.
         primary_camera: optional camera that initiated the event (first-camera bias in selection).
         """
         if not self._enabled:

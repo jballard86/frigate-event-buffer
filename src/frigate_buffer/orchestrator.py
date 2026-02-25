@@ -26,6 +26,7 @@ from frigate_buffer.managers.zone_filter import SmartZoneFilter
 from frigate_buffer.services.notifications import (
     NotificationDispatcher,
     HomeAssistantMqttProvider,
+    PushoverProvider,
 )
 from frigate_buffer.services.timeline import TimelineLogger
 from frigate_buffer.services.mqtt_client import MqttClientWrapper
@@ -202,6 +203,10 @@ class StateAwareOrchestrator:
                     storage_path=self.config["STORAGE_PATH"],
                 )
             )
+        po_config = self.config.get("pushover", {})
+        if po_config.get("enabled") and po_config.get("pushover_api_token") and po_config.get("pushover_user_key"):
+            player_base_url = f"http://{self.config.get('BUFFER_IP')}:{self.config.get('FLASK_PORT')}"
+            providers.append(PushoverProvider(po_config, player_base_url=player_base_url))
         return NotificationDispatcher(
             providers=providers,
             timeline_logger=self.timeline_logger,
@@ -252,7 +257,7 @@ class StateAwareOrchestrator:
             return
         event = self.state_manager.get_event(event_id)
         if event:
-            self.consolidated_manager.update_best(
+            self.consolidated_manager.set_final_from_frigate(
                 event_id, title=title, description=description, threat_level=threat_level
             )
             if event.folder_path:
@@ -276,18 +281,29 @@ class StateAwareOrchestrator:
                         'event_id': ce.consolidated_id, 'camera': ce.camera, 'label': ce.label,
                         'folder_path': primary.folder_path if primary else media_folder,
                         'created_at': ce.start_time, 'end_time': ce.end_time, 'phase': ce.phase,
-                        'genai_title': ce.best_title, 'genai_description': ce.best_description,
+                        'genai_title': ce.final_title, 'genai_description': ce.final_description,
                         'ai_description': None, 'review_summary': None,
-                        'threat_level': ce.best_threat_level, 'severity': ce.severity,
+                        'threat_level': ce.final_threat_level, 'severity': ce.severity,
                         'snapshot_downloaded': ce.snapshot_downloaded,
                         'clip_downloaded': ce.clip_downloaded,
                         'image_url_override': getattr(primary, 'image_url_override', None) if primary else None,
                     })()
                 else:
-                    notify_target = event
+                    # CE already removed; build CE-shaped target (e.g. 1-camera CE)
+                    notify_target = type('NotifyTarget', (), {
+                        'event_id': event.event_id, 'camera': event.camera, 'label': event.label,
+                        'folder_path': event.folder_path or '',
+                        'created_at': event.created_at, 'end_time': event.end_time or event.created_at,
+                        'phase': getattr(event, 'phase', None),
+                        'genai_title': title, 'genai_description': description,
+                        'ai_description': None, 'review_summary': None,
+                        'threat_level': threat_level, 'severity': getattr(event, 'severity', None) or 'detection',
+                        'snapshot_downloaded': event.snapshot_downloaded, 'clip_downloaded': event.clip_downloaded,
+                        'image_url_override': getattr(event, 'image_url_override', None),
+                    })()
                 self.notifier.publish_notification(
                     notify_target, "finalized",
-                    tag_override=f"frigate_{ce.consolidated_id}" if ce else None
+                    tag_override=f"frigate_{ce.consolidated_id}" if ce else f"frigate_{event.event_id}"
                 )
         logger.info(f"Analysis result applied for {event_id}: title={title or 'N/A'}, threat_level={threat_level}")
         if self.daily_reporter and event and event.folder_path:
@@ -316,6 +332,9 @@ class StateAwareOrchestrator:
         if not title and not description:
             logger.debug("CE analysis result for %s has no title/description, skipping", ce_id)
             return
+        self.consolidated_manager.set_final_from_ce_analysis(
+            ce_id, title=title, description=description, threat_level=threat_level
+        )
         label = ce_info.get("label", "unknown")
         start_time = 0  # Passed separately; ce_info has end_time
         self.file_manager.write_ce_summary(

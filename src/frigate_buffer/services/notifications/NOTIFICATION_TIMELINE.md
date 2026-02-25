@@ -7,7 +7,16 @@ When each notification is sent during the pipeline, what it includes, and where 
 - **Path 1 — Frigate GenAI** (`ai_mode: frigate`): All AI from Frigate (tracked_object descriptions, frigate/reviews GenAI, review summarize at CE close). Notifications: **new**, **described**, **discarded**, **canceled**, **finalized** (Frigate review), **clip_ready**, **finalized** (at CE close), **summarized** (at CE close). **snapshot_ready** and **finalized** (CE analysis) are **not** used.
 - **Path 2 — External API** (`ai_mode: external_api`, default): All AI from the buffer (quick title, multi-clip CE analysis). Notifications: **new**, **snapshot_ready**, **discarded**, **canceled**, **finalized** (CE analysis), **clip_ready**. **described**, **finalized** (Frigate review), **finalized** at CE close, and **summarized** at CE close are **not** used.
 
-**Per-event summarized (Step 11)** was removed globally; there is no longer a background thread that fetches Frigate review summary for a single event and sends **summarized**.
+**All events are CEs.** There is no separate “single event” path; even one-camera events go through the CE pipeline (1-camera CE).
+
+**Final title and description by path**
+
+| Path   | AI mode      | Source of final title/description for CE |
+|--------|--------------|------------------------------------------|
+| **CE** | Frigate      | Last GenAI from Frigate: `frigate/reviews` (or described). Set on CE via `set_final_from_frigate`; overwrite so last wins. |
+| **CE** | External API | CE analysis result only (multi-clip Gemini). Set when `_handle_ce_analysis_result` runs. Quick title is **not** used for final; it only drives **snapshot_ready** (interim). |
+
+**Per-event summarized (Step 11)** was removed globally; there is no longer a background thread that fetches Frigate review summary for one event and sends **summarized**.
 
 ---
 
@@ -92,10 +101,10 @@ flowchart LR
 ## 5. **canceled**
 
 - **When:**  
-  - **Single event:** event ends with duration ≥ `max_event_length_seconds`.  
-  - **CE:** at CE close when any sub-event duration ≥ `max_event_length_seconds` (no clip export/AI; folder renamed to `-canceled`).
-- **Trigger:** `process_event_end` (single) or `finalize_consolidated_event` (CE) when max duration exceeded → write canceled summary, optional folder rename → `publish_notification(..., "canceled", message="Event canceled see event viewer for details")` → `mark_last_event_ended`.
-- **Included:** Event or CE-shaped target: `event_id` / `ce_id`, camera(s), label(s), `folder_path` (if still present), **message**: “Event canceled see event viewer for details”. Tag: `frigate_{event_id}` or `frigate_{ce_id}`.
+  - **CE (one sub-event):** that sub-event ends with duration ≥ `max_event_length_seconds`.  
+  - **CE (multiple sub-events):** at CE close when any sub-event duration ≥ `max_event_length_seconds` (no clip export/AI; folder renamed to `-canceled`).
+- **Trigger:** `process_event_end` or `finalize_consolidated_event` when max duration exceeded → write canceled summary, optional folder rename → `publish_notification(..., "canceled", message="Event canceled see event viewer for details")` → `mark_last_event_ended`.
+- **Included:** CE-shaped target: `event_id` / `ce_id`, camera(s), label(s), `folder_path` (if still present), **message**: “Event canceled see event viewer for details”. Tag: `frigate_{event_id}` or `frigate_{ce_id}`.
 - **Source:** `EventState` or `ConsolidatedEvent`; `FileManager.write_canceled_summary`; config for max duration.
 
 ---
@@ -112,25 +121,25 @@ flowchart LR
 ## 7. **finalized** (Frigate review — GenAI via MQTT)
 
 - **When:** When Frigate sends GenAI metadata for an event on MQTT `frigate/reviews` (title/description present). Can occur before or after CE close.
-- **Trigger:** MQTT `frigate/reviews` with `type` in (update, end, genai) and GenAI title/description → (only when **not** `external_api`) `_handle_review` → state/CE update → write summary/metadata → `publish_notification(..., "finalized")`.
-- **Included:** CE if grouped (best_title, best_description, threat_level), else single event. **Path:** Frigate only.
+- **Trigger:** MQTT `frigate/reviews` with `type` in (update, end, genai) and GenAI title/description → (only when **not** `external_api`) `_handle_review` → `set_final_from_frigate` → state/CE update → write summary/metadata → `publish_notification(..., "finalized")`.
+- **Included:** CE (always). **title/description**: `ce.final_title`, `ce.final_description`, **threat_level**: `ce.final_threat_level`. **Path:** Frigate only.
 - **Source:** MQTT `frigate/reviews` payload; state and CE; `FileManager.write_summary`, `write_metadata_json`.
 
 ---
 
 ## 8. **clip_ready**
 
-- **When:** At CE close, after clips exported, sidecars, (optional) CE analysis, and (when **Frigate** mode) review summary fetched and notification GIF written. **external_api** mode does not fetch review summary; **clip_ready** is still sent with best_title/best_description from quick title or CE analysis.
+- **When:** At CE close, after clips exported, sidecars, (optional) CE analysis, and (when **Frigate** mode) review summary fetched and notification GIF written. **external_api** mode does not fetch review summary; **clip_ready** is still sent with **title/description** from `ce.final_title` / `ce.final_description` (set by CE analysis when it has run, or by Frigate for Path 1).
 - **Trigger:** `finalize_consolidated_event` → export + sidecars + (optional) `on_ce_ready_for_analysis` + video compilation + GIF → (Frigate only) `fetch_review_summary` → build notify target → `publish_notification(..., "clip_ready")`.
-- **Included:** CE target: **title**: `ce.best_title`, **description**: `ce.best_description`, **message**: “Video available. {description}” or “Video unavailable …”. **image**: buffer URL to `notification.gif` if present. **Path:** Both (content source differs by mode).
-- **Source:** `ConsolidatedEvent`; Frigate mode: `DownloadService.fetch_review_summary`; `VideoService.generate_gif_from_clip`; config; `FileManager`.
+- **Included:** CE target: **title**: `ce.final_title`, **description**: `ce.final_description`, **message**: “Video available. {description}” or “Video unavailable …”. **image**: buffer URL to `notification.gif` if present. **Path:** Both (content source differs by mode).
+- **Source:** `ConsolidatedEvent` (final_* from Frigate or CE analysis); Frigate mode: `DownloadService.fetch_review_summary`; `VideoService.generate_gif_from_clip`; config; `FileManager`.
 
 ---
 
 ## 9. **finalized** (at CE close)
 
 - **When:** Right after **clip_ready** at CE close (Frigate mode only), only if CE has a title or description and not already sent.
-- **Trigger:** Same block in `finalize_consolidated_event` when **not** `external_api`: `if not ce.finalized_sent and (ce.best_title or ce.best_description)` → `publish_notification(notify_target, "finalized")`.
+- **Trigger:** Same block in `finalize_consolidated_event` when **not** `external_api`: `if not ce.finalized_sent and (ce.final_title or ce.final_description)` → `publish_notification(notify_target, "finalized")`.
 - **Included:** Same as **clip_ready**. **Path:** Frigate only.
 - **Source:** Same as **clip_ready** (Frigate path).
 
@@ -147,7 +156,7 @@ flowchart LR
 
 ## ~~11. **summarized** (per-event)~~ *Removed*
 
-Per-event **summarized** was removed. Previously, when Frigate sent GenAI data for a single event (no CE or CE already finalized), a background thread fetched the review summary from Frigate API and sent **summarized**. That path is no longer implemented.
+Per-event **summarized** was removed. Previously, when Frigate sent GenAI data for one event (no CE or CE already finalized), a background thread fetched the review summary from Frigate API and sent **summarized**. That path is no longer implemented. All events are CEs.
 
 ---
 
@@ -172,7 +181,7 @@ Per-event **summarized** was removed. Previously, when Frigate sent GenAI data f
 | **finalized**  | CE analysis done (buffer AI)         | External  | ai_analyzer result, CE info, file manager                 |
 | **finalized**  | Frigate review GenAI received         | Frigate   | MQTT frigate/reviews, state, CE                          |
 | **clip_ready** | CE close, clips + GIF (and summary in Frigate) | Both | CE, Frigate review API (Frigate only), GIF, file manager |
-| **finalized**  | CE close (best title/desc present)   | Frigate   | Same as clip_ready                                       |
+| **finalized**  | CE close (final title/desc present)   | Frigate   | Same as clip_ready (ce.final_*)                         |
 | **summarized** | CE close, summary not “no concerns”  | Frigate   | Frigate review summarize API, CE                         |
 | **overflow**   | Queue overflow while rate-limited    | Both      | Dispatcher / provider static payload                     |
 

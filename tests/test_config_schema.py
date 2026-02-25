@@ -553,5 +553,72 @@ class TestConfigSchema(unittest.TestCase):
             load_config()
         self.assertEqual(cm.exception.code, 1)
 
+    @patch('builtins.open', new_callable=mock_open)
+    @patch('os.path.exists')
+    @patch('frigate_buffer.config.yaml.safe_load')
+    def test_pushover_block_valid(self, mock_yaml_load, mock_exists, mock_file):
+        """Valid pushover block under notifications is stored in config['pushover']; validation passes."""
+        valid_yaml = {
+            'cameras': [{'name': 'cam1'}],
+            'network': {
+                'mqtt_broker': 'localhost',
+                'frigate_url': 'http://frigate',
+                'buffer_ip': 'localhost',
+                'storage_path': '/tmp',
+            },
+            'notifications': {
+                'pushover': {
+                    'enabled': True,
+                    'pushover_user_key': 'uk',
+                    'pushover_api_token': 'tok',
+                    'device': 'phone',
+                    'default_sound': 'pushover',
+                    'html': 1,
+                },
+            },
+        }
+        mock_exists.return_value = True
+        mock_yaml_load.return_value = valid_yaml
+
+        config = load_config()
+        self.assertIn('pushover', config)
+        po = config['pushover']
+        self.assertIsInstance(po, dict)
+        self.assertTrue(po.get('enabled'))
+        self.assertEqual(po.get('pushover_user_key'), 'uk')
+        self.assertEqual(po.get('pushover_api_token'), 'tok')
+        self.assertEqual(po.get('device'), 'phone')
+        self.assertEqual(po.get('default_sound'), 'pushover')
+        self.assertEqual(po.get('html'), 1)
+
+    @patch('builtins.open', new_callable=mock_open)
+    @patch('os.path.exists')
+    @patch('frigate_buffer.config.yaml.safe_load')
+    def test_pushover_empty_normalized_to_dict(self, mock_yaml_load, mock_exists, mock_file):
+        """When notifications.pushover is present but blank (None), config['pushover'] is {} so .get() never raises."""
+        valid_yaml = {
+            'cameras': [{'name': 'cam1'}],
+            'network': {
+                'mqtt_broker': 'localhost',
+                'frigate_url': 'http://frigate',
+                'buffer_ip': 'localhost',
+                'storage_path': '/tmp',
+            },
+            'notifications': {
+                'pushover': None,
+            },
+        }
+        mock_exists.return_value = True
+        mock_yaml_load.return_value = valid_yaml
+
+        config = load_config()
+        self.assertIn('pushover', config)
+        po = config['pushover']
+        self.assertIsInstance(po, dict)
+        # Must not raise AttributeError (env overrides may add pushover_user_key/pushover_api_token).
+        _ = po.get('enabled')
+        _ = po.get('pushover_api_token')
+        _ = po.get('pushover_user_key')
+
 if __name__ == '__main__':
     unittest.main()

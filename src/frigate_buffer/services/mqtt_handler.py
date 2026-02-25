@@ -310,7 +310,7 @@ class MqttMessageHandler:
             ):
                 event = self._state_manager.get_event(event_id)
                 if event:
-                    self._consolidated_manager.update_best(
+                    self._consolidated_manager.set_final_from_frigate(
                         event_id,
                         title=title,
                         description=description,
@@ -362,11 +362,11 @@ class MqttMessageHandler:
                                     "created_at": ce.start_time,
                                     "end_time": ce.end_time,
                                     "phase": ce.phase,
-                                    "genai_title": ce.best_title,
-                                    "genai_description": ce.best_description,
+                                    "genai_title": ce.final_title,
+                                    "genai_description": ce.final_description,
                                     "ai_description": None,
                                     "review_summary": None,
-                                    "threat_level": ce.best_threat_level,
+                                    "threat_level": ce.final_threat_level,
                                     "severity": ce.severity,
                                     "snapshot_downloaded": ce.snapshot_downloaded,
                                     "clip_downloaded": ce.clip_downloaded,
@@ -378,9 +378,31 @@ class MqttMessageHandler:
                                 },
                             )()
                         else:
-                            notify_target = event
+                            # CE already removed; build CE-shaped target so pipeline stays CE-only (e.g. 1-camera CE)
+                            notify_target = type(
+                                "NotifyTarget",
+                                (),
+                                {
+                                    "event_id": event.event_id,
+                                    "camera": event.camera,
+                                    "label": event.label,
+                                    "folder_path": event.folder_path or "",
+                                    "created_at": event.created_at,
+                                    "end_time": event.end_time or event.created_at,
+                                    "phase": getattr(event, "phase", None),
+                                    "genai_title": title,
+                                    "genai_description": description,
+                                    "ai_description": None,
+                                    "review_summary": None,
+                                    "threat_level": threat_level,
+                                    "severity": getattr(event, "severity", None) or "detection",
+                                    "snapshot_downloaded": event.snapshot_downloaded,
+                                    "clip_downloaded": event.clip_downloaded,
+                                    "image_url_override": getattr(event, "image_url_override", None),
+                                },
+                            )()
                         self._notifier.publish_notification(
                             notify_target,
                             "finalized",
-                            tag_override=f"frigate_{ce.consolidated_id}" if ce else None,
+                            tag_override=f"frigate_{ce.consolidated_id}" if ce else f"frigate_{event.event_id}",
                         )

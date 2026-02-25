@@ -194,7 +194,7 @@ class EventLifecycleService:
                 self.run_cleanup()
                 return
 
-            # Event not in a CE (edge case; normal flow is all events in a CE).
+            # Event not in a CE: invariant violation (all events go through CE pipeline, including 1-camera).
             self.run_cleanup()
 
         except Exception as e:
@@ -383,9 +383,9 @@ class EventLifecycleService:
             'event_id': ce.consolidated_id, 'camera': ce.camera, 'label': ce.label,
             'folder_path': media_folder, 'created_at': ce.start_time,
             'end_time': ce.end_time, 'phase': ce.phase,
-            'genai_title': ce.best_title, 'genai_description': ce.best_description,
+            'genai_title': ce.final_title, 'genai_description': ce.final_description,
             'ai_description': None, 'review_summary': summary,
-            'threat_level': ce.best_threat_level, 'severity': ce.severity,
+            'threat_level': ce.final_threat_level, 'severity': ce.severity,
             'snapshot_downloaded': ce.snapshot_downloaded,
             'clip_downloaded': ce.clip_downloaded,
             'image_url_override': gif_url,
@@ -395,7 +395,7 @@ class EventLifecycleService:
             ce.clip_ready_sent = True
             self.notifier.publish_notification(notify_target, "clip_ready")
         if self.config.get('AI_MODE') != 'external_api':
-            if not ce.finalized_sent and (ce.best_title or ce.best_description):
+            if not ce.finalized_sent and (ce.final_title or ce.final_description):
                 ce.finalized_sent = True
                 self.notifier.publish_notification(notify_target, "finalized")
             if summary and not _is_no_concerns(summary):

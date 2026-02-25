@@ -151,8 +151,8 @@ class TestQuickTitleService(unittest.TestCase):
                 primary_event_id="ev1",
                 start_time=1000.0,
                 end_time=1010.0,
-                best_description="",
-                best_threat_level=0,
+                final_description="",
+                final_threat_level=0,
                 severity="detection",
             )
             consolidated_manager.get_by_frigate_event.return_value = ce
@@ -171,9 +171,7 @@ class TestQuickTitleService(unittest.TestCase):
             state_manager.set_genai_metadata.assert_called_once()
             file_manager.write_summary.assert_called_once()
             file_manager.write_metadata_json.assert_called_once()
-            consolidated_manager.update_best.assert_called_once_with(
-                "ev1", title="Person at door", description="A person is standing at the front door."
-            )
+            # Quick title does not set CE.final_* (final = CE analysis only for external_api)
             notifier.publish_notification.assert_called_once()
             call_args = notifier.publish_notification.call_args
             self.assertEqual(call_args[0][1], "snapshot_ready")

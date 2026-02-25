@@ -24,6 +24,10 @@ logger = logging.getLogger("frigate-buffer")
 # Output frame rate for compilation (smooth panning samples at this rate).
 COMPILATION_OUTPUT_FPS = 20
 
+# Chunk size for batched decode to protect VRAM (same pattern as video.py). Decoder returns
+# up to this many frames per get_frames call; after each chunk we del batch and empty_cache.
+BATCH_SIZE = 4
+
 # When the nearest sidecar entry has no detections (e.g. person left frame), search for the
 # nearest entry with detections within this many seconds and hold that crop instead of panning to center.
 HOLD_CROP_MAX_DISTANCE_SEC = 5.0
@@ -731,6 +735,7 @@ def _run_pynv_compilation(
             fallback_fps = (slice_meta[2] if slice_meta and slice_meta[2] > 0 else 30.0)
             fallback_duration = slice_meta[3] if slice_meta else duration
 
+            batch = None  # So slice finally can always try to del batch after chunk loop or on error.
             try:
                 with GPU_LOCK:
                     with create_decoder(clip_path, gpu_id=cuda_device_index) as ctx:
@@ -745,104 +750,129 @@ def _run_pynv_compilation(
                         ]
                         if not src_indices:
                             continue
-                        batch = ctx.get_frames(src_indices)
-                        if batch.shape[0] == 0:
-                            logger.error(
-                                "Compilation: decoder returned 0 frames for slice %s (post-decode, not hardware init). Skipping slice. path=%s",
-                                slice_idx,
-                                clip_path,
-                            )
-                            continue
-                # Decoder context closed; batch is cloned so we can use it.
-                _, _, ih, iw = batch.shape
-                sw = sl.get("native_width") or iw
-                sh = sl.get("native_height") or ih
-                scale_x = (iw / sw) if sw > 0 else 1.0
-                scale_y = (ih / sh) if sh > 0 else 1.0
-                # Scale crop from sidecar native (sw, sh) to decoder frame (iw, ih).
-                if crop_start and crop_end:
-                    xs, ys, w, h = crop_start
-                    xe, ye, we, he = crop_end
-                    w_d = max(1, min(iw, int(w * scale_x)))
-                    h_d = max(1, min(ih, int(h * scale_y)))
-                    we_d = max(1, min(iw, int(we * scale_x)))
-                    he_d = max(1, min(ih, int(he * scale_y)))
-                    xs_d = xs * scale_x
-                    ys_d = ys * scale_y
-                    xe_d = xe * scale_x
-                    ye_d = ye * scale_y
-                    start_cx = xs_d + w_d / 2.0
-                    start_cy = ys_d + h_d / 2.0
-                    end_cx = xe_d + we_d / 2.0
-                    end_cy = ye_d + he_d / 2.0
-                else:
-                    # Fallback: center in decoder space (slice missing crop_start/crop_end).
-                    start_cx = iw / 2.0
-                    start_cy = ih / 2.0
-                    end_cx = iw / 2.0
-                    end_cy = ih / 2.0
-
-                if len(src_indices) > 1 and len(set(src_indices)) == 1:
-                    logger.debug(
-                        "Compilation static frame: decoder returned same frame index %s for all %s frames for camera=%s slice [%.2f, %.2f]; check decoder/time mapping.",
-                        src_indices[0], n_frames, cam, t0, t1,
-                    )
-                    if cam not in logged_stutter_cameras:
-                        logger.info(
-                            "Possible stutter or missing frames from %s, check original file for confirmation. path=%s",
-                            cam, clip_path,
-                        )
-                        logged_stutter_cameras.add(cam)
-
-                if batch.shape[0] < n_frames:
-                    logger.debug(
-                        "Compilation: decoder returned fewer frames than requested for camera=%s slice [%.2f, %.2f] (%s of %s; post-decode). Repeating last frame.",
-                        cam, t0, t1, batch.shape[0], n_frames,
-                    )
-                    if cam not in logged_stutter_cameras:
-                        logger.info(
-                            "Possible stutter or missing frames from %s, check original file for confirmation. path=%s",
-                            cam, clip_path,
-                        )
-                        logged_stutter_cameras.add(cam)
-
-                # One log per camera per compilation run (avoids flooding when many slices).
-                if cam not in logged_cameras:
-                    logger.debug(
-                        "Compilation camera=%s: frame %sx%s, crop center (%.0f,%.0f)->(%.0f,%.0f), target %sx%s, n_slices=%s, n_frames=%s",
-                        cam, iw, ih, start_cx, start_cy, end_cx, end_cy, target_w, target_h,
-                        slices_per_cam.get(cam, 0), n_frames,
-                    )
-                    logged_cameras.add(cam)
-
-                for i in range(n_frames):
-                    safe_i = min(i, batch.shape[0] - 1)
-                    frame = batch[safe_i : safe_i + 1]
-                    t = output_times[i]
-                    t_progress = (t - t0) / duration if duration > 1e-6 else 0.0
-                    current_cx = start_cx + t_progress * (end_cx - start_cx)
-                    current_cy = start_cy + t_progress * (end_cy - start_cy)
-                    if crop_start and crop_end:
-                        current_w_d = max(2, int(w_d + t_progress * (we_d - w_d)) & ~1)
-                        current_h_d = max(2, int(h_d + t_progress * (he_d - h_d)) & ~1)
-                        current_w_d = min(iw, max(1, current_w_d))
-                        current_h_d = min(ih, max(1, current_h_d))
-                    else:
-                        current_w_d = min(iw, target_w)
-                        current_h_d = min(ih, target_h)
-                    current_cx_int = int(current_cx)
-                    current_cy_int = int(current_cy)
-                    cropped = crop_utils.crop_around_center_to_size(
-                        frame, current_cx_int, current_cy_int,
-                        current_w_d, current_h_d,
-                        target_w, target_h,
-                    )
-                    arr = cropped[0].permute(1, 2, 0).cpu().numpy()
-                    proc.stdin.write(arr.tobytes())
-                    proc.stdin.flush()
-                del batch
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
+                        ih, iw = None, None  # Set from first chunk batch shape; crop params computed once.
+                        for chunk_start in range(0, len(src_indices), BATCH_SIZE):
+                            chunk_indices = src_indices[chunk_start : chunk_start + BATCH_SIZE]
+                            try:
+                                batch = ctx.get_frames(chunk_indices)
+                            except Exception as e:
+                                logger.error(
+                                    "%s (decoder get_frames failed). path=%s chunk_indices=%s error=%s",
+                                    NVDEC_INIT_FAILURE_PREFIX,
+                                    clip_path,
+                                    chunk_indices,
+                                    e,
+                                    exc_info=True,
+                                )
+                                logger.warning(
+                                    "Compilation: decoder get_frames failed for slice %s (%s): %s",
+                                    slice_idx,
+                                    clip_path,
+                                    e,
+                                )
+                                if torch.cuda.is_available():
+                                    try:
+                                        logger.debug("VRAM summary: %s", torch.cuda.memory_summary())
+                                    except Exception:
+                                        pass
+                                break
+                            if batch.shape[0] == 0:
+                                logger.error(
+                                    "Compilation: decoder returned 0 frames for chunk (slice %s). Skipping chunk. path=%s",
+                                    slice_idx,
+                                    clip_path,
+                                )
+                                del batch
+                                if torch.cuda.is_available():
+                                    torch.cuda.empty_cache()
+                                continue
+                            # First chunk only: set decoder dimensions and compute crop params once per slice.
+                            if ih is None:
+                                _, _, ih, iw = batch.shape
+                                sw = sl.get("native_width") or iw
+                                sh = sl.get("native_height") or ih
+                                scale_x = (iw / sw) if sw > 0 else 1.0
+                                scale_y = (ih / sh) if sh > 0 else 1.0
+                                if crop_start and crop_end:
+                                    xs, ys, w, h = crop_start
+                                    xe, ye, we, he = crop_end
+                                    w_d = max(1, min(iw, int(w * scale_x)))
+                                    h_d = max(1, min(ih, int(h * scale_y)))
+                                    we_d = max(1, min(iw, int(we * scale_x)))
+                                    he_d = max(1, min(ih, int(he * scale_y)))
+                                    xs_d = xs * scale_x
+                                    ys_d = ys * scale_y
+                                    xe_d = xe * scale_x
+                                    ye_d = ye * scale_y
+                                    start_cx = xs_d + w_d / 2.0
+                                    start_cy = ys_d + h_d / 2.0
+                                    end_cx = xe_d + we_d / 2.0
+                                    end_cy = ye_d + he_d / 2.0
+                                else:
+                                    start_cx = iw / 2.0
+                                    start_cy = ih / 2.0
+                                    end_cx = iw / 2.0
+                                    end_cy = ih / 2.0
+                                # Static-frame: decoder returned same index for all frames in slice (first chunk only).
+                                if len(src_indices) > 1 and len(set(src_indices)) == 1:
+                                    logger.debug(
+                                        "Compilation static frame: decoder returned same frame index %s for all %s frames for camera=%s slice [%.2f, %.2f]; check decoder/time mapping.",
+                                        src_indices[0], n_frames, cam, t0, t1,
+                                    )
+                                    if cam not in logged_stutter_cameras:
+                                        logger.info(
+                                            "Possible stutter or missing frames from %s, check original file for confirmation. path=%s",
+                                            cam, clip_path,
+                                        )
+                                        logged_stutter_cameras.add(cam)
+                                if cam not in logged_cameras:
+                                    logger.debug(
+                                        "Compilation camera=%s: frame %sx%s, crop center (%.0f,%.0f)->(%.0f,%.0f), target %sx%s, n_slices=%s, n_frames=%s",
+                                        cam, iw, ih, start_cx, start_cy, end_cx, end_cy, target_w, target_h,
+                                        slices_per_cam.get(cam, 0), n_frames,
+                                    )
+                                    logged_cameras.add(cam)
+                            # Every chunk: fewer frames than requested — repeat last frame of chunk to keep sync.
+                            if batch.shape[0] < len(chunk_indices):
+                                logger.debug(
+                                    "Compilation: decoder returned fewer frames than requested for chunk camera=%s slice [%.2f, %.2f] (%s of %s). Repeating last frame of chunk.",
+                                    cam, t0, t1, batch.shape[0], len(chunk_indices),
+                                )
+                                if cam not in logged_stutter_cameras:
+                                    logger.info(
+                                        "Possible stutter or missing frames from %s, check original file for confirmation. path=%s",
+                                        cam, clip_path,
+                                    )
+                                    logged_stutter_cameras.add(cam)
+                            for j in range(len(chunk_indices)):
+                                safe_j = min(j, batch.shape[0] - 1)
+                                frame = batch[safe_j : safe_j + 1]
+                                i = chunk_start + j
+                                t = output_times[i]
+                                t_progress = (t - t0) / duration if duration > 1e-6 else 0.0
+                                current_cx = start_cx + t_progress * (end_cx - start_cx)
+                                current_cy = start_cy + t_progress * (end_cy - start_cy)
+                                if crop_start and crop_end:
+                                    current_w_d = max(2, int(w_d + t_progress * (we_d - w_d)) & ~1)
+                                    current_h_d = max(2, int(h_d + t_progress * (he_d - h_d)) & ~1)
+                                    current_w_d = min(iw, max(1, current_w_d))
+                                    current_h_d = min(ih, max(1, current_h_d))
+                                else:
+                                    current_w_d = min(iw, target_w)
+                                    current_h_d = min(ih, target_h)
+                                current_cx_int = int(current_cx)
+                                current_cy_int = int(current_cy)
+                                cropped = crop_utils.crop_around_center_to_size(
+                                    frame, current_cx_int, current_cy_int,
+                                    current_w_d, current_h_d,
+                                    target_w, target_h,
+                                )
+                                arr = cropped[0].permute(1, 2, 0).cpu().numpy()
+                                proc.stdin.write(arr.tobytes())
+                                proc.stdin.flush()
+                            del batch
+                            if torch.cuda.is_available():
+                                torch.cuda.empty_cache()
             except Exception as e:
                 logger.error(
                     "%s (decoder failed for slice %s). path=%s error=%s",

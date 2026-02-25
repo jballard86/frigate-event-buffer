@@ -130,10 +130,10 @@ class ConsolidatedEvent:
     frigate_event_ids: list[str] = field(default_factory=list)
     labels: list[str] = field(default_factory=list)
 
-    # Best-so-far (never regress)
-    best_title: str | None = None
-    best_description: str | None = None
-    best_threat_level: int = 0
+    # Final title/description from canonical source only (Frigate GenAI or CE analysis)
+    final_title: str | None = None
+    final_description: str | None = None
+    final_threat_level: int = 0
 
     # Primary (first) Frigate event for immediate clip/snapshot
     primary_event_id: str | None = None
@@ -176,15 +176,15 @@ class ConsolidatedEvent:
 
     @property
     def genai_title(self) -> str | None:
-        return self.best_title
+        return self.final_title
 
     @property
     def genai_description(self) -> str | None:
-        return self.best_description
+        return self.final_description
 
     @property
     def threat_level(self) -> int:
-        return self.best_threat_level
+        return self.final_threat_level
 
     @property
     def severity(self) -> str | None:

@@ -79,7 +79,18 @@ CONFIG_SCHEMA = Schema({
     Optional('notifications'): {
         Optional('home_assistant'): {
             Optional('enabled'): bool,  # When False, NotificationDispatcher omits HA MQTT provider; ha block (stats page) unchanged.
-        }
+        },
+        Optional('pushover'): Any(
+            None,
+            Schema({
+                Optional('enabled'): bool,
+                Optional('pushover_user_key'): str,
+                Optional('pushover_api_token'): str,
+                Optional('device'): str,
+                Optional('default_sound'): str,
+                Optional('html'): int,
+            }),
+        ),
     },
     # Gemini proxy for main-app clip AI analysis; optional; API key often via env (GEMINI_API_KEY).
     Optional('gemini'): {
@@ -183,6 +194,9 @@ def load_config() -> dict:
 
         # Notifications: when True, orchestrator adds HomeAssistantMqttProvider; default True (legacy behavior).
         'NOTIFICATIONS_HOME_ASSISTANT_ENABLED': True,
+
+        # Pushover: optional; orchestrator adds PushoverProvider when enabled and keys present.
+        'pushover': {},
 
         # Filtering defaults (empty = allow all)
         'ALLOWED_CAMERAS': [],
@@ -320,6 +334,9 @@ def load_config() -> dict:
                     if 'home_assistant' in notif:
                         config['NOTIFICATIONS_HOME_ASSISTANT_ENABLED'] = bool(notif['home_assistant'].get('enabled', True))
 
+                # Normalize pushover block so po_config.get() never raises (yaml may give None if pushover: is blank).
+                config['pushover'] = (yaml_config.get('notifications') or {}).get('pushover') or {}
+
                 if 'gemini' in yaml_config:
                     gemini_cfg = yaml_config['gemini']
                     config['GEMINI'] = {
@@ -414,6 +431,12 @@ def load_config() -> dict:
             config['GEMINI_FRAMES_PER_HOUR_CAP'] = int(_cap)
         except ValueError:
             pass
+
+    # Pushover: env overrides for credentials (e.g. in .env as PUSHOVER_USER_KEY, PUSHOVER_API_TOKEN)
+    config.setdefault('pushover', {})
+    if isinstance(config.get('pushover'), dict):
+        config['pushover']['pushover_user_key'] = os.getenv('PUSHOVER_USER_KEY') or config['pushover'].get('pushover_user_key') or ''
+        config['pushover']['pushover_api_token'] = os.getenv('PUSHOVER_API_TOKEN') or config['pushover'].get('pushover_api_token') or ''
 
     # Gemini env overrides (api_key for secrets). Single API Key: GEMINI_API_KEY only.
     config['GEMINI'] = dict(config.get('GEMINI') or {})

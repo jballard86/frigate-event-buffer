@@ -9,11 +9,15 @@ from frigate_buffer.services.notifications.base import (
     NotificationResult,
 )
 from frigate_buffer.services.notifications.dispatcher import NotificationDispatcher
-from frigate_buffer.services.notifications.providers import HomeAssistantMqttProvider
+from frigate_buffer.services.notifications.providers import (
+    HomeAssistantMqttProvider,
+    PushoverProvider,
+)
 
 __all__ = [
     "BaseNotificationProvider",
     "NotificationDispatcher",
     "NotificationResult",
     "HomeAssistantMqttProvider",
+    "PushoverProvider",
 ]

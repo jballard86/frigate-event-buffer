@@ -180,17 +180,34 @@ class ConsolidatedEventManager:
             except Exception as e:
                 logger.exception(f"CE close callback error for {ce_id}: {e}")
 
-    def update_best(self, event_id: str, title: str | None = None,
-                    description: str | None = None, threat_level: int | None = None) -> None:
+    def set_final_from_frigate(self, event_id: str, title: str | None = None,
+                               description: str | None = None, threat_level: int | None = None) -> None:
+        """Set CE final title/description from Frigate GenAI (Path 1). Overwrites so last wins."""
         with self._lock:
-            ce = self.get_by_frigate_event(event_id)
-            if ce:
-                if title and (not ce.best_title or len(str(title)) > len(str(ce.best_title or ""))):
-                    ce.best_title = title
-                if description and (not ce.best_description or len(str(description)) > len(str(ce.best_description or ""))):
-                    ce.best_description = description
-                if threat_level is not None and threat_level > ce.best_threat_level:
-                    ce.best_threat_level = threat_level
+            ce_id = self._frigate_to_ce.get(event_id)
+            if not ce_id or ce_id not in self._events:
+                return
+            ce = self._events[ce_id]
+            if title is not None:
+                ce.final_title = title
+            if description is not None:
+                ce.final_description = description
+            if threat_level is not None and threat_level > ce.final_threat_level:
+                ce.final_threat_level = threat_level
+
+    def set_final_from_ce_analysis(self, ce_id: str, title: str | None = None,
+                                   description: str | None = None, threat_level: int | None = None) -> None:
+        """Set CE final title/description from CE analysis result (Path 2). CE may already be removed."""
+        with self._lock:
+            if ce_id not in self._events:
+                return
+            ce = self._events[ce_id]
+            if title is not None:
+                ce.final_title = title
+            if description is not None:
+                ce.final_description = description
+            if threat_level is not None and threat_level > ce.final_threat_level:
+                ce.final_threat_level = threat_level
 
     def mark_inactive(self, consolidated_id: str) -> None:
         with self._lock:

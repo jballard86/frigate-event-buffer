@@ -122,6 +122,32 @@ class TestConsolidationClosingState(unittest.TestCase):
         result = self.mgr.remove_event_from_ce("nonexistent")
         self.assertIsNone(result)
 
+    def test_set_final_from_frigate_sets_ce_final_fields(self):
+        """set_final_from_frigate sets final_title, final_description, final_threat_level on the CE."""
+        now = 1000.0
+        ce, _, _ = self.mgr.get_or_create("e1", "cam1", "person", now)
+        self.assertIsNone(ce.final_title)
+        self.assertIsNone(ce.final_description)
+        self.assertEqual(ce.final_threat_level, 0)
+        self.mgr.set_final_from_frigate(
+            "e1", title="Test Title", description="Test desc", threat_level=2
+        )
+        self.assertEqual(ce.final_title, "Test Title")
+        self.assertEqual(ce.final_description, "Test desc")
+        self.assertEqual(ce.final_threat_level, 2)
+
+    def test_set_final_from_ce_analysis_sets_ce_final_fields(self):
+        """set_final_from_ce_analysis sets final_* on the CE by ce_id."""
+        now = 1000.0
+        ce, _, _ = self.mgr.get_or_create("e1", "cam1", "person", now)
+        ce_id = ce.consolidated_id
+        self.mgr.set_final_from_ce_analysis(
+            ce_id, title="CE Title", description="CE desc", threat_level=1
+        )
+        self.assertEqual(ce.final_title, "CE Title")
+        self.assertEqual(ce.final_description, "CE desc")
+        self.assertEqual(ce.final_threat_level, 1)
+
     def test_get_or_create_does_not_add_to_closed_ce(self):
         now = 1000.0
         ce1, is_new, _ = self.mgr.get_or_create("e1", "cam1", "person", now)

@@ -408,7 +408,7 @@ class FileManager:
             return False
 
     def delete_event_folder(self, folder_path: str) -> bool:
-        """Delete a single event folder (or CE camera subfolder). Path must be under storage_path.
+        """Delete one event folder (or one CE camera subfolder). Path must be under storage_path.
         Returns True if the folder was deleted, False if path invalid or not found."""
         try:
             base = os.path.realpath(self.storage_path)

@@ -118,7 +118,6 @@ class QuickTitleService:
         if event and event.folder_path:
             self._file_manager.write_summary(event.folder_path, event)
             self._file_manager.write_metadata_json(event.folder_path, event)
-        self._consolidated_manager.update_best(event_id, title=title_str, description=description_str)
         ce = self._consolidated_manager.get_by_frigate_event(event_id)
         primary = (
             self._state_manager.get_event(ce.primary_event_id)
@@ -135,6 +134,7 @@ class QuickTitleService:
         )
         if not ce:
             media_folder = camera_folder_path
+            logger.warning("Quick title: event %s not in a CE (invariant: all events are CEs)", event_id)
         notify_target = type(
             "NotifyTarget",
             (),
@@ -150,7 +150,7 @@ class QuickTitleService:
                 "genai_description": description_str,
                 "ai_description": None,
                 "review_summary": None,
-                "threat_level": ce.best_threat_level if ce else event.threat_level,
+                "threat_level": ce.final_threat_level if ce else event.threat_level,
                 "severity": ce.severity if ce else (event.severity or "detection"),
                 "snapshot_downloaded": getattr(primary, "snapshot_downloaded", False) if primary else False,
                 "clip_downloaded": getattr(primary, "clip_downloaded", False) if primary else False,
