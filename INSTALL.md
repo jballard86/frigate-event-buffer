@@ -77,6 +77,7 @@ cd /mnt/user/appdata/frigate-buffer
 mkdir -p /mnt/user/appdata/frigate_buffer
 cp config.example.yaml /mnt/user/appdata/frigate_buffer/config.yaml
 # Edit config.yaml: cameras, FRIGATE_URL, MQTT_BROKER, etc.
+# If upgrading: add settings.ai_mode ("frigate" or "external_api"); default is external_api.
 nano /mnt/user/appdata/frigate_buffer/config.yaml
 ```
 

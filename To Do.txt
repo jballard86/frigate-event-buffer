@@ -5,6 +5,10 @@
 
   - pushover notification option
 
+  - add black/ruff
+
+  - add RULE.md and .cursor/rules
+
   - if event starts with a car, have yolo track the car for that portion of the ai and video sumary, 
     but priortize people once they are in Frame
 

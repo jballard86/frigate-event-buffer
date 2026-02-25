@@ -14,7 +14,7 @@ import time
 from typing import Any
 
 from frigate_buffer.logging_utils import should_suppress_review_debug_logs
-from frigate_buffer.models import EventState, _is_no_concerns
+from frigate_buffer.models import EventState
 
 logger = logging.getLogger("frigate-buffer")
 
@@ -224,6 +224,8 @@ class MqttMessageHandler:
         update_type = payload.get("type")
         if update_type and update_type != "description":
             return
+        if self._config.get("AI_MODE") == "external_api":
+            return
         description = payload.get("description")
         if not event_id or not description:
             return
@@ -249,6 +251,8 @@ class MqttMessageHandler:
 
     def _handle_review(self, payload: dict) -> None:
         """Handle frigate/reviews: GenAI update (Phase 3)."""
+        if self._config.get("AI_MODE") == "external_api":
+            return
         event_type = payload.get("type")
         match event_type:
             case "update" | "end" | "genai":
@@ -380,93 +384,3 @@ class MqttMessageHandler:
                             "finalized",
                             tag_override=f"frigate_{ce.consolidated_id}" if ce else None,
                         )
-                    if not ce:
-                        threading.Thread(
-                            target=self._fetch_and_store_review_summary,
-                            args=(event,),
-                            daemon=True,
-                        ).start()
-
-    def _fetch_and_store_review_summary(self, event: EventState) -> None:
-        """Background: fetch review summary from Frigate API, store, notify, then schedule remove."""
-        try:
-            max_wait = 30
-            waited = 0
-            while event.end_time is None and waited < max_wait:
-                time.sleep(2)
-                waited += 2
-            if event.end_time is None:
-                logger.warning(
-                    "No end_time for %s after %ss, using created_at + 60s as fallback",
-                    event.event_id,
-                    max_wait,
-                )
-                effective_end = event.created_at + 60
-            else:
-                effective_end = event.end_time
-            time.sleep(5)
-            padding_before = self._config.get("SUMMARY_PADDING_BEFORE", 15)
-            padding_after = self._config.get("SUMMARY_PADDING_AFTER", 15)
-            padded_start = int(event.created_at - padding_before)
-            padded_end = int(effective_end + padding_after)
-            url = f"{self._config.get('FRIGATE_URL', '')}/api/review/summarize/start/{padded_start}/end/{padded_end}"
-            params = {
-                "start": padded_start,
-                "end": padded_end,
-                "padding_before": padding_before,
-                "padding_after": padding_after,
-            }
-            if self._timeline_logger.folder_for_event(event):
-                self._timeline_logger.log_frigate_api(
-                    self._timeline_logger.folder_for_event(event),
-                    "out",
-                    "Review summarize request (to Frigate API)",
-                    {"url": url, "params": params},
-                )
-            summary = self._download_service.fetch_review_summary(
-                event.created_at, effective_end, padding_before, padding_after
-            )
-            if self._timeline_logger.folder_for_event(event):
-                self._timeline_logger.log_frigate_api(
-                    self._timeline_logger.folder_for_event(event),
-                    "in",
-                    "Review summarize response (from Frigate API)",
-                    {
-                        "url": url,
-                        "params": params,
-                        "response": summary or "(empty or error)",
-                    },
-                )
-            if summary:
-                self._state_manager.set_review_summary(event.event_id, summary)
-                write_folder = (
-                    self._timeline_logger.folder_for_event(event) or event.folder_path
-                )
-                if write_folder:
-                    event.review_summary_written = (
-                        self._file_manager.write_review_summary(
-                            write_folder, summary
-                        )
-                    )
-                    self._file_manager.write_summary(write_folder, event)
-                    self._file_manager.write_metadata_json(write_folder, event)
-                if not _is_no_concerns(summary):
-                    self._notifier.publish_notification(event, "summarized")
-                else:
-                    logger.info(
-                        "Skipping summarized notification for %s (no concerns)",
-                        event.event_id,
-                    )
-            else:
-                logger.warning(
-                    "No review summary obtained for %s", event.event_id
-                )
-        except Exception as e:
-            logger.exception(
-                "Error fetching review summary for %s: %s", event.event_id, e
-            )
-        finally:
-            threading.Timer(
-                60.0,
-                lambda eid=event.event_id: self._state_manager.remove_event(eid),
-            ).start()

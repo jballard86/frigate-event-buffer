@@ -37,7 +37,9 @@ class TestEventLifecycleService(unittest.TestCase):
             self.video_service,
             self.download_service,
             self.notifier,
-            self.timeline_logger
+            self.timeline_logger,
+            on_ce_ready_for_analysis=None,
+            on_quick_title_trigger=None,
         )
 
     def test_handle_event_new_new_event(self):
@@ -247,6 +249,38 @@ class TestEventLifecycleService(unittest.TestCase):
         self.download_service.export_and_download_clip.assert_not_called()
         on_ce_ready_mock.assert_not_called()
         self.consolidated_manager.remove.assert_called_with(ce_id)
+
+    def test_finalize_consolidated_event_external_api_only_clip_ready(self):
+        """When AI_MODE is external_api, do not fetch review summary; send only clip_ready (no finalized/summarized)."""
+        self.config["AI_MODE"] = "external_api"
+        ce_id = "ce1"
+        ce = ConsolidatedEvent(ce_id, "folder", "/tmp/ce1", 100.0, 110.0)
+        ce.frigate_event_ids = ["evt1"]
+        ce.cameras = ["cam1"]
+        ce.primary_camera = "cam1"
+        ce.end_time_max = 110.0
+        ce.last_activity_time = 110.0
+        self.consolidated_manager.mark_closing.return_value = True
+        self.consolidated_manager._events = {ce_id: ce}
+        self.consolidated_manager._lock = MagicMock()
+
+        evt1 = EventState("evt1", "cam1", "person", created_at=100.0)
+        evt1.end_time = 110.0
+        self.state_manager.get_event.return_value = evt1
+        self.file_manager.ensure_consolidated_camera_folder.return_value = "/tmp/ce1/cam1"
+        self.download_service.export_and_download_clip.return_value = {
+            "success": True,
+            "clip_path": "/tmp/ce1/cam1/clip.mp4",
+        }
+        self.video_service.generate_detection_sidecars_for_cameras.return_value = None
+        self.file_manager.sanitize_camera_name.return_value = "cam1"
+
+        self.service.finalize_consolidated_event(ce_id)
+
+        self.download_service.fetch_review_summary.assert_not_called()
+        self.notifier.publish_notification.assert_called_once()
+        self.assertEqual(self.notifier.publish_notification.call_args[0][1], "clip_ready")
+        self.notifier.mark_last_event_ended.assert_called_once()
 
     def test_finalize_consolidated_event_multi_cam_uses_download_then_sidecar(self):
         """With 2+ cameras, lifecycle uses export_and_download_clip then generate_detection_sidecars_for_cameras (no transcode)."""

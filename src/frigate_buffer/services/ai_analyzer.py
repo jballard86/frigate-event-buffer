@@ -100,7 +100,7 @@ class GeminiAnalysisService:
         return self._prompt_template
 
     def _load_quick_title_prompt(self) -> str:
-        """Load system prompt for quick-title (single image, 3–6 word title only)."""
+        """Load system prompt for quick-title (single image; expects JSON with title and description)."""
         default_path = os.path.join(
             os.path.dirname(os.path.abspath(__file__)),
             'quick_title_prompt.txt'
@@ -112,8 +112,8 @@ class GeminiAnalysisService:
             except Exception as e:
                 logger.warning("Could not read quick_title_prompt.txt: %s", e)
         return (
-            "You are a security camera alert titler. Respond with ONLY a short title of 3 to 6 words. "
-            "No quotes, no markdown, no JSON, no explanation."
+            "You are a security camera alert titler. Return valid JSON only with keys \"title\" (max 12 words) and \"description\" (max 2 sentences). "
+            "No markdown, no explanation."
         )
 
     def _post_messages(self, messages: list[dict[str, Any]], timeout: int) -> requests.Response | None:
@@ -161,11 +161,12 @@ class GeminiAnalysisService:
             return None
         return self._parse_response_content(data)
 
-    def generate_quick_title(self, image: Any, camera: str, label: str) -> str | None:
+    def generate_quick_title(self, image: Any, camera: str, label: str) -> dict[str, str] | None:
         """
-        Send a single cropped/live frame to the Gemini proxy and return a short title (3–6 words).
-        image: numpy HWC BGR or torch.Tensor BCHW RGB (Phase 4); encoded via _frame_to_base64_url.
-        Used for the quick-title pipeline shortly after event start. Returns None on failure or empty.
+        Send a single cropped/live frame to the Gemini proxy and return title and description.
+        image: numpy HWC BGR or torch.Tensor BCHW RGB; encoded via _frame_to_base64_url.
+        Used for the quick-title pipeline shortly after event start.
+        Returns a dict with keys "title" and "description", or None on failure or empty.
         """
         if not self._proxy_url or not self._api_key:
             logger.warning("Gemini proxy_url or api_key not configured for quick title")
@@ -182,7 +183,24 @@ class GeminiAnalysisService:
             if lines and lines[-1].strip() == "```":
                 lines = lines[:-1]
             raw = "\n".join(lines)
-        return raw.strip()[:200] or None
+        raw = raw.strip()
+        if not raw:
+            return None
+        try:
+            data = json.loads(raw)
+        except (ValueError, TypeError) as e:
+            logger.warning("Quick-title response is not valid JSON: %s", e)
+            return None
+        if not isinstance(data, dict):
+            return None
+        title = data.get("title")
+        description = data.get("description", "")
+        if not title or not str(title).strip():
+            return None
+        return {
+            "title": str(title).strip()[:500],
+            "description": str(description).strip()[:1000] if description else "",
+        }
 
     def _build_system_prompt(
         self,

@@ -84,7 +84,7 @@ class TestQuickTitleService(unittest.TestCase):
 
     @patch("frigate_buffer.services.quick_title_service.requests.get")
     def test_run_quick_title_no_title_returned_does_not_notify(self, mock_get):
-        """When generate_quick_title returns empty, no notification is sent."""
+        """When generate_quick_title returns None or empty title, no notification is sent."""
         mock_get.return_value.content = b"\xff\xd8\xff"
         mock_get.return_value.raise_for_status = MagicMock()
         with patch("frigate_buffer.services.quick_title_service.cv2.imdecode") as mock_decode:
@@ -92,7 +92,7 @@ class TestQuickTitleService(unittest.TestCase):
             video_service = MagicMock()
             video_service.run_detection_on_image.return_value = []
             ai_analyzer = MagicMock()
-            ai_analyzer.generate_quick_title.return_value = ""
+            ai_analyzer.generate_quick_title.return_value = None
             notifier = MagicMock()
             service = self._make_service(
                 video_service=video_service,
@@ -116,7 +116,7 @@ class TestQuickTitleService(unittest.TestCase):
 
     @patch("frigate_buffer.services.quick_title_service.requests.get")
     def test_run_quick_title_updates_state_and_notifies_with_tag(self, mock_get):
-        """Happy path: state updated, metadata written, single notification with expected tag."""
+        """Happy path: state updated, write_summary and write_metadata_json called, notification with title and description."""
         mock_get.return_value.content = b"\xff\xd8\xff"
         mock_get.return_value.raise_for_status = MagicMock()
         with patch("frigate_buffer.services.quick_title_service.cv2.imdecode") as mock_decode:
@@ -124,7 +124,10 @@ class TestQuickTitleService(unittest.TestCase):
             video_service = MagicMock()
             video_service.run_detection_on_image.return_value = []
             ai_analyzer = MagicMock()
-            ai_analyzer.generate_quick_title.return_value = "Person at door"
+            ai_analyzer.generate_quick_title.return_value = {
+                "title": "Person at door",
+                "description": "A person is standing at the front door.",
+            }
             state_manager = MagicMock()
             event = MagicMock(
                 event_id="ev1",
@@ -166,12 +169,18 @@ class TestQuickTitleService(unittest.TestCase):
                 "ev1", "cam1", "person", "ce1", "/storage/events/ce1/cam1", tag_override=None
             )
             state_manager.set_genai_metadata.assert_called_once()
+            file_manager.write_summary.assert_called_once()
             file_manager.write_metadata_json.assert_called_once()
-            consolidated_manager.update_best.assert_called_once_with("ev1", title="Person at door")
+            consolidated_manager.update_best.assert_called_once_with(
+                "ev1", title="Person at door", description="A person is standing at the front door."
+            )
             notifier.publish_notification.assert_called_once()
             call_args = notifier.publish_notification.call_args
             self.assertEqual(call_args[0][1], "snapshot_ready")
             self.assertEqual(call_args[1]["tag_override"], "frigate_ce1")
+            notify_target = call_args[0][0]
+            self.assertEqual(getattr(notify_target, "genai_title", None), "Person at door")
+            self.assertEqual(getattr(notify_target, "genai_description", None), "A person is standing at the front door.")
 
     @patch("frigate_buffer.services.quick_title_service.requests.get")
     def test_run_quick_title_event_gone_does_not_notify(self, mock_get):
@@ -183,7 +192,7 @@ class TestQuickTitleService(unittest.TestCase):
             video_service = MagicMock()
             video_service.run_detection_on_image.return_value = []
             ai_analyzer = MagicMock()
-            ai_analyzer.generate_quick_title.return_value = "Title"
+            ai_analyzer.generate_quick_title.return_value = {"title": "Title", "description": ""}
             state_manager = MagicMock()
             state_manager.get_event.return_value = None
             notifier = MagicMock()

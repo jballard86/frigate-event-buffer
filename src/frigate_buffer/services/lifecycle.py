@@ -354,24 +354,26 @@ class EventLifecycleService:
                 ce.snapshot_downloaded = True
             ce.clip_downloaded = True
 
-        padded_start = int(ce.start_time - padding_before)
-        padded_end = int((ce.end_time_max or ce.last_activity_time) + padding_after)
-        self.timeline_logger.log_frigate_api(
-            ce.folder_path, 'out',
-            'Review summarize (CE close)',
-            {'url': f"{self.config.get('FRIGATE_URL', '')}/api/review/summarize/start/{padded_start}/end/{padded_end}"}
-        )
-        summary = self.download_service.fetch_review_summary(
-            ce.start_time, ce.end_time_max or ce.last_activity_time,
-            padding_before, padding_after
-        )
-        self.timeline_logger.log_frigate_api(
-            ce.folder_path, 'in',
-            'Review summarize response',
-            {'response': summary or '(empty or error)'}
-        )
-        if summary:
-            self.file_manager.write_review_summary(ce.folder_path, summary)
+        summary = None
+        if self.config.get('AI_MODE') != 'external_api':
+            padded_start = int(ce.start_time - padding_before)
+            padded_end = int((ce.end_time_max or ce.last_activity_time) + padding_after)
+            self.timeline_logger.log_frigate_api(
+                ce.folder_path, 'out',
+                'Review summarize (CE close)',
+                {'url': f"{self.config.get('FRIGATE_URL', '')}/api/review/summarize/start/{padded_start}/end/{padded_end}"}
+            )
+            summary = self.download_service.fetch_review_summary(
+                ce.start_time, ce.end_time_max or ce.last_activity_time,
+                padding_before, padding_after
+            )
+            self.timeline_logger.log_frigate_api(
+                ce.folder_path, 'in',
+                'Review summarize response',
+                {'response': summary or '(empty or error)'}
+            )
+            if summary:
+                self.file_manager.write_review_summary(ce.folder_path, summary)
 
         primary_cam = ce.primary_camera or (ce.cameras[0] if ce.cameras else None)
         media_folder = os.path.join(ce.folder_path, self.file_manager.sanitize_camera_name(primary_cam or "")) if primary_cam else ce.folder_path
@@ -392,11 +394,12 @@ class EventLifecycleService:
         if not ce.clip_ready_sent:
             ce.clip_ready_sent = True
             self.notifier.publish_notification(notify_target, "clip_ready")
-        if not ce.finalized_sent and (ce.best_title or ce.best_description):
-            ce.finalized_sent = True
-            self.notifier.publish_notification(notify_target, "finalized")
-        if summary and not _is_no_concerns(summary):
-            self.notifier.publish_notification(notify_target, "summarized")
+        if self.config.get('AI_MODE') != 'external_api':
+            if not ce.finalized_sent and (ce.best_title or ce.best_description):
+                ce.finalized_sent = True
+                self.notifier.publish_notification(notify_target, "finalized")
+            if summary and not _is_no_concerns(summary):
+                self.notifier.publish_notification(notify_target, "summarized")
 
         for fid in ce.frigate_event_ids:
             self.state_manager.remove_event(fid)

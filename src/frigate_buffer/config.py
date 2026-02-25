@@ -1,7 +1,8 @@
 """Configuration loading and validation."""
 
-import os
+from frigate_buffer.constants import AI_MODE_EXTERNAL_API, AI_MODE_FRIGATE
 import logging
+import os
 import sys
 
 import yaml
@@ -64,6 +65,7 @@ CONFIG_SCHEMA = Schema({
         Optional('gemini_frames_per_hour_cap'): int,             # Rolling cap: max frames sent to proxy per hour; 0 = disabled.
         Optional('quick_title_delay_seconds'): int,              # Delay (3–5s) before running quick AI title on live frame; 0 = disabled.
         Optional('quick_title_enabled'): bool,                  # When true (and Gemini enabled), run quick-title pipeline after delay.
+        Optional('ai_mode'): Any('frigate', 'external_api'),    # frigate = Frigate MQTT AI only; external_api = buffer Gemini/Quick Title only.
     },
     # Home Assistant REST API; used for stats page to display Gemini cost/token entities.
     Optional('ha'): {
@@ -171,6 +173,7 @@ def load_config() -> dict:
         'GEMINI_FRAMES_PER_HOUR_CAP': 200,
         'QUICK_TITLE_DELAY_SECONDS': 4,
         'QUICK_TITLE_ENABLED': True,
+        'AI_MODE': AI_MODE_EXTERNAL_API,
 
         # Optional HA REST API (for stats page token/cost display)
         'HA_URL': None,
@@ -291,6 +294,8 @@ def load_config() -> dict:
                     config['GEMINI_FRAMES_PER_HOUR_CAP'] = settings.get('gemini_frames_per_hour_cap', config.get('GEMINI_FRAMES_PER_HOUR_CAP', 200))
                     config['QUICK_TITLE_DELAY_SECONDS'] = settings.get('quick_title_delay_seconds', config.get('QUICK_TITLE_DELAY_SECONDS', 4))
                     config['QUICK_TITLE_ENABLED'] = settings.get('quick_title_enabled', config.get('QUICK_TITLE_ENABLED', True))
+                    _ai_mode = settings.get('ai_mode', config.get('AI_MODE', AI_MODE_EXTERNAL_API))
+                    config['AI_MODE'] = (_ai_mode or AI_MODE_EXTERNAL_API).strip().lower() if isinstance(_ai_mode, str) else AI_MODE_EXTERNAL_API
 
                 if 'network' in yaml_config:
                     network = yaml_config['network']
@@ -384,6 +389,9 @@ def load_config() -> dict:
     config['STORAGE_PATH'] = os.getenv('STORAGE_PATH', config['STORAGE_PATH'])
     config['RETENTION_DAYS'] = int(os.getenv('RETENTION_DAYS', str(config['RETENTION_DAYS'])))
     config['LOG_LEVEL'] = os.getenv('LOG_LEVEL', config['LOG_LEVEL'])
+    _env_ai = os.getenv('AI_MODE')
+    if _env_ai and str(_env_ai).strip().lower() in (AI_MODE_FRIGATE, AI_MODE_EXTERNAL_API):
+        config['AI_MODE'] = str(_env_ai).strip().lower()
     config['STATS_REFRESH_SECONDS'] = int(os.getenv('STATS_REFRESH_SECONDS', str(config['STATS_REFRESH_SECONDS'])))
     config['DAILY_REPORT_RETENTION_DAYS'] = int(os.getenv('DAILY_REPORT_RETENTION_DAYS', str(config['DAILY_REPORT_RETENTION_DAYS'])))
     config['DAILY_REPORT_SCHEDULE_HOUR'] = int(os.getenv('DAILY_REPORT_SCHEDULE_HOUR', str(config['DAILY_REPORT_SCHEDULE_HOUR'])))

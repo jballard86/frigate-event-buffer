@@ -52,6 +52,12 @@ ZOOM_MIN_FRAME_FRACTION: float = 0.4
 # Video compilation dynamic zoom: padding around bounding box (e.g. 0.10 = bbox + 10%).
 ZOOM_CONTENT_PADDING: float = 0.10
 
+# AI notification mode: mutually exclusive paths (settings.ai_mode / AI_MODE).
+# "frigate" = Frigate GenAI only (tracked_object, frigate/reviews, review summarize at CE close).
+# "external_api" = Buffer Gemini/Quick Title only (quick title, multi-clip CE analysis).
+AI_MODE_FRIGATE: str = "frigate"
+AI_MODE_EXTERNAL_API: str = "external_api"
+
 
 def is_tensor(x: Any) -> bool:
     """True if x is a torch.Tensor; avoids importing torch at module level for tests."""

@@ -97,25 +97,28 @@ class QuickTitleService:
         else:
             image_to_send = image_bgr
         title = self._ai_analyzer.generate_quick_title(image_to_send, camera, label)
-        if not title or not title.strip():
+        if not title or not isinstance(title, dict) or not (title.get("title") or "").strip():
             logger.debug("Quick title: no title returned for %s", event_id)
             return
+        title_str = (title.get("title") or "").strip()
+        description_str = (title.get("description") or "").strip()
         event = self._state_manager.get_event(event_id)
         if not event:
             logger.debug("Quick title: event %s no longer in state", event_id)
             return
         self._state_manager.set_genai_metadata(
             event_id,
-            title,
-            event.genai_description or "",
+            title_str,
+            description_str,
             event.severity or "detection",
             event.threat_level,
             scene=event.genai_scene,
         )
         event = self._state_manager.get_event(event_id)
         if event and event.folder_path:
+            self._file_manager.write_summary(event.folder_path, event)
             self._file_manager.write_metadata_json(event.folder_path, event)
-        self._consolidated_manager.update_best(event_id, title=title)
+        self._consolidated_manager.update_best(event_id, title=title_str, description=description_str)
         ce = self._consolidated_manager.get_by_frigate_event(event_id)
         primary = (
             self._state_manager.get_event(ce.primary_event_id)
@@ -143,8 +146,8 @@ class QuickTitleService:
                 "created_at": ce.start_time if ce else event.created_at,
                 "end_time": ce.end_time if ce else event.end_time,
                 "phase": EventPhase.FINALIZED,
-                "genai_title": title,
-                "genai_description": ce.best_description if ce else (event.genai_description or ""),
+                "genai_title": title_str,
+                "genai_description": description_str,
                 "ai_description": None,
                 "review_summary": None,
                 "threat_level": ce.best_threat_level if ce else event.threat_level,
@@ -159,4 +162,4 @@ class QuickTitleService:
             "snapshot_ready",
             tag_override=tag_override or f"frigate_{ce_id if ce else event_id}",
         )
-        logger.info("Quick title applied for %s: %s", event_id, title[:50])
+        logger.info("Quick title applied for %s: %s", event_id, title_str[:50])

@@ -102,7 +102,7 @@ class StateAwareOrchestrator:
             self._gemini_analysis_semaphore = None
 
         on_ce_ready = None
-        if self.ai_analyzer:
+        if self.ai_analyzer and config.get('AI_MODE') == 'external_api':
             def _on_ce_ready_for_analysis(ce_id: str, ce_folder_path: str, ce_start_time: float, ce_info: dict):
                 def _run():
                     if not self.ai_analyzer or not self._gemini_analysis_semaphore:
@@ -121,7 +121,7 @@ class StateAwareOrchestrator:
             on_ce_ready = _on_ce_ready_for_analysis
 
         on_quick_title = None
-        if self.ai_analyzer and config.get('QUICK_TITLE_ENABLED', True):
+        if self.ai_analyzer and config.get('QUICK_TITLE_ENABLED', True) and config.get('AI_MODE') == 'external_api':
             quick_title_svc = QuickTitleService(
                 config,
                 self.state_manager,
