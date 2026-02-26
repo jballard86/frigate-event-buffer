@@ -217,10 +217,13 @@ def _delete_export_from_frigate(
             pass
         if not reason and resp.text:
             reason = resp.text[:200]
+        body_str_for_log = body_str or "(no body)"
         logger.warning(
-            "Frigate export delete error: export_id=%s status=%s%s",
+            "Frigate export delete error: file_name_requested=%s status=%s "
+            "frigate_response=%s%s",
             export_id,
             resp.status_code,
+            body_str_for_log,
             f" reason={reason}" if reason else "",
         )
         if body_str:
@@ -232,7 +235,8 @@ def _delete_export_from_frigate(
         return "failure"
     except requests.exceptions.RequestException as e:
         logger.warning(
-            "Frigate export delete request failed: export_id=%s error=%s",
+            "Frigate export delete request failed: file_name_requested=%s "
+            "frigate_response=%s",
             export_id,
             e,
         )
@@ -296,10 +300,15 @@ def run_once(config: dict[str, Any]) -> None:
                             if not event_entry.is_dir():
                                 continue
                             event_path = event_entry.path
-                            timeline_path = os.path.join(
+                            timeline_base = os.path.join(
                                 event_path, "notification_timeline.json"
                             )
-                            if not os.path.isfile(timeline_path):
+                            timeline_append = os.path.join(
+                                event_path, "notification_timeline_append.jsonl"
+                            )
+                            if not os.path.isfile(timeline_base) and not os.path.isfile(
+                                timeline_append
+                            ):
                                 continue
 
                             folders_with_timeline += 1
@@ -353,7 +362,21 @@ def run_once(config: dict[str, Any]) -> None:
     )
     total_deletes = succeeded + already_gone + failed
     if total_deletes == 0:
-        logger.info("Export watchdog complete: no exports to delete")
+        if folders_with_timeline == 0:
+            skip_reason = "no folders with timeline (base or append)"
+        elif export_entries_found == 0:
+            skip_reason = "no Clip export response entries in timelines"
+        else:
+            skip_reason = (
+                "entries found but all skipped (clip missing or export_id missing)"
+            )
+        logger.info(
+            "Export watchdog complete: no exports to delete "
+            "(folders_with_timeline=%s export_entries_found=%s reason=%s)",
+            folders_with_timeline,
+            export_entries_found,
+            skip_reason,
+        )
     else:
         logger.info(
             "Export watchdog complete: %s succeeded, %s failed, %s already removed",

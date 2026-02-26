@@ -84,8 +84,11 @@ class DownloadService:
         )
         if resp.status_code != 200:
             logger.warning(
-                f"Export API non-200: status={resp.status_code} "
-                f"response.text={resp.text or '(empty)'}",
+                "Export API non-200: file_name_requested=%s status=%s "
+                "frigate_response=%s",
+                body.get("name", "(unknown)"),
+                resp.status_code,
+                resp.text or "(empty)",
             )
         return resp
 
@@ -182,8 +185,10 @@ class DownloadService:
                 and frigate_response.get("success") is False
             ):
                 logger.warning(
-                    "Export failed for %s. Status: %s. Response: %s",
+                    "Export failed for %s: file_name_requested=%s status=%s "
+                    "frigate_response=%s",
                     event_id,
+                    body.get("name", "(unknown)"),
                     resp.status_code,
                     resp.text or "(empty)",
                 )
@@ -219,6 +224,35 @@ class DownloadService:
                                 ):
                                     matched = e
                                     break
+                        # Frigate DELETE expects list "id", not "name".
+                        # Match by name/path so we persist correct id for watchdog.
+                        if not matched and export_filename:
+                            tail = export_filename.lstrip("/").split("/")[-1]
+                            for e in exports:
+                                if e.get("name") == export_filename or e.get(
+                                    "name"
+                                ) == tail:
+                                    matched = e
+                                    break
+                                e_path = (
+                                    e.get("video_path")
+                                    or e.get("export")
+                                    or e.get("filename")
+                                    or e.get("name")
+                                    or e.get("path")
+                                )
+                                if e_path and (
+                                    export_filename in e_path
+                                    or e_path.endswith(tail)
+                                    or tail in e_path
+                                ):
+                                    matched = e
+                                    break
+                        if not matched and body.get("name"):
+                            for e in exports:
+                                if e.get("name") == body.get("name"):
+                                    matched = e
+                                    break
                         if not matched:
                             newest = max(
                                 exports,
@@ -243,6 +277,7 @@ class DownloadService:
                                 or matched.get("path")
                             )
                             if export_filename and isinstance(frigate_response, dict):
+                                # Persist list "id" for watchdog DELETE.
                                 frigate_response["export_id"] = (
                                     matched.get("id")
                                     or matched.get("export_id")
@@ -275,7 +310,10 @@ class DownloadService:
 
             if not export_filename:
                 logger.warning(
-                    "Could not determine export filename, falling back to events API",
+                    "Could not determine export filename, falling back to "
+                    "events API: file_name_requested=%s frigate_response=%s",
+                    body.get("name", "(unknown)"),
+                    frigate_response,
                 )
                 fallback_result = self._download_clip_events_api_to_path(
                     event_id, folder_path, camera
@@ -297,28 +335,37 @@ class DownloadService:
                             "export_id"
                         ) or frigate_response.get("id")
                         matched = None
+                        tail = export_filename.lstrip("/").split("/")[-1]
+                        # Prefer match by name so we persist list "id" for DELETE.
                         for e in exports:
-                            e_path = (
-                                e.get("video_path")
-                                or e.get("export")
-                                or e.get("filename")
-                                or e.get("name")
-                                or e.get("path")
-                            )
-                            if e_path:
-                                tail = export_filename.lstrip("/").split("/")[-1]
-                                if (
-                                    export_filename in e_path
-                                    or e_path.endswith(tail)
-                                    or tail in e_path
+                            if e.get("name") == export_filename or e.get(
+                                "name"
+                            ) == tail:
+                                matched = e
+                                break
+                        if not matched:
+                            for e in exports:
+                                e_path = (
+                                    e.get("video_path")
+                                    or e.get("export")
+                                    or e.get("filename")
+                                    or e.get("name")
+                                    or e.get("path")
+                                )
+                                if e_path:
+                                    if (
+                                        export_filename in e_path
+                                        or e_path.endswith(tail)
+                                        or tail in e_path
+                                    ):
+                                        matched = e
+                                        break
+                                if list_id and (
+                                    e.get("id") == list_id
+                                    or e.get("export_id") == list_id
                                 ):
                                     matched = e
                                     break
-                            if list_id and (
-                                e.get("id") == list_id or e.get("export_id") == list_id
-                            ):
-                                matched = e
-                                break
                         if matched:
                             frigate_response["export_id"] = (
                                 matched.get("id")
@@ -326,7 +373,9 @@ class DownloadService:
                                 or frigate_response.get("export_id")
                             )
                 except Exception as e:
-                    logger.debug("Could not sync export_id from exports list: %s", e)
+                    logger.debug(
+                        "Could not sync export_id from exports list: %s", e
+                    )
 
             download_path = (
                 export_filename.lstrip("/").split("/")[-1]
@@ -360,16 +409,19 @@ class DownloadService:
 
         except requests.exceptions.RequestException as e:
             resp = getattr(e, "response", None)
+            file_name = body.get("name", "(unknown)") if body else "(unknown)"
             if resp is not None and resp.text:
                 logger.warning(
-                    "Export API request failed for %s: response.text=%s",
-                    event_id,
+                    "Export API request failed: file_name_requested=%s "
+                    "frigate_response=%s",
+                    file_name,
                     resp.text,
                 )
             else:
                 logger.warning(
-                    "Export API failed for %s: %s, falling back to events API",
-                    event_id,
+                    "Export API failed, falling back to events API: "
+                    "file_name_requested=%s frigate_response=%s",
+                    file_name,
                     e,
                 )
             fallback_result = self._download_clip_events_api_to_path(
@@ -382,7 +434,11 @@ class DownloadService:
                 "fallback": "events_api",
             }
         except Exception as e:
-            logger.exception("Export clip failed for %s: %s", event_id, e)
+            logger.exception(
+                "Export clip failed: file_name_requested=%s frigate_response=%s",
+                body.get("name", "(unknown)") if body else "(unknown)",
+                frigate_response or str(e),
+            )
             if os.path.exists(final_path):
                 try:
                     os.remove(final_path)

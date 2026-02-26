@@ -122,6 +122,42 @@ class TestFrigateExportWatchdog(unittest.TestCase):
 
     @patch("frigate_buffer.services.frigate_export_watchdog.requests.delete")
     @patch("frigate_buffer.services.frigate_export_watchdog.requests.head")
+    def test_folder_with_only_append_timeline_is_considered(
+        self, mock_head, mock_delete
+    ):
+        """Watchdog considers folder when only notification_timeline_append.jsonl exists."""
+        mock_delete.return_value = MagicMock(status_code=200)
+        mock_head.return_value = MagicMock(status_code=200)
+        with tempfile.TemporaryDirectory() as tmp:
+            storage = os.path.join(tmp, "storage")
+            cam = os.path.join(storage, "doorbell")
+            event_dir = os.path.join(cam, "1234567890_evt1")
+            os.makedirs(event_dir, exist_ok=True)
+            # No notification_timeline.json; only append file (app behavior).
+            entry = {
+                "source": "frigate_api",
+                "direction": "in",
+                "label": "Clip export response (1-cam)",
+                "ts": "2025-01-01T12:00:05",
+                "data": {
+                    "frigate_response": {
+                        "export_id": "exp-append-only",
+                        "success": True,
+                    }
+                },
+            }
+            with open(
+                os.path.join(event_dir, "notification_timeline_append.jsonl"), "w"
+            ) as f:
+                f.write(json.dumps(entry) + "\n")
+            with open(os.path.join(event_dir, "clip.mp4"), "wb") as f:
+                f.write(b"x")
+            run_once({"STORAGE_PATH": storage, "FRIGATE_URL": "http://f:5000"})
+            self.assertEqual(mock_delete.call_count, 1)
+            self.assertIn("exp-append-only", mock_delete.call_args[0][0])
+
+    @patch("frigate_buffer.services.frigate_export_watchdog.requests.delete")
+    @patch("frigate_buffer.services.frigate_export_watchdog.requests.head")
     def test_delete_error_logs_status_and_reason(self, mock_head, mock_delete):
         mock_delete.return_value = MagicMock(
             status_code=500,
