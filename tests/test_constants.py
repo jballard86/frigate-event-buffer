@@ -35,8 +35,10 @@ class TestIsTensor(unittest.TestCase):
 
     def test_tensor_like_by_name_returns_true(self):
         """Object whose type __name__ is 'Tensor' returns True (same check as real torch.Tensor)."""
+
         class Tensor:
             pass
+
         obj = Tensor()
         self.assertTrue(is_tensor(obj))
 
@@ -88,5 +90,7 @@ class TestNvdecInitFailurePrefix(unittest.TestCase):
 
     def test_prefix_is_non_empty_and_searchable(self):
         """NVDEC_INIT_FAILURE_PREFIX is a fixed string used when NVDEC/decoder init fails."""
-        self.assertEqual(NVDEC_INIT_FAILURE_PREFIX, "NVDEC hardware initialization failed")
+        self.assertEqual(
+            NVDEC_INIT_FAILURE_PREFIX, "NVDEC hardware initialization failed"
+        )
         self.assertIn("NVDEC", NVDEC_INIT_FAILURE_PREFIX)

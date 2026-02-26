@@ -1,7 +1,5 @@
 """Tests for Phase 1 timeline logic: dense grid, EMA, hysteresis, merge (including first-segment roll-forward)."""
 
-import pytest
-
 from frigate_buffer.services.timeline_ema import (
     build_dense_times,
     build_phase1_assignments,
@@ -51,6 +49,7 @@ class TestBuildPhase1Assignments:
 
     def test_two_cameras_returns_assignments_per_time(self):
         times = [0.0, 0.5, 1.0]
+
         def area(cam: str, t: float) -> float:
             return 100.0 if cam == "cam1" else 50.0
 
@@ -70,6 +69,7 @@ class TestBuildPhase1Assignments:
     def test_first_segment_short_merges_forward(self):
         # First run = 2 frames of cam2, then cam1 for 10. Should become cam1 for first 2 as well (roll forward).
         times = [0.0 + i * 0.5 for i in range(14)]  # 14 times
+
         def area(cam: str, t: float) -> float:
             if t < 1.0 and cam == "cam2":
                 return 600.0
@@ -96,6 +96,7 @@ class TestBuildPhase1Assignments:
     def test_short_mid_segment_merges_into_previous(self):
         # cam1, then 2 frames cam2, then cam1. Middle cam2 run should become cam1.
         times = [0.0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0]
+
         def area(cam: str, t: float) -> float:
             if 1.0 <= t <= 1.5 and cam == "cam2":
                 return 600.0

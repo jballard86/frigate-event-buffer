@@ -2,11 +2,12 @@
 Frigate HTTP proxy helpers: snapshot and latest.jpg.
 
 Streams image responses from Frigate so the buffer can serve them (e.g. for
-Companion app reachability). Returns either a Flask Response or (body, status_code).
+Companion app reachability). Returns either a Flask Response or
+(body, status_code).
 """
 
-import re
 import logging
+import re
 
 import requests
 from flask import Response
@@ -62,7 +63,8 @@ def proxy_camera_latest(
     Validates camera_name (alphanumeric, underscore, hyphen only). If
     allowed_cameras is non-empty, camera must be in the list.
     Returns a streaming Response on success, or (body, status_code) on error
-    (400 invalid name, 404 camera not configured, 503 no Frigate URL, 502 request failure).
+    (400 invalid name, 404 camera not configured, 503 no Frigate URL,
+    502 request failure).
     """
     if not camera_name or camera_name != re.sub(r"[^a-zA-Z0-9_-]", "", camera_name):
         return "Invalid camera name", 400

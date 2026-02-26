@@ -1,11 +1,13 @@
-import unittest
+import json
 import os
 import shutil
 import tempfile
-import json
 import time
+import unittest
 from collections import OrderedDict
+
 from frigate_buffer.services.query import EventQueryService, read_timeline_merged
+
 
 class TestEventQueryService(unittest.TestCase):
     def setUp(self):
@@ -103,11 +105,19 @@ class TestEventQueryService(unittest.TestCase):
         self.assertEqual(len(events), 1)
         ev = events[0]
         self.assertIn("hosted_clips", ev)
-        summary_entries = [c for c in ev["hosted_clips"] if c.get("camera") == "Summary video"]
-        self.assertEqual(len(summary_entries), 1, "hosted_clips should include Summary video entry")
+        summary_entries = [
+            c for c in ev["hosted_clips"] if c.get("camera") == "Summary video"
+        ]
+        self.assertEqual(
+            len(summary_entries), 1, "hosted_clips should include Summary video entry"
+        )
         summary_url = summary_entries[0]["url"]
         self.assertIn(f"/files/events/{self.ce_id}/{summary_basename}", summary_url)
-        self.assertEqual(ev["hosted_clip"], summary_url, "hosted_clip should be the summary URL when summary exists")
+        self.assertEqual(
+            ev["hosted_clip"],
+            summary_url,
+            "hosted_clip should be the summary URL when summary exists",
+        )
 
     def test_get_all_events(self):
         events, cameras = self.service.get_all_events()
@@ -121,8 +131,12 @@ class TestEventQueryService(unittest.TestCase):
 
         # Check consolidated event properties
         ce = next(e for e in events if e["event_id"] == self.ce_id)
-        self.assertTrue(ce.get("consolidated"), "Consolidated event should have consolidated=True")
-        self.assertTrue(ce.get("has_clip"), "Consolidated event should have has_clip=True")
+        self.assertTrue(
+            ce.get("consolidated"), "Consolidated event should have consolidated=True"
+        )
+        self.assertTrue(
+            ce.get("has_clip"), "Consolidated event should have has_clip=True"
+        )
 
     def test_camera_event_includes_end_timestamp_when_in_timeline(self):
         """When timeline has an entry with payload.after.end_time, event dict includes end_timestamp."""
@@ -150,7 +164,9 @@ class TestEventQueryService(unittest.TestCase):
     def test_camera_event_end_timestamp_fallback_from_metadata(self):
         """When metadata.json has end_time but timeline has none, event gets end_timestamp from metadata."""
         with open(os.path.join(self.ev1_dir, "metadata.json"), "w") as f:
-            json.dump({"label": "person", "threat_level": 0, "end_time": 1234567895.25}, f)
+            json.dump(
+                {"label": "person", "threat_level": 0, "end_time": 1234567895.25}, f
+            )
         events = self.service.get_events("front_door")
         self.assertEqual(len(events), 1)
         ev = events[0]
@@ -250,7 +266,11 @@ class TestEventQueryService(unittest.TestCase):
         self.assertNotIn("ultralytics", cameras_found)
         # No event may have camera == "ultralytics"
         for ev in all_events:
-            self.assertNotEqual(ev.get("camera"), "ultralytics", f"Ghost event from ultralytics: {ev.get('event_id')}")
+            self.assertNotEqual(
+                ev.get("camera"),
+                "ultralytics",
+                f"Ghost event from ultralytics: {ev.get('event_id')}",
+            )
         # We should still have our real events (1 camera event + 1 consolidated)
         self.assertGreaterEqual(len(all_events), 2)
 
@@ -266,7 +286,9 @@ class TestQueryCaching(unittest.TestCase):
         self.cam = "test_cam"
         os.makedirs(os.path.join(self.test_dir, self.cam))
         self.event_id = "event1"
-        self.event_dir = os.path.join(self.test_dir, self.cam, f"{int(time.time())}_{self.event_id}")
+        self.event_dir = os.path.join(
+            self.test_dir, self.cam, f"{int(time.time())}_{self.event_id}"
+        )
         os.makedirs(self.event_dir)
 
         self.summary_path = os.path.join(self.event_dir, "summary.txt")
@@ -278,7 +300,7 @@ class TestQueryCaching(unittest.TestCase):
 
     def test_caching_behavior(self):
         events = self.service.get_events(self.cam)
-        self.assertEqual(events[0]['title'], "Initial Title")
+        self.assertEqual(events[0]["title"], "Initial Title")
 
         with open(self.summary_path, "w") as f:
             f.write("Title: Modified Title")
@@ -287,12 +309,20 @@ class TestQueryCaching(unittest.TestCase):
         os.utime(self.event_dir, (st.st_atime, st.st_mtime + 1.0))
 
         events_cached = self.service.get_events(self.cam)
-        self.assertEqual(events_cached[0]['title'], "Initial Title", "Should return cached data immediately")
+        self.assertEqual(
+            events_cached[0]["title"],
+            "Initial Title",
+            "Should return cached data immediately",
+        )
 
         time.sleep(self.ttl + 0.1)
 
         events_fresh = self.service.get_events(self.cam)
-        self.assertEqual(events_fresh[0]['title'], "Modified Title", "Should return fresh data after TTL")
+        self.assertEqual(
+            events_fresh[0]["title"],
+            "Modified Title",
+            "Should return fresh data after TTL",
+        )
 
     def test_event_cache_evicts_when_over_max(self):
         """Event cache is bounded with LRU eviction (event_cache_max)."""
@@ -307,9 +337,11 @@ class TestQueryCaching(unittest.TestCase):
         svc = EventQueryService(storage, cache_ttl=5, event_cache_max=3)
         self.assertIsInstance(svc._event_cache, OrderedDict)
         self.assertEqual(svc._event_cache_max, 3)
-        for i in range(5):
+        for _ in range(5):
             svc.get_events("cam1")
-        self.assertLessEqual(len(svc._event_cache), 3, "event cache must not exceed max size")
+        self.assertLessEqual(
+            len(svc._event_cache), 3, "event cache must not exceed max size"
+        )
 
 
 class TestExtractEndTimestampFromTimeline(unittest.TestCase):
@@ -321,13 +353,18 @@ class TestExtractEndTimestampFromTimeline(unittest.TestCase):
         self.service = EventQueryService(self.tmp)
 
     def test_returns_none_for_empty_timeline(self):
-        self.assertIsNone(self.service._extract_end_timestamp_from_timeline({"entries": []}))
+        self.assertIsNone(
+            self.service._extract_end_timestamp_from_timeline({"entries": []})
+        )
 
     def test_returns_none_when_no_entries_have_end_time(self):
         """Entries present but all end_time null or missing → None."""
         timeline = {
             "entries": [
-                {"source": "frigate_mqtt", "data": {"payload": {"after": {"end_time": None}}}},
+                {
+                    "source": "frigate_mqtt",
+                    "data": {"payload": {"after": {"end_time": None}}},
+                },
                 {"source": "frigate_mqtt", "data": {"payload": {"after": {}}}},
             ]
         }
@@ -337,40 +374,66 @@ class TestExtractEndTimestampFromTimeline(unittest.TestCase):
         """Regular events: end_time from payload.after (unchanged behavior)."""
         timeline = {
             "entries": [
-                {"source": "frigate_mqtt", "data": {"payload": {"after": {"end_time": 1700000000.5}}}},
+                {
+                    "source": "frigate_mqtt",
+                    "data": {"payload": {"after": {"end_time": 1700000000.5}}},
+                },
             ]
         }
-        self.assertEqual(self.service._extract_end_timestamp_from_timeline(timeline), 1700000000.5)
+        self.assertEqual(
+            self.service._extract_end_timestamp_from_timeline(timeline), 1700000000.5
+        )
 
     def test_returns_end_time_from_test_ai_prompt_entry(self):
         """Test events only: end_time from source=test_ai_prompt and data.end_time."""
         timeline = {
             "entries": [
-                {"source": "test_ai_prompt", "data": {"title": "Test", "end_time": 1700000100.0}},
+                {
+                    "source": "test_ai_prompt",
+                    "data": {"title": "Test", "end_time": 1700000100.0},
+                },
             ]
         }
-        self.assertEqual(self.service._extract_end_timestamp_from_timeline(timeline), 1700000100.0)
+        self.assertEqual(
+            self.service._extract_end_timestamp_from_timeline(timeline), 1700000100.0
+        )
 
     def test_returns_max_when_multiple_frigate_entries_have_different_end_times(self):
         """Multiple Frigate event-end entries: result is the latest (max) end_time."""
         timeline = {
             "entries": [
-                {"source": "frigate_mqtt", "data": {"payload": {"after": {"end_time": 1700000000.0}}}},
-                {"source": "frigate_mqtt", "data": {"payload": {"after": {"end_time": 1700000050.0}}}},
-                {"source": "frigate_mqtt", "data": {"payload": {"after": {"end_time": 1700000025.0}}}},
+                {
+                    "source": "frigate_mqtt",
+                    "data": {"payload": {"after": {"end_time": 1700000000.0}}},
+                },
+                {
+                    "source": "frigate_mqtt",
+                    "data": {"payload": {"after": {"end_time": 1700000050.0}}},
+                },
+                {
+                    "source": "frigate_mqtt",
+                    "data": {"payload": {"after": {"end_time": 1700000025.0}}},
+                },
             ]
         }
-        self.assertEqual(self.service._extract_end_timestamp_from_timeline(timeline), 1700000050.0)
+        self.assertEqual(
+            self.service._extract_end_timestamp_from_timeline(timeline), 1700000050.0
+        )
 
     def test_returns_max_when_frigate_and_test_ai_prompt_both_have_end_time(self):
         """When both Frigate and test_ai_prompt have end_time, result is the latest (max)."""
         timeline = {
             "entries": [
-                {"source": "frigate_mqtt", "data": {"payload": {"after": {"end_time": 1700000000.0}}}},
+                {
+                    "source": "frigate_mqtt",
+                    "data": {"payload": {"after": {"end_time": 1700000000.0}}},
+                },
                 {"source": "test_ai_prompt", "data": {"end_time": 1700000100.0}},
             ]
         }
-        self.assertEqual(self.service._extract_end_timestamp_from_timeline(timeline), 1700000100.0)
+        self.assertEqual(
+            self.service._extract_end_timestamp_from_timeline(timeline), 1700000100.0
+        )
 
 
 class TestEvictCache(unittest.TestCase):
@@ -437,7 +500,9 @@ class TestReadTimelineMerged(unittest.TestCase):
         base_path = os.path.join(folder, "notification_timeline.json")
         append_path = os.path.join(folder, "notification_timeline_append.jsonl")
         with open(base_path, "w") as f:
-            json.dump({"event_id": "ev1", "entries": [{"ts": "T1", "label": "base"}]}, f)
+            json.dump(
+                {"event_id": "ev1", "entries": [{"ts": "T1", "label": "base"}]}, f
+            )
         with open(append_path, "a") as f:
             f.write(json.dumps({"ts": "T2", "label": "append"}) + "\n")
         data = read_timeline_merged(folder)
@@ -446,5 +511,5 @@ class TestReadTimelineMerged(unittest.TestCase):
         self.assertEqual(data["entries"][1]["label"], "append")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     unittest.main()

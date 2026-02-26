@@ -79,9 +79,13 @@ class TestProxyCameraLatest(unittest.TestCase):
         mock_resp = MagicMock()
         mock_resp.status_code = 200
         mock_resp.headers = {"Content-Type": "image/jpeg"}
-        mock_resp.iter_content = MagicMock(return_value=iter((b"\xff\xd8", b"\xff\xd9")))
+        mock_resp.iter_content = MagicMock(
+            return_value=iter((b"\xff\xd8", b"\xff\xd9"))
+        )
         mock_resp.raise_for_status = MagicMock()
-        with patch("frigate_buffer.web.frigate_proxy.requests.get", return_value=mock_resp):
+        with patch(
+            "frigate_buffer.web.frigate_proxy.requests.get", return_value=mock_resp
+        ):
             result = proxy_camera_latest("http://frigate:5000", "front_door", [])
         self.assertIsInstance(result, Response)
         self.assertEqual(result.status_code, 200)

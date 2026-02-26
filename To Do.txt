@@ -3,8 +3,6 @@
     maximize speed without triggering an Out-of-Memory error during the initial batch.float() conversion.
         -make batch size configurable in config.yaml
 
-  - pushover notification option
-
   - if event starts with a car, have yolo track the car for that portion of the ai and video sumary, 
     but priortize people once they are in Frame
 
@@ -21,3 +19,4 @@
             - Verification: Cosine similarity matching across camera streams.
             - Topology Constraints: Filter matches based on travel time and camera adjacency.
 
+  - standalone android app, for better mobile experience, notifications, etc

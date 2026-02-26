@@ -14,7 +14,7 @@ import time
 from typing import Any
 
 from frigate_buffer.logging_utils import should_suppress_review_debug_logs
-from frigate_buffer.models import EventState, _is_no_concerns
+from frigate_buffer.models import EventState
 
 logger = logging.getLogger("frigate-buffer")
 
@@ -46,7 +46,9 @@ class MqttMessageHandler:
 
     def on_message(self, client: Any, userdata: Any, msg: Any) -> None:
         """Route incoming MQTT messages by topic. Called by MqttClientWrapper."""
-        logger.debug("MQTT message received: %s (%s bytes)", msg.topic, len(msg.payload))
+        logger.debug(
+            "MQTT message received: %s (%s bytes)", msg.topic, len(msg.payload)
+        )
         try:
             payload = json.loads(msg.payload.decode("utf-8"))
             topic = msg.topic
@@ -80,7 +82,9 @@ class MqttMessageHandler:
         camera_label_map = self._config.get("CAMERA_LABEL_MAP", {})
         if camera_label_map:
             if camera not in camera_label_map:
-                logger.debug("Filtered out event from camera '%s' (not configured)", camera)
+                logger.debug(
+                    "Filtered out event from camera '%s' (not configured)", camera
+                )
                 return
             allowed_labels_for_camera = camera_label_map[camera]
             if allowed_labels_for_camera and label not in allowed_labels_for_camera:
@@ -114,7 +118,10 @@ class MqttMessageHandler:
             if folder:
                 mqtt_type = payload.get("type", "update")
                 self._timeline_logger.log_mqtt(
-                    folder, "frigate/events", payload, f"Event {mqtt_type} (from Frigate)"
+                    folder,
+                    "frigate/events",
+                    payload,
+                    f"Event {mqtt_type} (from Frigate)",
                 )
             return
 
@@ -161,7 +168,9 @@ class MqttMessageHandler:
         """Handle event end: mark ended, log, then process in background thread."""
         event = self._state_manager.get_event(event_id)
         if event and event.end_time is not None:
-            logger.debug("Duplicate event end for %s (already ended), skipping", event_id)
+            logger.debug(
+                "Duplicate event end for %s (already ended), skipping", event_id
+            )
             return
         logger.info("Event ended: %s", event_id)
         event = self._state_manager.mark_event_ended(
@@ -189,8 +198,6 @@ class MqttMessageHandler:
 
     def _handle_tracked_update(self, payload: dict, topic: str) -> None:
         """Handle tracked_object_update: frame metadata and/or AI description."""
-        parts = topic.split("/")
-        camera = parts[1] if len(parts) >= 2 else "unknown"
         event_id = payload.get("id")
         if event_id:
             after = payload.get("after") or payload.get("before") or {}
@@ -224,6 +231,8 @@ class MqttMessageHandler:
         update_type = payload.get("type")
         if update_type and update_type != "description":
             return
+        if self._config.get("AI_MODE") == "external_api":
+            return
         description = payload.get("description")
         if not event_id or not description:
             return
@@ -249,6 +258,8 @@ class MqttMessageHandler:
 
     def _handle_review(self, payload: dict) -> None:
         """Handle frigate/reviews: GenAI update (Phase 3)."""
+        if self._config.get("AI_MODE") == "external_api":
+            return
         event_type = payload.get("type")
         match event_type:
             case "update" | "end" | "genai":
@@ -306,7 +317,7 @@ class MqttMessageHandler:
             ):
                 event = self._state_manager.get_event(event_id)
                 if event:
-                    self._consolidated_manager.update_best(
+                    self._consolidated_manager.set_final_from_frigate(
                         event_id,
                         title=title,
                         description=description,
@@ -316,9 +327,7 @@ class MqttMessageHandler:
                         event.summary_written = self._file_manager.write_summary(
                             event.folder_path, event
                         )
-                        self._file_manager.write_metadata_json(
-                            event.folder_path, event
-                        )
+                        self._file_manager.write_metadata_json(event.folder_path, event)
                     ce = self._consolidated_manager.get_by_frigate_event(event_id)
                     if ce and ce.finalized_sent:
                         logger.debug(
@@ -329,9 +338,7 @@ class MqttMessageHandler:
                     else:
                         if ce:
                             ce.finalized_sent = True
-                            primary = self._state_manager.get_event(
-                                ce.primary_event_id
-                            )
+                            primary = self._state_manager.get_event(ce.primary_event_id)
                             media_folder = (
                                 os.path.join(
                                     ce.folder_path,
@@ -358,11 +365,11 @@ class MqttMessageHandler:
                                     "created_at": ce.start_time,
                                     "end_time": ce.end_time,
                                     "phase": ce.phase,
-                                    "genai_title": ce.best_title,
-                                    "genai_description": ce.best_description,
+                                    "genai_title": ce.final_title,
+                                    "genai_description": ce.final_description,
                                     "ai_description": None,
                                     "review_summary": None,
-                                    "threat_level": ce.best_threat_level,
+                                    "threat_level": ce.final_threat_level,
                                     "severity": ce.severity,
                                     "snapshot_downloaded": ce.snapshot_downloaded,
                                     "clip_downloaded": ce.clip_downloaded,
@@ -374,99 +381,36 @@ class MqttMessageHandler:
                                 },
                             )()
                         else:
-                            notify_target = event
+                            # CE already removed; build CE-shaped target so pipeline stays CE-only (e.g. 1-camera CE)
+                            notify_target = type(
+                                "NotifyTarget",
+                                (),
+                                {
+                                    "event_id": event.event_id,
+                                    "camera": event.camera,
+                                    "label": event.label,
+                                    "folder_path": event.folder_path or "",
+                                    "created_at": event.created_at,
+                                    "end_time": event.end_time or event.created_at,
+                                    "phase": getattr(event, "phase", None),
+                                    "genai_title": title,
+                                    "genai_description": description,
+                                    "ai_description": None,
+                                    "review_summary": None,
+                                    "threat_level": threat_level,
+                                    "severity": getattr(event, "severity", None)
+                                    or "detection",
+                                    "snapshot_downloaded": event.snapshot_downloaded,
+                                    "clip_downloaded": event.clip_downloaded,
+                                    "image_url_override": getattr(
+                                        event, "image_url_override", None
+                                    ),
+                                },
+                            )()
                         self._notifier.publish_notification(
                             notify_target,
                             "finalized",
-                            tag_override=f"frigate_{ce.consolidated_id}" if ce else None,
+                            tag_override=f"frigate_{ce.consolidated_id}"
+                            if ce
+                            else f"frigate_{event.event_id}",
                         )
-                    if not ce:
-                        threading.Thread(
-                            target=self._fetch_and_store_review_summary,
-                            args=(event,),
-                            daemon=True,
-                        ).start()
-
-    def _fetch_and_store_review_summary(self, event: EventState) -> None:
-        """Background: fetch review summary from Frigate API, store, notify, then schedule remove."""
-        try:
-            max_wait = 30
-            waited = 0
-            while event.end_time is None and waited < max_wait:
-                time.sleep(2)
-                waited += 2
-            if event.end_time is None:
-                logger.warning(
-                    "No end_time for %s after %ss, using created_at + 60s as fallback",
-                    event.event_id,
-                    max_wait,
-                )
-                effective_end = event.created_at + 60
-            else:
-                effective_end = event.end_time
-            time.sleep(5)
-            padding_before = self._config.get("SUMMARY_PADDING_BEFORE", 15)
-            padding_after = self._config.get("SUMMARY_PADDING_AFTER", 15)
-            padded_start = int(event.created_at - padding_before)
-            padded_end = int(effective_end + padding_after)
-            url = f"{self._config.get('FRIGATE_URL', '')}/api/review/summarize/start/{padded_start}/end/{padded_end}"
-            params = {
-                "start": padded_start,
-                "end": padded_end,
-                "padding_before": padding_before,
-                "padding_after": padding_after,
-            }
-            if self._timeline_logger.folder_for_event(event):
-                self._timeline_logger.log_frigate_api(
-                    self._timeline_logger.folder_for_event(event),
-                    "out",
-                    "Review summarize request (to Frigate API)",
-                    {"url": url, "params": params},
-                )
-            summary = self._download_service.fetch_review_summary(
-                event.created_at, effective_end, padding_before, padding_after
-            )
-            if self._timeline_logger.folder_for_event(event):
-                self._timeline_logger.log_frigate_api(
-                    self._timeline_logger.folder_for_event(event),
-                    "in",
-                    "Review summarize response (from Frigate API)",
-                    {
-                        "url": url,
-                        "params": params,
-                        "response": summary or "(empty or error)",
-                    },
-                )
-            if summary:
-                self._state_manager.set_review_summary(event.event_id, summary)
-                write_folder = (
-                    self._timeline_logger.folder_for_event(event) or event.folder_path
-                )
-                if write_folder:
-                    event.review_summary_written = (
-                        self._file_manager.write_review_summary(
-                            write_folder, summary
-                        )
-                    )
-                    self._file_manager.write_summary(write_folder, event)
-                    self._file_manager.write_metadata_json(write_folder, event)
-                if not _is_no_concerns(summary):
-                    self._notifier.publish_notification(event, "summarized")
-                else:
-                    logger.info(
-                        "Skipping summarized notification for %s (no concerns)",
-                        event.event_id,
-                    )
-            else:
-                logger.warning(
-                    "No review summary obtained for %s", event.event_id
-                )
-        except Exception as e:
-            logger.exception(
-                "Error fetching review summary for %s: %s", event.event_id, e
-            )
-        finally:
-            threading.Timer(
-                60.0,
-                lambda eid=event.event_id: self._state_manager.remove_event(eid),
-            ).start()

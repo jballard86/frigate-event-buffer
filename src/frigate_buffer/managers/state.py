@@ -5,9 +5,9 @@ import threading
 import time
 from typing import Any
 
-from frigate_buffer.models import EventState, EventPhase, FrameMetadata
+from frigate_buffer.models import EventPhase, EventState, FrameMetadata
 
-logger = logging.getLogger('frigate-buffer')
+logger = logging.getLogger("frigate-buffer")
 
 # Max per-frame metadata entries per event to bound memory
 MAX_FRAME_METADATA_PER_EVENT = 500
@@ -38,7 +38,8 @@ def _normalize_box(
         ymin, xmin = ymin / frame_height, xmin / frame_width
         ymax, xmax = ymax / frame_height, xmax / frame_width
     else:
-        # If any value > 1, assume pixels but we have no dimensions: use 1920x1080 as fallback
+        # If any value > 1, assume pixels but we have no dimensions: use
+        # 1920x1080 as fallback
         if max(xmin, ymin, xmax, ymax) > 1.0:
             ymin, xmin = ymin / 1080.0, xmin / 1920.0
             ymax, xmax = ymax / 1080.0, xmax / 1920.0
@@ -60,8 +61,9 @@ class EventStateManager:
         self._frame_metadata: dict[str, list[FrameMetadata]] = {}
         self._lock = threading.RLock()
 
-    def create_event(self, event_id: str, camera: str, label: str,
-                     start_time: float) -> EventState:
+    def create_event(
+        self, event_id: str, camera: str, label: str, start_time: float
+    ) -> EventState:
         """Create a new event in NEW phase."""
         with self._lock:
             if event_id in self._events:
@@ -72,7 +74,7 @@ class EventStateManager:
                 event_id=event_id,
                 camera=camera,
                 label=label,
-                created_at=start_time or time.time()
+                created_at=start_time or time.time(),
             )
             self._events[event_id] = event
             logger.info(f"Created event state: {event_id} ({label} on {camera})")
@@ -91,20 +93,31 @@ class EventStateManager:
                 event.ai_description = description
                 event.phase = EventPhase.DESCRIBED
                 logger.info(f"Event {event_id} advanced to DESCRIBED phase")
-                logger.debug(f"AI description: {description[:100]}..." if len(description) > 100 else f"AI description: {description}")
+                logger.debug(
+                    f"AI description: {description[:100]}..."
+                    if len(description) > 100
+                    else f"AI description: {description}"
+                )
                 return True
             elif event:
                 # Update description even if already past NEW phase
                 event.ai_description = description
-                logger.debug(f"Updated AI description for {event_id} (already past NEW phase)")
+                logger.debug(
+                    f"Updated AI description for {event_id} (already past NEW phase)"
+                )
                 return True
             logger.debug(f"Cannot set AI description: event {event_id} not found")
             return False
 
-    def set_genai_metadata(self, event_id: str, title: str | None,
-                           description: str | None, severity: str,
-                           threat_level: int = 0,
-                           scene: str | None = None) -> bool:
+    def set_genai_metadata(
+        self,
+        event_id: str,
+        title: str | None,
+        description: str | None,
+        severity: str,
+        threat_level: int = 0,
+        scene: str | None = None,
+    ) -> bool:
         """Set GenAI review metadata and advance to FINALIZED phase."""
         with self._lock:
             event = self._events.get(event_id)
@@ -116,7 +129,10 @@ class EventStateManager:
                 event.severity = severity
                 event.threat_level = threat_level
                 event.phase = EventPhase.FINALIZED
-                logger.info(f"Event {event_id} advanced to FINALIZED (threat_level={threat_level})")
+                logger.info(
+                    f"Event {event_id} advanced to FINALIZED "
+                    f"(threat_level={threat_level})"
+                )
                 logger.debug(f"GenAI title: {title}, severity: {severity}")
                 return True
             logger.debug(f"Cannot set GenAI metadata: event {event_id} not found")
@@ -134,8 +150,9 @@ class EventStateManager:
             logger.debug(f"Cannot set review summary: event {event_id} not found")
             return False
 
-    def mark_event_ended(self, event_id: str, end_time: float,
-                         has_clip: bool, has_snapshot: bool) -> EventState | None:
+    def mark_event_ended(
+        self, event_id: str, end_time: float, has_clip: bool, has_snapshot: bool
+    ) -> EventState | None:
         """Mark event as ended, returning the event for processing."""
         with self._lock:
             event = self._events.get(event_id)
@@ -143,7 +160,10 @@ class EventStateManager:
                 event.end_time = end_time
                 event.has_clip = has_clip
                 event.has_snapshot = has_snapshot
-                logger.debug(f"Event {event_id} marked ended (clip={has_clip}, snapshot={has_snapshot})")
+                logger.debug(
+                    f"Event {event_id} marked ended "
+                    f"(clip={has_clip}, snapshot={has_snapshot})"
+                )
             return event
 
     def add_frame_metadata(
@@ -156,7 +176,8 @@ class EventStateManager:
         frame_width: int | None = None,
         frame_height: int | None = None,
     ) -> bool:
-        """Append per-frame metadata for an event. Box is normalized to [ymin, xmin, ymax, xmax] 0-1. Capped at MAX_FRAME_METADATA_PER_EVENT."""
+        """Append per-frame metadata for an event. Box is normalized to
+        [ymin, xmin, ymax, xmax] 0-1. Capped at MAX_FRAME_METADATA_PER_EVENT."""
         normalized = _normalize_box(box, frame_width, frame_height)
         if normalized is None and box:
             logger.debug("Skipping frame metadata: box could not be normalized")
@@ -182,7 +203,8 @@ class EventStateManager:
             return list(self._frame_metadata.get(event_id, []))
 
     def clear_frame_metadata(self, event_id: str) -> None:
-        """Remove all frame metadata for the event (e.g. after analysis or on event removal)."""
+        """Remove all frame metadata for the event (e.g. after analysis or on
+        event removal)."""
         with self._lock:
             self._frame_metadata.pop(event_id, None)
 
@@ -213,5 +235,5 @@ class EventStateManager:
             return {
                 "total_active": len(self._events),
                 "by_phase": by_phase,
-                "by_camera": by_camera
+                "by_camera": by_camera,
             }

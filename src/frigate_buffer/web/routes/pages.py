@@ -30,6 +30,7 @@ def create_bp(orchestrator):
     @bp.route("/test-multi-cam")
     def test_multi_cam_page():
         subdir = request.args.get("subdir", "")
-        return render_template("test_run.html", subdir=subdir)
+        test_run = request.args.get("test_run", "")
+        return render_template("test_run.html", subdir=subdir, test_run=test_run)
 
     return bp

@@ -1,12 +1,12 @@
 """Error buffer and logging setup for the stats dashboard."""
 
 import logging
-import time
 import threading
+import time
 
 from frigate_buffer.constants import ERROR_BUFFER_MAX_SIZE
 
-logger = logging.getLogger('frigate-buffer')
+logger = logging.getLogger("frigate-buffer")
 
 
 class ErrorBuffer:
@@ -19,11 +19,13 @@ class ErrorBuffer:
 
     def append(self, timestamp: str, level: str, message: str) -> None:
         with self._lock:
-            self._entries.append({
-                "ts": timestamp,
-                "level": level,
-                "message": message[:500] if message else ""
-            })
+            self._entries.append(
+                {
+                    "ts": timestamp,
+                    "level": level,
+                    "message": message[:500] if message else "",
+                }
+            )
             if len(self._entries) > self._max_size:
                 self._entries.pop(0)
 
@@ -41,7 +43,7 @@ class ErrorBufferHandler(logging.Handler):
 
     def emit(self, record: logging.LogRecord) -> None:
         try:
-            ts = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(record.created))
+            ts = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(record.created))
             self._buffer.append(ts, record.levelname, record.getMessage())
         except Exception:
             self.handleError(record)
@@ -104,6 +106,6 @@ def setup_logging(log_level: str):
         logger.addHandler(ErrorBufferHandler(error_buffer))
 
     # Suppress werkzeug per-request logging (floods logs with GET /events)
-    logging.getLogger('werkzeug').setLevel(logging.WARNING)
+    logging.getLogger("werkzeug").setLevel(logging.WARNING)
 
     logger.info(f"Log level set to {log_level.upper()}")

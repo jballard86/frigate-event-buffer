@@ -8,6 +8,7 @@ from frigate_buffer.services import crop_utils
 
 try:
     import torch
+
     _TORCH_AVAILABLE = True
 except ImportError:
     _TORCH_AVAILABLE = False
@@ -73,7 +74,9 @@ class TestDrawTimestampOverlay(unittest.TestCase):
         self.assertTrue(result.flags.writeable)
         h, w = result.shape[:2]
         bottom_right = result[h - 30 : h, w - 120 : w]
-        self.assertGreater(np.count_nonzero(bottom_right), 0, "Bottom-right overlay should be drawn")
+        self.assertGreater(
+            np.count_nonzero(bottom_right), 0, "Bottom-right overlay should be drawn"
+        )
 
     def test_draw_timestamp_overlay_tensor_returns_numpy_bgr(self):
         """When frame is tensor BCHW RGB, overlay returns numpy HWC BGR."""
@@ -157,7 +160,9 @@ class TestCropAroundDetectionsWithPadding(unittest.TestCase):
         if not _TORCH_AVAILABLE:
             self.skipTest("torch not available")
         frame = _bchw_tensor(100, 200)
-        result = crop_utils.crop_around_detections_with_padding(frame, [], padding_fraction=0.1)
+        result = crop_utils.crop_around_detections_with_padding(
+            frame, [], padding_fraction=0.1
+        )
         self.assertIs(result, frame)
         self.assertEqual(result.shape, (1, 3, 100, 200))
 
@@ -167,7 +172,9 @@ class TestCropAroundDetectionsWithPadding(unittest.TestCase):
             self.skipTest("torch not available")
         frame = _bchw_tensor(100, 200)
         detections = [{"bbox": [50, 20, 90, 80], "label": "person"}]
-        result = crop_utils.crop_around_detections_with_padding(frame, detections, padding_fraction=0.1)
+        result = crop_utils.crop_around_detections_with_padding(
+            frame, detections, padding_fraction=0.1
+        )
         self.assertIsNotNone(result)
         self.assertEqual(result.shape[0], 1)
         self.assertEqual(result.shape[1], 3)
@@ -183,7 +190,9 @@ class TestCropAroundDetectionsWithPadding(unittest.TestCase):
             {"bbox": [10, 50, 60, 120], "label": "person"},
             {"bbox": [200, 80, 280, 180], "label": "person"},
         ]
-        result = crop_utils.crop_around_detections_with_padding(frame, detections, padding_fraction=0.1)
+        result = crop_utils.crop_around_detections_with_padding(
+            frame, detections, padding_fraction=0.1
+        )
         self.assertIsNotNone(result)
         self.assertGreaterEqual(result.shape[2], 100)
         self.assertGreaterEqual(result.shape[3], 200)

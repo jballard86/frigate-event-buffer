@@ -39,9 +39,7 @@ class TestFileManagerPathValidation(unittest.TestCase):
     def test_create_event_folder_path_traversal_raises(self):
         with self.assertRaises(ValueError) as ctx:
             self.fm.create_event_folder(
-                event_id="../../../../evil",
-                camera="cam1",
-                timestamp=1000.0
+                event_id="../../../../evil", camera="cam1", timestamp=1000.0
             )
         self.assertIn("Invalid event path", str(ctx.exception))
 
@@ -123,7 +121,9 @@ class TestFileManagerCleanup(unittest.TestCase):
         os.makedirs(events_dir, exist_ok=True)
         canceled = os.path.join(events_dir, "1700000000_ev123-canceled")
         os.makedirs(canceled, exist_ok=True)
-        deleted = fm.cleanup_old_events(active_event_ids=["ev123"], active_ce_folder_names=[])
+        deleted = fm.cleanup_old_events(
+            active_event_ids=["ev123"], active_ce_folder_names=[]
+        )
         self.assertEqual(deleted, 0)
         self.assertTrue(os.path.isdir(canceled))
 
@@ -191,7 +191,9 @@ class TestFileManagerTimeline(unittest.TestCase):
         append_path = os.path.join(folder, "notification_timeline_append.jsonl")
         base_path = os.path.join(folder, "notification_timeline.json")
         self.assertTrue(os.path.isfile(append_path), "append should create .jsonl file")
-        self.assertFalse(os.path.isfile(base_path), "append should NOT create/overwrite full .json")
+        self.assertFalse(
+            os.path.isfile(base_path), "append should NOT create/overwrite full .json"
+        )
 
 
 class TestFileManagerStorageStats(unittest.TestCase):
@@ -204,11 +206,11 @@ class TestFileManagerStorageStats(unittest.TestCase):
 
     def test_empty_storage_returns_zero_totals(self):
         stats = self.fm.compute_storage_stats()
-        self.assertEqual(stats['total'], 0)
-        self.assertEqual(stats['clips'], 0)
-        self.assertEqual(stats['snapshots'], 0)
-        self.assertEqual(stats['descriptions'], 0)
-        self.assertEqual(stats['by_camera'], {})
+        self.assertEqual(stats["total"], 0)
+        self.assertEqual(stats["clips"], 0)
+        self.assertEqual(stats["snapshots"], 0)
+        self.assertEqual(stats["descriptions"], 0)
+        self.assertEqual(stats["by_camera"], {})
 
     def test_legacy_camera_event_folder_counted(self):
         cam = os.path.join(self.tmp, "carport")
@@ -221,13 +223,15 @@ class TestFileManagerStorageStats(unittest.TestCase):
         with open(os.path.join(ev, "summary.txt"), "w") as f:
             f.write("Event")
         stats = self.fm.compute_storage_stats()
-        self.assertEqual(stats['clips'], 1000)
-        self.assertEqual(stats['snapshots'], 200)
-        self.assertGreaterEqual(stats['descriptions'], 5)
-        self.assertIn("carport", stats['by_camera'])
-        self.assertEqual(stats['by_camera']["carport"]['clips'], 1000)
-        self.assertEqual(stats['by_camera']["carport"]['snapshots'], 200)
-        self.assertEqual(stats['total'], stats['clips'] + stats['snapshots'] + stats['descriptions'])
+        self.assertEqual(stats["clips"], 1000)
+        self.assertEqual(stats["snapshots"], 200)
+        self.assertGreaterEqual(stats["descriptions"], 5)
+        self.assertIn("carport", stats["by_camera"])
+        self.assertEqual(stats["by_camera"]["carport"]["clips"], 1000)
+        self.assertEqual(stats["by_camera"]["carport"]["snapshots"], 200)
+        self.assertEqual(
+            stats["total"], stats["clips"] + stats["snapshots"] + stats["descriptions"]
+        )
 
     def test_consolidated_events_counted(self):
         events_dir = os.path.join(self.tmp, "events")
@@ -239,16 +243,16 @@ class TestFileManagerStorageStats(unittest.TestCase):
         with open(os.path.join(cam_dir, "snapshot.jpg"), "wb") as f:
             f.write(b"b" * 500)
         with open(os.path.join(cam_dir, "metadata.json"), "w") as f:
-            f.write('{}')
+            f.write("{}")
         with open(os.path.join(ce_dir, "review_summary.md"), "w") as f:
             f.write("# Summary")
         stats = self.fm.compute_storage_stats()
-        self.assertIn("events", stats['by_camera'])
-        self.assertGreaterEqual(stats['clips'], 5000)
-        self.assertGreaterEqual(stats['snapshots'], 500)
-        self.assertGreater(stats['descriptions'], 0)
-        self.assertEqual(stats['by_camera']["events"]['clips'], 5000)
-        self.assertEqual(stats['by_camera']["events"]['snapshots'], 500)
+        self.assertIn("events", stats["by_camera"])
+        self.assertGreaterEqual(stats["clips"], 5000)
+        self.assertGreaterEqual(stats["snapshots"], 500)
+        self.assertGreater(stats["descriptions"], 0)
+        self.assertEqual(stats["by_camera"]["events"]["clips"], 5000)
+        self.assertEqual(stats["by_camera"]["events"]["snapshots"], 500)
 
     def test_daily_reports_and_daily_reviews_included_in_total(self):
         for sub in ("daily_reports", "daily_reviews"):
@@ -257,8 +261,8 @@ class TestFileManagerStorageStats(unittest.TestCase):
             with open(os.path.join(path, "report.md"), "w") as f:
                 f.write("x" * 300)
         stats = self.fm.compute_storage_stats()
-        self.assertGreaterEqual(stats['descriptions'], 600)
-        self.assertGreaterEqual(stats['total'], 600)
+        self.assertGreaterEqual(stats["descriptions"], 600)
+        self.assertGreaterEqual(stats["total"], 600)
 
     def test_legacy_and_consolidated_both_counted(self):
         cam = os.path.join(self.tmp, "doorbell")
@@ -273,11 +277,11 @@ class TestFileManagerStorageStats(unittest.TestCase):
         with open(os.path.join(cam_dir, "clip.mp4"), "wb") as f:
             f.write(b"2" * 200)
         stats = self.fm.compute_storage_stats()
-        self.assertEqual(stats['clips'], 100 + 200)
-        self.assertIn("doorbell", stats['by_camera'])
-        self.assertIn("events", stats['by_camera'])
-        self.assertEqual(stats['by_camera']["doorbell"]['clips'], 100)
-        self.assertEqual(stats['by_camera']["events"]['clips'], 200)
+        self.assertEqual(stats["clips"], 100 + 200)
+        self.assertIn("doorbell", stats["by_camera"])
+        self.assertIn("events", stats["by_camera"])
+        self.assertEqual(stats["by_camera"]["doorbell"]["clips"], 100)
+        self.assertEqual(stats["by_camera"]["events"]["clips"], 200)
 
     def test_stats_api_returns_storage_with_value_unit_format(self):
         storage = tempfile.mkdtemp()
@@ -287,7 +291,14 @@ class TestFileManagerStorageStats(unittest.TestCase):
             "snapshots": 100 * 1024,
             "descriptions": 50 * 1024,
             "total": 650 * 1024,
-            "by_camera": {"carport": {"clips": 500 * 1024, "snapshots": 100 * 1024, "descriptions": 50 * 1024, "total": 650 * 1024}},
+            "by_camera": {
+                "carport": {
+                    "clips": 500 * 1024,
+                    "snapshots": 100 * 1024,
+                    "descriptions": 50 * 1024,
+                    "total": 650 * 1024,
+                }
+            },
         }
         orch = SimpleNamespace(
             config={
@@ -309,6 +320,7 @@ class TestFileManagerStorageStats(unittest.TestCase):
             mqtt_wrapper=MagicMock(mqtt_connected=False),
         )
         from frigate_buffer.web.server import create_app
+
         app = create_app(orch)
         if isinstance(app, MagicMock):
             self.skipTest("create_app was mocked")
@@ -327,7 +339,7 @@ class TestFileManagerStorageStats(unittest.TestCase):
             self.assertIsNotNone(s["breakdown"][key].get("value"))
             self.assertIn(s["breakdown"][key].get("unit"), ("KB", "MB", "GB"))
         self.assertIn("by_camera", s)
-        for cam, val in s["by_camera"].items():
+        for _cam, val in s["by_camera"].items():
             self.assertIn("value", val)
             self.assertIn("unit", val)
 

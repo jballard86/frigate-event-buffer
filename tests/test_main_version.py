@@ -15,7 +15,11 @@ class TestLoadVersion(unittest.TestCase):
         result = _load_version()
         self.assertIsInstance(result, str)
         self.assertGreater(len(result), 0)
-        self.assertNotEqual(result, "unknown", "version.txt should be found from project root or package")
+        self.assertNotEqual(
+            result,
+            "unknown",
+            "version.txt should be found from project root or package",
+        )
 
     def test_load_version_returns_unknown_when_file_missing(self) -> None:
         """When version.txt does not exist, return 'unknown'."""

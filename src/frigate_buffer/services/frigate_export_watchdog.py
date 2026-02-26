@@ -40,7 +40,8 @@ def _parse_export_response_entries(
 ) -> list[tuple[str, str | None]]:
     """
     Read merged timeline (base + append JSONL) and return list of (export_id, camera_for_clip).
-    camera_for_clip is None for single-camera event (clip at root); else camera name for consolidated (clip at camera subdir).
+    camera_for_clip is None for 1-camera CE (clip at root); else camera name for
+    multi-camera CE (clip at camera subdir).
     """
     result: list[tuple[str, str | None]] = []
     try:
@@ -74,8 +75,10 @@ def _clip_path_for_entry(
     folder_path: str,
     camera_for_clip: str | None,
 ) -> str | None:
-    """Path to the clip file for this entry (single-cam or consolidated). Uses resolve_clip_in_folder for dynamic names."""
+    """Path to clip file for this entry (1-camera or multi-camera CE).
+    Uses resolve_clip_in_folder for dynamic names."""
     from frigate_buffer.services.query import resolve_clip_in_folder
+
     if camera_for_clip is None:
         clip_basename = resolve_clip_in_folder(folder_path)
         return os.path.join(folder_path, clip_basename) if clip_basename else None
@@ -85,7 +88,9 @@ def _clip_path_for_entry(
     return os.path.join(cam_folder, clip_basename) if clip_basename else None
 
 
-def _rel_path_from_storage(folder_path: str, storage_path: str) -> tuple[str, str] | None:
+def _rel_path_from_storage(
+    folder_path: str, storage_path: str
+) -> tuple[str, str] | None:
     """Return (camera, subdir) relative to storage_path, or None if not under storage."""
     try:
         folder_real = os.path.realpath(folder_path)
@@ -104,8 +109,10 @@ def _rel_path_from_storage(folder_path: str, storage_path: str) -> tuple[str, st
 
 
 def _event_files_list(folder_path: str) -> list[str]:
-    """Build same file list as timeline page: root files + camera_subdir/<clip>.mp4 etc. (dynamic clip names)."""
+    """Build same file list as timeline page: root files + camera_subdir/<clip>.mp4
+    etc. (dynamic clip names)."""
     from frigate_buffer.services.query import resolve_clip_in_folder
+
     files: list[str] = []
     try:
         for name in os.listdir(folder_path):
@@ -118,7 +125,12 @@ def _event_files_list(folder_path: str) -> list[str]:
                 clip_basename = resolve_clip_in_folder(sub_fp)
                 if clip_basename:
                     files.append(f"{sub}/{clip_basename}")
-                for sf in ("snapshot.jpg", "metadata.json", "summary.txt", "review_summary.md"):
+                for sf in (
+                    "snapshot.jpg",
+                    "metadata.json",
+                    "summary.txt",
+                    "review_summary.md",
+                ):
                     if os.path.isfile(os.path.join(sub_fp, sf)):
                         files.append(f"{sub}/{sf}")
         files.sort()
@@ -165,7 +177,11 @@ def _delete_export_from_frigate(
     Returns outcome so run_once can aggregate counts for the run summary.
     """
     url = f"{frigate_url.rstrip('/')}/api/export/{export_id}"
-    logger.debug("Frigate export delete: url=%s export_id=%s", _redact_url(url), export_id)
+    logger.debug(
+        "Frigate export delete: url=%s export_id=%s",
+        _redact_url(url),
+        export_id,
+    )
     try:
         resp = requests.delete(url, timeout=DELETE_EXPORT_TIMEOUT)
         body_str = _response_body_for_log(resp)
@@ -181,7 +197,11 @@ def _delete_export_from_frigate(
                 resp.status_code,
             )
             if body_str:
-                logger.debug("Frigate export delete response (%s): %s", resp.status_code, body_str)
+                logger.debug(
+                    "Frigate export delete response (%s): %s",
+                    resp.status_code,
+                    body_str,
+                )
             return "already_gone"
         # Failure: extract reason and log warning
         reason = ""
@@ -197,17 +217,29 @@ def _delete_export_from_frigate(
             pass
         if not reason and resp.text:
             reason = resp.text[:200]
+        body_str_for_log = body_str or "(no body)"
         logger.warning(
-            "Frigate export delete error: export_id=%s status=%s%s",
+            "Frigate export delete error: file_name_requested=%s status=%s "
+            "frigate_response=%s%s",
             export_id,
             resp.status_code,
+            body_str_for_log,
             f" reason={reason}" if reason else "",
         )
         if body_str:
-            logger.debug("Frigate export delete response (%s): %s", resp.status_code, body_str)
+            logger.debug(
+                "Frigate export delete response (%s): %s",
+                resp.status_code,
+                body_str,
+            )
         return "failure"
     except requests.exceptions.RequestException as e:
-        logger.warning("Frigate export delete request failed: export_id=%s error=%s", export_id, e)
+        logger.warning(
+            "Frigate export delete request failed: file_name_requested=%s "
+            "frigate_response=%s",
+            export_id,
+            e,
+        )
         return "failure"
 
 
@@ -224,16 +256,22 @@ def run_once(config: dict[str, Any]) -> None:
     base_url = f"http://{buffer_ip}:{flask_port}" if buffer_ip else ""
 
     if not storage_path or not os.path.isdir(storage_path):
-        logger.debug("Export watchdog: STORAGE_PATH missing or not a directory, skipping")
+        logger.debug(
+            "Export watchdog: STORAGE_PATH missing or not a directory, skipping"
+        )
         return
     if not frigate_url:
         logger.debug("Export watchdog: FRIGATE_URL missing, skipping")
         return
 
-    logger.debug("Export watchdog run started: frigate_url=%s", _redact_url(frigate_url))
+    logger.debug(
+        "Export watchdog run started: frigate_url=%s", _redact_url(frigate_url)
+    )
 
     seen_export_ids: set[str] = set()
-    events_checked_for_links: list[tuple[str, str, str]] = []  # (folder_path, camera, subdir)
+    events_checked_for_links: list[
+        tuple[str, str, str]
+    ] = []  # (folder_path, camera, subdir)
     folders_with_timeline = 0
     export_entries_found = 0
     succeeded = 0
@@ -261,10 +299,16 @@ def run_once(config: dict[str, Any]) -> None:
                         for event_entry in it_events:
                             if not event_entry.is_dir():
                                 continue
-                            event_dir = event_entry.name
                             event_path = event_entry.path
-                            timeline_path = os.path.join(event_path, "notification_timeline.json")
-                            if not os.path.isfile(timeline_path):
+                            timeline_base = os.path.join(
+                                event_path, "notification_timeline.json"
+                            )
+                            timeline_append = os.path.join(
+                                event_path, "notification_timeline_append.jsonl"
+                            )
+                            if not os.path.isfile(timeline_base) and not os.path.isfile(
+                                timeline_append
+                            ):
                                 continue
 
                             folders_with_timeline += 1
@@ -273,11 +317,15 @@ def run_once(config: dict[str, Any]) -> None:
                             for export_id, camera_for_clip in pairs:
                                 if export_id in seen_export_ids:
                                     continue
-                                clip_path = _clip_path_for_entry(event_path, camera_for_clip)
+                                clip_path = _clip_path_for_entry(
+                                    event_path, camera_for_clip
+                                )
                                 if not clip_path or not os.path.isfile(clip_path):
                                     continue
                                 seen_export_ids.add(export_id)
-                                outcome = _delete_export_from_frigate(frigate_url, export_id)
+                                outcome = _delete_export_from_frigate(
+                                    frigate_url, export_id
+                                )
                                 if outcome == "success":
                                     succeeded += 1
                                 elif outcome == "already_gone":
@@ -285,14 +333,18 @@ def run_once(config: dict[str, Any]) -> None:
                                 else:
                                     failed += 1
 
-                            # Remember for link verification (any folder with timeline and at least one clip)
+                            # Remember for link verification (any folder with timeline and clip)
                             if pairs and any(
-                                (lambda p: p is not None and os.path.isfile(p))(_clip_path_for_entry(event_path, c))
+                                (lambda p: p is not None and os.path.isfile(p))(
+                                    _clip_path_for_entry(event_path, c)
+                                )
                                 for _, c in pairs
                             ):
                                 rel = _rel_path_from_storage(event_path, storage_path)
                                 if rel:
-                                    events_checked_for_links.append((event_path, rel[0], rel[1]))
+                                    events_checked_for_links.append(
+                                        (event_path, rel[0], rel[1])
+                                    )
 
                 except OSError as e:
                     logger.debug("Export watchdog: scan %s: %s", camera_path, e)
@@ -302,14 +354,29 @@ def run_once(config: dict[str, Any]) -> None:
         return
 
     logger.debug(
-        "Export watchdog: folders_with_timeline=%s export_entries_found=%s deletes_attempted=%s",
+        "Export watchdog: folders_with_timeline=%s export_entries_found=%s "
+        "deletes_attempted=%s",
         folders_with_timeline,
         export_entries_found,
         succeeded + already_gone + failed,
     )
     total_deletes = succeeded + already_gone + failed
     if total_deletes == 0:
-        logger.info("Export watchdog complete: no exports to delete")
+        if folders_with_timeline == 0:
+            skip_reason = "no folders with timeline (base or append)"
+        elif export_entries_found == 0:
+            skip_reason = "no Clip export response entries in timelines"
+        else:
+            skip_reason = (
+                "entries found but all skipped (clip missing or export_id missing)"
+            )
+        logger.info(
+            "Export watchdog complete: no exports to delete "
+            "(folders_with_timeline=%s export_entries_found=%s reason=%s)",
+            folders_with_timeline,
+            export_entries_found,
+            skip_reason,
+        )
     else:
         logger.info(
             "Export watchdog complete: %s succeeded, %s failed, %s already removed",
@@ -321,7 +388,9 @@ def run_once(config: dict[str, Any]) -> None:
     # Verify download links (capped to avoid unbounded HEAD requests)
     if base_url and events_checked_for_links:
         head_count = 0
-        for folder_path, camera, subdir in events_checked_for_links[:MAX_LINK_CHECK_FOLDERS]:
+        for folder_path, camera, subdir in events_checked_for_links[
+            :MAX_LINK_CHECK_FOLDERS
+        ]:
             if head_count >= MAX_HEAD_REQUESTS:
                 break
             for f in _event_files_list(folder_path):
@@ -331,7 +400,11 @@ def run_once(config: dict[str, Any]) -> None:
                 try:
                     r = requests.head(url, timeout=5)
                     if r.status_code != 200:
-                        logger.warning(f"Export watchdog: download link check failed: {url} status={r.status_code}")
+                        logger.warning(
+                            "Export watchdog: download link check failed: %s status=%s",
+                            url,
+                            r.status_code,
+                        )
                 except requests.exceptions.RequestException as e:
                     logger.debug(f"Export watchdog: link check {url}: {e}")
                 finally:
@@ -341,7 +414,10 @@ def run_once(config: dict[str, Any]) -> None:
 if __name__ == "__main__":
     from frigate_buffer.config import load_config
 
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s %(message)s",
+    )
     config = load_config()
     run_once(config)
     logger.info("Export watchdog run complete.")

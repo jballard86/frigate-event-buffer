@@ -13,11 +13,13 @@ import pytest
 @pytest.fixture
 def mock_pynv(monkeypatch):
     """Mock PyNvVideoCodec so tests run without GPU."""
+
     class MockFrame:
         """DLPack-capable mock frame: (3, H, W) CHW."""
 
         def __init__(self, h: int = 1080, w: int = 1920):
             import torch
+
             self._t = torch.zeros(3, h, w, dtype=torch.uint8, device="cuda")
 
         def __dlpack__(self):
@@ -27,7 +29,14 @@ def mock_pynv(monkeypatch):
             return (2, 0)  # CUDA, device 0
 
     class MockSimpleDecoder:
-        def __init__(self, path, gpu_id=0, use_device_memory=True, max_width=4096, output_color_type=None):
+        def __init__(
+            self,
+            path,
+            gpu_id=0,
+            use_device_memory=True,
+            max_width=4096,
+            output_color_type=None,
+        ):
             self._path = path
             self._frame_count = 100
 
@@ -80,6 +89,7 @@ def test_decoder_context_frame_count(mock_pynv):
 def test_decoder_context_get_frames_empty_indices(mock_pynv):
     """get_frames([]) returns empty BCHW tensor."""
     import torch
+
     from frigate_buffer.services.gpu_decoder import DecoderContext
 
     class Dec:
@@ -101,6 +111,7 @@ def test_decoder_context_get_frames_empty_indices(mock_pynv):
 def test_decoder_context_get_frames_bchw(mock_pynv):
     """get_frames([0, 1]) returns BCHW tensor (N, 3, H, W)."""
     import torch
+
     from frigate_buffer.services.gpu_decoder import DecoderContext
 
     class Dec:
@@ -147,7 +158,6 @@ def test_create_decoder_yields_context(mock_pynv):
 
 def test_create_decoder_logs_on_failure(monkeypatch):
     """On init failure, NVDEC_INIT_FAILURE_PREFIX is logged and exception re-raised."""
-    from frigate_buffer.constants import NVDEC_INIT_FAILURE_PREFIX
     from frigate_buffer.services.gpu_decoder import create_decoder
 
     def fail(*args, **kwargs):

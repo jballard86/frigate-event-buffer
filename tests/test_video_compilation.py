@@ -1,10 +1,8 @@
 """Tests for video_compilation service."""
 
 import json
-import os
 import unittest
-from unittest.mock import MagicMock, patch, mock_open
-
+from unittest.mock import MagicMock, mock_open, patch
 
 from frigate_buffer.services.video_compilation import (
     _encode_frames_via_ffmpeg,
@@ -20,7 +18,9 @@ from frigate_buffer.services.video_compilation import (
 )
 
 
-def _fake_create_decoder_context(frame_count: int = 200, height: int = 480, width: int = 640):
+def _fake_create_decoder_context(
+    frame_count: int = 200, height: int = 480, width: int = 640
+):
     """Build a mock DecoderContext for _run_pynv_compilation tests."""
     try:
         import torch
@@ -29,7 +29,9 @@ def _fake_create_decoder_context(frame_count: int = 200, height: int = 480, widt
     mock_ctx = MagicMock()
     mock_ctx.__len__ = lambda self: frame_count
     # Called as ctx.get_index_from_time_in_seconds(t) -> one arg t
-    mock_ctx.get_index_from_time_in_seconds = lambda t: min(max(0, int(t * 20)), max(0, frame_count - 1))
+    mock_ctx.get_index_from_time_in_seconds = lambda t: min(
+        max(0, int(t * 20)), max(0, frame_count - 1)
+    )
     # Called as ctx.get_frames(indices) -> one arg indices
     mock_ctx.get_frames = lambda indices: torch.zeros(
         (len(indices), 3, height, width), dtype=torch.uint8
@@ -135,8 +137,14 @@ class TestTrimSlicesToActionWindow(unittest.TestCase):
         """First detection at 2s, last at 10s, global_end=20 → action [0, 13]; slices outside dropped, overlapping clamped."""
         sidecars = {
             "cam1": [
-                {"timestamp_sec": 2.0, "detections": [{"centerpoint": [100, 100], "area": 1.0}]},
-                {"timestamp_sec": 10.0, "detections": [{"centerpoint": [200, 200], "area": 1.0}]},
+                {
+                    "timestamp_sec": 2.0,
+                    "detections": [{"centerpoint": [100, 100], "area": 1.0}],
+                },
+                {
+                    "timestamp_sec": 10.0,
+                    "detections": [{"centerpoint": [200, 200], "area": 1.0}],
+                },
             ],
         }
         slices = [
@@ -156,7 +164,12 @@ class TestTrimSlicesToActionWindow(unittest.TestCase):
 
     def test_no_detections_keeps_full_range(self):
         """When no sidecar has any entry with detections, no trimming (full 0..global_end)."""
-        sidecars = {"cam1": [{"timestamp_sec": 1.0, "detections": []}, {"timestamp_sec": 5.0, "detections": []}]}
+        sidecars = {
+            "cam1": [
+                {"timestamp_sec": 1.0, "detections": []},
+                {"timestamp_sec": 5.0, "detections": []},
+            ]
+        }
         slices = [{"camera": "cam1", "start_sec": 0.0, "end_sec": 10.0}]
         result = _trim_slices_to_action_window(slices, sidecars, global_end=10.0)
         self.assertEqual(len(result), 1)
@@ -200,9 +213,7 @@ class TestCalculateCropAtTime(unittest.TestCase):
             "entries": [
                 {
                     "timestamp_sec": 5.0,
-                    "detections": [
-                        {"centerpoint": [1000, 500], "area": 1000.0}
-                    ],
+                    "detections": [{"centerpoint": [1000, 500], "area": 1000.0}],
                 }
             ]
         }
@@ -215,8 +226,14 @@ class TestCalculateCropAtTime(unittest.TestCase):
     def test_with_timestamps_sorted_uses_bisect(self):
         sidecar = {
             "entries": [
-                {"timestamp_sec": 1.0, "detections": [{"centerpoint": [100, 100], "area": 100.0}]},
-                {"timestamp_sec": 3.0, "detections": [{"centerpoint": [500, 500], "area": 100.0}]},
+                {
+                    "timestamp_sec": 1.0,
+                    "detections": [{"centerpoint": [100, 100], "area": 100.0}],
+                },
+                {
+                    "timestamp_sec": 3.0,
+                    "detections": [{"centerpoint": [500, 500], "area": 100.0}],
+                },
             ]
         }
         ts_sorted = [1.0, 3.0]
@@ -230,7 +247,10 @@ class TestCalculateCropAtTime(unittest.TestCase):
         """When person leaves at t=4, query at t=6: nearest entry (t=6) has no detections; entry at t=4 has detections within 5s → crop holds at t=4 position, not center."""
         sidecar = {
             "entries": [
-                {"timestamp_sec": 4.0, "detections": [{"centerpoint": [800, 400], "area": 500.0}]},
+                {
+                    "timestamp_sec": 4.0,
+                    "detections": [{"centerpoint": [800, 400], "area": 500.0}],
+                },
                 {"timestamp_sec": 5.0, "detections": []},
                 {"timestamp_sec": 6.0, "detections": []},
             ]
@@ -248,7 +268,10 @@ class TestCalculateCropAtTime(unittest.TestCase):
         """When no entry with detections exists within 5s, crop remains center."""
         sidecar = {
             "entries": [
-                {"timestamp_sec": 0.0, "detections": [{"centerpoint": [200, 200], "area": 100.0}]},
+                {
+                    "timestamp_sec": 0.0,
+                    "detections": [{"centerpoint": [200, 200], "area": 100.0}],
+                },
                 {"timestamp_sec": 10.0, "detections": []},
             ]
         }
@@ -263,8 +286,14 @@ class TestCalculateCropAtTime(unittest.TestCase):
         """When the nearest entry already has detections, behavior unchanged (no regression)."""
         sidecar = {
             "entries": [
-                {"timestamp_sec": 4.0, "detections": [{"centerpoint": [800, 400], "area": 500.0}]},
-                {"timestamp_sec": 6.0, "detections": [{"centerpoint": [1000, 500], "area": 500.0}]},
+                {
+                    "timestamp_sec": 4.0,
+                    "detections": [{"centerpoint": [800, 400], "area": 500.0}],
+                },
+                {
+                    "timestamp_sec": 6.0,
+                    "detections": [{"centerpoint": [1000, 500], "area": 500.0}],
+                },
             ]
         }
         x, y, w, h = calculate_crop_at_time(sidecar, 5.5, 1920, 1080, 1440, 1080)
@@ -280,14 +309,17 @@ class TestCalculateCropAtTime(unittest.TestCase):
             "entries": [
                 {
                     "timestamp_sec": 1.0,
-                    "detections": [
-                        {"bbox": [100, 100, 200, 200], "area": 10000.0}
-                    ]
+                    "detections": [{"bbox": [100, 100, 200, 200], "area": 10000.0}],
                 }
             ]
         }
         x, y, w, h = calculate_crop_at_time(
-            sidecar, 1.0, 1920, 1080, 1440, 1080,
+            sidecar,
+            1.0,
+            1920,
+            1080,
+            1440,
+            1080,
             tracking_target_frame_percent=40,
         )
         # Content = bbox + 10% padding; desired crop area = content / 0.4; aspect 1440/1080.
@@ -309,11 +341,19 @@ class TestCalculateCropAtTime(unittest.TestCase):
         """When tracking_target_frame_percent=0, crop size is fixed target_w x target_h."""
         sidecar = {
             "entries": [
-                {"timestamp_sec": 1.0, "detections": [{"bbox": [100, 100, 200, 200], "area": 10000.0}]}
+                {
+                    "timestamp_sec": 1.0,
+                    "detections": [{"bbox": [100, 100, 200, 200], "area": 10000.0}],
+                }
             ]
         }
         x, y, w, h = calculate_crop_at_time(
-            sidecar, 1.0, 1920, 1080, 1440, 1080,
+            sidecar,
+            1.0,
+            1920,
+            1080,
+            1440,
+            1080,
             tracking_target_frame_percent=0,
         )
         self.assertEqual(w, 1440)
@@ -352,7 +392,12 @@ class TestSmoothZoomEma(unittest.TestCase):
     def test_alpha_zero_or_one_does_not_change_zoom(self):
         """Alpha 0 or 1 leaves zoom dimensions unchanged (or no-op)."""
         slices = [
-            {"crop_start": (0, 0, 800, 450), "crop_end": (0, 0, 800, 450), "native_width": 1920, "native_height": 1080},
+            {
+                "crop_start": (0, 0, 800, 450),
+                "crop_end": (0, 0, 800, 450),
+                "native_width": 1920,
+                "native_height": 1080,
+            },
         ]
         orig_w, orig_h = slices[0]["crop_start"][2], slices[0]["crop_start"][3]
         smooth_zoom_ema(slices, 0.0, 1440, 1080)
@@ -365,8 +410,18 @@ class TestSmoothZoomEma(unittest.TestCase):
     def test_smooth_zoom_ema_updates_crop_size_in_place(self):
         """smooth_zoom_ema updates (w,h) on each slice; dimensions stay even and in bounds."""
         slices = [
-            {"crop_start": (100, 50, 960, 540), "crop_end": (120, 60, 960, 540), "native_width": 1920, "native_height": 1080},
-            {"crop_start": (200, 100, 800, 450), "crop_end": (220, 110, 800, 450), "native_width": 1920, "native_height": 1080},
+            {
+                "crop_start": (100, 50, 960, 540),
+                "crop_end": (120, 60, 960, 540),
+                "native_width": 1920,
+                "native_height": 1080,
+            },
+            {
+                "crop_start": (200, 100, 800, 450),
+                "crop_end": (220, 110, 800, 450),
+                "native_width": 1920,
+                "native_height": 1080,
+            },
         ]
         smooth_zoom_ema(slices, 0.3, 1440, 1080)
         for sl in slices:
@@ -395,7 +450,7 @@ class TestCalculateSegmentCrop(unittest.TestCase):
         self.assertEqual(h, 1080)
         # Should be centered
         self.assertEqual(x, 240)  # (1920 - 1440) / 2
-        self.assertEqual(y, 0)    # (1080 - 1080) / 2
+        self.assertEqual(y, 0)  # (1080 - 1080) / 2
 
     def test_detections_use_weighted_center(self):
         """Detections are used for area-weighted center calculation."""
@@ -404,9 +459,7 @@ class TestCalculateSegmentCrop(unittest.TestCase):
             "entries": [
                 {
                     "timestamp_sec": 5.0,
-                    "detections": [
-                        {"centerpoint": [1000, 500], "area": 1000.0}
-                    ]
+                    "detections": [{"centerpoint": [1000, 500], "area": 1000.0}],
                 }
             ]
         }
@@ -426,9 +479,7 @@ class TestCalculateSegmentCrop(unittest.TestCase):
             "entries": [
                 {
                     "timestamp_sec": 5.0,
-                    "detections": [
-                        {"box": [800, 400, 1200, 600], "area": 40000.0}
-                    ]
+                    "detections": [{"box": [800, 400, 1200, 600], "area": 40000.0}],
                 }
             ]
         }
@@ -448,7 +499,7 @@ class TestCalculateSegmentCrop(unittest.TestCase):
                     "timestamp_sec": 5.0,
                     "detections": [
                         {"centerpoint": [100, 100], "area": 1000.0}  # Near edge
-                    ]
+                    ],
                 }
             ]
         }
@@ -485,7 +536,13 @@ class TestGenerateCompilationVideo(unittest.TestCase):
     @patch("frigate_buffer.services.query.resolve_clip_in_folder")
     @patch("builtins.open", new_callable=mock_open)
     def test_pynv_pipeline_writes_to_tmp_then_renames(
-        self, mock_file, mock_resolve, mock_getsize, mock_rename, mock_isfile, mock_run_pynv
+        self,
+        mock_file,
+        mock_resolve,
+        mock_getsize,
+        mock_rename,
+        mock_isfile,
+        mock_run_pynv,
     ):
         """PyNv pipeline is called with tmp path; on success temp file is renamed to final output."""
         mock_resolve.return_value = "doorbell-123.mp4"
@@ -514,7 +571,13 @@ class TestGenerateCompilationVideo(unittest.TestCase):
     @patch("frigate_buffer.services.query.resolve_clip_in_folder")
     @patch("builtins.open", new_callable=mock_open)
     def test_pynv_pipeline_receives_slices_and_target_resolution(
-        self, mock_file, mock_resolve, mock_getsize, mock_rename, mock_isfile, mock_run_pynv
+        self,
+        mock_file,
+        mock_resolve,
+        mock_getsize,
+        mock_rename,
+        mock_isfile,
+        mock_run_pynv,
     ):
         """_run_pynv_compilation is invoked with correct slices and target dimensions."""
         mock_resolve.return_value = "doorbell-123.mp4"
@@ -544,7 +607,13 @@ class TestGenerateCompilationVideo(unittest.TestCase):
     @patch("frigate_buffer.services.query.resolve_clip_in_folder")
     @patch("builtins.open", new_callable=mock_open)
     def test_successful_completion_renames_temp_file(
-        self, mock_file, mock_resolve, mock_getsize, mock_rename, mock_isfile, mock_run_pynv
+        self,
+        mock_file,
+        mock_resolve,
+        mock_getsize,
+        mock_rename,
+        mock_isfile,
+        mock_run_pynv,
     ):
         """On success, temp file is renamed to final output path."""
         mock_resolve.return_value = "doorbell-123.mp4"
@@ -589,7 +658,13 @@ class TestGenerateCompilationVideo(unittest.TestCase):
     @patch("frigate_buffer.services.query.resolve_clip_in_folder")
     @patch("builtins.open", new_callable=mock_open)
     def test_multiple_slices_passed_to_pynv(
-        self, mock_file, mock_resolve, mock_getsize, mock_rename, mock_isfile, mock_run_pynv
+        self,
+        mock_file,
+        mock_resolve,
+        mock_getsize,
+        mock_rename,
+        mock_isfile,
+        mock_run_pynv,
     ):
         """Multiple slices are passed to _run_pynv_compilation (one segment per slice)."""
         mock_resolve.return_value = "doorbell.mp4"
@@ -629,7 +704,13 @@ class TestGenerateCompilationVideo(unittest.TestCase):
     @patch("frigate_buffer.services.query.resolve_clip_in_folder")
     @patch("builtins.open", new_callable=mock_open)
     def test_last_slice_of_camera_run_holds_crop(
-        self, mock_file, mock_resolve, mock_getsize, mock_rename, mock_isfile, mock_run_pynv
+        self,
+        mock_file,
+        mock_resolve,
+        mock_getsize,
+        mock_rename,
+        mock_isfile,
+        mock_run_pynv,
     ):
         """Last slice before a camera switch must have crop_end == crop_start (smooth hold)."""
         mock_resolve.return_value = "cam.mp4"
@@ -657,7 +738,13 @@ class TestGenerateCompilationVideo(unittest.TestCase):
     @patch("frigate_buffer.services.video_compilation.os.path.getsize")
     @patch("frigate_buffer.services.query.resolve_clip_in_folder")
     def test_fallback_log_once_per_camera_no_detections(
-        self, mock_resolve, mock_getsize, mock_rename, mock_isfile, mock_run_pynv, mock_logger
+        self,
+        mock_resolve,
+        mock_getsize,
+        mock_rename,
+        mock_isfile,
+        mock_run_pynv,
+        mock_logger,
     ):
         """When multiple slices have no detections at start/end, only one ERROR is logged per camera."""
         mock_resolve.return_value = "doorbell.mp4"
@@ -687,10 +774,15 @@ class TestGenerateCompilationVideo(unittest.TestCase):
         generate_compilation_video(slices, ce_dir, output_path, sidecars=sidecars)
 
         no_detection_calls = [
-            c for c in mock_logger.error.call_args_list
+            c
+            for c in mock_logger.error.call_args_list
             if c[0] and "no detections at slice start/end" in str(c[0][0])
         ]
-        self.assertEqual(len(no_detection_calls), 1, "Expected exactly one ERROR per camera for no detections")
+        self.assertEqual(
+            len(no_detection_calls),
+            1,
+            "Expected exactly one ERROR per camera for no detections",
+        )
         msg = no_detection_calls[0][0]
         self.assertIn("doorbell", str(msg))
         self.assertIn("in %s slices", msg[0])
@@ -704,7 +796,13 @@ class TestGenerateCompilationVideo(unittest.TestCase):
     @patch("frigate_buffer.services.video_compilation.os.path.getsize")
     @patch("frigate_buffer.services.query.resolve_clip_in_folder")
     def test_fallback_log_once_per_camera_no_entries(
-        self, mock_resolve, mock_getsize, mock_rename, mock_isfile, mock_run_pynv, mock_logger
+        self,
+        mock_resolve,
+        mock_getsize,
+        mock_rename,
+        mock_isfile,
+        mock_run_pynv,
+        mock_logger,
     ):
         """When multiple slices have no sidecar entries for a camera, only one ERROR is logged per camera."""
         mock_resolve.return_value = "doorbell.mp4"
@@ -728,10 +826,15 @@ class TestGenerateCompilationVideo(unittest.TestCase):
         generate_compilation_video(slices, ce_dir, output_path, sidecars=sidecars)
 
         no_entries_calls = [
-            c for c in mock_logger.error.call_args_list
+            c
+            for c in mock_logger.error.call_args_list
             if c[0] and "no sidecar entries" in str(c[0][0])
         ]
-        self.assertEqual(len(no_entries_calls), 1, "Expected exactly one ERROR per camera for no sidecar entries")
+        self.assertEqual(
+            len(no_entries_calls),
+            1,
+            "Expected exactly one ERROR per camera for no sidecar entries",
+        )
         msg = no_entries_calls[0][0]
         self.assertIn("doorbell", str(msg))
         self.assertIn("in %s slices", msg[0])
@@ -745,7 +848,12 @@ class TestGenerateCompilationVideo(unittest.TestCase):
     @patch("frigate_buffer.services.video_compilation._get_video_metadata")
     @patch("frigate_buffer.services.video_compilation.os.path.isfile")
     def test_run_pynv_compilation_uses_metadata_fallback_when_len_zero(
-        self, mock_isfile, mock_get_metadata, mock_open_fn, mock_popen, mock_create_decoder
+        self,
+        mock_isfile,
+        mock_get_metadata,
+        mock_open_fn,
+        mock_popen,
+        mock_create_decoder,
     ):
         """When decoder reports len 0, frame count uses _get_video_metadata fallback and _run_pynv_compilation completes; encode via FFmpeg streaming."""
         try:
@@ -810,12 +918,17 @@ class TestGenerateCompilationVideo(unittest.TestCase):
     @patch("frigate_buffer.services.video_compilation._get_video_metadata")
     @patch("frigate_buffer.services.video_compilation.os.path.isfile")
     def test_run_pynv_compilation_calls_ffmpeg_encode_with_h264_nvenc(
-        self, mock_isfile, mock_get_metadata, mock_open_fn, mock_popen, mock_create_decoder
+        self,
+        mock_isfile,
+        mock_get_metadata,
+        mock_open_fn,
+        mock_popen,
+        mock_create_decoder,
     ):
         """Compilation encode is via FFmpeg streaming (h264_nvenc only; no CPU fallback)."""
-        try:
-            import torch
-        except ImportError:
+        import importlib.util
+
+        if importlib.util.find_spec("torch") is None:
             self.skipTest("torch not available")
         mock_isfile.return_value = True
         mock_get_metadata.return_value = (640, 480, 20.0, 2.0)
@@ -874,7 +987,12 @@ class TestGenerateCompilationVideo(unittest.TestCase):
     @patch("frigate_buffer.services.video_compilation._get_video_metadata")
     @patch("frigate_buffer.services.video_compilation.os.path.isfile")
     def test_run_pynv_compilation_skips_slice_on_decoder_failure(
-        self, mock_isfile, mock_get_metadata, mock_open_fn, mock_popen, mock_create_decoder
+        self,
+        mock_isfile,
+        mock_get_metadata,
+        mock_open_fn,
+        mock_popen,
+        mock_create_decoder,
     ):
         """When create_decoder raises for a slice, that slice is skipped; FFmpeg is opened but no frames are written."""
         mock_isfile.return_value = True
@@ -919,7 +1037,13 @@ class TestGenerateCompilationVideo(unittest.TestCase):
     @patch("frigate_buffer.services.video_compilation._get_video_metadata")
     @patch("frigate_buffer.services.video_compilation.os.path.isfile")
     def test_run_pynv_compilation_skips_slice_when_decoder_returns_zero_frames(
-        self, mock_isfile, mock_get_metadata, mock_logger, mock_open_fn, mock_popen, mock_create_decoder
+        self,
+        mock_isfile,
+        mock_get_metadata,
+        mock_logger,
+        mock_open_fn,
+        mock_popen,
+        mock_create_decoder,
     ):
         """When get_frames returns 0 frames (post-decode), slice is skipped; log is clear it is not hardware init."""
         try:
@@ -931,7 +1055,9 @@ class TestGenerateCompilationVideo(unittest.TestCase):
         mock_ctx = _fake_create_decoder_context(200, height=480, width=640)
         if mock_ctx is None:
             self.skipTest("torch not available")
-        mock_ctx.get_frames = lambda indices: torch.empty(0, 3, 480, 640, dtype=torch.uint8)
+        mock_ctx.get_frames = lambda indices: torch.empty(
+            0, 3, 480, 640, dtype=torch.uint8
+        )
         mock_cm = MagicMock()
         mock_cm.__enter__ = MagicMock(return_value=mock_ctx)
         mock_cm.__exit__ = MagicMock(return_value=None)
@@ -967,19 +1093,109 @@ class TestGenerateCompilationVideo(unittest.TestCase):
         self.assertGreater(len(error_calls), 0)
         msg = str(error_calls[0][0][0])
         self.assertIn("0 frames", msg)
-        self.assertIn("Skipping slice", msg)
-        self.assertIn("post-decode", msg)
-        self.assertIn("not hardware init", msg)
+        self.assertIn("Skipping chunk", msg)
 
     @patch("frigate_buffer.services.video_compilation.GPU_LOCK", MagicMock())
     @patch("frigate_buffer.services.video_compilation.create_decoder")
     @patch("frigate_buffer.services.video_compilation.subprocess.Popen")
     @patch("builtins.open", new_callable=mock_open)
-    @patch("frigate_buffer.services.video_compilation.crop_utils.crop_around_center_to_size")
+    @patch("frigate_buffer.services.video_compilation._get_video_metadata")
+    @patch("frigate_buffer.services.video_compilation.os.path.isfile")
+    def test_run_pynv_compilation_chunks_decode_and_calls_empty_cache_per_chunk(
+        self,
+        mock_isfile,
+        mock_get_metadata,
+        mock_open_fn,
+        mock_popen,
+        mock_create_decoder,
+    ):
+        """get_frames is called in chunks of BATCH_SIZE; empty_cache after each chunk and in finally."""
+        try:
+            import torch
+        except ImportError:
+            self.skipTest("torch not available")
+        mock_isfile.return_value = True
+        # 1.0 s at 20 fps = 20 frames → 5 chunks of 4 (BATCH_SIZE)
+        mock_get_metadata.return_value = (640, 480, 20.0, 1.0)
+        get_frames_calls = []
+
+        def record_get_frames(indices):
+            get_frames_calls.append(list(indices))
+            return torch.zeros((len(indices), 3, 480, 640), dtype=torch.uint8)
+
+        mock_ctx = _fake_create_decoder_context(200, height=480, width=640)
+        if mock_ctx is None:
+            self.skipTest("torch not available")
+        mock_ctx.get_frames = record_get_frames
+        mock_cm = MagicMock()
+        mock_cm.__enter__ = MagicMock(return_value=mock_ctx)
+        mock_cm.__exit__ = MagicMock(return_value=None)
+        mock_create_decoder.return_value = mock_cm
+        proc = MagicMock()
+        proc.stdin = MagicMock()
+        proc.returncode = 0
+        mock_popen.return_value = proc
+
+        slices = [
+            {
+                "camera": "doorbell",
+                "start_sec": 0.0,
+                "end_sec": 1.0,
+                "crop_start": (0, 0, 320, 240),
+                "crop_end": (0, 0, 320, 240),
+            },
+        ]
+        resolve_clip = MagicMock(return_value="doorbell-1.mp4")
+
+        with (
+            patch("torch.cuda.is_available", return_value=True),
+            patch("torch.cuda.empty_cache", MagicMock()) as mock_empty_cache,
+        ):
+            _run_pynv_compilation(
+                slices=slices,
+                ce_dir="/ce",
+                tmp_output_path="/out.mp4.tmp",
+                target_w=1440,
+                target_h=1080,
+                resolve_clip_in_folder=resolve_clip,
+                cuda_device_index=0,
+            )
+
+        # 20 frames in chunks of BATCH_SIZE (4) → 5 chunk calls
+        self.assertGreater(
+            len(get_frames_calls),
+            1,
+            "get_frames should be called multiple times per slice",
+        )
+        self.assertEqual(
+            len(get_frames_calls), 5, "20 frames / BATCH_SIZE=4 → 5 chunks"
+        )
+        self.assertEqual(get_frames_calls[0], [0, 1, 2, 3])
+        self.assertEqual(get_frames_calls[1], [4, 5, 6, 7])
+        self.assertEqual(get_frames_calls[2], [8, 9, 10, 11])
+        self.assertEqual(get_frames_calls[3], [12, 13, 14, 15])
+        self.assertEqual(get_frames_calls[4], [16, 17, 18, 19])
+        # empty_cache: once after each of 5 chunks + once in slice finally = 6
+        self.assertEqual(mock_empty_cache.call_count, 6)
+        self.assertEqual(proc.stdin.write.call_count, 20)
+
+    @patch("frigate_buffer.services.video_compilation.GPU_LOCK", MagicMock())
+    @patch("frigate_buffer.services.video_compilation.create_decoder")
+    @patch("frigate_buffer.services.video_compilation.subprocess.Popen")
+    @patch("builtins.open", new_callable=mock_open)
+    @patch(
+        "frigate_buffer.services.video_compilation.crop_utils.crop_around_center_to_size"
+    )
     @patch("frigate_buffer.services.video_compilation._get_video_metadata")
     @patch("frigate_buffer.services.video_compilation.os.path.isfile")
     def test_run_pynv_compilation_repeats_last_frame_when_decoder_returns_fewer_frames(
-        self, mock_isfile, mock_get_metadata, mock_crop_to_size, mock_open_fn, mock_popen, mock_create_decoder
+        self,
+        mock_isfile,
+        mock_get_metadata,
+        mock_crop_to_size,
+        mock_open_fn,
+        mock_popen,
+        mock_create_decoder,
     ):
         """When get_frames returns fewer frames than requested (e.g. de-dup), repeat last frame; no IndexError."""
         try:
@@ -991,13 +1207,15 @@ class TestGenerateCompilationVideo(unittest.TestCase):
         mock_ctx = _fake_create_decoder_context(200, height=480, width=640)
         if mock_ctx is None:
             self.skipTest("torch not available")
-        mock_ctx.get_frames = lambda indices: torch.zeros((1, 3, 480, 640), dtype=torch.uint8)
+        mock_ctx.get_frames = lambda indices: torch.zeros(
+            (1, 3, 480, 640), dtype=torch.uint8
+        )
         mock_cm = MagicMock()
         mock_cm.__enter__ = MagicMock(return_value=mock_ctx)
         mock_cm.__exit__ = MagicMock(return_value=None)
         mock_create_decoder.return_value = mock_cm
-        mock_crop_to_size.side_effect = lambda frame, cx, cy, cw, ch, out_w, out_h: torch.zeros(
-            (1, 3, out_h, out_w), dtype=torch.uint8
+        mock_crop_to_size.side_effect = lambda frame, cx, cy, cw, ch, out_w, out_h: (
+            torch.zeros((1, 3, out_h, out_w), dtype=torch.uint8)
         )
         proc = MagicMock()
         proc.stdin = MagicMock()
@@ -1035,11 +1253,20 @@ class TestGenerateCompilationVideo(unittest.TestCase):
     @patch("frigate_buffer.services.video_compilation.subprocess.Popen")
     @patch("builtins.open", new_callable=mock_open)
     @patch("frigate_buffer.services.video_compilation.logger")
-    @patch("frigate_buffer.services.video_compilation.crop_utils.crop_around_center_to_size")
+    @patch(
+        "frigate_buffer.services.video_compilation.crop_utils.crop_around_center_to_size"
+    )
     @patch("frigate_buffer.services.video_compilation._get_video_metadata")
     @patch("frigate_buffer.services.video_compilation.os.path.isfile")
     def test_run_pynv_compilation_logs_info_once_per_camera_when_fewer_frames(
-        self, mock_isfile, mock_get_metadata, mock_crop_to_size, mock_logger, mock_open_fn, mock_popen, mock_create_decoder
+        self,
+        mock_isfile,
+        mock_get_metadata,
+        mock_crop_to_size,
+        mock_logger,
+        mock_open_fn,
+        mock_popen,
+        mock_create_decoder,
     ):
         """When decoder returns fewer frames than requested, log DEBUG and one INFO per camera per event."""
         try:
@@ -1051,13 +1278,15 @@ class TestGenerateCompilationVideo(unittest.TestCase):
         mock_ctx = _fake_create_decoder_context(200, height=480, width=640)
         if mock_ctx is None:
             self.skipTest("torch not available")
-        mock_ctx.get_frames = lambda indices: torch.zeros((1, 3, 480, 640), dtype=torch.uint8)
+        mock_ctx.get_frames = lambda indices: torch.zeros(
+            (1, 3, 480, 640), dtype=torch.uint8
+        )
         mock_cm = MagicMock()
         mock_cm.__enter__ = MagicMock(return_value=mock_ctx)
         mock_cm.__exit__ = MagicMock(return_value=None)
         mock_create_decoder.return_value = mock_cm
-        mock_crop_to_size.side_effect = lambda frame, cx, cy, cw, ch, out_w, out_h: torch.zeros(
-            (1, 3, out_h, out_w), dtype=torch.uint8
+        mock_crop_to_size.side_effect = lambda frame, cx, cy, cw, ch, out_w, out_h: (
+            torch.zeros((1, 3, out_h, out_w), dtype=torch.uint8)
         )
         proc = MagicMock()
         proc.stdin = MagicMock()
@@ -1087,10 +1316,14 @@ class TestGenerateCompilationVideo(unittest.TestCase):
         )
 
         info_calls = [
-            c for c in mock_logger.info.call_args_list
-            if c[0] and "Possible stutter or missing frames" in (str(c[0][0]) if c[0] else "")
+            c
+            for c in mock_logger.info.call_args_list
+            if c[0]
+            and "Possible stutter or missing frames" in (str(c[0][0]) if c[0] else "")
         ]
-        self.assertEqual(len(info_calls), 1, "Expected exactly one INFO per camera per event")
+        self.assertEqual(
+            len(info_calls), 1, "Expected exactly one INFO per camera per event"
+        )
         self.assertIn("doorbell", str(info_calls[0]))
         self.assertIn("/path/doorbell-1.mp4", str(info_calls[0]))
 
@@ -1098,11 +1331,19 @@ class TestGenerateCompilationVideo(unittest.TestCase):
     @patch("frigate_buffer.services.video_compilation.create_decoder")
     @patch("frigate_buffer.services.video_compilation.subprocess.Popen")
     @patch("builtins.open", new_callable=mock_open)
-    @patch("frigate_buffer.services.video_compilation.crop_utils.crop_around_center_to_size")
+    @patch(
+        "frigate_buffer.services.video_compilation.crop_utils.crop_around_center_to_size"
+    )
     @patch("frigate_buffer.services.video_compilation._get_video_metadata")
     @patch("frigate_buffer.services.video_compilation.os.path.isfile")
     def test_run_pynv_compilation_uses_crop_utils_and_outputs_target_resolution(
-        self, mock_isfile, mock_get_metadata, mock_crop_to_size, mock_open_fn, mock_popen, mock_create_decoder
+        self,
+        mock_isfile,
+        mock_get_metadata,
+        mock_crop_to_size,
+        mock_open_fn,
+        mock_popen,
+        mock_create_decoder,
     ):
         """_run_pynv_compilation uses crop_utils.crop_around_center_to_size (variable crop, fixed output); frames streamed to FFmpeg are target resolution."""
         try:
@@ -1123,8 +1364,8 @@ class TestGenerateCompilationVideo(unittest.TestCase):
         mock_cm.__exit__ = MagicMock(return_value=None)
         mock_create_decoder.return_value = mock_cm
         # crop_around_center_to_size(frame, cx, cy, crop_w, crop_h, output_w, output_h)
-        mock_crop_to_size.side_effect = lambda frame, cx, cy, cw, ch, out_w, out_h: torch.zeros(
-            (1, 3, out_h, out_w), dtype=torch.uint8
+        mock_crop_to_size.side_effect = lambda frame, cx, cy, cw, ch, out_w, out_h: (
+            torch.zeros((1, 3, out_h, out_w), dtype=torch.uint8)
         )
         proc = MagicMock()
         proc.stdin = MagicMock()
@@ -1224,19 +1465,24 @@ class TestGenerateCompilationVideo(unittest.TestCase):
         )
 
         debug_calls = [
-            c for c in mock_logger.debug.call_args_list
+            c
+            for c in mock_logger.debug.call_args_list
             if c[0] and "static frame" in (str(c[0][0]) if c[0] else "")
         ]
         self.assertGreater(
-            len(debug_calls), 0,
+            len(debug_calls),
+            0,
             "Expected at least one DEBUG log for static frame (same index for all frames)",
         )
         info_calls = [
-            c for c in mock_logger.info.call_args_list
-            if c[0] and "Possible stutter or missing frames" in (str(c[0][0]) if c[0] else "")
+            c
+            for c in mock_logger.info.call_args_list
+            if c[0]
+            and "Possible stutter or missing frames" in (str(c[0][0]) if c[0] else "")
         ]
         self.assertGreater(
-            len(info_calls), 0,
+            len(info_calls),
+            0,
             "Expected at least one INFO log for stutter/missing frames (once per camera per event)",
         )
         self.assertIn("doorbell", str(info_calls[0]))
@@ -1274,11 +1520,41 @@ class TestGenerateCompilationVideo(unittest.TestCase):
 
         # 3 slices for doorbell, 2 for front_door (5 slices, 2 distinct cameras).
         slices = [
-            {"camera": "doorbell", "start_sec": 0.0, "end_sec": 1.0, "crop_start": (0, 0, 320, 240), "crop_end": (0, 0, 320, 240)},
-            {"camera": "doorbell", "start_sec": 1.0, "end_sec": 2.0, "crop_start": (0, 0, 320, 240), "crop_end": (0, 0, 320, 240)},
-            {"camera": "doorbell", "start_sec": 2.0, "end_sec": 3.0, "crop_start": (0, 0, 320, 240), "crop_end": (0, 0, 320, 240)},
-            {"camera": "front_door", "start_sec": 3.0, "end_sec": 4.0, "crop_start": (0, 0, 320, 240), "crop_end": (0, 0, 320, 240)},
-            {"camera": "front_door", "start_sec": 4.0, "end_sec": 5.0, "crop_start": (0, 0, 320, 240), "crop_end": (0, 0, 320, 240)},
+            {
+                "camera": "doorbell",
+                "start_sec": 0.0,
+                "end_sec": 1.0,
+                "crop_start": (0, 0, 320, 240),
+                "crop_end": (0, 0, 320, 240),
+            },
+            {
+                "camera": "doorbell",
+                "start_sec": 1.0,
+                "end_sec": 2.0,
+                "crop_start": (0, 0, 320, 240),
+                "crop_end": (0, 0, 320, 240),
+            },
+            {
+                "camera": "doorbell",
+                "start_sec": 2.0,
+                "end_sec": 3.0,
+                "crop_start": (0, 0, 320, 240),
+                "crop_end": (0, 0, 320, 240),
+            },
+            {
+                "camera": "front_door",
+                "start_sec": 3.0,
+                "end_sec": 4.0,
+                "crop_start": (0, 0, 320, 240),
+                "crop_end": (0, 0, 320, 240),
+            },
+            {
+                "camera": "front_door",
+                "start_sec": 4.0,
+                "end_sec": 5.0,
+                "crop_start": (0, 0, 320, 240),
+                "crop_end": (0, 0, 320, 240),
+            },
         ]
         resolve_clip = MagicMock(return_value="clip.mp4")
 
@@ -1293,7 +1569,8 @@ class TestGenerateCompilationVideo(unittest.TestCase):
         )
 
         compilation_debug_calls = [
-            c for c in mock_logger.debug.call_args_list
+            c
+            for c in mock_logger.debug.call_args_list
             if c[0] and "Compilation camera=" in (str(c[0][0]) if c[0] else "")
         ]
         self.assertEqual(
@@ -1310,9 +1587,12 @@ class TestEncodeFramesViaFfmpeg(unittest.TestCase):
     def test_encode_uses_h264_nvenc_in_command(self):
         """FFmpeg is invoked with -c:v h264_nvenc (GPU only; no libx264) and -pix_fmt yuv420p."""
         import numpy as np
+
         frames = [np.zeros((1080, 1440, 3), dtype=np.uint8)]
         with patch("builtins.open", mock_open()):
-            with patch("frigate_buffer.services.video_compilation.subprocess.Popen") as mock_popen:
+            with patch(
+                "frigate_buffer.services.video_compilation.subprocess.Popen"
+            ) as mock_popen:
                 proc = MagicMock()
                 proc.stdin = MagicMock()
                 proc.returncode = 0
@@ -1326,9 +1606,12 @@ class TestEncodeFramesViaFfmpeg(unittest.TestCase):
     def test_encode_uses_thread_queue_size_and_nvenc_tune(self):
         """FFmpeg command includes -thread_queue_size 512 and h264_nvenc preset/tune/rc/cq for stability."""
         import numpy as np
+
         frames = [np.zeros((1080, 1440, 3), dtype=np.uint8)]
         with patch("builtins.open", mock_open()):
-            with patch("frigate_buffer.services.video_compilation.subprocess.Popen") as mock_popen:
+            with patch(
+                "frigate_buffer.services.video_compilation.subprocess.Popen"
+            ) as mock_popen:
                 proc = MagicMock()
                 proc.stdin = MagicMock()
                 proc.returncode = 0
@@ -1346,9 +1629,12 @@ class TestEncodeFramesViaFfmpeg(unittest.TestCase):
     def test_encode_failure_raises_with_descriptive_message(self):
         """On non-zero exit, RuntimeError is raised advising to check ffmpeg_compile.log."""
         import numpy as np
+
         frames = [np.zeros((1080, 1440, 3), dtype=np.uint8)]
         with patch("builtins.open", mock_open()):
-            with patch("frigate_buffer.services.video_compilation.subprocess.Popen") as mock_popen:
+            with patch(
+                "frigate_buffer.services.video_compilation.subprocess.Popen"
+            ) as mock_popen:
                 proc = MagicMock()
                 proc.stdin = MagicMock()
                 proc.returncode = 1
@@ -1361,9 +1647,12 @@ class TestEncodeFramesViaFfmpeg(unittest.TestCase):
     def test_broken_pipe_logs_and_raises_with_log_path(self):
         """When FFmpeg crashes and closes stdin, BrokenPipeError is caught; RuntimeError advises checking ffmpeg_compile.log."""
         import numpy as np
+
         frames = [np.zeros((1080, 1440, 3), dtype=np.uint8)]
         with patch("builtins.open", mock_open()):
-            with patch("frigate_buffer.services.video_compilation.subprocess.Popen") as mock_popen:
+            with patch(
+                "frigate_buffer.services.video_compilation.subprocess.Popen"
+            ) as mock_popen:
                 proc = MagicMock()
                 proc.stdin = MagicMock()
                 proc.stdin.write.side_effect = BrokenPipeError
@@ -1379,7 +1668,9 @@ class TestCompileCeVideoConfig(unittest.TestCase):
     """Tests that compile_ce_video uses same timeline config as frame timeline."""
 
     @patch("frigate_buffer.services.video_compilation.generate_compilation_video")
-    @patch("frigate_buffer.services.video_compilation.timeline_ema.build_phase1_assignments")
+    @patch(
+        "frigate_buffer.services.video_compilation.timeline_ema.build_phase1_assignments"
+    )
     @patch("frigate_buffer.services.video_compilation.timeline_ema.build_dense_times")
     @patch("frigate_buffer.services.query.resolve_clip_in_folder")
     def test_uses_max_multi_cam_frames_config_keys(
@@ -1388,8 +1679,13 @@ class TestCompileCeVideoConfig(unittest.TestCase):
         """compile_ce_video must use MAX_MULTI_CAM_FRAMES_SEC and MAX_MULTI_CAM_FRAMES_MIN."""
         mock_resolve.return_value = "cam1.mp4"
         mock_build_dense.return_value = [0.0, 1.0, 2.0]
-        mock_build_assignments.return_value = [(0.0, "cam1"), (1.0, "cam1"), (2.0, "cam1")]
+        mock_build_assignments.return_value = [
+            (0.0, "cam1"),
+            (1.0, "cam1"),
+            (2.0, "cam1"),
+        ]
         from frigate_buffer.services.video_compilation import compile_ce_video
+
         config = {
             "MAX_MULTI_CAM_FRAMES_SEC": 2.5,
             "MAX_MULTI_CAM_FRAMES_MIN": 50,
@@ -1401,9 +1697,21 @@ class TestCompileCeVideoConfig(unittest.TestCase):
             "SUMMARY_TARGET_WIDTH": 1440,
             "SUMMARY_TARGET_HEIGHT": 1080,
         }
-        with patch("frigate_buffer.services.video_compilation.os.scandir") as mock_scandir:
-            with patch("frigate_buffer.services.video_compilation.os.path.isfile", return_value=True):
-                with patch("builtins.open", mock_open(read_data=json.dumps({"entries": [], "native_width": 1920, "native_height": 1080}))):
+        with patch(
+            "frigate_buffer.services.video_compilation.os.scandir"
+        ) as mock_scandir:
+            with patch(
+                "frigate_buffer.services.video_compilation.os.path.isfile",
+                return_value=True,
+            ):
+                with patch(
+                    "builtins.open",
+                    mock_open(
+                        read_data=json.dumps(
+                            {"entries": [], "native_width": 1920, "native_height": 1080}
+                        )
+                    ),
+                ):
                     mock_ent = MagicMock()
                     mock_ent.is_dir.return_value = True
                     mock_ent.name = "cam1"
@@ -1416,18 +1724,30 @@ class TestCompileCeVideoConfig(unittest.TestCase):
 
     @patch("frigate_buffer.services.video_compilation.generate_compilation_video")
     @patch("frigate_buffer.services.video_compilation._trim_slices_to_action_window")
-    @patch("frigate_buffer.services.video_compilation.timeline_ema.build_phase1_assignments")
+    @patch(
+        "frigate_buffer.services.video_compilation.timeline_ema.build_phase1_assignments"
+    )
     @patch("frigate_buffer.services.video_compilation.timeline_ema.build_dense_times")
     @patch("frigate_buffer.services.query.resolve_clip_in_folder")
     def test_returns_none_when_trim_leaves_no_slices(
-        self, mock_resolve, mock_build_dense, mock_build_assignments, mock_trim, mock_gen
+        self,
+        mock_resolve,
+        mock_build_dense,
+        mock_build_assignments,
+        mock_trim,
+        mock_gen,
     ):
         """When _trim_slices_to_action_window returns empty list, compile_ce_video returns None and does not call generate_compilation_video."""
         mock_resolve.return_value = "cam1.mp4"
         mock_build_dense.return_value = [0.0, 1.0, 2.0]
-        mock_build_assignments.return_value = [(0.0, "cam1"), (1.0, "cam1"), (2.0, "cam1")]
+        mock_build_assignments.return_value = [
+            (0.0, "cam1"),
+            (1.0, "cam1"),
+            (2.0, "cam1"),
+        ]
         mock_trim.return_value = []
         from frigate_buffer.services.video_compilation import compile_ce_video
+
         config = {
             "MAX_MULTI_CAM_FRAMES_SEC": 2,
             "MAX_MULTI_CAM_FRAMES_MIN": 45,
@@ -1439,9 +1759,21 @@ class TestCompileCeVideoConfig(unittest.TestCase):
             "SUMMARY_TARGET_WIDTH": 1440,
             "SUMMARY_TARGET_HEIGHT": 1080,
         }
-        with patch("frigate_buffer.services.video_compilation.os.scandir") as mock_scandir:
-            with patch("frigate_buffer.services.video_compilation.os.path.isfile", return_value=True):
-                with patch("builtins.open", mock_open(read_data=json.dumps({"entries": [], "native_width": 1920, "native_height": 1080}))):
+        with patch(
+            "frigate_buffer.services.video_compilation.os.scandir"
+        ) as mock_scandir:
+            with patch(
+                "frigate_buffer.services.video_compilation.os.path.isfile",
+                return_value=True,
+            ):
+                with patch(
+                    "builtins.open",
+                    mock_open(
+                        read_data=json.dumps(
+                            {"entries": [], "native_width": 1920, "native_height": 1080}
+                        )
+                    ),
+                ):
                     mock_ent = MagicMock()
                     mock_ent.is_dir.return_value = True
                     mock_ent.name = "cam1"
@@ -1452,7 +1784,9 @@ class TestCompileCeVideoConfig(unittest.TestCase):
         mock_gen.assert_not_called()
 
     @patch("frigate_buffer.services.video_compilation.generate_compilation_video")
-    @patch("frigate_buffer.services.video_compilation.timeline_ema.build_phase1_assignments")
+    @patch(
+        "frigate_buffer.services.video_compilation.timeline_ema.build_phase1_assignments"
+    )
     @patch("frigate_buffer.services.video_compilation.timeline_ema.build_dense_times")
     @patch("frigate_buffer.services.query.resolve_clip_in_folder")
     def test_extends_global_end_when_sidecar_longer_than_requested_window(
@@ -1461,17 +1795,25 @@ class TestCompileCeVideoConfig(unittest.TestCase):
         """When sidecar content is longer than passed global_end, compile_ce_video extends timeline to sidecar duration."""
         mock_resolve.return_value = "cam1.mp4"
         mock_build_dense.return_value = [0.0, 2.0, 4.0]
-        mock_build_assignments.return_value = [(0.0, "cam1"), (2.0, "cam1"), (4.0, "cam1")]
+        mock_build_assignments.return_value = [
+            (0.0, "cam1"),
+            (2.0, "cam1"),
+            (4.0, "cam1"),
+        ]
         # Sidecar with last entry at 87s (longer than requested 50s)
         sidecar_data = {
             "entries": [
                 {"timestamp_sec": 0, "detections": []},
-                {"timestamp_sec": 87.0, "detections": [{"label": "person", "area": 1000}]},
+                {
+                    "timestamp_sec": 87.0,
+                    "detections": [{"label": "person", "area": 1000}],
+                },
             ],
             "native_width": 1920,
             "native_height": 1080,
         }
         from frigate_buffer.services.video_compilation import compile_ce_video
+
         config = {
             "MAX_MULTI_CAM_FRAMES_SEC": 2,
             "MAX_MULTI_CAM_FRAMES_MIN": 45,
@@ -1483,9 +1825,16 @@ class TestCompileCeVideoConfig(unittest.TestCase):
             "SUMMARY_TARGET_WIDTH": 1440,
             "SUMMARY_TARGET_HEIGHT": 1080,
         }
-        with patch("frigate_buffer.services.video_compilation.os.scandir") as mock_scandir:
-            with patch("frigate_buffer.services.video_compilation.os.path.isfile", return_value=True):
-                with patch("builtins.open", mock_open(read_data=json.dumps(sidecar_data))):
+        with patch(
+            "frigate_buffer.services.video_compilation.os.scandir"
+        ) as mock_scandir:
+            with patch(
+                "frigate_buffer.services.video_compilation.os.path.isfile",
+                return_value=True,
+            ):
+                with patch(
+                    "builtins.open", mock_open(read_data=json.dumps(sidecar_data))
+                ):
                     mock_ent = MagicMock()
                     mock_ent.is_dir.return_value = True
                     mock_ent.name = "cam1"
@@ -1494,10 +1843,14 @@ class TestCompileCeVideoConfig(unittest.TestCase):
                     compile_ce_video("/ce", 50.0, config, None)
         # build_dense_times(step_sec, max_frames_min, multiplier, global_end) -> global_end should be 87
         call_args = mock_build_dense.call_args[0]
-        self.assertEqual(call_args[3], 87.0, "global_end should extend to sidecar last timestamp")
+        self.assertEqual(
+            call_args[3], 87.0, "global_end should extend to sidecar last timestamp"
+        )
 
     @patch("frigate_buffer.services.video_compilation.generate_compilation_video")
-    @patch("frigate_buffer.services.video_compilation.timeline_ema.build_phase1_assignments")
+    @patch(
+        "frigate_buffer.services.video_compilation.timeline_ema.build_phase1_assignments"
+    )
     @patch("frigate_buffer.services.video_compilation.timeline_ema.build_dense_times")
     @patch("frigate_buffer.services.query.resolve_clip_in_folder")
     def test_keeps_global_end_when_sidecar_shorter_than_requested_window(
@@ -1506,17 +1859,25 @@ class TestCompileCeVideoConfig(unittest.TestCase):
         """When sidecar content is shorter than passed global_end, compile_ce_video keeps caller global_end."""
         mock_resolve.return_value = "cam1.mp4"
         mock_build_dense.return_value = [0.0, 2.0, 4.0]
-        mock_build_assignments.return_value = [(0.0, "cam1"), (2.0, "cam1"), (4.0, "cam1")]
+        mock_build_assignments.return_value = [
+            (0.0, "cam1"),
+            (2.0, "cam1"),
+            (4.0, "cam1"),
+        ]
         # Sidecar with last entry at 20s (shorter than requested 50s)
         sidecar_data = {
             "entries": [
                 {"timestamp_sec": 0, "detections": []},
-                {"timestamp_sec": 20.0, "detections": [{"label": "person", "area": 1000}]},
+                {
+                    "timestamp_sec": 20.0,
+                    "detections": [{"label": "person", "area": 1000}],
+                },
             ],
             "native_width": 1920,
             "native_height": 1080,
         }
         from frigate_buffer.services.video_compilation import compile_ce_video
+
         config = {
             "MAX_MULTI_CAM_FRAMES_SEC": 2,
             "MAX_MULTI_CAM_FRAMES_MIN": 45,
@@ -1528,9 +1889,16 @@ class TestCompileCeVideoConfig(unittest.TestCase):
             "SUMMARY_TARGET_WIDTH": 1440,
             "SUMMARY_TARGET_HEIGHT": 1080,
         }
-        with patch("frigate_buffer.services.video_compilation.os.scandir") as mock_scandir:
-            with patch("frigate_buffer.services.video_compilation.os.path.isfile", return_value=True):
-                with patch("builtins.open", mock_open(read_data=json.dumps(sidecar_data))):
+        with patch(
+            "frigate_buffer.services.video_compilation.os.scandir"
+        ) as mock_scandir:
+            with patch(
+                "frigate_buffer.services.video_compilation.os.path.isfile",
+                return_value=True,
+            ):
+                with patch(
+                    "builtins.open", mock_open(read_data=json.dumps(sidecar_data))
+                ):
                     mock_ent = MagicMock()
                     mock_ent.is_dir.return_value = True
                     mock_ent.name = "cam1"
@@ -1539,7 +1907,11 @@ class TestCompileCeVideoConfig(unittest.TestCase):
                     compile_ce_video("/ce", 50.0, config, None)
         # global_end should remain 50 (max(50, 20) = 50)
         call_args = mock_build_dense.call_args[0]
-        self.assertEqual(call_args[3], 50.0, "global_end should remain caller value when sidecar is shorter")
+        self.assertEqual(
+            call_args[3],
+            50.0,
+            "global_end should remain caller value when sidecar is shorter",
+        )
 
 
 class TestCompilationDecoderImport(unittest.TestCase):
@@ -1548,8 +1920,13 @@ class TestCompilationDecoderImport(unittest.TestCase):
     def test_video_compilation_imports_create_decoder(self):
         """video_compilation module uses create_decoder from gpu_decoder for decode."""
         from frigate_buffer.services import video_compilation
-        self.assertTrue(hasattr(video_compilation, "create_decoder") or "create_decoder" in dir(video_compilation))
+
+        self.assertTrue(
+            hasattr(video_compilation, "create_decoder")
+            or "create_decoder" in dir(video_compilation)
+        )
         from frigate_buffer.services.gpu_decoder import create_decoder
+
         self.assertIs(video_compilation.create_decoder, create_decoder)
 
 

@@ -1,26 +1,28 @@
 """
 Shared crop and overlay helpers for AI analyzer and multi-cam frame extractor.
 
-All crop/resize/letterbox functions accept PyTorch tensors in BCHW (batch, channels, height, width).
-Motion crop uses GPU absdiff with int16 cast to avoid uint8 underflow; only the 1-bit mask is
-transferred to CPU for cv2.findContours. Timestamp overlay accepts tensor or numpy (Phase 1 compat);
-converts RGB→BGR only at the OpenCV boundary and returns numpy HWC BGR.
+All crop/resize/letterbox functions accept PyTorch tensors in BCHW format.
+Motion crop uses GPU absdiff with int16 cast to avoid uint8 underflow; only the
+1-bit mask is transferred to CPU for cv2.findContours. Timestamp overlay accepts
+tensor or numpy (Phase 1 compat); converts RGB→BGR only at the OpenCV boundary
+and returns numpy HWC BGR.
 """
 
 from __future__ import annotations
 
 import logging
-from typing import Any, Union
+from typing import Any, cast
 
 import cv2
+import numpy as np
 
 from frigate_buffer.constants import is_tensor
-import numpy as np
 
 logger = logging.getLogger("frigate-buffer")
 
 # Default minimum area for motion-based crop (avoid noise pulling crop)
-# Fraction of frame area; if largest motion blob is below this, fall back to center crop.
+# Fraction of frame area; if largest motion blob is below this,
+# fall back to center crop.
 DEFAULT_MOTION_CROP_MIN_AREA_FRACTION = 0.001
 # Alternative: minimum area in pixels (e.g. 500). If both set, use the stricter.
 DEFAULT_MOTION_CROP_MIN_PX = 500
@@ -72,7 +74,8 @@ def crop_around_center(
     target_h: int,
 ) -> Any:
     """
-    Crop frame centered on (center_x, center_y), clamped to frame bounds, then resize to target.
+    Crop frame centered on (center_x, center_y), clamped to frame bounds,
+    then resize to target.
 
     frame: torch.Tensor BCHW. Returns BCHW tensor.
     """
@@ -84,7 +87,8 @@ def crop_around_center(
 def _crop_around_center(
     frame: Any, center_x: int, center_y: int, target_w: int, target_h: int
 ) -> Any:
-    """Crop frame centered on (center_x, center_y), clamped to frame bounds, then resize to target. BCHW in/out."""
+    """Crop frame centered on (center_x, center_y), clamped to frame bounds,
+    then resize to target. BCHW in/out."""
     import torch
     import torch.nn.functional as F
 
@@ -136,9 +140,9 @@ def crop_around_center_to_size(
     output_h: int,
 ) -> Any:
     """
-    Crop a region of size (crop_w, crop_h) centered at (center_x, center_y), clamped to frame
-    bounds, then resize to (output_w, output_h). Used for compilation with variable zoom;
-    output size is fixed for the encoder.
+    Crop a region of size (crop_w, crop_h) centered at (center_x, center_y),
+    clamped to frame bounds, then resize to (output_w, output_h). Used for
+    compilation with variable zoom; output size is fixed for the encoder.
 
     frame: torch.Tensor BCHW. Returns BCHW tensor of shape (B, C, output_h, output_w).
     Uses bicubic interpolation for the resize step (sharper when downscaling).
@@ -194,7 +198,7 @@ def crop_around_detections_with_padding(
     """
     Crop the frame to a region that encompasses ALL detections plus padding.
 
-    frame: torch.Tensor BCHW. Returns BCHW tensor (variable size crop; no resize to fixed size).
+    frame: torch.Tensor BCHW. Returns BCHW (variable size crop; no fixed resize).
     Each detection must have "bbox" as [x1, y1, x2, y2] in pixel coordinates.
     """
     if not is_tensor(frame):
@@ -288,10 +292,12 @@ def motion_crop(
     center_override: tuple[int, int] | None = None,
 ) -> tuple[Any, Any]:
     """
-    Crop frame centered on the largest motion region (absdiff + contours on GPU; findContours on CPU).
+    Crop frame centered on the largest motion region (absdiff + contours on GPU;
+    findContours on CPU).
 
-    frame, prev_gray: torch.Tensor. frame is BCHW RGB; prev_gray is 1CHW or HW (grayscale).
-    Returns (cropped_frame BCHW, next_gray 1CHW or HW). Cast to int16 before subtraction to avoid uint8 underflow.
+    frame, prev_gray: torch.Tensor. frame is BCHW RGB; prev_gray is 1CHW or HW.
+    Returns (cropped_frame BCHW, next_gray 1CHW or HW). Cast to int16 before
+    subtraction to avoid uint8 underflow.
     """
     import torch
 
@@ -314,7 +320,8 @@ def motion_crop(
     if prev_gray is None:
         return center_crop(frame, target_w, target_h), gray
 
-    # Cast to int16 before subtraction to avoid uint8 underflow (e.g. 50 - 60 = 246 in uint8).
+    # Cast to int16 before subtraction to avoid uint8 underflow
+    # (e.g. 50 - 60 = 246 in uint8).
     prev_s = prev_gray.to(torch.int16)
     gray_s = gray.to(torch.int16)
     diff = torch.abs(prev_s - gray_s)
@@ -323,9 +330,7 @@ def motion_crop(
     mask_cpu = thresh.squeeze().cpu().numpy()
     if mask_cpu.ndim == 3:
         mask_cpu = mask_cpu[0]
-    contours, _ = cv2.findContours(
-        mask_cpu, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
-    )
+    contours, _ = cv2.findContours(mask_cpu, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
     if not contours:
         return center_crop(frame, target_w, target_h), gray
@@ -350,7 +355,7 @@ def motion_crop(
 
 
 def draw_timestamp_overlay(
-    frame: Union[Any, np.ndarray],
+    frame: Any | np.ndarray,
     time_str: str,
     camera_name: str,
     seq_index: int,
@@ -365,16 +370,20 @@ def draw_timestamp_overlay(
     Draw timestamp overlay on frame (top-left by default).
 
     Accepts torch.Tensor BCHW RGB or numpy ndarray HWC BGR (Phase 1 compat).
-    For tensor: converts to HWC BGR at the OpenCV boundary, draws, returns numpy HWC BGR.
+    For tensor: converts to HWC BGR at OpenCV boundary, draws, returns numpy HWC BGR.
     For numpy: draws in-place (or copy if read-only) and returns the array.
     """
     if is_tensor(frame):
+        import torch
+        t = cast(torch.Tensor, frame)
         # BCHW RGB → HWC BGR for OpenCV
-        if frame.dim() == 4:
-            frame_np = frame[:, [2, 1, 0], :, :].permute(0, 2, 3, 1).squeeze(0).cpu().numpy()
+        if t.dim() == 4:
+            frame_np = (
+                t[:, [2, 1, 0], :, :].permute(0, 2, 3, 1).squeeze(0).cpu().numpy()
+            )
         else:
             # CHW
-            frame_np = frame[[2, 1, 0], :, :].permute(1, 2, 0).cpu().numpy()
+            frame_np = t[[2, 1, 0], :, :].permute(1, 2, 0).cpu().numpy()
         frame = np.ascontiguousarray(frame_np)
     else:
         if not getattr(frame, "flags", None) or not frame.flags.writeable:

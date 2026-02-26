@@ -10,7 +10,8 @@ and deletes the aggregate file on success.
 import json
 import logging
 import os
-from datetime import date, datetime, timedelta, time as dt_time
+from datetime import date, datetime, timedelta
+from datetime import time as dt_time
 from typing import Any
 
 from frigate_buffer.services.ai_analyzer import GeminiAnalysisService
@@ -24,7 +25,9 @@ AGGREGATE_FILENAME_SUFFIX = ".jsonl"
 class DailyReporterService:
     """Generates daily security reports from aggregated analysis_result.json files."""
 
-    def __init__(self, config: dict, storage_path: str, ai_analyzer: GeminiAnalysisService):
+    def __init__(
+        self, config: dict, storage_path: str, ai_analyzer: GeminiAnalysisService
+    ):
         self.config = config
         self.storage_path = os.path.abspath(storage_path)
         self.ai_analyzer = ai_analyzer
@@ -34,7 +37,9 @@ class DailyReporterService:
             self._report_prompt_file = os.path.join(
                 os.path.dirname(os.path.abspath(__file__)), "report_prompt.txt"
             )
-        self._known_person_name = (config.get("REPORT_KNOWN_PERSON_NAME") or "").strip() or "Unspecified"
+        self._known_person_name = (
+            config.get("REPORT_KNOWN_PERSON_NAME") or ""
+        ).strip() or "Unspecified"
 
     def _aggregate_file_path(self, target_date: date) -> str:
         """Path to the per-day aggregate JSONL file."""
@@ -54,7 +59,7 @@ class DailyReporterService:
             return None
         events: list[dict] = []
         try:
-            with open(path, "r", encoding="utf-8") as f:
+            with open(path, encoding="utf-8") as f:
                 for line in f:
                     line = line.strip()
                     if not line:
@@ -79,7 +84,9 @@ class DailyReporterService:
             except OSError as e:
                 logger.warning("Could not remove aggregate file %s: %s", path, e)
 
-    def append_event_to_daily_aggregate(self, event_date: date, event_payload: dict[str, Any]) -> None:
+    def append_event_to_daily_aggregate(
+        self, event_date: date, event_payload: dict[str, Any]
+    ) -> None:
         """
         Append one event to the per-day aggregate JSONL file (for report-time read).
         Call this when an analysis result is persisted. event_payload must have keys
@@ -106,10 +113,13 @@ class DailyReporterService:
             logger.error("Daily report skipped: report prompt file path is empty")
             return None
         if not os.path.isfile(self._report_prompt_file):
-            logger.error("Daily report skipped: report prompt file not found: %s", self._report_prompt_file)
+            logger.error(
+                "Daily report skipped: report prompt file not found: %s",
+                self._report_prompt_file,
+            )
             return None
         try:
-            with open(self._report_prompt_file, "r", encoding="utf-8") as f:
+            with open(self._report_prompt_file, encoding="utf-8") as f:
                 self._prompt_template = f.read()
             return self._prompt_template
         except OSError as e:
@@ -120,7 +130,9 @@ class DailyReporterService:
             )
             return None
 
-    def _folder_name_and_timestamp(self, json_path: str) -> tuple[str | None, int | None]:
+    def _folder_name_and_timestamp(
+        self, json_path: str
+    ) -> tuple[str | None, int | None]:
         """Return (folder_name, unix_timestamp) for the event folder containing this analysis_result.json."""
         event_dir = os.path.dirname(os.path.abspath(json_path))
         parent_dir = os.path.dirname(event_dir)
@@ -163,7 +175,7 @@ class DailyReporterService:
             if event_date != target_date:
                 continue
             try:
-                with open(json_path, "r", encoding="utf-8") as f:
+                with open(json_path, encoding="utf-8") as f:
                     data = json.load(f)
             except (json.JSONDecodeError, OSError) as e:
                 logger.debug("Skip invalid or unreadable %s: %s", json_path, e)
@@ -176,7 +188,9 @@ class DailyReporterService:
         lines = []
         for _path, data, unix_ts in events:
             title = (data.get("title") or "").strip()
-            short_summary = (data.get("shortSummary") or data.get("description") or "").strip()
+            short_summary = (
+                data.get("shortSummary") or data.get("description") or ""
+            ).strip()
             try:
                 level = int(data.get("potential_threat_level", 0))
             except (TypeError, ValueError):
@@ -196,7 +210,11 @@ class DailyReporterService:
             if parent_basename == "events":
                 camera = os.path.basename(event_dir)
             else:
-                camera = os.path.basename(os.path.dirname(event_dir)) if os.path.dirname(event_dir) else "unknown"
+                camera = (
+                    os.path.basename(os.path.dirname(event_dir))
+                    if os.path.dirname(event_dir)
+                    else "unknown"
+                )
             try:
                 threat_level = int(data.get("potential_threat_level", 0))
             except (TypeError, ValueError):
@@ -232,7 +250,9 @@ class DailyReporterService:
                 len(event_objects),
             )
         else:
-            events_list, total_seen, total_matched = self._collect_events_for_date(target_date)
+            events_list, total_seen, total_matched = self._collect_events_for_date(
+                target_date
+            )
             logger.info(
                 "Daily report scan: %d analysis_result.json found, %d for date %s",
                 total_seen,
@@ -242,20 +262,32 @@ class DailyReporterService:
             for json_path, data, unix_ts in events_list:
                 event_dir = os.path.dirname(json_path)
                 parent_basename = os.path.basename(os.path.dirname(event_dir))
-                camera = os.path.basename(event_dir) if parent_basename == "events" else (os.path.basename(os.path.dirname(event_dir)) if os.path.dirname(event_dir) else "unknown")
+                camera = (
+                    os.path.basename(event_dir)
+                    if parent_basename == "events"
+                    else (
+                        os.path.basename(os.path.dirname(event_dir))
+                        if os.path.dirname(event_dir)
+                        else "unknown"
+                    )
+                )
                 try:
                     threat_level = int(data.get("potential_threat_level", 0))
                 except (TypeError, ValueError):
                     threat_level = 0
-                event_objects.append({
-                    "title": data.get("title", ""),
-                    "scene": data.get("scene", ""),
-                    "confidence": data.get("confidence", 0),
-                    "threat_level": threat_level,
-                    "camera": camera,
-                    "time": datetime.fromtimestamp(unix_ts).strftime("%Y-%m-%d %H:%M:%S"),
-                    "context": data.get("context", []),
-                })
+                event_objects.append(
+                    {
+                        "title": data.get("title", ""),
+                        "scene": data.get("scene", ""),
+                        "confidence": data.get("confidence", 0),
+                        "threat_level": threat_level,
+                        "camera": camera,
+                        "time": datetime.fromtimestamp(unix_ts).strftime(
+                            "%Y-%m-%d %H:%M:%S"
+                        ),
+                        "context": data.get("context", []),
+                    }
+                )
             logger.info(
                 "Daily report for %s: including %d event(s) from analysis_result.json",
                 date_str,
@@ -265,7 +297,11 @@ class DailyReporterService:
                 logger.debug("Included event from %s", json_path)
 
         # Same value for both {event_list} and {list_of_event_json_objects} (JSON array).
-        list_of_event_json_objects = json.dumps(event_objects, indent=2, ensure_ascii=False) if event_objects else "[]"
+        list_of_event_json_objects = (
+            json.dumps(event_objects, indent=2, ensure_ascii=False)
+            if event_objects
+            else "[]"
+        )
         event_list_str = list_of_event_json_objects
 
         report_date_string = date_str
@@ -287,7 +323,11 @@ class DailyReporterService:
             .replace("{list_of_event_json_objects}", list_of_event_json_objects)
             .replace("{known_person_name}", self._known_person_name)
         )
-        user_prompt = list_of_event_json_objects if event_objects else "No events recorded for this date."
+        user_prompt = (
+            list_of_event_json_objects
+            if event_objects
+            else "No events recorded for this date."
+        )
 
         report_md = self.ai_analyzer.send_text_prompt(system_prompt, user_prompt)
         if not report_md:

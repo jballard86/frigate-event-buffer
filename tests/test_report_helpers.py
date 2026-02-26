@@ -20,7 +20,9 @@ class TestDailyReportsDir(unittest.TestCase):
 
     def test_returns_joined_path(self):
         storage = "/var/storage"
-        self.assertEqual(daily_reports_dir(storage), os.path.join(storage, "daily_reports"))
+        self.assertEqual(
+            daily_reports_dir(storage), os.path.join(storage, "daily_reports")
+        )
 
 
 class TestListReportDates(unittest.TestCase):

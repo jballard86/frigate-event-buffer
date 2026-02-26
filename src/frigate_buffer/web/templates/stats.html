@@ -1,129 +1,247 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Stats - Frigate Event Buffer</title>
-<style>
-  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+{% extends "base.html" %}
 
-  body {
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-    background: #1a1a2e;
-    color: #e0e0e0;
-    min-height: 100vh;
-  }
+{% block title %}Stats - Frigate Event Buffer{% endblock %}
 
-  .header {
-    background: #16213e;
-    padding: 12px 16px;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    border-bottom: 1px solid #0f3460;
-    flex-wrap: wrap;
-    gap: 8px;
-  }
+{% block head %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+{% endblock %}
 
-  .header h1 {
-    font-size: 1.1rem;
-    color: #e94560;
-    white-space: nowrap;
-  }
-
-  .header-controls {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    flex-wrap: wrap;
-  }
-
-  select, button {
-    background: #0f3460;
-    color: #e0e0e0;
-    border: 1px solid #533483;
-    border-radius: 6px;
-    padding: 6px 10px;
-    font-size: 0.85rem;
-    cursor: pointer;
-  }
-
-  select:focus, button:focus { outline: 2px solid #e94560; }
-
-  button:hover { background: #533483; }
-
-  a { text-decoration: none; color: inherit; }
-
-  .main {
-    max-width: 800px;
-    margin: 0 auto;
-    padding: 16px;
-  }
-
-  .stats-panel { margin-top: 16px; text-align: center; }
-  .stats-panel .info-card {
-    margin-top: 12px;
-    padding: 16px;
-    background: #16213e;
-    border: 1px solid #0f3460;
-    border-radius: 8px;
-    text-align: center;
-  }
-  .stats-panel .info-card:first-of-type { margin-top: 0; }
-  .stats-panel .info-card h2 { text-align: center; color: #e94560; font-size: 1rem; margin-bottom: 12px; }
-  .stats-panel .stats-row {
-    display: flex; flex-wrap: wrap; justify-content: center; align-items: center;
-    gap: 16px 24px; margin: 8px 0; font-size: 0.9rem; text-align: center;
-  }
-  .stats-panel .stats-item { display: flex; gap: 6px; justify-content: center; }
-  .stats-panel .stats-item strong { color: #e94560; min-width: 4ch; }
-  .stats-panel .errors-list {
-    max-height: 200px; overflow-y: auto; font-size: 0.8rem; font-family: monospace;
-    background: #0f3460; border-radius: 4px; padding: 8px; margin: 8px auto;
-    text-align: left; max-width: 100%;
-  }
-  .stats-panel .errors-list .err-item { margin: 6px 0; padding: 4px 0; border-bottom: 1px solid #1a1a2e; word-break: break-word; }
-  .stats-panel .errors-list .err-ts { color: #888; margin-right: 8px; }
-  .stats-panel .errors-footer { font-size: 0.8rem; color: #666; margin-top: 8px; text-align: center; }
-  .stats-panel .camera-table {
-    margin: 0 auto; border-collapse: collapse; font-size: 0.9rem;
-  }
-  .stats-panel .camera-table td { padding: 6px 16px; border-bottom: 1px solid #0f3460; text-align: center; }
-  .stats-panel .camera-table .meta-label { padding-right: 12px; text-align: center; }
-  .stats-panel .meta-grid {
-    display: grid; grid-template-columns: auto auto;
-    justify-content: center; justify-items: start; gap: 4px 16px;
-    margin: 8px auto; text-align: left; max-width: fit-content;
-  }
-
-  .loading {
-    text-align: center;
-    padding: 40px;
-    color: #888;
-  }
-</style>
-</head>
-<body data-stats-refresh-seconds="{{ stats_refresh_seconds|default(60)|int }}">
-
-<div class="header">
-  <h1>Stats</h1>
-  <div class="header-controls">
-    <a href="/player"><button>Back to Events</button></a>
-    <button id="btnRefreshStats">Refresh Stats</button>
+{% block content %}
+<!-- Top Bar -->
+<div class="flex flex-col sm:flex-row gap-4 items-start sm:items-center justify-between mb-6">
+  <h1 class="text-2xl font-bold text-white flex items-center gap-3">
+    <svg class="w-7 h-7 text-brand" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"></path></svg>
+    Dashboard
+  </h1>
+  <div class="flex gap-2">
+    <button id="btnRefreshStats" class="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-gray-800 text-gray-300 border border-gray-700 hover:bg-gray-700 transition-all">
+      <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path></svg>
+      Refresh
+    </button>
   </div>
 </div>
 
-<div class="main">
-  <div id="statsContainer" class="loading">Loading stats...</div>
+<!-- Loading State -->
+<div id="loadingState" class="flex items-center justify-center py-20">
+  <div class="animate-pulse flex items-center gap-3 text-gray-500">
+    <svg class="w-6 h-6 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+    <span class="text-lg">Loading stats...</span>
+  </div>
 </div>
 
+<!-- Dashboard Content -->
+<div id="statsContainer" class="hidden space-y-6" data-refresh-seconds="{{ stats_refresh_seconds|default(90)|int }}">
+  <!-- Event Count Cards -->
+  <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+    <div class="bg-cardbg border border-cardborder rounded-xl p-4 shadow-lg">
+      <div class="flex items-center justify-between mb-2">
+        <span class="text-gray-400 text-sm font-medium">Today</span>
+        <div class="w-8 h-8 rounded-lg bg-brand/20 flex items-center justify-center">
+          <svg class="w-4 h-4 text-brand" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z"></path></svg>
+        </div>
+      </div>
+      <div class="text-2xl font-bold text-white" id="statToday">0</div>
+    </div>
+    <div class="bg-cardbg border border-cardborder rounded-xl p-4 shadow-lg">
+      <div class="flex items-center justify-between mb-2">
+        <span class="text-gray-400 text-sm font-medium">This Week</span>
+        <div class="w-8 h-8 rounded-lg bg-blue-500/20 flex items-center justify-center">
+          <svg class="w-4 h-4 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg>
+        </div>
+      </div>
+      <div class="text-2xl font-bold text-white" id="statWeek">0</div>
+    </div>
+    <div class="bg-cardbg border border-cardborder rounded-xl p-4 shadow-lg">
+      <div class="flex items-center justify-between mb-2">
+        <span class="text-gray-400 text-sm font-medium">This Month</span>
+        <div class="w-8 h-8 rounded-lg bg-purple-500/20 flex items-center justify-center">
+          <svg class="w-4 h-4 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"></path></svg>
+        </div>
+      </div>
+      <div class="text-2xl font-bold text-white" id="statMonth">0</div>
+    </div>
+    <div class="bg-cardbg border border-cardborder rounded-xl p-4 shadow-lg">
+      <div class="flex items-center justify-between mb-2">
+        <span class="text-gray-400 text-sm font-medium">Unreviewed</span>
+        <div class="w-8 h-8 rounded-lg bg-amber-500/20 flex items-center justify-center">
+          <svg class="w-4 h-4 text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"></path></svg>
+        </div>
+      </div>
+      <div class="text-2xl font-bold text-white" id="statUnreviewed">0</div>
+    </div>
+  </div>
+
+  <!-- Charts Row -->
+  <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+    <!-- Camera Events Chart (event counts from events/ folder by camera) -->
+    <div class="bg-cardbg border border-cardborder rounded-xl p-5 shadow-lg">
+      <h3 class="text-lg font-semibold text-white mb-4 flex items-center gap-2">
+        <svg class="w-5 h-5 text-brand" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"></path></svg>
+        Camera Events
+      </h3>
+      <div class="h-64">
+        <canvas id="eventsChart"></canvas>
+      </div>
+    </div>
+
+    <!-- Storage Breakdown Chart -->
+    <div class="bg-cardbg border border-cardborder rounded-xl p-5 shadow-lg">
+      <h3 class="text-lg font-semibold text-white mb-4 flex items-center gap-2">
+        <svg class="w-5 h-5 text-brand" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4m0 5c0 2.21-3.582 4-8 4s-8-1.79-8-4"></path></svg>
+        Storage Usage
+      </h3>
+      <div class="grid grid-cols-2 gap-4 mb-4">
+        <div class="text-center p-3 bg-gray-800/50 rounded-lg">
+          <div class="text-gray-400 text-xs mb-1">Total Storage</div>
+          <div class="text-xl font-bold text-white" id="totalStorage">-</div>
+        </div>
+        <div class="text-center p-3 bg-gray-800/50 rounded-lg">
+          <div class="text-gray-400 text-xs mb-1">Reviewed</div>
+          <div class="text-xl font-bold text-green-400" id="statReviewed">0</div>
+        </div>
+      </div>
+      <div class="h-48">
+        <canvas id="storageChart"></canvas>
+      </div>
+    </div>
+  </div>
+
+  <!-- Storage by Camera Table -->
+  <div class="bg-cardbg border border-cardborder rounded-xl p-5 shadow-lg" id="storageByCameraSection">
+    <h3 class="text-lg font-semibold text-white mb-4 flex items-center gap-2">
+      <svg class="w-5 h-5 text-brand" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z"></path></svg>
+      Storage by Camera
+    </h3>
+    <div class="overflow-x-auto">
+      <table class="w-full text-sm">
+        <thead>
+          <tr class="border-b border-gray-700">
+            <th class="text-left py-3 px-4 text-gray-400 font-medium">Camera</th>
+            <th class="text-right py-3 px-4 text-gray-400 font-medium">Storage Used</th>
+          </tr>
+        </thead>
+        <tbody id="storageTableBody">
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- API Usage (if available) -->
+  <div id="apiUsageSection" class="hidden bg-cardbg border border-cardborder rounded-xl p-5 shadow-lg">
+    <h3 class="text-lg font-semibold text-white mb-4 flex items-center gap-2">
+      <svg class="w-5 h-5 text-brand" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
+      API Usage
+    </h3>
+    <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+      <div class="flex items-center justify-between p-4 bg-gray-800/50 rounded-lg">
+        <span class="text-gray-400">Month to Date Cost</span>
+        <span class="text-xl font-bold text-brand" id="apiCost">-</span>
+      </div>
+      <div class="flex items-center justify-between p-4 bg-gray-800/50 rounded-lg">
+        <span class="text-gray-400">Month to Date Tokens</span>
+        <span class="text-xl font-bold text-brand" id="apiTokens">-</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Recent Activity & System Info -->
+  <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+    <!-- Recent Activity -->
+    <div class="bg-cardbg border border-cardborder rounded-xl p-5 shadow-lg">
+      <h3 class="text-lg font-semibold text-white mb-4 flex items-center gap-2">
+        <svg class="w-5 h-5 text-brand" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+        Recent Activity
+      </h3>
+      <div id="recentActivity" class="space-y-3">
+      </div>
+    </div>
+
+    <!-- System Status -->
+    <div class="bg-cardbg border border-cardborder rounded-xl p-5 shadow-lg">
+      <h3 class="text-lg font-semibold text-white mb-4 flex items-center gap-2">
+        <svg class="w-5 h-5 text-brand" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z"></path></svg>
+        System Status
+      </h3>
+      <div class="space-y-3" id="systemStatus">
+      </div>
+    </div>
+  </div>
+
+  <!-- Errors Section -->
+  <div id="errorsSection" class="hidden bg-cardbg border border-cardborder rounded-xl p-5 shadow-lg">
+    <h3 class="text-lg font-semibold text-red-400 mb-4 flex items-center gap-2">
+      <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path></svg>
+      Recent Errors
+    </h3>
+    <div id="errorsList" class="space-y-2 max-h-64 overflow-y-auto pr-2">
+    </div>
+    <p class="text-gray-500 text-xs mt-3">See container logs for full error history.</p>
+  </div>
+</div>
+
+<div id="errorState" class="hidden text-center py-20">
+  <div class="text-red-400 mb-2">
+    <svg class="w-12 h-12 mx-auto" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+  </div>
+  <h2 class="text-xl text-gray-400 mb-2">Failed to load stats</h2>
+  <p class="text-gray-500">Could not connect to the API.</p>
+</div>
+{% endblock %}
+
+{% block scripts %}
 <script>
 (function() {
   'use strict';
 
-  const statsContainer = document.getElementById('statsContainer');
-  const btnRefreshStats = document.getElementById('btnRefreshStats');
+  let eventsChart = null;
+  let storageChart = null;
   let refreshTimer = null;
+  let hasLoadedOnce = false;
+
+  const loadingState = document.getElementById('loadingState');
+  const statsContainer = document.getElementById('statsContainer');
+  const errorState = document.getElementById('errorState');
+  const btnRefreshStats = document.getElementById('btnRefreshStats');
+
+  function getRefreshSeconds() {
+    const val = statsContainer ? statsContainer.dataset.refreshSeconds : '';
+    const n = parseInt(val, 10);
+    return (n > 0 ? n : 90) * 1000;
+  }
+
+  async function fetchStats(isInitialLoad) {
+    try {
+      const resp = await fetch('/stats');
+      const data = await resp.json();
+      renderStats(data);
+      hasLoadedOnce = true;
+      loadingState.classList.add('hidden');
+      statsContainer.classList.remove('hidden');
+      errorState.classList.add('hidden');
+    } catch (e) {
+      console.error('Failed to fetch stats:', e);
+      if (isInitialLoad !== false && !hasLoadedOnce) {
+        loadingState.classList.add('hidden');
+        statsContainer.classList.add('hidden');
+        errorState.classList.remove('hidden');
+      } else if (hasLoadedOnce) {
+        showRefreshToast();
+      }
+    }
+  }
+
+  function showRefreshToast() {
+    let toast = document.getElementById('statsRefreshToast');
+    if (!toast) {
+      toast = document.createElement('div');
+      toast.id = 'statsRefreshToast';
+      toast.className = 'fixed bottom-4 right-4 z-50 px-4 py-2 rounded-lg bg-amber-900/90 text-amber-200 text-sm border border-amber-700/50 shadow-lg';
+      document.body.appendChild(toast);
+    }
+    toast.textContent = 'Could not refresh stats. Retrying on next interval.';
+    toast.classList.remove('hidden');
+    setTimeout(() => toast.classList.add('hidden'), 4000);
+  }
 
   function escapeHtml(str) {
     if (!str) return '';
@@ -132,20 +250,13 @@
     return div.innerHTML;
   }
 
-  function getRefreshSeconds() {
-    const val = document.body.dataset.statsRefreshSeconds || '60';
-    return parseInt(val, 10) || 60;
-  }
-
-  async function fetchStats() {
-    try {
-      const resp = await fetch('/stats');
-      const data = await resp.json();
-      renderStats(data);
-    } catch (e) {
-      console.error('Failed to fetch stats:', e);
-      statsContainer.innerHTML = '<p style="color:#e94560;">Failed to load stats.</p>';
-    }
+  function formatStorage(cam) {
+    if (!cam) return '-';
+    if (cam.value != null && cam.unit) return cam.value + ' ' + cam.unit;
+    if (cam.gb != null) return cam.gb + ' GB';
+    if (cam.mb != null) return cam.mb + ' MB';
+    if (cam.kb != null) return cam.kb + ' KB';
+    return '-';
   }
 
   function renderStats(data) {
@@ -157,125 +268,226 @@
     const sys = data.system || {};
     const ha = data.ha_helpers || null;
 
-    const fmtStorage = (cam) => {
-      if (!cam) return '-';
-      if (cam.value != null && cam.unit) return cam.value + ' ' + cam.unit;
-      if (cam.gb != null) return cam.gb + ' GB';
-      if (cam.mb != null) return cam.mb + ' MB';
-      if (cam.kb != null) return cam.kb + ' KB';
-      return '-';
-    };
+    // Update stat cards
+    document.getElementById('statToday').textContent = c.today ?? 0;
+    document.getElementById('statWeek').textContent = c.this_week ?? 0;
+    document.getElementById('statMonth').textContent = c.this_month ?? 0;
+    document.getElementById('statUnreviewed').textContent = c.total_unreviewed ?? 0;
+    document.getElementById('statReviewed').textContent = c.total_reviewed ?? 0;
+
+    // Total storage
     const totalStorage = (s.total_display && s.total_display.value != null && s.total_display.unit)
       ? (s.total_display.value + ' ' + s.total_display.unit)
       : (s.total_gb != null ? s.total_gb + ' GB' : (s.total_mb != null ? s.total_mb + ' MB' : '-'));
+    document.getElementById('totalStorage').textContent = totalStorage;
 
-    const byCam = c.by_camera || {};
-    const camRows = Object.entries(byCam).map(([name, count]) =>
-      `<tr><td class="meta-label">${escapeHtml(name.replace(/_/g, ' '))}</td><td>${count}</td></tr>`
-    ).join('');
-
-    const storageRows = Object.entries(s.by_camera || {}).map(([name, val]) =>
-      `<tr><td class="meta-label">${escapeHtml(name.replace(/_/g, ' '))}</td><td>${fmtStorage(val)}</td></tr>`
-    ).join('');
-
-    const bd = s.breakdown || {};
-    const fmtBreakdown = (x) => (x && x.value != null && x.unit) ? (x.value + ' ' + x.unit) : '0 KB';
-    const errItems = errs.slice(0, 10).map(e =>
-      `<div class="err-item"><span class="err-ts">${escapeHtml(e.ts || '')}</span>${escapeHtml((e.message || '').substring(0, 300))}</div>`
-    ).join('');
-
-    const uptime = sys.uptime_seconds != null ? Math.floor(sys.uptime_seconds / 60) + ' min' : '-';
-
-    let apiUsageCard = '';
+    // API Usage
+    const apiSection = document.getElementById('apiUsageSection');
     if (ha && (ha.gemini_month_cost != null || ha.gemini_month_tokens != null)) {
-      const costStr = ha.gemini_month_cost != null ? '$' + Number(ha.gemini_month_cost).toFixed(5) : '-';
-      const tokensStr = ha.gemini_month_tokens != null ? (ha.gemini_month_tokens).toLocaleString() : '-';
-      apiUsageCard = `
-        <div class="info-card">
-          <h2>API Usage</h2>
-          <div class="stats-row">
-            <span class="stats-item"><strong>Month to Date API cost:</strong> ${costStr}</span>
-            <span class="stats-item"><strong>Month to Date Token Usage:</strong> ${tokensStr}</span>
-          </div>
-        </div>`;
+      apiSection.classList.remove('hidden');
+      document.getElementById('apiCost').textContent = ha.gemini_month_cost != null ? '$' + Number(ha.gemini_month_cost).toFixed(5) : '-';
+      document.getElementById('apiTokens').textContent = ha.gemini_month_tokens != null ? ha.gemini_month_tokens.toLocaleString() : '-';
+    } else {
+      apiSection.classList.add('hidden');
     }
 
-    const html = `
-      <div class="stats-panel">
-        ${apiUsageCard}
-        <div class="info-card">
-          <h2>Event Counts</h2>
-          <div class="stats-row">
-            <span class="stats-item"><strong>Today:</strong> ${c.today ?? 0}</span>
-            <span class="stats-item"><strong>This Week:</strong> ${c.this_week ?? 0}</span>
-            <span class="stats-item"><strong>This Month:</strong> ${c.this_month ?? 0}</span>
-          </div>
-          <div class="stats-row">
-            <span class="stats-item"><strong>Reviewed:</strong> ${c.total_reviewed ?? 0}</span>
-            <span class="stats-item"><strong>Unreviewed:</strong> ${c.total_unreviewed ?? 0}</span>
-          </div>
-        </div>
-        <div class="info-card">
-          <h2>Events by Camera</h2>
-          <table class="camera-table"><tbody>${camRows || '<tr><td>No cameras</td></tr>'}</tbody></table>
-        </div>
-        <div class="info-card">
-          <h2>Storage</h2>
-          <div class="stats-row">
-            <span class="stats-item"><strong>Total:</strong> ${totalStorage}</span>
-          </div>
-          <div class="stats-row" style="margin-top:8px;">
-            <span class="meta-label">Clips:</span> ${fmtBreakdown(bd.clips)} |
-            <span class="meta-label">Snapshots:</span> ${fmtBreakdown(bd.snapshots)} |
-            <span class="meta-label">Descriptions:</span> ${fmtBreakdown(bd.descriptions)}
-          </div>
-          ${storageRows ? `<table class="camera-table" style="margin-top:8px;"><tbody>${storageRows}</tbody></table>` : ''}
-        </div>
-        <div class="info-card">
-          <h2>Recent Activity</h2>
-          <div class="stats-row">
-            ${lc ? `<span class="stats-item"><strong>Last cleanup:</strong> ${escapeHtml(lc.at)} (deleted ${lc.deleted})</span>` : '<span class="stats-item">No cleanup recorded yet</span>'}
-          </div>
-          ${mr ? `<div class="stats-row"><a href="${escapeHtml(mr.url)}" style="color:#e94560;">View most recent notification</a></div>` : ''}
-        </div>
-        <div class="info-card">
-          <h2>Errors</h2>
-          ${errItems ? `<div class="errors-list">${errItems}</div><p class="errors-footer">See container logs for full error history.</p>` : '<p>No recent errors.</p>'}
-        </div>
-        <div class="info-card">
-          <h2>System</h2>
-          <div class="meta-grid">
-            <span class="meta-label">Uptime</span>
-            <span class="meta-value">${uptime}</span>
-            <span class="meta-label">MQTT</span>
-            <span class="meta-value">${sys.mqtt_connected ? 'Connected' : 'Disconnected'}</span>
-            <span class="meta-label">Active events</span>
-            <span class="meta-value">${sys.active_events ?? 0}</span>
-            <span class="meta-label">Retention</span>
-            <span class="meta-value">${sys.retention_days ?? '-'} days</span>
-            <span class="meta-label">Cleanup interval</span>
-            <span class="meta-value">${sys.cleanup_interval_hours ?? '-'} hrs</span>
-            ${sys.storage_path ? `<span class="meta-label">Storage path</span><span class="meta-value" style="font-size:0.8rem;">${escapeHtml(sys.storage_path)}</span>` : ''}
-          </div>
-        </div>
-      </div>`;
+    // Events by Camera Chart
+    const byCam = c.by_camera || {};
+    const camNames = Object.keys(byCam).map(n => n.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()));
+    const camCounts = Object.values(byCam);
 
-    statsContainer.innerHTML = html;
+    if (eventsChart) eventsChart.destroy();
+    const eventsCtx = document.getElementById('eventsChart').getContext('2d');
+    eventsChart = new Chart(eventsCtx, {
+      type: 'bar',
+      data: {
+        labels: camNames,
+        datasets: [{
+          label: 'Events',
+          data: camCounts,
+          backgroundColor: 'rgba(233, 69, 96, 0.8)',
+          borderColor: '#e94560',
+          borderWidth: 1,
+          borderRadius: 4
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { display: false }
+        },
+        scales: {
+          y: {
+            beginAtZero: true,
+            ticks: { color: '#9ca3af' },
+            grid: { color: 'rgba(75, 85, 99, 0.3)' }
+          },
+          x: {
+            ticks: { color: '#9ca3af' },
+            grid: { display: false }
+          }
+        }
+      }
+    });
+
+    // Storage Breakdown Chart
+    const bd = s.breakdown || {};
+    const storageData = [
+      bd.clips?.value || 0,
+      bd.snapshots?.value || 0,
+      bd.descriptions?.value || 0
+    ];
+    const storageLabels = ['Clips', 'Snapshots', 'Descriptions'];
+
+    if (storageChart) storageChart.destroy();
+    const storageCtx = document.getElementById('storageChart').getContext('2d');
+    storageChart = new Chart(storageCtx, {
+      type: 'doughnut',
+      data: {
+        labels: storageLabels,
+        datasets: [{
+          data: storageData,
+          backgroundColor: [
+            'rgba(34, 197, 94, 0.8)',
+            'rgba(59, 130, 246, 0.8)',
+            'rgba(168, 85, 247, 0.8)'
+          ],
+          borderColor: [
+            '#22c55e',
+            '#3b82f6',
+            '#a855f7'
+          ],
+          borderWidth: 1
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: {
+            position: 'right',
+            labels: { color: '#9ca3af' }
+          }
+        }
+      }
+    });
+
+    // Storage by Camera Table
+    const storageRows = Object.entries(s.by_camera || {});
+    const storageTableBody = document.getElementById('storageTableBody');
+    if (storageRows.length > 0) {
+      storageTableBody.innerHTML = storageRows.map(([name, val]) => `
+        <tr class="border-b border-gray-800 hover:bg-gray-800/30">
+          <td class="py-3 px-4 text-gray-300">${escapeHtml(name.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()))}</td>
+          <td class="py-3 px-4 text-right text-gray-300 font-mono">${formatStorage(val)}</td>
+        </tr>
+      `).join('');
+      document.getElementById('storageByCameraSection').classList.remove('hidden');
+    } else {
+      document.getElementById('storageByCameraSection').classList.add('hidden');
+    }
+
+    // Recent Activity
+    const recentActivity = document.getElementById('recentActivity');
+    let activityHtml = '';
+    if (lc) {
+      activityHtml += `
+        <div class="flex items-center justify-between p-3 bg-gray-800/30 rounded-lg">
+          <div class="flex items-center gap-3">
+            <div class="w-8 h-8 rounded-lg bg-blue-500/20 flex items-center justify-center">
+              <svg class="w-4 h-4 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
+            </div>
+            <div>
+              <div class="text-sm text-gray-300">Last cleanup</div>
+              <div class="text-xs text-gray-500">${escapeHtml(lc.at)}</div>
+            </div>
+          </div>
+          <span class="text-sm text-red-400 font-medium">${lc.deleted} deleted</span>
+        </div>`;
+    }
+    if (mr) {
+      activityHtml += `
+        <a href="${escapeHtml(mr.url)}" class="flex items-center justify-between p-3 bg-gray-800/30 rounded-lg hover:bg-gray-800/50 transition-colors">
+          <div class="flex items-center gap-3">
+            <div class="w-8 h-8 rounded-lg bg-brand/20 flex items-center justify-center">
+              <svg class="w-4 h-4 text-brand" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"></path></svg>
+            </div>
+            <div>
+              <div class="text-sm text-gray-300">Most recent notification</div>
+              <div class="text-xs text-brand">View event</div>
+            </div>
+          </div>
+          <svg class="w-5 h-5 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path></svg>
+        </a>`;
+    }
+    if (!activityHtml) {
+      activityHtml = '<p class="text-gray-500 text-center py-4">No recent activity recorded</p>';
+    }
+    recentActivity.innerHTML = activityHtml;
+
+    // System Status
+    const uptime = sys.uptime_seconds != null ? Math.floor(sys.uptime_seconds / 60) + ' min' : '-';
+    const systemStatus = document.getElementById('systemStatus');
+    systemStatus.innerHTML = `
+      <div class="grid grid-cols-2 gap-3">
+        <div class="p-3 bg-gray-800/30 rounded-lg">
+          <div class="text-xs text-gray-500 mb-1">Uptime</div>
+          <div class="text-sm font-medium text-gray-300">${uptime}</div>
+        </div>
+        <div class="p-3 bg-gray-800/30 rounded-lg">
+          <div class="text-xs text-gray-500 mb-1">MQTT</div>
+          <div class="text-sm font-medium ${sys.mqtt_connected ? 'text-green-400' : 'text-red-400'}">${sys.mqtt_connected ? 'Connected' : 'Disconnected'}</div>
+        </div>
+        <div class="p-3 bg-gray-800/30 rounded-lg">
+          <div class="text-xs text-gray-500 mb-1">Active Events</div>
+          <div class="text-sm font-medium text-gray-300">${sys.active_events ?? 0}</div>
+        </div>
+        <div class="p-3 bg-gray-800/30 rounded-lg">
+          <div class="text-xs text-gray-500 mb-1">Retention</div>
+          <div class="text-sm font-medium text-gray-300">${sys.retention_days ?? '-'} days</div>
+        </div>
+      </div>
+      ${sys.storage_path ? `
+        <div class="mt-3 p-3 bg-gray-800/30 rounded-lg">
+          <div class="text-xs text-gray-500 mb-1">Storage Path</div>
+          <div class="text-xs font-mono text-gray-400 truncate">${escapeHtml(sys.storage_path)}</div>
+        </div>
+      ` : ''}
+    `;
+
+    // Errors
+    const errorsSection = document.getElementById('errorsSection');
+    const errorsList = document.getElementById('errorsList');
+    if (errs.length > 0) {
+      errorsSection.classList.remove('hidden');
+      errorsList.innerHTML = errs.slice(0, 10).map(e => `
+        <div class="p-3 bg-red-900/20 border border-red-800/30 rounded-lg">
+          <div class="text-xs text-red-400 mb-1">${escapeHtml(e.ts || '')}</div>
+          <div class="text-sm text-gray-300">${escapeHtml((e.message || '').substring(0, 300))}</div>
+        </div>
+      `).join('');
+    } else {
+      errorsSection.classList.add('hidden');
+    }
   }
 
   function startAutoRefresh() {
     if (refreshTimer) clearInterval(refreshTimer);
-    const intervalMs = getRefreshSeconds() * 1000;
-    refreshTimer = setInterval(() => fetchStats(), intervalMs);
+    const intervalMs = getRefreshSeconds();
+    refreshTimer = setInterval(() => fetchStats(false), intervalMs);
   }
 
-  btnRefreshStats.addEventListener('click', () => fetchStats());
+  btnRefreshStats.addEventListener('click', () => {
+    loadingState.classList.remove('hidden');
+    statsContainer.classList.add('hidden');
+    fetchStats(true);
+  });
 
   (async function init() {
-    await fetchStats();
+    await fetchStats(true);
     startAutoRefresh();
   })();
 })();
 </script>
-</body>
-</html>
+{% endblock %}

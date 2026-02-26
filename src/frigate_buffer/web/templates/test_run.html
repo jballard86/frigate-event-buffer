@@ -1,81 +1,469 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Test multi-cam pipeline</title>
+{% extends "base.html" %}
+
+{% block title %}Test Multi-Cam Pipeline{% endblock %}
+
+{% block content %}
 <style>
-  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #1a1a2e; color: #e0e0e0; min-height: 100vh; padding: 16px; }
-  .header { background: #16213e; padding: 12px 16px; border-radius: 8px; margin-bottom: 16px; border: 1px solid #0f3460; }
-  .header h1 { font-size: 1.1rem; color: #e94560; }
-  .log-area { background: #0f3460; border: 1px solid #533483; border-radius: 8px; padding: 12px; min-height: 200px; max-height: 60vh; overflow-y: auto; font-family: monospace; font-size: 0.85rem; white-space: pre-wrap; word-break: break-all; }
-  .log-area .err { color: #ff6b6b; }
-  .log-area .done { color: #7dde7d; margin-top: 12px; }
-  .link-box { margin-top: 16px; padding: 12px; background: #16213e; border-radius: 8px; border: 1px solid #0f3460; }
-  .link-box a { color: #e94560; }
-  .link-box p { margin: 8px 0; }
-  .no-subdir { color: #888; }
-  .btn-row { margin: 12px 0; display: flex; gap: 12px; flex-wrap: wrap; }
-  .btn-row button { padding: 8px 16px; background: #0f3460; border: 1px solid #533483; border-radius: 6px; color: #e0e0e0; cursor: pointer; font-size: 0.9rem; }
-  .btn-row button:hover:not(:disabled) { background: #16213e; }
-  .btn-row button:disabled { opacity: 0.6; cursor: not-allowed; }
+  /* Collapsed: 10 lines of text or 1 row of images */
+  .collapsible-bar-body.collapsible-collapsed .collapsible-bar-text { max-height: 15rem; }
+  .collapsible-bar-body.collapsible-collapsed .collapsible-bar-images { max-height: 7rem; }
+  .collapsible-bar-body.collapsible-expanded .collapsible-bar-text,
+  .collapsible-bar-body.collapsible-expanded .collapsible-bar-images { max-height: none; }
 </style>
-</head>
-<body>
-  <div class="header">
-    <h1>Test multi-cam pipeline</h1>
-    <p class="no-subdir" id="headerText">{% if subdir %}Event: <strong>{{ subdir }}</strong>{% else %}Open this page from the player TEST button (select a consolidated event with clips ready).{% endif %}</p>
+<!-- Header -->
+<div class="bg-cardbg border border-cardborder rounded-xl p-5 mb-6 shadow-lg">
+  <h1 class="text-2xl font-bold text-white flex items-center gap-3 mb-2">
+    <svg class="w-7 h-7 text-brand" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+    Test Multi-Cam Pipeline
+  </h1>
+  <p class="text-gray-400 text-sm" id="headerText">
+    Open this page from the player TEST button or select an event below.
+  </p>
+</div>
+
+<!-- Event selection grid (shown when no test_run in URL and no subdir) -->
+<div id="eventSelectionSection" class="mb-6">
+  <h2 class="text-lg font-semibold text-gray-200 mb-3">Select an event to Test</h2>
+  <div id="eventGrid" class="grid grid-cols-2 sm:grid-cols-4 gap-4">
   </div>
-  <div id="btnRow" class="btn-row" style="display: none;">
-    <button type="button" id="btnStartTest">Start the test</button>
-    <button type="button" id="btnVideoRequest">Video request</button>
+  <div id="eventGridLoading" class="flex items-center justify-center py-12 text-gray-500">
+    <span class="animate-pulse">Loading events...</span>
   </div>
-  <div id="logContainer">
-    <div class="log-area" id="logArea">{% if subdir %}Copying...{% else %}No event selected. Use the TEST button on the player for a consolidated event.{% endif %}</div>
-    <div class="link-box" id="linkBox" style="display: none;">
-      <p><strong>Done.</strong></p>
-      <p><a id="aiRequestLink" href="" target="_blank" rel="noopener noreferrer">View AI request (frames and prompt)</a></p>
+  <div id="eventGridEmpty" class="hidden py-8 text-center text-gray-500">
+    No consolidated events. Use the player to view events with clips.
+  </div>
+</div>
+
+<!-- Test view: video + clip selector + log + collapsible bars -->
+<div id="testViewSection" class="hidden">
+  <div id="testViewHeader" class="mb-4 text-gray-400 text-sm"></div>
+  <div class="bg-black rounded-xl overflow-hidden shadow-2xl mb-4">
+    <video id="testVideo" controls preload="metadata" class="w-full" style="max-height: 60vh;"></video>
+  </div>
+  <div id="testClipSelector" class="flex flex-wrap gap-2 mb-4"></div>
+</div>
+
+<!-- Terminal Log Window -->
+<div class="bg-black border border-gray-800 rounded-xl overflow-hidden shadow-2xl">
+  <div class="bg-gray-900 border-b border-gray-800 px-4 py-2 flex items-center">
+    <div class="flex-1 text-xs text-gray-500 font-mono">test-pipeline.log</div>
+  </div>
+  <div id="logArea" class="p-4 font-mono text-sm min-h-[300px] max-h-[60vh] overflow-y-auto whitespace-pre-wrap break-all bg-black text-green-400 leading-relaxed">
+    <span class="text-gray-500">$</span> <span class="text-yellow-400">No event selected. Select an event above or use the TEST button on the player.</span>
+  </div>
+</div>
+
+<!-- Full-width collapsible bars -->
+<div id="collapsibleBarsSection" class="hidden mt-6 space-y-0 border border-cardborder rounded-xl overflow-hidden shadow-lg">
+  <div class="collapsible-bar border-b border-cardborder bg-cardbg" data-bar="timeline">
+    <button type="button" class="collapsible-bar-toggle w-full px-4 py-3 flex items-center justify-between text-left text-gray-200 font-medium bg-gray-800/50 hover:bg-gray-800 transition-colors" aria-expanded="false">
+      <span>Timeline</span>
+      <svg class="w-5 h-5 transform transition-transform collapsible-chevron" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path></svg>
+    </button>
+    <div class="collapsible-bar-body overflow-hidden border-t border-cardborder collapsible-collapsed">
+      <pre id="timelineContent" class="collapsible-bar-text p-4 text-sm text-gray-300 whitespace-pre-wrap break-words overflow-y-auto bg-gray-900/50"></pre>
     </div>
   </div>
-<script type="application/json" id="test-run-subdir">{{ subdir|tojson }}</script>
+  <div class="collapsible-bar border-b border-cardborder bg-cardbg" data-bar="eventfiles">
+    <button type="button" class="collapsible-bar-toggle w-full px-4 py-3 flex items-center justify-between text-left text-gray-200 font-medium bg-gray-800/50 hover:bg-gray-800 transition-colors" aria-expanded="false">
+      <span>Event files</span>
+      <svg class="w-5 h-5 transform transition-transform collapsible-chevron" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path></svg>
+    </button>
+    <div class="collapsible-bar-body overflow-hidden border-t border-cardborder collapsible-collapsed">
+      <div id="eventFilesContent" class="collapsible-bar-text p-4 text-sm text-gray-300 overflow-y-auto bg-gray-900/50 space-y-1"></div>
+    </div>
+  </div>
+  <div class="collapsible-bar border-b border-cardborder bg-cardbg" data-bar="prompt">
+    <button type="button" class="collapsible-bar-toggle w-full px-4 py-3 flex items-center justify-between text-left text-gray-200 font-medium bg-gray-800/50 hover:bg-gray-800 transition-colors" aria-expanded="false">
+      <span>Prompt</span>
+      <svg class="w-5 h-5 transform transition-transform collapsible-chevron" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path></svg>
+    </button>
+    <div class="collapsible-bar-body overflow-hidden border-t border-cardborder collapsible-collapsed">
+      <pre id="requestPromptContent" class="collapsible-bar-text p-4 text-sm text-gray-300 whitespace-pre-wrap break-words overflow-y-auto bg-gray-900/50"></pre>
+    </div>
+  </div>
+  <div class="collapsible-bar border-b border-cardborder bg-cardbg" data-bar="images">
+    <button type="button" class="collapsible-bar-toggle w-full px-4 py-3 flex items-center justify-between text-left text-gray-200 font-medium bg-gray-800/50 hover:bg-gray-800 transition-colors" aria-expanded="false">
+      <span>Images</span>
+      <svg class="w-5 h-5 transform transition-transform collapsible-chevron" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path></svg>
+    </button>
+    <div class="collapsible-bar-body overflow-hidden border-t border-cardborder collapsible-collapsed">
+      <div id="imagesContent" class="collapsible-bar-images p-4 grid grid-cols-4 gap-2 overflow-y-auto bg-gray-900/50"></div>
+    </div>
+  </div>
+  <div class="collapsible-bar bg-cardbg" data-bar="response">
+    <button type="button" class="collapsible-bar-toggle w-full px-4 py-3 flex items-center justify-between text-left text-gray-200 font-medium bg-gray-800/50 hover:bg-gray-800 transition-colors" aria-expanded="false">
+      <span>Return prompt</span>
+      <svg class="w-5 h-5 transform transition-transform collapsible-chevron" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path></svg>
+    </button>
+    <div class="collapsible-bar-body overflow-hidden border-t border-cardborder collapsible-collapsed">
+      <pre id="responseContent" class="collapsible-bar-text p-4 text-sm text-gray-300 whitespace-pre-wrap break-words overflow-y-auto bg-gray-900/50">No response yet. Click &quot;Send prompt to AI&quot; in the sidebar.</pre>
+    </div>
+  </div>
+</div>
+
+<script type="application/json" id="test-page-initial">{"subdir": {{ subdir|tojson }}, "test_run": {{ test_run|tojson }}}</script>
+{% endblock %}
+
+{% block scripts %}
 <script>
 (function() {
-  const eventSubdir = JSON.parse(document.getElementById('test-run-subdir').textContent);
+  'use strict';
+
+  const initial = JSON.parse(document.getElementById('test-page-initial').textContent);
   const logArea = document.getElementById('logArea');
-  const linkBox = document.getElementById('linkBox');
-  const aiRequestLink = document.getElementById('aiRequestLink');
-  const btnRow = document.getElementById('btnRow');
-  const btnStartTest = document.getElementById('btnStartTest');
-  const btnVideoRequest = document.getElementById('btnVideoRequest');
   const headerText = document.getElementById('headerText');
+  const sidebarExtras = document.getElementById('sidebarTestExtras');
+  const eventSelectionSection = document.getElementById('eventSelectionSection');
+  const eventGrid = document.getElementById('eventGrid');
+  const eventGridLoading = document.getElementById('eventGridLoading');
+  const eventGridEmpty = document.getElementById('eventGridEmpty');
+  const testViewSection = document.getElementById('testViewSection');
+  const testViewHeader = document.getElementById('testViewHeader');
+  const testVideo = document.getElementById('testVideo');
+  const testClipSelector = document.getElementById('testClipSelector');
+  const collapsibleBarsSection = document.getElementById('collapsibleBarsSection');
+
+  const FRIGATE_TEST_RUN_KEY = 'frigate_test_run';
+  const frigateTestLogKey = function(id) { return 'frigate_test_log_' + (id || ''); };
+
+  function persistTestRun() {
+    if (!testRunId) return;
+    try {
+      sessionStorage.setItem(FRIGATE_TEST_RUN_KEY, testRunId);
+    } catch (e) {}
+  }
+
+  function persistLog() {
+    if (!testRunId || !logArea) return;
+    try {
+      sessionStorage.setItem(frigateTestLogKey(testRunId), logArea.innerHTML);
+    } catch (e) {}
+  }
+
+  function clearTestPersistence() {
+    try {
+      var id = testRunId;
+      sessionStorage.removeItem(FRIGATE_TEST_RUN_KEY);
+      if (id) sessionStorage.removeItem(frigateTestLogKey(id));
+    } catch (e) {}
+  }
+
+  let testRunId = null;
+  let eventData = null;
+  const btnClass = 'inline-flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium w-full transition-all mb-1';
+
+  function getUrlParams() {
+    const p = new URLSearchParams(window.location.search);
+    return { subdir: p.get('subdir') || '', test_run: p.get('test_run') || '' };
+  }
+
+  function updateUrl(params, replace) {
+    const url = new URL(window.location.href);
+    url.search = new URLSearchParams(params).toString();
+    if (replace) {
+      window.history.replaceState({}, '', url.pathname + (url.search || ''));
+    } else {
+      window.history.pushState({}, '', url.pathname + (url.search || ''));
+    }
+  }
+
+  function escapeHtml(str) {
+    if (!str) return '';
+    const div = document.createElement('div');
+    div.textContent = str;
+    return div.innerHTML;
+  }
 
   function appendLog(msg, isError) {
-    const el = isError ? document.createElement('span') : document.createTextNode(msg + '\n');
-    if (isError) { el.className = 'err'; el.textContent = msg + '\n'; }
-    logArea.appendChild(el);
+    const line = document.createElement('div');
+    line.className = 'mb-1';
+    const timestamp = new Date().toLocaleTimeString();
+    if (isError) {
+      line.innerHTML = '<span class="text-gray-500">[' + timestamp + ']</span> <span class="text-red-400">✗ ' + escapeHtml(msg) + '</span>';
+    } else if (msg.toLowerCase().includes('done') || msg.toLowerCase().includes('success')) {
+      line.innerHTML = '<span class="text-gray-500">[' + timestamp + ']</span> <span class="text-green-400">✓ ' + escapeHtml(msg) + '</span>';
+    } else if (msg.toLowerCase().includes('warning') || msg.toLowerCase().includes('warn')) {
+      line.innerHTML = '<span class="text-gray-500">[' + timestamp + ']</span> <span class="text-yellow-400">⚠ ' + escapeHtml(msg) + '</span>';
+    } else {
+      line.innerHTML = '<span class="text-gray-500">[' + timestamp + ']</span> <span class="text-green-400">' + escapeHtml(msg) + '</span>';
+    }
+    logArea.appendChild(line);
     logArea.scrollTop = logArea.scrollHeight;
+    persistLog();
+  }
+
+  function setLogInitial(message) {
+    logArea.innerHTML = '<span class="text-gray-500">$</span> <span class="text-yellow-400">' + escapeHtml(message) + '</span>';
+    persistLog();
+  }
+
+  function showEventGrid() {
+    eventSelectionSection.classList.remove('hidden');
+    testViewSection.classList.add('hidden');
+    collapsibleBarsSection.classList.add('hidden');
+    eventGrid.innerHTML = '';
+    eventGridLoading.classList.remove('hidden');
+    eventGridEmpty.classList.add('hidden');
+    fetch('/events?filter=all')
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        eventGridLoading.classList.add('hidden');
+        const events = (data.events || []).filter(function(e) { return e.consolidated === true; }).slice(0, 8);
+        if (events.length === 0) {
+          eventGridEmpty.classList.remove('hidden');
+          return;
+        }
+        events.forEach(function(ev) {
+          const subdir = ev.subdir || (ev.hosted_clip && ev.hosted_clip.split('/').slice(-2, -1)[0]) || ev.event_id || '';
+          const prepareSubdir = (ev.saved && ev.camera === 'events') ? ('saved/events/' + subdir) : subdir;
+          const ts = ev.timestamp ? new Date(parseInt(ev.timestamp, 10) * 1000) : null;
+          const dateStr = ts ? ts.toLocaleDateString() : '—';
+          const timeStr = ts ? ts.toLocaleTimeString() : '—';
+          const thumb = ev.hosted_snapshot || '';
+          const cell = document.createElement('button');
+          cell.type = 'button';
+          cell.className = 'block text-left rounded-lg border border-gray-700 bg-gray-800/50 hover:bg-gray-800 overflow-hidden focus:ring-2 focus:ring-brand';
+          cell.dataset.subdir = prepareSubdir;
+          cell.innerHTML = '<img src="' + escapeHtml(thumb) + '" alt="" class="w-full aspect-video object-cover bg-gray-900" onerror="this.style.display=\'none\'">' +
+            '<div class="p-2 text-xs text-gray-400">' + escapeHtml(dateStr) + '<br>' + escapeHtml(timeStr) + '</div>';
+          cell.addEventListener('click', function() { selectEvent(cell.dataset.subdir); });
+          eventGrid.appendChild(cell);
+        });
+      })
+      .catch(function() {
+        eventGridLoading.classList.add('hidden');
+        eventGridEmpty.classList.remove('hidden');
+        eventGridEmpty.textContent = 'Failed to load events.';
+      });
+  }
+
+  function selectEvent(subdir) {
+    setLogInitial('Preparing test environment...');
+    eventSelectionSection.classList.add('hidden');
+    testViewSection.classList.remove('hidden');
+    fetch('/api/test-multi-cam/prepare?subdir=' + encodeURIComponent(subdir))
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        if (data.error) {
+          appendLog('Error: ' + data.error, true);
+          showEventGrid();
+          return;
+        }
+        testRunId = data.test_run_id;
+        appendLog('Event: ' + subdir);
+        appendLog('Test run: ' + testRunId);
+        updateUrl({ test_run: testRunId }, true);
+        persistTestRun();
+        loadTestView();
+      })
+      .catch(function(e) {
+        appendLog('Error: ' + e.message, true);
+        showEventGrid();
+      });
+  }
+
+  function loadTestView() {
+    if (!testRunId) return;
+    fetch('/api/test-multi-cam/event-data?test_run=' + encodeURIComponent(testRunId))
+      .then(function(r) {
+        if (!r.ok) throw new Error('Event data not found');
+        return r.json();
+      })
+      .then(function(data) {
+        eventData = data;
+        if (headerText) {
+          headerText.innerHTML = 'Test run: <span class="text-brand font-mono">' + escapeHtml(testRunId) + '</span>';
+        }
+        if (testViewHeader) {
+          testViewHeader.textContent = 'Event: ' + (data.timeline && data.timeline.event_id ? data.timeline.event_id : testRunId);
+        }
+        var clips = (data.event_files || []).filter(function(f) { return f.path && f.path.endsWith('.mp4'); });
+        var primaryUrl = clips.length ? clips[0].url : '';
+        if (testVideo) {
+          testVideo.src = primaryUrl;
+          testVideo.style.display = primaryUrl ? '' : 'none';
+        }
+        testClipSelector.innerHTML = '';
+        clips.forEach(function(c, idx) {
+          var cam = c.path.split('/')[0] || ('Clip ' + (idx + 1));
+          var btn = document.createElement('button');
+          btn.type = 'button';
+          btn.className = 'clip-tab px-3 py-1.5 rounded-lg text-xs font-medium ' + (idx === 0 ? 'bg-brand/20 text-brand border border-brand/30' : 'bg-gray-800 text-gray-300 border border-gray-700 hover:bg-gray-700');
+          btn.textContent = cam.replace(/_/g, ' ').replace(/\b\w/g, function(ch) { return ch.toUpperCase(); });
+          btn.dataset.url = c.url;
+          btn.addEventListener('click', function() {
+            if (testVideo) testVideo.src = btn.dataset.url;
+            testClipSelector.querySelectorAll('.clip-tab').forEach(function(b) {
+              b.classList.remove('bg-brand/20', 'text-brand', 'border-brand/30');
+              b.classList.add('bg-gray-800', 'text-gray-300', 'border-gray-700');
+            });
+            btn.classList.remove('bg-gray-800', 'text-gray-300', 'border-gray-700');
+            btn.classList.add('bg-brand/20', 'text-brand', 'border-brand/30');
+          });
+          testClipSelector.appendChild(btn);
+        });
+        collapsibleBarsSection.classList.remove('hidden');
+        var timelineContent = document.getElementById('timelineContent');
+        if (timelineContent && data.timeline) {
+          timelineContent.textContent = JSON.stringify(data.timeline, null, 2);
+        }
+        var eventFilesContent = document.getElementById('eventFilesContent');
+        if (eventFilesContent && data.event_files && data.event_files.length) {
+          eventFilesContent.innerHTML = data.event_files.map(function(f) {
+            return '<a href="' + escapeHtml(f.url) + '" download class="block text-brand hover:underline truncate">' + escapeHtml(f.path) + '</a>';
+          }).join('');
+        }
+        renderSidebar(false);
+        setupCollapsibles();
+        persistTestRun();
+        try {
+          var savedLog = sessionStorage.getItem(frigateTestLogKey(testRunId));
+          if (savedLog && logArea) logArea.innerHTML = savedLog;
+        } catch (e) {}
+      })
+      .catch(function(e) {
+        if (testRunId) appendLog('Could not load event data: ' + e.message, true);
+        clearTestPersistence();
+        testRunId = null;
+        updateUrl({}, true);
+        showEventGrid();
+        setLogInitial('No event selected. Select an event above or use the TEST button on the player.');
+      });
+  }
+
+  function setupCollapsibles() {
+    var bars = document.querySelectorAll('#collapsibleBarsSection .collapsible-bar');
+    bars.forEach(function(bar) {
+      var btn = bar.querySelector('.collapsible-bar-toggle');
+      var body = bar.querySelector('.collapsible-bar-body');
+      if (!btn || !body || btn._bound) return;
+      btn._bound = true;
+      btn.addEventListener('click', function() {
+        var isCurrentlyExpanded = body.classList.contains('collapsible-expanded');
+        /* Accordion: close all bars first */
+        bars.forEach(function(other) {
+          var otherBody = other.querySelector('.collapsible-bar-body');
+          var otherBtn = other.querySelector('.collapsible-bar-toggle');
+          if (otherBody && otherBtn) {
+            otherBody.classList.remove('collapsible-expanded');
+            otherBody.classList.add('collapsible-collapsed');
+            otherBtn.setAttribute('aria-expanded', 'false');
+            var chev = otherBtn.querySelector('.collapsible-chevron');
+            if (chev) chev.style.transform = '';
+          }
+        });
+        /* Then open this one if it was collapsed */
+        if (!isCurrentlyExpanded) {
+          body.classList.remove('collapsible-collapsed');
+          body.classList.add('collapsible-expanded');
+          btn.setAttribute('aria-expanded', 'true');
+          var chevron = btn.querySelector('.collapsible-chevron');
+          if (chevron) chevron.style.transform = 'rotate(180deg)';
+        }
+      });
+    });
+  }
+
+  function renderSidebar(hasAiRequest) {
+    if (!sidebarExtras) return;
+    var html = '';
+    if (testRunId) {
+      html += '<button type="button" id="btnStartTest" class="' + btnClass + ' bg-brand/20 text-brand border border-brand/30 hover:bg-brand/30">';
+      html += '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"></path></svg>Start the Test</button>';
+      html += '<button type="button" id="btnVideoRequest" class="' + btnClass + ' bg-blue-900/50 text-blue-400 border border-blue-700/50 hover:bg-blue-900/70">';
+      html += '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"></path></svg>Video Request</button>';
+      if (hasAiRequest) {
+        html += '<button type="button" id="btnViewAiRequest" class="' + btnClass + ' bg-brand/20 text-brand border border-brand/30 hover:bg-brand/30">';
+        html += 'View AI Request</button>';
+        html += '<button type="button" id="btnSendPrompt" class="' + btnClass + ' bg-green-900/50 text-green-400 border border-green-700/50 hover:bg-green-900/70">';
+        html += 'Send prompt to AI</button>';
+      }
+      html += '<button type="button" id="btnResetTest" class="' + btnClass + ' bg-gray-700 text-gray-300 border border-gray-600 hover:bg-gray-600">';
+      html += 'Reset Test</button>';
+    }
+    sidebarExtras.innerHTML = html;
+
+    var btnReset = document.getElementById('btnResetTest');
+    if (btnReset) {
+      btnReset.onclick = function() {
+        clearTestPersistence();
+        testRunId = null;
+        eventData = null;
+        updateUrl({}, true);
+        setLogInitial('No event selected. Select an event above or use the TEST button on the player.');
+        showEventGrid();
+        renderSidebar(false);
+      };
+    }
+    var btnStart = document.getElementById('btnStartTest');
+    if (btnStart) btnStart.onclick = function() { appendLog('Starting test pipeline...'); connectStream('/api/test-multi-cam/stream?test_run=' + encodeURIComponent(testRunId)); };
+    var btnVideo = document.getElementById('btnVideoRequest');
+    if (btnVideo) btnVideo.onclick = function() { appendLog('Video request (Frigate Export API)...'); connectStream('/api/test-multi-cam/video-request?test_run=' + encodeURIComponent(testRunId)); };
+    var btnView = document.getElementById('btnViewAiRequest');
+    if (btnView) btnView.onclick = function() { collapsibleBarsSection.scrollIntoView({ behavior: 'smooth' }); };
+    var btnSend = document.getElementById('btnSendPrompt');
+    if (btnSend) btnSend.onclick = sendPromptToAi;
+  }
+
+  function loadAiPayload() {
+    if (!testRunId) return;
+    fetch('/api/test-multi-cam/ai-payload?test_run=' + encodeURIComponent(testRunId))
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        if (data.error) return;
+        var requestPromptContent = document.getElementById('requestPromptContent');
+        if (requestPromptContent) requestPromptContent.textContent = data.prompt || '';
+        var imagesContent = document.getElementById('imagesContent');
+        if (imagesContent && data.image_urls && data.image_urls.length) {
+          imagesContent.innerHTML = data.image_urls.map(function(url) {
+            return '<img src="' + escapeHtml(url) + '" alt="frame" class="max-h-24 rounded border border-gray-700 object-contain w-full">';
+          }).join('');
+        }
+        renderSidebar(true);
+      })
+      .catch(function() {});
+  }
+
+  function sendPromptToAi() {
+    if (!testRunId) return;
+    var btn = document.getElementById('btnSendPrompt');
+    if (btn) { btn.disabled = true; btn.classList.add('opacity-50', 'cursor-not-allowed'); }
+    fetch('/api/test-multi-cam/send?test_run=' + encodeURIComponent(testRunId), { method: 'POST' })
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        var responseContent = document.getElementById('responseContent');
+        if (responseContent) responseContent.textContent = JSON.stringify(data, null, 2);
+      })
+      .catch(function(e) {
+        var responseContent = document.getElementById('responseContent');
+        if (responseContent) responseContent.textContent = 'Error: ' + e.message;
+      })
+      .finally(function() {
+        if (btn) { btn.disabled = false; btn.classList.remove('opacity-50', 'cursor-not-allowed'); }
+      });
   }
 
   function setButtonsEnabled(enabled) {
-    btnStartTest.disabled = !enabled;
-    btnVideoRequest.disabled = !enabled;
+    var btnStart = document.getElementById('btnStartTest');
+    var btnVideo = document.getElementById('btnVideoRequest');
+    if (btnStart) { btnStart.disabled = !enabled; btnStart.classList.toggle('opacity-50', !enabled); btnStart.classList.toggle('cursor-not-allowed', !enabled); }
+    if (btnVideo) { btnVideo.disabled = !enabled; btnVideo.classList.toggle('opacity-50', !enabled); btnVideo.classList.toggle('cursor-not-allowed', !enabled); }
   }
 
   function connectStream(url, onDone) {
     setButtonsEnabled(false);
-    const es = new EventSource(url);
+    var es = new EventSource(url);
     es.onmessage = function(e) {
       try {
-        const ev = JSON.parse(e.data);
+        var ev = JSON.parse(e.data);
         if (ev.type === 'log') {
           appendLog(ev.message, false);
         } else if (ev.type === 'done') {
           appendLog('Done.', false);
           if (ev.ai_request_url) {
-            aiRequestLink.href = ev.ai_request_url;
-            aiRequestLink.textContent = 'View AI request (frames and prompt)';
-            linkBox.style.display = 'block';
+            loadAiPayload();
+            renderSidebar(true);
           }
           es.close();
           setButtonsEnabled(true);
@@ -93,39 +481,24 @@
       }
     };
     es.onerror = function() {
-      if (linkBox.style.display !== 'block') appendLog('Connection error or stream ended.', true);
+      appendLog('Connection error or stream ended.', true);
       es.close();
       setButtonsEnabled(true);
     };
   }
 
-  if (!eventSubdir) return;
-
-  logArea.textContent = 'Copying...\n';
-  fetch('/api/test-multi-cam/prepare?subdir=' + encodeURIComponent(eventSubdir))
-    .then(function(r) { return r.json(); })
-    .then(function(data) {
-      if (data.error) {
-        logArea.textContent = 'Error: ' + data.error + '\n';
-        return;
-      }
-      const testRunId = data.test_run_id;
-      logArea.textContent = 'Event: ' + eventSubdir + '\nTest run: ' + testRunId + '\n';
-      if (headerText) headerText.innerHTML = 'Event: <strong>' + eventSubdir + '</strong> &middot; Test run: <strong>' + testRunId + '</strong>';
-      btnRow.style.display = 'flex';
-      btnStartTest.onclick = function() {
-        appendLog('Starting test pipeline...', false);
-        connectStream('/api/test-multi-cam/stream?test_run=' + encodeURIComponent(testRunId));
-      };
-      btnVideoRequest.onclick = function() {
-        appendLog('Video request (Frigate Export API)...', false);
-        connectStream('/api/test-multi-cam/video-request?test_run=' + encodeURIComponent(testRunId));
-      };
-    })
-    .catch(function(e) {
-      logArea.textContent = 'Error: ' + e.message + '\n';
-    });
+  var params = getUrlParams();
+  if (params.test_run) {
+    testRunId = params.test_run;
+    setLogInitial('Loading test run...');
+    eventSelectionSection.classList.add('hidden');
+    testViewSection.classList.remove('hidden');
+    loadTestView();
+  } else if (params.subdir) {
+    selectEvent(params.subdir);
+  } else {
+    showEventGrid();
+  }
 })();
 </script>
-</body>
-</html>
+{% endblock %}

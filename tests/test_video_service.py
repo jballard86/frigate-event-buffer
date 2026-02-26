@@ -6,13 +6,12 @@ from contextlib import contextmanager
 from unittest.mock import MagicMock, patch
 
 from frigate_buffer.services.video import (
+    _METADATA_CACHE,
+    _METADATA_CACHE_MAX_SIZE,
     VideoService,
-    BATCH_SIZE,
     _decoder_frame_count,
     _decoder_reader_ready,
     _get_video_metadata,
-    _METADATA_CACHE,
-    _METADATA_CACHE_MAX_SIZE,
     _run_detection_on_batch,
     ensure_detection_model_ready,
     get_detection_model_path,
@@ -85,8 +84,14 @@ class TestVideoService(unittest.TestCase):
             def fake_create_decoder(path, gpu_id=0):
                 yield mock_ctx
 
-            with patch("frigate_buffer.services.video.create_decoder", side_effect=fake_create_decoder):
-                with patch("frigate_buffer.services.video.get_detection_model_path", return_value=os.path.join("/tmp", "yolo_models", "yolov8n.pt")):
+            with patch(
+                "frigate_buffer.services.video.create_decoder",
+                side_effect=fake_create_decoder,
+            ):
+                with patch(
+                    "frigate_buffer.services.video.get_detection_model_path",
+                    return_value=os.path.join("/tmp", "yolo_models", "yolov8n.pt"),
+                ):
                     with patch("ultralytics.YOLO") as mock_yolo:
                         mock_yolo.return_value = MagicMock()
                         result = self.video_service.generate_detection_sidecar(
@@ -123,10 +128,12 @@ class TestVideoService(unittest.TestCase):
     @patch("frigate_buffer.services.video.subprocess.run")
     def test_get_video_metadata_caches_result(self, mock_run):
         """Second call with same path returns cached result and does not run ffprobe again."""
-        ffprobe_json = json.dumps({
-            "streams": [{"width": 1920, "height": 1080, "r_frame_rate": "30/1"}],
-            "format": {"duration": "5.5"},
-        }).encode("utf-8")
+        ffprobe_json = json.dumps(
+            {
+                "streams": [{"width": 1920, "height": 1080, "r_frame_rate": "30/1"}],
+                "format": {"duration": "5.5"},
+            }
+        ).encode("utf-8")
         mock_run.return_value = MagicMock(returncode=0, stdout=ffprobe_json)
         path = "/nonexistent/test_clip.mp4"
         _METADATA_CACHE.clear()
@@ -134,15 +141,21 @@ class TestVideoService(unittest.TestCase):
         second = _get_video_metadata(path)
         self.assertEqual(first, (1920, 1080, 30.0, 5.5))
         self.assertEqual(second, first)
-        self.assertEqual(mock_run.call_count, 1, "ffprobe should be invoked only once; second call uses cache")
+        self.assertEqual(
+            mock_run.call_count,
+            1,
+            "ffprobe should be invoked only once; second call uses cache",
+        )
 
     @patch("frigate_buffer.services.video.subprocess.run")
     def test_get_video_metadata_clears_cache_when_over_max_size(self, mock_run):
         """When cache size exceeds _METADATA_CACHE_MAX_SIZE, cache is cleared before lookup/insert."""
-        ffprobe_json = json.dumps({
-            "streams": [{"width": 640, "height": 480, "r_frame_rate": "30/1"}],
-            "format": {"duration": "2.0"},
-        }).encode("utf-8")
+        ffprobe_json = json.dumps(
+            {
+                "streams": [{"width": 640, "height": 480, "r_frame_rate": "30/1"}],
+                "format": {"duration": "2.0"},
+            }
+        ).encode("utf-8")
         mock_run.return_value = MagicMock(returncode=0, stdout=ffprobe_json)
         _METADATA_CACHE.clear()
         # Fill cache over the limit so next _get_video_metadata triggers clear
@@ -152,7 +165,11 @@ class TestVideoService(unittest.TestCase):
         new_path = "/new/unique/clip.mp4"
         result = _get_video_metadata(new_path)
         self.assertEqual(result, (640, 480, 30.0, 2.0))
-        self.assertEqual(len(_METADATA_CACHE), 1, "cache should have been cleared and only new entry remains")
+        self.assertEqual(
+            len(_METADATA_CACHE),
+            1,
+            "cache should have been cleared and only new entry remains",
+        )
         self.assertIn(new_path, _METADATA_CACHE)
         _METADATA_CACHE.clear()
 
@@ -170,7 +187,9 @@ class TestVideoService(unittest.TestCase):
 
     @patch("frigate_buffer.services.video._run_detection_on_batch")
     @patch("frigate_buffer.services.video._get_video_metadata")
-    def test_generate_detection_sidecar_calls_get_frames(self, mock_get_metadata, mock_run_batch):
+    def test_generate_detection_sidecar_calls_get_frames(
+        self, mock_get_metadata, mock_run_batch
+    ):
         """generate_detection_sidecar uses create_decoder and calls get_frames on context."""
         try:
             import torch
@@ -181,7 +200,9 @@ class TestVideoService(unittest.TestCase):
         mock_ctx = MagicMock()
         mock_ctx.frame_count = 20
         mock_ctx.__len__ = lambda self: 20
-        mock_ctx.get_frames.side_effect = lambda indices: torch.zeros((len(indices), 3, 480, 640), dtype=torch.uint8)
+        mock_ctx.get_frames.side_effect = lambda indices: torch.zeros(
+            (len(indices), 3, 480, 640), dtype=torch.uint8
+        )
         tmp = tempfile.mkdtemp(prefix="tmp_video_sidecar_")
         clip_path = os.path.join(tmp, "clip.mp4")
         sidecar_path = os.path.join(tmp, "detection.json")
@@ -193,8 +214,13 @@ class TestVideoService(unittest.TestCase):
             def fake_create_decoder(path, gpu_id=0):
                 yield mock_ctx
 
-            with patch("frigate_buffer.services.video.create_decoder", side_effect=fake_create_decoder):
-                result = self.video_service.generate_detection_sidecar(clip_path, sidecar_path, {"DETECTION_FRAME_INTERVAL": 5})
+            with patch(
+                "frigate_buffer.services.video.create_decoder",
+                side_effect=fake_create_decoder,
+            ):
+                result = self.video_service.generate_detection_sidecar(
+                    clip_path, sidecar_path, {"DETECTION_FRAME_INTERVAL": 5}
+                )
             self.assertTrue(result)
             self.assertTrue(mock_ctx.get_frames.called)
         finally:
@@ -220,7 +246,10 @@ class TestVideoService(unittest.TestCase):
         def fake_create_decoder_raises(path, gpu_id=0):
             raise RuntimeError("decoder open failed")
 
-        with patch("frigate_buffer.services.video.create_decoder", side_effect=fake_create_decoder_raises):
+        with patch(
+            "frigate_buffer.services.video.create_decoder",
+            side_effect=fake_create_decoder_raises,
+        ):
             tmp = tempfile.mkdtemp(prefix="tmp_video_sidecar_noclip_")
             try:
                 sidecar_path = os.path.join(tmp, "detection.json")
@@ -257,7 +286,9 @@ class TestVideoService(unittest.TestCase):
             return torch.zeros((len(indices), 3, 480, 640), dtype=torch.uint8)
 
         mock_ctx.get_frames.side_effect = get_frames
-        mock_run_batch.side_effect = lambda model, batch, device, imgsz=640: [[] for _ in range(batch.shape[0])]
+        mock_run_batch.side_effect = lambda model, batch, device, imgsz=640: [
+            [] for _ in range(batch.shape[0])
+        ]
 
         config = {
             "DETECTION_MODEL": "yolov8n.pt",
@@ -276,14 +307,23 @@ class TestVideoService(unittest.TestCase):
             def fake_create_decoder(path, gpu_id=0):
                 yield mock_ctx
 
-            with patch("frigate_buffer.services.video.create_decoder", side_effect=fake_create_decoder):
-                with patch("frigate_buffer.services.video.get_detection_model_path", return_value=os.path.join("/tmp", "yolo_models", "yolov8n.pt")):
+            with patch(
+                "frigate_buffer.services.video.create_decoder",
+                side_effect=fake_create_decoder,
+            ):
+                with patch(
+                    "frigate_buffer.services.video.get_detection_model_path",
+                    return_value=os.path.join("/tmp", "yolo_models", "yolov8n.pt"),
+                ):
                     with patch("ultralytics.YOLO") as mock_yolo:
                         mock_yolo.return_value = MagicMock()
                         result = self.video_service.generate_detection_sidecar(
                             clip_path, sidecar_path, config
                         )
-            self.assertTrue(result, "generate_detection_sidecar should succeed using metadata fallback")
+            self.assertTrue(
+                result,
+                "generate_detection_sidecar should succeed using metadata fallback",
+            )
             self.assertTrue(os.path.isfile(sidecar_path))
             with open(sidecar_path, encoding="utf-8") as f:
                 data = json.load(f)
@@ -303,7 +343,9 @@ class TestVideoService(unittest.TestCase):
                 except OSError:
                     pass
 
-    def test_generate_detection_sidecars_for_cameras_acquires_and_releases_app_lock(self):
+    def test_generate_detection_sidecars_for_cameras_acquires_and_releases_app_lock(
+        self,
+    ):
         mock_lock = MagicMock()
         self.video_service.set_sidecar_app_lock(mock_lock)
         with patch.object(
@@ -348,7 +390,9 @@ class TestEnsureDetectionModelReady(unittest.TestCase):
     def test_get_detection_model_path_under_storage(self):
         config = {"STORAGE_PATH": "/app/storage", "DETECTION_MODEL": "yolo26m.pt"}
         path = get_detection_model_path(config)
-        self.assertEqual(path, os.path.join("/app/storage", "yolo_models", "yolo26m.pt"))
+        self.assertEqual(
+            path, os.path.join("/app/storage", "yolo_models", "yolo26m.pt")
+        )
 
     def test_get_detection_model_path_default_model_when_empty(self):
         config = {"STORAGE_PATH": "/data"}
@@ -368,30 +412,38 @@ class TestDecoderFrameCount(unittest.TestCase):
 
     def test_decoder_frame_count_uses_len_when_available(self):
         """When len(reader) works and no frame_count, _decoder_frame_count returns it."""
+
         class ReaderWithLen:
             def __len__(self):
                 return 42
+
         result = _decoder_frame_count(ReaderWithLen(), 30.0, 10.0)
         self.assertEqual(result, 42)
 
     def test_decoder_frame_count_fallback_when_len_raises(self):
         """When len(reader) raises (e.g. missing _decoder), _decoder_frame_count returns duration * fps."""
+
         class ReaderNoLen:
             pass
+
         result = _decoder_frame_count(ReaderNoLen(), 30.0, 10.0)
         self.assertEqual(result, 300)
 
     def test_decoder_frame_count_uses_shape_when_len_raises(self):
         """When len(reader) raises but reader.shape is (N, ...), _decoder_frame_count returns N."""
+
         class ReaderShapeOnly:
             shape = (100, 3, 480, 640)
+
         result = _decoder_frame_count(ReaderShapeOnly(), 30.0, 10.0)
         self.assertEqual(result, 100)
 
     def test_decoder_frame_count_fallback_zero_duration_returns_zero(self):
         """When both len and shape fail and duration is 0, _decoder_frame_count returns 0."""
+
         class ReaderNoLen:
             shape = ()
+
         result = _decoder_frame_count(ReaderNoLen(), 30.0, 0.0)
         self.assertEqual(result, 0)
 
@@ -428,7 +480,12 @@ class TestRunDetectionOnBatch(unittest.TestCase):
         except ImportError:
             self.skipTest("torch not available")
         batch = torch.zeros((2, 3, 480, 640), dtype=torch.float32)
-        mock_model = MagicMock(return_value=[MagicMock(boxes=MagicMock(xyxy=None)), MagicMock(boxes=MagicMock(xyxy=None))])
+        mock_model = MagicMock(
+            return_value=[
+                MagicMock(boxes=MagicMock(xyxy=None)),
+                MagicMock(boxes=MagicMock(xyxy=None)),
+            ]
+        )
         out = _run_detection_on_batch(mock_model, batch, None, imgsz=640)
         self.assertEqual(len(out), 2)
         self.assertEqual(out[0], [])
