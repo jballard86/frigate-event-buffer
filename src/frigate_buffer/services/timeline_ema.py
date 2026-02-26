@@ -2,8 +2,8 @@
 Phase 1 timeline logic for multi-cam: dense grid, EMA smoothing, segment
 assignment with hysteresis, merge short segments.
 
-Used by multi_clip_extractor for the Trust-the-EMA pipeline. No decode or file
-I/O here;
+Also provides timeline/slice building for compilation: convert_timeline_to_segments,
+assignments_to_slices, _trim_slices_to_action_window. No decode or file I/O here;
 caller provides area_at_t(camera, t_sec) and native sizes for normalization.
 """
 
@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
+
+from frigate_buffer.constants import ACTION_POSTROLL_SEC, ACTION_PREROLL_SEC
 
 logger = logging.getLogger("frigate-buffer")
 
@@ -167,3 +169,102 @@ def build_phase1_assignments(
                 merged[j] = prev_cam
 
     return list(zip(times, merged, strict=True))
+
+
+def convert_timeline_to_segments(
+    timeline_points: list[tuple[float, str]], global_end: float
+) -> list[dict]:
+    """
+    Groups continuous time steps for the same camera into segments.
+    global_end is required, but if for some reason it is 0 or None, it falls back
+    to the last point + the step interval of the first two points.
+    """
+    segments = []
+    if not timeline_points:
+        return segments
+
+    if not global_end:
+        step = 1.0
+        if len(timeline_points) > 1:
+            step = timeline_points[1][0] - timeline_points[0][0]
+        global_end = timeline_points[-1][0] + step
+
+    current_cam = timeline_points[0][1]
+    seg_start = timeline_points[0][0]
+
+    for i in range(1, len(timeline_points)):
+        t, cam = timeline_points[i]
+        if cam != current_cam:
+            segments.append(
+                {"camera": current_cam, "start_sec": seg_start, "end_sec": t}
+            )
+            current_cam = cam
+            seg_start = t
+
+    segments.append(
+        {"camera": current_cam, "start_sec": seg_start, "end_sec": global_end}
+    )
+
+    return segments
+
+
+def assignments_to_slices(
+    assignments: list[tuple[float, str]], global_end: float
+) -> list[dict]:
+    """
+    Build one slice per assignment. Slice i covers [t_i, t_{i+1}] with camera cam_i.
+    Last slice uses global_end as end_sec. Time O(len(assignments)), space O(n).
+    """
+    if not assignments:
+        return []
+    slices: list[dict] = []
+    for i, (t_sec, camera) in enumerate(assignments):
+        end_sec = assignments[i + 1][0] if i + 1 < len(assignments) else global_end
+        slices.append(
+            {
+                "camera": camera,
+                "start_sec": t_sec,
+                "end_sec": end_sec,
+            }
+        )
+    return slices
+
+
+def _trim_slices_to_action_window(
+    slices: list[dict],
+    sidecars: dict[str, list],
+    global_end: float,
+) -> list[dict]:
+    """
+    Compute first/last detection time across all cameras' sidecar entries (with detections),
+    then discard slices entirely outside [action_start, action_end] and clamp overlapping
+    slices to that window. Returns a new list; does not mutate input.
+    """
+    first_detection_sec: float = global_end
+    last_detection_sec: float = 0.0
+    for entries in sidecars.values():
+        for e in entries or []:
+            if len(e.get("detections") or []) > 0:
+                ts = float(e.get("timestamp_sec") or 0)
+                first_detection_sec = min(first_detection_sec, ts)
+                last_detection_sec = max(last_detection_sec, ts)
+    if first_detection_sec > last_detection_sec:
+        action_start = 0.0
+        action_end = global_end
+    else:
+        action_start = max(0.0, first_detection_sec - ACTION_PREROLL_SEC)
+        action_end = min(global_end, last_detection_sec + ACTION_POSTROLL_SEC)
+
+    result: list[dict] = []
+    for sl in slices:
+        if sl["end_sec"] <= action_start or sl["start_sec"] >= action_end:
+            continue
+        s_start = max(sl["start_sec"], action_start)
+        s_end = min(sl["end_sec"], action_end)
+        if s_start >= s_end:
+            continue
+        new_slice = dict(sl)
+        new_slice["start_sec"] = s_start
+        new_slice["end_sec"] = s_end
+        result.append(new_slice)
+    return result

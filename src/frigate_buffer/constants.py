@@ -12,15 +12,13 @@ from typing import Any
 # listing, cleanup, and storage stats (e.g. ultralytics, yolo_models, daily_reports,
 # daily_reviews). "saved" holds user-kept events; excluded from cleanup and from
 # normal camera/event listing.
-NON_CAMERA_DIRS: frozenset[str] = frozenset(
-    {
-        "ultralytics",
-        "yolo_models",
-        "daily_reports",
-        "daily_reviews",
-        "saved",
-    }
-)
+NON_CAMERA_DIRS: frozenset[str] = frozenset({
+    "ultralytics",
+    "yolo_models",
+    "daily_reports",
+    "daily_reviews",
+    "saved",
+})
 
 # Chunk size for HTTP streaming (e.g. proxy snapshot/latest.jpg, download
 # iter_content). Used so streaming responses do not load entire body into memory.
@@ -62,6 +60,19 @@ ZOOM_MIN_FRAME_FRACTION: float = 0.4
 # Video compilation dynamic zoom: padding around bounding box (e.g. 0.10 = bbox
 # + 10%).
 ZOOM_CONTENT_PADDING: float = 0.10
+
+# Video compilation: default native resolution when sidecar is missing or empty.
+COMPILATION_DEFAULT_NATIVE_WIDTH: int = 1920
+COMPILATION_DEFAULT_NATIVE_HEIGHT: int = 1080
+
+# When nearest sidecar entry has no detections (e.g. person left frame), search
+# for nearest entry with detections within this many seconds; hold that crop.
+HOLD_CROP_MAX_DISTANCE_SEC: float = 5.0
+
+# Dynamic slice trimming: pre-roll and post-roll around first/last detection
+# across all cameras (used by timeline_ema._trim_slices_to_action_window).
+ACTION_PREROLL_SEC: float = 3.0
+ACTION_POSTROLL_SEC: float = 3.0
 
 # AI notification mode: mutually exclusive paths (settings.ai_mode / AI_MODE).
 # "frigate" = Frigate GenAI only (tracked_object, frigate/reviews, review

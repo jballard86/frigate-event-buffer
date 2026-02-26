@@ -63,7 +63,6 @@ extend-ignore = ["E402"]
 "src/frigate_buffer/services/multi_clip_extractor.py" = ["E501"]
 "src/frigate_buffer/services/query.py" = ["E501"]
 "src/frigate_buffer/services/video.py" = ["E501"]
-"src/frigate_buffer/services/video_compilation.py" = ["E501"]
 "tests/test_ai_analyzer.py" = ["E501"]
 "tests/test_config_schema.py" = ["E501"]
 "tests/test_constants.py" = ["E501"]
@@ -97,5 +96,9 @@ extend-ignore = ["E402"]
 quote-style = "double"
 
 [tool.pyright]
+include = ["src"]
+extraPaths = ["src"]
+
+[tool.basedpyright]
 include = ["src"]
 extraPaths = ["src"]
