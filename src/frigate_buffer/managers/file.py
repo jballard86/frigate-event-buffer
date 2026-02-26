@@ -636,28 +636,40 @@ class FileManager:
                 cam_clips = cam_snapshots = cam_descriptions = 0
 
                 if camera_dir == "events":
-                    # Consolidated layout: events/{ce_id}/ (CE root files) and events/{ce_id}/{camera}/ (event files)
+                    # Consolidated layout: events/{ce_id}/ (CE root) and events/{ce_id}/{camera}/ (event files).
+                    # Aggregate by camera name so storage by_camera shows per-camera usage, not "events".
                     try:
                         with os.scandir(camera_path) as it_ce:
                             for ce_entry in it_ce:
                                 if not ce_entry.is_dir():
                                     continue
                                 ce_path = ce_entry.path
-                                # CE-root files (notification.gif, review_summary.md)
-                                for f in ('notification.gif', 'review_summary.md'):
+                                # CE-root files (notification.gif, review_summary.md) go to descriptions total only
+                                for f in ("notification.gif", "review_summary.md"):
                                     p = os.path.join(ce_path, f)
                                     try:
                                         if os.path.exists(p) and os.path.isfile(p):
                                             cam_descriptions += os.path.getsize(p)
                                     except OSError:
                                         pass
-                                # Camera subdirs: events/ce_id/camera/ with *.mp4, snapshot.jpg, etc.
                                 try:
                                     with os.scandir(ce_path) as it_cam:
                                         for cam_entry in it_cam:
-                                            if not cam_entry.is_dir() or cam_entry.name.startswith('.'):
+                                            if not cam_entry.is_dir() or cam_entry.name.startswith("."):
                                                 continue
+                                            cam_name = cam_entry.name
                                             c, s, d = self._sum_event_folder(cam_entry.path)
+                                            if cam_name not in by_camera:
+                                                by_camera[cam_name] = {
+                                                    "clips": 0,
+                                                    "snapshots": 0,
+                                                    "descriptions": 0,
+                                                    "total": 0,
+                                                }
+                                            by_camera[cam_name]["clips"] += c
+                                            by_camera[cam_name]["snapshots"] += s
+                                            by_camera[cam_name]["descriptions"] += d
+                                            by_camera[cam_name]["total"] += c + s + d
                                             cam_clips += c
                                             cam_snapshots += s
                                             cam_descriptions += d
@@ -680,7 +692,7 @@ class FileManager:
                         continue
 
                 cam_total = cam_clips + cam_snapshots + cam_descriptions
-                if cam_total > 0:
+                if cam_total > 0 and camera_dir != "events":
                     by_camera[camera_dir] = {
                         'clips': cam_clips,
                         'snapshots': cam_snapshots,

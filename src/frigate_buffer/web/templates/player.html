@@ -1,294 +1,23 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Frigate Event Viewer</title>
-<style>
-  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+{% extends "base.html" %}
 
-  body {
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-    background: #1a1a2e;
-    color: #e0e0e0;
-    min-height: 100vh;
-  }
+{% block title %}Frigate Event Viewer{% endblock %}
 
-  /* Header */
-  .header {
-    background: #16213e;
-    padding: 12px 16px;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    border-bottom: 1px solid #0f3460;
-    flex-wrap: wrap;
-    gap: 8px;
-  }
+{% block content %}
+<!-- Flash Notification -->
+<div id="flash" class="fixed top-4 right-4 z-50 bg-green-600 text-white px-4 py-2 rounded-lg opacity-0 transition-opacity duration-300 pointer-events-none shadow-lg text-sm font-medium"></div>
 
-  .header h1 {
-    font-size: 1.1rem;
-    color: #e94560;
-    white-space: nowrap;
-  }
-
-  .header-controls {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    flex-wrap: wrap;
-  }
-
-  select {
-    background: #0f3460;
-    color: #e0e0e0;
-    border: 1px solid #533483;
-    border-radius: 6px;
-    padding: 6px 10px;
-    font-size: 0.85rem;
-    cursor: pointer;
-  }
-
-  select:focus { outline: 2px solid #e94560; }
-
-  /* Main single-column layout */
-  .main {
-    max-width: 800px;
-    margin: 0 auto;
-    padding: 16px;
-  }
-
-  /* Video player */
-  .video-container {
-    background: #000;
-    border-radius: 8px;
-    overflow: hidden;
-  }
-
-  .video-container video,
-  .video-container img {
-    width: 100%;
-    display: block;
-  }
-
-  .no-video {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    min-height: 240px;
-    color: #666;
-    font-size: 1.1rem;
-  }
-
-  /* Navigation bar */
-  .nav-bar {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    margin-top: 10px;
-    gap: 8px;
-    flex-wrap: wrap;
-  }
-
-  .nav-bar .event-counter {
-    color: #999;
-    font-size: 0.85rem;
-    white-space: nowrap;
-  }
-
-  .nav-buttons {
-    display: flex;
-    gap: 6px;
-  }
-
-  button {
-    background: #0f3460;
-    color: #e0e0e0;
-    border: 1px solid #533483;
-    border-radius: 6px;
-    padding: 7px 14px;
-    font-size: 0.85rem;
-    cursor: pointer;
-    transition: background 0.15s;
-    white-space: nowrap;
-  }
-
-  button:hover:not(:disabled) { background: #533483; }
-  button:disabled { opacity: 0.4; cursor: not-allowed; }
-
-  .btn-danger { background: #5c1a1a; border-color: #8b2020; }
-  .btn-danger:hover:not(:disabled) { background: #8b2020; }
-
-  .btn-download { background: #1a4a1a; border-color: #2d7a2d; }
-  .btn-download:hover { background: #2d7a2d; }
-
-  .btn-success { background: #1a4a1a; border-color: #2d7a2d; }
-  .btn-success:hover:not(:disabled) { background: #2d7a2d; }
-
-  .btn-mark-all { background: #4a3a1a; border-color: #7a6a2d; }
-  .btn-mark-all:hover:not(:disabled) { background: #7a6a2d; }
-
-  .ongoing-badge { margin-left: 8px; padding: 2px 8px; background: #3a4a2a; color: #9fdf9f; border-radius: 4px; font-size: 0.75rem; }
-
-  /* Info cards */
-  .info-card {
-    background: #16213e;
-    border: 1px solid #0f3460;
-    border-radius: 8px;
-    padding: 14px;
-    margin-top: 10px;
-  }
-
-  .info-card h2 {
-    font-size: 0.95rem;
-    color: #e94560;
-    margin-bottom: 8px;
-    border-bottom: 1px solid #0f3460;
-    padding-bottom: 6px;
-  }
-
-  .meta-grid {
-    display: grid;
-    grid-template-columns: auto 1fr;
-    gap: 4px 12px;
-    font-size: 0.9rem;
-  }
-
-  .meta-label { color: #888; font-weight: 500; }
-  .meta-value { color: #e0e0e0; word-break: break-word; }
-
-  .description-text {
-    font-size: 0.9rem;
-    line-height: 1.5;
-    color: #ccc;
-    white-space: pre-wrap;
-  }
-
-  .scene-text {
-    font-size: 0.9rem;
-    line-height: 1.5;
-    color: #aaa;
-    margin-top: 10px;
-    padding-top: 10px;
-    border-top: 1px solid #333;
-  }
-
-  .ai-title {
-    font-weight: 600;
-    margin-bottom: 6px;
-    color: #e0e0e0;
-  }
-
-  /* Empty state */
-  .empty-state {
-    text-align: center;
-    padding: 60px 20px;
-    color: #666;
-  }
-
-  .empty-state h2 {
-    font-size: 1.3rem;
-    color: #888;
-    margin-bottom: 10px;
-  }
-
-  /* Loading */
-  .loading {
-    text-align: center;
-    padding: 40px;
-    color: #888;
-  }
-
-  /* Updated flash */
-  .flash {
-    position: fixed;
-    top: 8px;
-    right: 8px;
-    background: #2d7a2d;
-    color: #fff;
-    padding: 6px 14px;
-    border-radius: 6px;
-    font-size: 0.8rem;
-    opacity: 0;
-    transition: opacity 0.3s;
-    pointer-events: none;
-    z-index: 100;
-  }
-
-  .flash.show { opacity: 1; }
-
-  /* Viewed badge */
-  .viewed-badge {
-    display: inline-block;
-    background: #2d7a2d;
-    color: #fff;
-    font-size: 0.7rem;
-    padding: 2px 6px;
-    border-radius: 4px;
-    margin-left: 8px;
-    vertical-align: middle;
-  }
-
-  /* Threat level badges */
-  .threat-badge {
-    display: inline-block;
-    padding: 2px 8px;
-    border-radius: 4px;
-    font-size: 0.75rem;
-    font-weight: 600;
-    margin-left: 8px;
-    vertical-align: middle;
-  }
-  .threat-0 { background: #1a4a1a; color: #7dde7d; }
-  .threat-1 { background: #4a3a1a; color: #deb87d; }
-  .threat-2 { background: #5c1a1a; color: #ff6b6b; animation: pulse-red 1.5s infinite; }
-  @keyframes pulse-red {
-    0%, 100% { opacity: 1; }
-    50% { opacity: 0.7; }
-  }
-
-  /* AI Analysis tile: placeholder, title, scene */
-  .ai-placeholder { font-style: italic; color: #888; margin: 0 0 10px 0; font-size: 0.9rem; }
-  .ai-title { color: #e94560; font-size: 1rem; margin: 0 0 8px 0; font-weight: 600; }
-  .ai-scene { margin: 0; line-height: 1.5; color: #ccc; font-size: 0.9rem; }
-
-  /* Responsive: mobile */
-  @media (max-width: 600px) {
-    .header { padding: 10px 12px; }
-    .header h1 { font-size: 0.95rem; }
-    .main { padding: 10px; }
-    button { padding: 6px 10px; font-size: 0.8rem; }
-  }
-</style>
-<script src="/static/marked.min.js"></script>
-<script src="/static/purify.min.js"></script>
-</head>
-<body>
-
-<div class="header">
-  <h1>Frigate Event Viewer</h1>
-  <div class="header-controls">
-    <select id="cameraSelect">
-      <option value="">All Cameras</option>
-    </select>
-    <select id="filterSelect">
-      <option value="unreviewed">Unreviewed</option>
-      <option value="all">All Events</option>
-      <option value="reviewed">Reviewed</option>
-      <option value="saved">Saved</option>
-    </select>
-    <button class="btn-mark-all" id="btnMarkAll" style="display:none;">Mark All Reviewed</button>
-    <a href="/stats-page"><button>Stats</button></a>
-    <a href="/daily-review"><button>Daily Review</button></a>
+<!-- Main Content Area -->
+<div id="mainContent">
+  <div class="flex items-center justify-center py-20">
+    <div class="animate-pulse flex items-center gap-3 text-gray-500">
+      <svg class="w-6 h-6 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+      <span class="text-lg">Loading events...</span>
+    </div>
   </div>
 </div>
+{% endblock %}
 
-<div class="flash" id="flash"></div>
-
-<div id="mainContent" class="main">
-  <div class="loading">Loading events...</div>
-</div>
-
+{% block scripts %}
 <script>
 (function() {
   'use strict';
@@ -298,51 +27,94 @@
   let refreshTimer = null;
   let videoPlaying = false;
   let lastRenderedEventId = null;
+  let currentFilter = 'unreviewed';
+  let hasLoadedOnce = false;
+  let lastShowTestEvents = null;
+  let filterFetchInProgress = false;
 
-  const cameraSelect = document.getElementById('cameraSelect');
-  const filterSelect = document.getElementById('filterSelect');
   const mainContent = document.getElementById('mainContent');
-  const btnMarkAll = document.getElementById('btnMarkAll');
   const flashEl = document.getElementById('flash');
+  const btnTestEvents = document.getElementById('btnTestEvents');
+
+  // Filter buttons: delegated from sidebar (buttons are injected in render())
+  const sidebarPlayerExtras = document.getElementById('sidebarPlayerExtras');
+  if (sidebarPlayerExtras) {
+    sidebarPlayerExtras.addEventListener('click', (e) => {
+      const btn = e.target.closest('.filter-btn');
+      if (!btn) return;
+      if (filterFetchInProgress) return;
+      currentFilter = btn.dataset.filter;
+      updateFilterButtons();
+      filterFetchInProgress = true;
+      fetchEvents().finally(() => { filterFetchInProgress = false; });
+      startAutoRefresh();
+    });
+  }
+
+  function getFilterButtonClass(filter) {
+    const active = 'bg-brand/20 text-brand border-brand/30 hover:bg-brand/30';
+    const inactive = 'bg-gray-800 text-gray-300 border border-gray-700 hover:bg-gray-700';
+    return currentFilter === filter ? active : inactive;
+  }
+
+  function buildSidebarFilterButtonsHtml(showTestEvents) {
+    const btnClass = 'filter-btn px-3 py-2 rounded-lg text-sm font-medium transition-all w-full text-left border mb-1';
+    const buttons = [
+      { filter: 'unreviewed', label: 'Unreviewed' },
+      { filter: 'all', label: 'All Events' },
+      { filter: 'reviewed', label: 'Reviewed' },
+      { filter: 'saved', label: 'Saved' },
+      { filter: 'test_events', label: 'Test Events', id: 'btnTestEvents', hidden: !showTestEvents }
+    ];
+    return buttons.map(b => {
+      const cls = getFilterButtonClass(b.filter) + ' ' + btnClass;
+      const hidden = b.hidden ? ' hidden' : '';
+      const id = b.id ? ` id="${b.id}"` : '';
+      return `<button type="button" data-filter="${b.filter}" class="${cls}${hidden}"${id}>${escapeHtml(b.label)}</button>`;
+    }).join('');
+  }
+
+  function updateFilterButtons() {
+    const container = document.getElementById('sidebarPlayerExtras');
+    if (!container) return;
+    const filterButtons = container.querySelectorAll('.filter-btn');
+    filterButtons.forEach(btn => {
+      const isActive = btn.dataset.filter === currentFilter;
+      if (isActive) {
+        btn.classList.remove('bg-gray-800', 'text-gray-300', 'border-gray-700');
+        btn.classList.add('bg-brand/20', 'text-brand', 'border-brand/30');
+      } else {
+        btn.classList.add('bg-gray-800', 'text-gray-300', 'border-gray-700');
+        btn.classList.remove('bg-brand/20', 'text-brand', 'border-brand/30');
+      }
+    });
+  }
 
   // --- Flash ---
   function showFlash(msg) {
     flashEl.textContent = msg;
-    flashEl.classList.add('show');
-    setTimeout(() => flashEl.classList.remove('show'), 1500);
+    flashEl.classList.remove('opacity-0');
+    flashEl.classList.add('opacity-100');
+    setTimeout(() => {
+      flashEl.classList.remove('opacity-100');
+      flashEl.classList.add('opacity-0');
+    }, 1500);
   }
 
   // --- API ---
-  async function fetchCameras() {
-    try {
-      const resp = await fetch('/cameras');
-      const data = await resp.json();
-      data.cameras.forEach(cam => {
-        const opt = document.createElement('option');
-        opt.value = cam;
-        opt.textContent = cam.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
-        cameraSelect.appendChild(opt);
-      });
-    } catch (e) {
-      console.error('Failed to fetch cameras:', e);
-    }
-  }
-
   async function fetchEvents(opts) {
-    const filter = filterSelect.value;
     const silent = opts && opts.silent;
-    // Back from timeline: fetch all events (don't restrict to camera) so count matches
     const forceAll = !!(opts && opts.forceAll);
-    const camera = forceAll ? '' : cameraSelect.value;
+    const camera = '';
 
     try {
       const base = camera ? `/events/${encodeURIComponent(camera)}` : '/events';
-      const resp = await fetch(`${base}?filter=${filter}`);
+      const resp = await fetch(`${base}?filter=${currentFilter}`);
       const data = await resp.json();
       const newEvents = data.events || [];
 
+      hasLoadedOnce = true;
       if (silent) {
-        // Preserve position by event_id
         const currentId = events[currentIndex] ? events[currentIndex].event_id : null;
         events = newEvents;
         if (currentId) {
@@ -357,7 +129,6 @@
       } else {
         events = newEvents;
         currentIndex = 0;
-        // Back from timeline: seek to same event (do NOT change camera dropdown - keeps full count)
         if (urlCamera && urlSubdir && events.length > 0) {
           const idx = events.findIndex(e => (e.camera || '').toLowerCase() === urlCamera.toLowerCase() && (e.subdir || (e.hosted_clip && e.hosted_clip.split('/').slice(-2, -1)[0])) === urlSubdir);
           if (idx >= 0) {
@@ -369,10 +140,31 @@
       render();
     } catch (e) {
       console.error('Failed to fetch events:', e);
-      if (!silent) {
-        mainContent.innerHTML = '<div class="empty-state"><h2>Error loading events</h2><p>Could not connect to the API.</p></div>';
+      if (opts && opts.silent && hasLoadedOnce) {
+        showRefreshToast();
+        return;
+      }
+      if (!(opts && opts.silent)) {
+        mainContent.innerHTML = `
+          <div class="text-center py-20 text-gray-500">
+            <h2 class="text-xl text-gray-400 mb-2">Error loading events</h2>
+            <p>Could not connect to the API.</p>
+          </div>`;
       }
     }
+  }
+
+  function showRefreshToast() {
+    let toast = document.getElementById('playerRefreshToast');
+    if (!toast) {
+      toast = document.createElement('div');
+      toast.id = 'playerRefreshToast';
+      toast.className = 'fixed bottom-4 right-4 z-50 px-4 py-2 rounded-lg bg-amber-900/90 text-amber-200 text-sm border border-amber-700/50 shadow-lg';
+      document.body.appendChild(toast);
+    }
+    toast.textContent = 'Could not refresh events. Retrying on next interval.';
+    toast.classList.remove('hidden');
+    setTimeout(() => toast.classList.add('hidden'), 4000);
   }
 
   function getEventPath(ev) {
@@ -417,8 +209,7 @@
   async function markViewed(eventPath) {
     try {
       await fetch('/viewed/' + eventPath.split('/').map(encodeURIComponent).join('/'), { method: 'POST' });
-      // If viewing unreviewed, remove from list; otherwise update in place
-      if (filterSelect.value === 'unreviewed') {
+      if (currentFilter === 'unreviewed') {
         events.splice(currentIndex, 1);
         if (currentIndex >= events.length) currentIndex = Math.max(0, events.length - 1);
       } else {
@@ -435,7 +226,7 @@
     try {
       const resp = await fetch('/viewed/all', { method: 'POST' });
       if (resp.ok) {
-        if (filterSelect.value === 'unreviewed') {
+        if (currentFilter === 'unreviewed') {
           events = [];
           currentIndex = 0;
         } else {
@@ -449,38 +240,43 @@
     }
   }
 
-  // Renders the AI Analysis tile: first line = title (canned or AI) or "future screenshot analysis"; then scene.
   function renderAiAnalysisBlocks(ev) {
     const placeholderText = 'future screenshot analysis';
     const firstLineText = (ev.title != null && ev.title !== '') ? ev.title : placeholderText;
     const firstLineHtml = firstLineText === placeholderText
-      ? '<p class="ai-placeholder">' + escapeHtml(firstLineText) + '</p>'
-      : '<h3 class="ai-title">' + escapeHtml(firstLineText) + '</h3>';
+      ? `<p class="italic text-gray-500 mb-3">${escapeHtml(firstLineText)}</p>`
+      : `<h3 class="text-brand text-lg font-semibold mb-2">${escapeHtml(firstLineText)}</h3>`;
     const sceneText = ev.scene != null && ev.scene !== '' ? escapeHtml(ev.scene) : 'No scene description.';
-    const sceneHtml = '<p class="ai-scene">' + sceneText + '</p>';
+    const sceneHtml = `<p class="text-gray-300 leading-relaxed">${sceneText}</p>`;
     return firstLineHtml + sceneHtml;
+  }
+
+  function getThreatBadge(threatLevel) {
+    const labels = {0: 'Normal', 1: 'Suspicious', 2: 'Critical'};
+    const colors = {
+      0: 'bg-green-900/50 text-green-400 border-green-700/50',
+      1: 'bg-amber-900/50 text-amber-400 border-amber-700/50',
+      2: 'bg-red-900/50 text-red-400 border-red-700/50 animate-pulse'
+    };
+    if (threatLevel === 0) return '';
+    return `<span class="ml-2 px-2 py-1 rounded-md text-xs font-semibold border ${colors[threatLevel]}">${labels[threatLevel]}</span>`;
   }
 
   // --- Render ---
   function render() {
-    const filter = filterSelect.value;
-    btnMarkAll.style.display = (filter === 'saved' || filter === 'test_events') ? 'none' : '';
+    const sidebarExtras = document.getElementById('sidebarPlayerExtras');
 
-    const testOpt = document.querySelector('#filterSelect option[value="test_events"]');
     if (events.length === 0) {
-      // When no events, still show "Test events" so user can select it to view test runs.
-      if (!testOpt) {
-        const opt = document.createElement('option');
-        opt.value = 'test_events';
-        opt.textContent = 'Test events';
-        filterSelect.appendChild(opt);
+      const filterLabel = currentFilter === 'reviewed' ? 'reviewed' : currentFilter === 'unreviewed' ? 'unreviewed' : currentFilter === 'saved' ? 'saved' : currentFilter === 'test_events' ? 'test' : '';
+      if (sidebarExtras) {
+        sidebarExtras.innerHTML = buildSidebarFilterButtonsHtml(true);
+        lastShowTestEvents = true;
       }
-      const filterLabel = filter === 'reviewed' ? 'reviewed' : filter === 'unreviewed' ? 'unreviewed' : filter === 'saved' ? 'saved' : filter === 'test_events' ? 'test' : '';
       mainContent.innerHTML = `
-        <div class="empty-state">
-          <h2>No Events Found</h2>
-          <p>No ${filterLabel} events${cameraSelect.value ? ' for this camera' : ''}.</p>
-          <p style="margin-top:16px;"><a href="/stats-page" style="color:#e94560;">View Stats</a></p>
+        <div class="text-center py-20 text-gray-500">
+          <h2 class="text-2xl text-gray-400 mb-3">No Events Found</h2>
+          <p class="mb-4">No ${filterLabel} events.</p>
+          <a href="/stats-page" class="text-brand hover:underline">View Stats</a>
         </div>`;
       return;
     }
@@ -488,16 +284,12 @@
     const ev = events[currentIndex];
     const eventPath = getEventPath(ev);
 
-    // Add or remove "Test events" filter option based on current event being consolidated.
-    if (ev.consolidated && !testOpt) {
-      const opt = document.createElement('option');
-      opt.value = 'test_events';
-      opt.textContent = 'Test events';
-      filterSelect.appendChild(opt);
-    } else if (!ev.consolidated && testOpt) {
-      if (filterSelect.value === 'test_events') filterSelect.value = 'all';
-      testOpt.remove();
+    // Show/hide test events filter based on consolidated status (built into sidebar HTML)
+    if (!ev.consolidated && currentFilter === 'test_events') {
+      currentFilter = 'all';
+      updateFilterButtons();
     }
+
     const ts = ev.timestamp ? new Date(parseInt(ev.timestamp) * 1000) : null;
     const endTs = ev.end_timestamp != null ? new Date(Math.round(parseFloat(ev.end_timestamp) * 1000)) : null;
     const dateStr = ts ? ts.toLocaleDateString() : 'Unknown';
@@ -507,92 +299,170 @@
       ? (parseFloat(ev.end_timestamp) - parseFloat(ev.timestamp))
       : null;
     const durationStr = formatDuration(durationSec);
-    const title = ev.title || (ev.label || 'Event').replace(/\b\w/g, c => c.toUpperCase()) + ' Detected';
-    const description = ev.description || ev.summary || 'No description available.';
-    const scene = ev.scene || '';
     const cameraDisplay = ev.camera.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
     const labelDisplay = (ev.label || 'unknown').replace(/\b\w/g, c => c.toUpperCase());
     const subdir = ev.subdir || (ev.hosted_clip && ev.hosted_clip.split('/').slice(-2, -1)[0]);
     const threatLevel = ev.threat_level || 0;
-    const threatLabels = {0: 'Normal', 1: 'Suspicious', 2: 'Critical'};
-    const threatBadge = threatLevel > 0
-      ? ` <span class="threat-badge threat-${threatLevel}">${threatLabels[threatLevel]}</span>`
-      : '';
 
     const clips = ev.hosted_clips || (ev.hosted_clip ? [{ camera: ev.camera || 'Clip', url: ev.hosted_clip }] : []);
     const primaryClipUrl = ev.hosted_clip || (clips[0] && clips[0].url) || '';
 
+    // Build clip selector buttons for multi-cam
+    let clipSelectorHtml = '';
+    if (clips.length > 1) {
+      clipSelectorHtml = `
+        <div class="flex flex-wrap gap-2">
+          ${clips.map((c, idx) => `
+            <button class="clip-btn px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${idx === 0 ? 'bg-brand/20 text-brand border border-brand/30' : 'bg-gray-800 text-gray-300 border border-gray-700 hover:bg-gray-700'}"
+                    data-url="${escapeHtml(c.url)}">
+              ${escapeHtml((c.camera || 'Camera').replace(/_/g, ' ').replace(/\b\w/g, ch => ch.toUpperCase()))}
+            </button>
+          `).join('')}
+        </div>`;
+    }
+
+    // Sidebar: filter buttons — only rebuild when Test Events visibility changes
+    const showTestEvents = ev.consolidated;
+    if (sidebarExtras) {
+      if (lastShowTestEvents !== showTestEvents) {
+        sidebarExtras.innerHTML = buildSidebarFilterButtonsHtml(showTestEvents);
+        lastShowTestEvents = showTestEvents;
+      }
+      updateFilterButtons();
+    }
+
+    // Build action bar for under the video (order: Timeline, Delete, Keep, Download)
+    const actionBarItems = [];
+    actionBarItems.push(`<a href="/events/${escapeHtml(eventPath)}/timeline" class="flex-1 min-w-0 inline-flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm font-medium bg-gray-800 text-gray-300 border border-gray-700 hover:bg-gray-700 transition-all"><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>Timeline</a>`);
+    actionBarItems.push(`<button type="button" id="actionDelete" class="flex-1 min-w-0 inline-flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm font-medium bg-red-900/50 text-red-400 border border-red-700/50 hover:bg-red-900/70 transition-all"><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>Delete</button>`);
+    if (!ev.saved) {
+      actionBarItems.push(`<button type="button" id="actionKeep" class="flex-1 min-w-0 inline-flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm font-medium bg-blue-900/50 text-blue-400 border border-blue-700/50 hover:bg-blue-900/70 transition-all"><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z"></path></svg>Keep</button>`);
+    }
+    if (ev.has_clip) {
+      actionBarItems.push(`<a id="actionDownload" href="${escapeHtml(primaryClipUrl)}" download class="flex-1 min-w-0 inline-flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm font-medium bg-green-900/50 text-green-400 border border-green-700/50 hover:bg-green-900/70 transition-all"><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path></svg>Download</a>`);
+    }
+    const actionBarHtml = `<div class="flex flex-wrap gap-2 mb-4">${actionBarItems.join('')}</div>`;
+
     mainContent.innerHTML = `
-      <div class="video-container">
+      <!-- Video Player -->
+      <div class="bg-black rounded-xl overflow-hidden shadow-2xl mb-4">
         ${ev.has_clip
-          ? `<video id="videoPlayer" controls preload="metadata"
+          ? `<video id="videoPlayer" controls preload="metadata" class="w-full"
                poster="${ev.has_snapshot ? ev.hosted_snapshot : ''}"
                src="${escapeHtml(primaryClipUrl)}">
                Your browser does not support the video tag.
-             </video>
-             ${clips.length > 1 ? '' : ''}`
+             </video>`
           : ev.has_snapshot
-            ? `<img src="${ev.hosted_snapshot}" alt="Snapshot">`
-            : `<div class="no-video">No media available</div>`
+            ? `<img src="${ev.hosted_snapshot}" alt="Snapshot" class="w-full">`
+            : `<div class="flex items-center justify-center min-h-[240px] text-gray-500 text-lg">No media available</div>`
         }
       </div>
 
-      <div class="nav-bar">
-        <div class="nav-buttons" style="align-items: center;">
-          <button id="btnNewer" ${currentIndex <= 0 ? 'disabled' : ''}>&#9664; Newer</button>
-          <span class="event-counter">${currentIndex + 1} / ${events.length}${ev.viewed ? '<span class="viewed-badge">Reviewed</span>' : ''}${ev.ongoing ? '<span class="ongoing-badge">Event ongoing</span>' : ''}</span>
-          <button id="btnOlder" ${currentIndex >= events.length - 1 ? 'disabled' : ''}>Older &#9654;</button>
+      <!-- Navigation & Clip Selector -->
+      <div class="flex flex-col lg:flex-row gap-4 items-start lg:items-center justify-between mb-4">
+        <!-- Navigation -->
+        <div class="flex items-center gap-3">
+          <button id="btnNewer" ${currentIndex <= 0 ? 'disabled' : ''} class="px-4 py-2 rounded-lg text-sm font-medium bg-gray-800 text-gray-300 border border-gray-700 hover:bg-gray-700 transition-all disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"></path></svg>
+            Newer
+          </button>
+          <span class="text-gray-400 text-sm font-medium">
+            ${currentIndex + 1} / ${events.length}
+            ${ev.viewed ? '<span class="ml-2 px-2 py-0.5 rounded bg-green-900/50 text-green-400 text-xs">Reviewed</span>' : ''}
+            ${ev.ongoing ? '<span class="ml-2 px-2 py-0.5 rounded bg-green-900/30 text-green-400 text-xs animate-pulse">Event ongoing</span>' : ''}
+          </span>
+          <button id="btnOlder" ${currentIndex >= events.length - 1 ? 'disabled' : ''} class="px-4 py-2 rounded-lg text-sm font-medium bg-gray-800 text-gray-300 border border-gray-700 hover:bg-gray-700 transition-all disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1">
+            Older
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path></svg>
+          </button>
         </div>
-        <div style="flex: 1; display: flex; justify-content: center;">
-          ${!ev.viewed ? `<button class="btn-success" id="btnMarkReviewed">Click to Review</button>` : ''}
-        </div>
-        <div class="nav-buttons">
-          ${clips.length > 1 ? `<select id="clipSelectNav">${clips.map((c) =>
-            `<option value="${escapeHtml(c.url)}" ${c.url === primaryClipUrl ? 'selected' : ''}>${escapeHtml((c.camera || 'Camera').replace(/_/g, ' ').replace(/\b\w/g, ch => ch.toUpperCase()))}</option>`
-          ).join('')}</select>` : ''}
-          <div class="dropdown-wrapper" style="position:relative;display:inline-block;">
-            <button id="btnActionsDropdown">Actions &#9662;</button>
-            <div id="actionsMenu" class="actions-menu" style="display:none;position:absolute;right:0;top:100%;margin-top:4px;background:#16213e;border:1px solid #0f3460;border-radius:6px;min-width:140px;z-index:50;box-shadow:0 4px 12px rgba(0,0,0,0.3);">
-              ${ev.has_clip ? `<a id="actionDownload" href="${escapeHtml(primaryClipUrl)}" download style="display:block;padding:8px 12px;color:#e0e0e0;text-decoration:none;font-size:0.85rem;">Download</a>` : ''}
-              ${!ev.saved ? `<button type="button" id="actionKeep" style="display:block;width:100%;text-align:left;padding:8px 12px;background:transparent;border:none;color:#e0e0e0;cursor:pointer;font-size:0.85rem;">Keep</button>` : ''}
-              <a href="/events/${escapeHtml(eventPath)}/timeline" style="display:block;padding:8px 12px;color:#e0e0e0;text-decoration:none;font-size:0.85rem;">View Timeline</a>
-              ${ev.consolidated ? `<a id="actionTest" href="/test-multi-cam?subdir=${encodeURIComponent(ev.saved && ev.camera === 'events' ? 'saved/events/' + subdir : subdir)}" target="_blank" rel="noopener" style="display:block;padding:8px 12px;color:#e0e0e0;text-decoration:none;font-size:0.85rem;">TEST</a>` : ''}
-              <button type="button" id="actionDelete" class="btn-danger" style="display:block;width:100%;text-align:left;padding:8px 12px;border:none;cursor:pointer;font-size:0.85rem;border-radius:0;">Delete</button>
-            </div>
-          </div>
-        </div>
+
+        <!-- Clip Selector -->
+        ${clipSelectorHtml}
       </div>
 
-      <div class="info-card">
-        <h2>AI Analysis${threatBadge}</h2>
+      <!-- Mark Reviewed Bar: Click to Review (left 4/5) + Mark All Reviewed (right 1/5) -->
+      ${!ev.viewed ? `
+        <div class="flex gap-2 mb-4">
+          <button id="btnMarkReviewed" class="flex-[4_4_80%] min-w-0 px-4 py-3 rounded-lg text-sm font-medium bg-green-900/50 text-green-400 border border-green-700/50 hover:bg-green-900/70 transition-all flex items-center justify-center gap-2">
+            <svg class="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>
+            <span class="truncate">Click to Review</span>
+          </button>
+          ${(currentFilter !== 'saved' && currentFilter !== 'test_events') ? `
+          <button id="btnMarkAll" class="flex-[1_1_20%] min-w-0 px-4 py-3 rounded-lg text-sm font-medium bg-amber-900/50 text-amber-400 border border-amber-700/50 hover:bg-amber-900/70 transition-all flex items-center justify-center gap-2">
+            <svg class="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>
+            <span class="truncate">Mark All Reviewed</span>
+          </button>
+          ` : '<div class="flex-[1_1_20%] flex-shrink-0"></div>'}
+        </div>
+      ` : ''}
+
+      ${actionBarHtml}
+
+      <!-- AI Analysis Card -->
+      <div class="bg-cardbg border border-cardborder rounded-xl p-5 mb-4 shadow-lg">
+        <h2 class="text-lg font-semibold text-brand mb-3 flex items-center">
+          <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"></path></svg>
+          AI Analysis
+          ${getThreatBadge(threatLevel)}
+        </h2>
         <div id="aiAnalysisContainer"></div>
       </div>
 
-      <div class="info-card">
-        <h2>Event Details</h2>
-        <div class="meta-grid">
-          <span class="meta-label">Date</span>
-          <span class="meta-value">${escapeHtml(dateStr)}</span>
-          <span class="meta-label">Start</span>
-          <span class="meta-value">${escapeHtml(startTimeStr)}</span>
-          <span class="meta-label">End</span>
-          <span class="meta-value">${escapeHtml(endTimeStr)}</span>
-          <span class="meta-label">Event length</span>
-          <span class="meta-value">${escapeHtml(durationStr)}</span>
-          <span class="meta-label">Cameras & Zones</span>
-          <span class="meta-value cameras-zones">${((ev.cameras_with_zones && ev.cameras_with_zones.length) ? ev.cameras_with_zones : [{camera: ev.camera, zones: []}])
-            .map(c => {
-              const cam = escapeHtml((c.camera || '').replace(/_/g, ' ').replace(/\\b\\w/g, ch => ch.toUpperCase()));
-              const zones = (c.zones && c.zones.length) ? c.zones.join(', ') : 'No Zones Indicated';
-              return cam + ': ' + escapeHtml(zones);
-            })
-            .join('<br>')}</span>
-          <span class="meta-label">Label</span>
-          <span class="meta-value">${escapeHtml(labelDisplay)}</span>
-          ${ev.severity ? `<span class="meta-label">Severity</span><span class="meta-value">${escapeHtml(ev.severity)}</span>` : ''}
-          ${threatLevel > 0 ? `<span class="meta-label">Threat Level</span><span class="meta-value"><span class="threat-badge threat-${threatLevel}">${threatLabels[threatLevel]}</span></span>` : ''}
-          <span class="meta-label">Event ID</span>
-          <span class="meta-value" style="font-size:0.8rem;color:#888;">${escapeHtml(ev.event_id)}</span>
+      <!-- Event Details Card -->
+      <div class="bg-cardbg border border-cardborder rounded-xl p-5 shadow-lg">
+        <h2 class="text-lg font-semibold text-brand mb-4 flex items-center">
+          <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+          Event Details
+        </h2>
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-3 text-sm">
+          <div class="flex justify-between md:block">
+            <span class="text-gray-500 font-medium">Date</span>
+            <span class="text-gray-200">${escapeHtml(dateStr)}</span>
+          </div>
+          <div class="flex justify-between md:block">
+            <span class="text-gray-500 font-medium">Start</span>
+            <span class="text-gray-200">${escapeHtml(startTimeStr)}</span>
+          </div>
+          <div class="flex justify-between md:block">
+            <span class="text-gray-500 font-medium">End</span>
+            <span class="text-gray-200">${escapeHtml(endTimeStr)}</span>
+          </div>
+          <div class="flex justify-between md:block">
+            <span class="text-gray-500 font-medium">Duration</span>
+            <span class="text-gray-200">${escapeHtml(durationStr)}</span>
+          </div>
+          <div class="col-span-1 md:col-span-2">
+            <span class="text-gray-500 font-medium block mb-1">Cameras & Zones</span>
+            <div class="text-gray-200">
+              ${((ev.cameras_with_zones && ev.cameras_with_zones.length) ? ev.cameras_with_zones : [{camera: ev.camera, zones: []}])
+                .map(c => {
+                  const cam = escapeHtml((c.camera || '').replace(/_/g, ' ').replace(/\b\w/g, ch => ch.toUpperCase()));
+                  const zones = (c.zones && c.zones.length) ? c.zones.join(', ') : 'No Zones Indicated';
+                  return `<div class="mb-1"><span class="text-gray-300">${cam}:</span> <span class="text-gray-400">${escapeHtml(zones)}</span></div>`;
+                }).join('')}
+            </div>
+          </div>
+          <div class="flex justify-between md:block">
+            <span class="text-gray-500 font-medium">Label</span>
+            <span class="text-gray-200">${escapeHtml(labelDisplay)}</span>
+          </div>
+          ${ev.severity ? `
+            <div class="flex justify-between md:block">
+              <span class="text-gray-500 font-medium">Severity</span>
+              <span class="text-gray-200">${escapeHtml(ev.severity)}</span>
+            </div>
+          ` : ''}
+          ${threatLevel > 0 ? `
+            <div class="flex justify-between md:block">
+              <span class="text-gray-500 font-medium">Threat Level</span>
+              <span>${getThreatBadge(threatLevel)}</span>
+            </div>
+          ` : ''}
+          <div class="col-span-1 md:col-span-2 pt-2 border-t border-gray-700">
+            <span class="text-gray-500 font-medium text-xs">Event ID</span>
+            <span class="text-gray-500 text-xs ml-2 font-mono">${escapeHtml(ev.event_id)}</span>
+          </div>
         </div>
       </div>`;
 
@@ -604,44 +474,42 @@
 
     if (btnNewer) btnNewer.addEventListener('click', () => { if (currentIndex > 0) { currentIndex--; render(); } });
     if (btnOlder) btnOlder.addEventListener('click', () => { if (currentIndex < events.length - 1) { currentIndex++; render(); } });
-    const btnActionsDropdown = document.getElementById('btnActionsDropdown');
-    const actionsMenu = document.getElementById('actionsMenu');
-    if (btnActionsDropdown && actionsMenu) {
-      btnActionsDropdown.addEventListener('click', (e) => {
-        e.stopPropagation();
-        const open = actionsMenu.style.display !== 'block';
-        actionsMenu.style.display = open ? 'block' : 'none';
-        if (open) {
-          const closeOnce = () => { actionsMenu.style.display = 'none'; document.removeEventListener('click', closeOnce); };
-          setTimeout(() => document.addEventListener('click', closeOnce), 0);
-        }
-      });
-    }
-    const actionKeep = document.getElementById('actionKeep');
-    if (actionKeep) actionKeep.addEventListener('click', () => { keepEvent(ev); if (actionsMenu) actionsMenu.style.display = 'none'; });
-    const actionDelete = document.getElementById('actionDelete');
-    if (actionDelete) actionDelete.addEventListener('click', () => { deleteEvent(eventPath); if (actionsMenu) actionsMenu.style.display = 'none'; });
-    if (btnMarkReviewed) btnMarkReviewed.addEventListener('click', () => markViewed(eventPath));
 
-    // Track video playing state for auto-refresh
+    // Bind clip selector buttons
+    const clipButtons = document.querySelectorAll('.clip-btn');
+    clipButtons.forEach(btn => {
+      btn.addEventListener('click', () => {
+        const url = btn.dataset.url;
+        if (video) video.src = url;
+        const dl = document.getElementById('actionDownload');
+        if (dl) dl.href = url;
+        // Update active state
+        clipButtons.forEach(b => {
+          b.classList.remove('bg-brand/20', 'text-brand', 'border-brand/30');
+          b.classList.add('bg-gray-800', 'text-gray-300', 'border-gray-700');
+        });
+        btn.classList.remove('bg-gray-800', 'text-gray-300', 'border-gray-700');
+        btn.classList.add('bg-brand/20', 'text-brand', 'border-brand/30');
+      });
+    });
+
+    // Bind action buttons
+    const actionKeep = document.getElementById('actionKeep');
+    if (actionKeep) actionKeep.addEventListener('click', () => keepEvent(ev));
+    const actionDelete = document.getElementById('actionDelete');
+    if (actionDelete) actionDelete.addEventListener('click', () => deleteEvent(eventPath));
+    if (btnMarkReviewed) btnMarkReviewed.addEventListener('click', () => markViewed(eventPath));
+    const btnMarkAll = document.getElementById('btnMarkAll');
+    if (btnMarkAll) btnMarkAll.addEventListener('click', markAllViewed);
+
+    // Track video playing state
     if (video) {
       video.addEventListener('play', () => { videoPlaying = true; });
       video.addEventListener('pause', () => { videoPlaying = false; });
       video.addEventListener('ended', () => { videoPlaying = false; });
     }
 
-    // Clip selector (in nav): switch video src and download link when user picks another camera
-    const clipSelectNav = document.getElementById('clipSelectNav');
-    if (clipSelectNav) {
-      clipSelectNav.addEventListener('change', () => {
-        const url = clipSelectNav.value;
-        if (video) video.src = url;
-        const dl = document.getElementById('actionDownload');
-        if (dl) dl.href = url;
-      });
-    }
-
-    // Populate AI Analysis tile (placeholder, title, scene)
+    // Populate AI Analysis
     const aiContainer = document.getElementById('aiAnalysisContainer');
     if (aiContainer) {
       aiContainer.innerHTML = renderAiAnalysisBlocks(ev);
@@ -656,7 +524,6 @@
     return div.innerHTML;
   }
 
-  /** Format seconds as human-readable duration (e.g. "2m 30s", "1h 5m 0s"). Returns "—" if invalid. */
   function formatDuration(sec) {
     if (sec == null || typeof sec !== 'number' || sec < 0) return '—';
     const m = Math.floor(sec / 60);
@@ -668,7 +535,6 @@
     return `${s}s`;
   }
 
-  // --- Auto-refresh ---
   function startAutoRefresh() {
     if (refreshTimer) clearInterval(refreshTimer);
     refreshTimer = setInterval(() => {
@@ -679,33 +545,19 @@
   }
 
   // --- Init ---
-  // Honor ?filter= from URL (all, saved, test_events, etc.)
   const urlParams = new URLSearchParams(window.location.search);
   const urlFilter = urlParams.get('filter');
   const urlCamera = urlParams.get('camera');
   const urlSubdir = urlParams.get('subdir');
   if (urlFilter && ['all', 'reviewed', 'unreviewed', 'saved', 'test_events'].includes(urlFilter)) {
-    filterSelect.value = urlFilter;
+    currentFilter = urlFilter;
+    updateFilterButtons();
   }
-  // Only set camera from URL when NOT coming back from timeline (no subdir) - preserves event count
-  if (urlCamera && !urlSubdir) {
-    cameraSelect.value = urlCamera;
-  }
-
-  cameraSelect.addEventListener('change', () => fetchEvents());
-  filterSelect.addEventListener('change', () => {
-    fetchEvents();
-    startAutoRefresh();
-  });
-  btnMarkAll.addEventListener('click', markAllViewed);
 
   (async function init() {
-    await fetchCameras();
-    if (urlCamera && !urlSubdir) cameraSelect.value = urlCamera;
     await fetchEvents({ forceAll: !!urlSubdir });
     startAutoRefresh();
   })();
 })();
 </script>
-</body>
-</html>
+{% endblock %}

@@ -1,163 +1,74 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Daily Report - Frigate Event Buffer</title>
-<style>
-  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+{% extends "base.html" %}
 
-  body {
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-    background: #1a1a2e;
-    color: #e0e0e0;
-    min-height: 100vh;
-  }
+{% block title %}Daily Report - Frigate Event Buffer{% endblock %}
 
-  .header {
-    background: #16213e;
-    padding: 12px 16px;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    border-bottom: 1px solid #0f3460;
-    flex-wrap: wrap;
-    gap: 8px;
-  }
+{% block head %}
+{% endblock %}
 
-  .header h1 {
-    font-size: 1.1rem;
-    color: #e94560;
-    white-space: nowrap;
-  }
+{% block content %}
+<!-- Top Bar -->
+<div class="flex flex-col lg:flex-row gap-4 items-start lg:items-center justify-between mb-6">
+  <h1 class="text-2xl font-bold text-white flex items-center gap-3">
+    <svg class="w-7 h-7 text-brand" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
+    Daily Report
+  </h1>
+</div>
 
-  .header-controls {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    flex-wrap: wrap;
-  }
+<!-- Controls Toolbar -->
+<div class="bg-cardbg border border-cardborder rounded-xl p-4 mb-6 shadow-lg">
+  <div class="flex flex-col lg:flex-row gap-4 items-start lg:items-center">
+    <!-- Date Selector -->
+    <div class="flex items-center gap-3">
+      <label for="dateSelect" class="text-gray-400 text-sm font-medium whitespace-nowrap">Select date:</label>
+      <select id="dateSelect" class="bg-gray-800 border border-gray-700 text-gray-200 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-brand focus:border-transparent min-w-[200px]">
+        <option value="">Loading...</option>
+      </select>
+    </div>
 
-  select, button {
-    background: #0f3460;
-    color: #e0e0e0;
-    border: 1px solid #533483;
-    border-radius: 6px;
-    padding: 6px 10px;
-    font-size: 0.85rem;
-    cursor: pointer;
-  }
-
-  select:focus, button:focus { outline: 2px solid #e94560; }
-
-  button:hover { background: #533483; }
-
-  a { text-decoration: none; color: inherit; }
-
-  .main {
-    max-width: 900px;
-    margin: 0 auto;
-    padding: 16px;
-  }
-
-  .review-controls {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    margin-bottom: 16px;
-    flex-wrap: wrap;
-  }
-
-  .review-controls label { font-size: 0.9rem; color: #888; }
-
-  .btn-fetch {
-    background: #1a4a1a;
-    border-color: #2d7a2d;
-  }
-  .btn-fetch:hover { background: #2d7a2d; }
-
-  .btn-generate {
-    background: #1a3a4a;
-    border-color: #2d5a7a;
-  }
-  .btn-generate:hover { background: #2d5a7a; }
-
-  .loading {
-    text-align: center;
-    padding: 40px;
-    color: #888;
-  }
-
-  .error {
-    color: #e94560;
-    padding: 16px;
-    background: #2d1a1a;
-    border-radius: 8px;
-    margin-bottom: 16px;
-  }
-
-  .review-content {
-    background: #16213e;
-    border: 1px solid #0f3460;
-    border-radius: 8px;
-    padding: 20px;
-  }
-
-  .review-content h1, .review-content h2, .review-content h3 {
-    color: #e94560;
-    margin: 16px 0 8px 0;
-  }
-  .review-content h1 { font-size: 1.2rem; }
-  .review-content h2 { font-size: 1.05rem; }
-  .review-content h3 { font-size: 1rem; }
-  .review-content h1:first-child, .review-content h2:first-child { margin-top: 0; }
-
-  .review-content p { margin: 8px 0; line-height: 1.6; color: #ccc; }
-  .review-content ul, .review-content ol { margin: 8px 0 8px 20px; color: #ccc; }
-  .review-content li { margin: 4px 0; }
-  .review-content strong { color: #fff; }
-  .review-content hr { border-color: #0f3460; margin: 16px 0; }
-
-  .review-content blockquote, .review-content pre {
-    background: #0f3460;
-    padding: 12px;
-    border-radius: 6px;
-    margin: 12px 0;
-    overflow-x: auto;
-  }
-
-  .badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 0.8rem; margin-right: 6px; }
-  .badge-review { background: #4a3a1a; color: #deb87d; }
-  .badge-concern { background: #5c1a1a; color: #ff6b6b; }
-</style>
-<script src="/static/marked.min.js"></script>
-<script src="/static/purify.min.js"></script>
-</head>
-<body>
-
-<div class="header">
-  <h1>Daily Report</h1>
-  <div class="header-controls">
-    <a href="/player"><button>Back to Events</button></a>
+    <!-- Action Buttons -->
+    <div class="flex flex-wrap gap-2">
+      <button id="btnLoad" class="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-brand/20 text-brand border border-brand/30 hover:bg-brand/30 transition-all">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L5 8m4-4v12"></path></svg>
+        Load Report
+      </button>
+      <button id="btnCurrentDay" class="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-green-900/50 text-green-400 border border-green-700/50 hover:bg-green-900/70 transition-all">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg>
+        Today's Report
+      </button>
+      <button id="btnGenerate" class="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-blue-900/50 text-blue-400 border border-blue-700/50 hover:bg-blue-900/70 transition-all">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19.428 15.428a2 2 0 00-1.022-.547l-2.387-.477a6 6 0 00-3.86.517l-.318.158a6 6 0 01-3.86.517L6.05 15.21a2 2 0 00-1.806.547M8 4h8l-1 1v5.172a2 2 0 00.586 1.414l5 5c1.26 1.26.367 3.414-1.415 3.414H4.828c-1.782 0-2.674-2.154-1.414-3.414l5-5A2 2 0 009 10.172V5L8 4z"></path></svg>
+        Generate Today's Report
+      </button>
+    </div>
   </div>
 </div>
 
-<div class="main">
-  <div class="review-controls">
-    <label for="dateSelect">Select date:</label>
-    <select id="dateSelect">
-      <option value="">Loading...</option>
-    </select>
-    <button id="btnLoad">Load Report</button>
-    <button class="btn-fetch" id="btnCurrentDay">Today's Report</button>
-    <button class="btn-generate" id="btnGenerate">Generate Today's Report</button>
+<!-- Error Message -->
+<div id="errorMsg" class="hidden mb-6 p-4 bg-red-900/30 border border-red-700/50 rounded-lg text-red-400">
+  <div class="flex items-center gap-2">
+    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+    <span id="errorText"></span>
   </div>
-
-  <div id="errorMsg" class="error" style="display:none;"></div>
-  <div id="loading" class="loading" style="display:none;">Loading report...</div>
-  <div id="reviewContent" class="review-content"></div>
 </div>
 
+<!-- Loading State -->
+<div id="loading" class="hidden flex items-center justify-center py-20">
+  <div class="animate-pulse flex items-center gap-3 text-gray-500">
+    <svg class="w-6 h-6 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+    <span class="text-lg" id="loadingText">Loading report...</span>
+  </div>
+</div>
+
+<!-- Report Content -->
+<div id="reviewContent" class="bg-cardbg border border-cardborder rounded-xl p-6 shadow-lg text-gray-200">
+  <div class="text-center py-20 text-gray-500">
+    <svg class="w-16 h-16 mx-auto mb-4 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
+    <p class="text-lg">Select a date and click "Load Report" to view a daily report.</p>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
 <script>
 (function() {
   'use strict';
@@ -167,21 +78,43 @@
   const btnCurrentDay = document.getElementById('btnCurrentDay');
   const btnGenerate = document.getElementById('btnGenerate');
   const errorMsg = document.getElementById('errorMsg');
+  const errorText = document.getElementById('errorText');
   const loading = document.getElementById('loading');
+  const loadingText = document.getElementById('loadingText');
   const reviewContent = document.getElementById('reviewContent');
+  let hasLoadedReportOnce = false;
 
   function hideError() {
-    errorMsg.style.display = 'none';
+    errorMsg.classList.add('hidden');
   }
 
   function showError(msg) {
-    errorMsg.textContent = msg;
-    errorMsg.style.display = 'block';
+    errorText.textContent = msg;
+    errorMsg.classList.remove('hidden');
   }
 
   function setLoading(on, text) {
-    loading.style.display = on ? 'block' : 'none';
-    if (on && text) loading.textContent = text;
+    if (on) {
+      loading.classList.remove('hidden');
+      reviewContent.classList.add('hidden');
+      if (text) loadingText.textContent = text;
+    } else {
+      loading.classList.add('hidden');
+      reviewContent.classList.remove('hidden');
+    }
+  }
+
+  function showRefreshToast() {
+    let toast = document.getElementById('dailyReviewRefreshToast');
+    if (!toast) {
+      toast = document.createElement('div');
+      toast.id = 'dailyReviewRefreshToast';
+      toast.className = 'fixed bottom-4 right-4 z-50 px-4 py-2 rounded-lg bg-amber-900/90 text-amber-200 text-sm border border-amber-700/50 shadow-lg';
+      document.body.appendChild(toast);
+    }
+    toast.textContent = 'Could not load report. Showing previous content.';
+    toast.classList.remove('hidden');
+    setTimeout(() => toast.classList.add('hidden'), 4000);
   }
 
   function formatDateLabel(d) {
@@ -240,9 +173,14 @@
         throw new Error(data.error || 'Failed to load report');
       }
       renderReview(data);
+      hasLoadedReportOnce = true;
     } catch (e) {
-      showError(e.message || 'Failed to load report.');
-      reviewContent.innerHTML = '';
+      if (hasLoadedReportOnce) {
+        showRefreshToast();
+      } else {
+        showError(e.message || 'Failed to load report.');
+        reviewContent.innerHTML = '';
+      }
     } finally {
       setLoading(false);
     }
@@ -258,6 +196,7 @@
         throw new Error(data.error || 'No report for today yet');
       }
       renderReview(data);
+      hasLoadedReportOnce = true;
       await loadDates();
       const today = new Date().toISOString().slice(0, 10);
       dateSelect.value = today;
@@ -299,7 +238,8 @@
       html = summary.replace(/\n/g, '<br>').replace(/^# (.*)$/gm, '<h1>$1</h1>')
         .replace(/^## (.*)$/gm, '<h2>$1</h2>').replace(/^### (.*)$/gm, '<h3>$1</h3>');
     }
-    reviewContent.innerHTML = '<div class="markdown-content">' + html + '</div>';
+    // Apply Tailwind Typography with dark theme to match rest of app
+    reviewContent.innerHTML = '<div class="prose prose-invert prose-lg max-w-none prose-headings:text-brand prose-p:text-gray-300 prose-li:text-gray-300 prose-strong:text-white prose-a:text-brand prose-blockquote:border-brand/50 prose-blockquote:bg-gray-800/50 prose-pre:bg-gray-900 prose-code:text-gray-300">' + html + '</div>';
   }
 
   btnLoad.addEventListener('click', () => loadReview(dateSelect.value));
@@ -313,5 +253,4 @@
   }).catch(() => setLoading(false));
 })();
 </script>
-</body>
-</html>
+{% endblock %}

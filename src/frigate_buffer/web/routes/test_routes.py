@@ -15,6 +15,7 @@ from frigate_buffer.event_test.event_test_orchestrator import (
     run_test_pipeline_from_folder,
 )
 from frigate_buffer.logging_utils import set_suppress_review_debug_logs
+from frigate_buffer.services.query import read_timeline_merged, resolve_clip_in_folder
 from frigate_buffer.web.path_helpers import resolve_under_storage
 
 
@@ -48,6 +49,74 @@ def create_bp(orchestrator):
             return jsonify({"test_run_id": test_run_id})
         except ValueError as e:
             return jsonify({"error": str(e)}), 400
+
+    @bp.route("/event-data")
+    def test_multi_cam_event_data():
+        """
+        Return timeline and event_files for a test run (for test page collapsible bars).
+        Resolves events/<test_run>, uses read_timeline_merged and same event_files scan as api.event_timeline.
+        """
+        test_run = request.args.get("test_run", "").strip()
+        if not test_run or not re.match(r"^test\d+$", test_run):
+            return jsonify({"error": "Invalid test_run"}), 400
+        folder_path = resolve_under_storage(storage_path, "events", test_run)
+        if folder_path is None or not os.path.isdir(folder_path):
+            return jsonify({"error": "Test run folder not found"}), 404
+        try:
+            timeline_data = read_timeline_merged(folder_path)
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
+        event_files: list[dict[str, str]] = []
+        try:
+            for f in os.listdir(folder_path):
+                fp = os.path.join(folder_path, f)
+                if os.path.isfile(fp):
+                    event_files.append({"path": f, "url": f"/files/events/{test_run}/{f}"})
+            for sub in os.listdir(folder_path):
+                sub_fp = os.path.join(folder_path, sub)
+                if os.path.isdir(sub_fp) and not sub.startswith("."):
+                    clip_basename = resolve_clip_in_folder(sub_fp)
+                    if clip_basename:
+                        event_files.append({"path": f"{sub}/{clip_basename}", "url": f"/files/events/{test_run}/{sub}/{clip_basename}"})
+                    for sf in (
+                        "snapshot.jpg",
+                        "metadata.json",
+                        "summary.txt",
+                        "review_summary.md",
+                        "ai_analysis_debug.zip",
+                    ):
+                        if os.path.isfile(os.path.join(sub_fp, sf)):
+                            event_files.append({"path": f"{sub}/{sf}", "url": f"/files/events/{test_run}/{sub}/{sf}"})
+            event_files.sort(key=lambda x: x["path"])
+        except OSError:
+            pass
+        return jsonify({"timeline": timeline_data, "event_files": event_files})
+
+    @bp.route("/ai-payload")
+    def test_multi_cam_ai_payload():
+        """Return prompt text and image URLs for the test run (for inline AI request UI)."""
+        test_run = request.args.get("test_run", "").strip()
+        if not test_run or not re.match(r"^test\d+$", test_run):
+            return jsonify({"error": "Invalid test_run"}), 400
+        test_path = resolve_under_storage(storage_path, "events", test_run)
+        if test_path is None or not os.path.isdir(test_path):
+            return jsonify({"error": "Test run folder not found"}), 404
+        prompt_path = os.path.join(test_path, "system_prompt.txt")
+        if not os.path.isfile(prompt_path):
+            return jsonify({"error": "system_prompt.txt not found"}), 404
+        try:
+            with open(prompt_path, "r", encoding="utf-8") as f:
+                prompt = f.read()
+        except OSError as e:
+            return jsonify({"error": str(e)}), 500
+        frames_dir = os.path.join(test_path, "ai_frame_analysis", "frames")
+        image_urls: list[str] = []
+        if os.path.isdir(frames_dir):
+            base = f"/files/events/{test_run}/ai_frame_analysis/frames"
+            for name in sorted(os.listdir(frames_dir)):
+                if name.startswith("frame_") and name.endswith(".jpg"):
+                    image_urls.append(f"{base}/{name}")
+        return jsonify({"prompt": prompt, "image_urls": image_urls})
 
     @bp.route("/stream")
     def test_multi_cam_stream():

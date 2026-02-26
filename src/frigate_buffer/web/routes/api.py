@@ -369,13 +369,34 @@ def create_bp(orchestrator):
                             if ts >= month_start:
                                 events_month += 1
                             if most_recent is None or ts > most_recent["timestamp"]:
+                                first_camera_in_ce = event_dir
+                                if camera_dir == "events":
+                                    try:
+                                        with os.scandir(event_entry.path) as it_cam:
+                                            for cam_entry in it_cam:
+                                                if cam_entry.is_dir() and not cam_entry.name.startswith("."):
+                                                    first_camera_in_ce = cam_entry.name
+                                                    break
+                                    except OSError:
+                                        pass
                                 most_recent = {
                                     "event_id": parts[1] if len(parts) > 1 else event_dir,
-                                    "camera": camera_dir,
+                                    "camera": camera_dir if camera_dir != "events" else first_camera_in_ce,
                                     "subdir": event_dir,
                                     "timestamp": ts,
                                 }
-                    by_camera[camera_dir] = count
+                            if camera_dir == "events":
+                                try:
+                                    with os.scandir(event_entry.path) as it_cam:
+                                        for cam_entry in it_cam:
+                                            if not cam_entry.is_dir() or cam_entry.name.startswith("."):
+                                                continue
+                                            cam_name = cam_entry.name
+                                            by_camera[cam_name] = by_camera.get(cam_name, 0) + 1
+                                except OSError:
+                                    pass
+                    if camera_dir != "events":
+                        by_camera[camera_dir] = count
         except Exception as e:
             logger.error("Error scanning events for stats: %s", e)
         storage_raw = orchestrator.get_storage_stats()

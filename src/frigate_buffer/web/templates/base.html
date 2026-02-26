@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}Frigate Event Buffer{% endblock %}</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.tailwindcss.com?plugins=forms,typography,aspect-ratio,line-clamp"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            brand: {
+              DEFAULT: '#e94560',
+              hover: '#d6344e'
+            },
+            navbg: '#16213e',
+            navborder: '#0f3460',
+            mainbg: '#1a1a2e',
+            cardbg: '#16213e',
+            cardborder: '#0f3460'
+          }
+        }
+      }
+    }
+  </script>
+  <style type="text/tailwindcss">
+    @layer utilities {
+      .scrollbar-hide::-webkit-scrollbar {
+        display: none;
+      }
+      .scrollbar-hide {
+        -ms-overflow-style: none;
+        scrollbar-width: none;
+      }
+    }
+  </style>
+  {% block head %}{% endblock %}
+  <script src="/static/marked.min.js"></script>
+  <script src="/static/purify.min.js"></script>
+</head>
+<body class="bg-mainbg text-gray-200 font-sans min-h-screen flex flex-col md:flex-row">
+
+  <!-- Mobile header with hamburger -->
+  <div class="md:hidden flex items-center justify-between bg-navbg border-b border-navborder p-4 sticky top-0 z-40">
+    <div class="text-brand font-bold text-lg flex items-start gap-2 leading-tight text-left">
+      <svg class="w-6 h-6 flex-shrink-0 mt-0.5" fill="currentColor" viewBox="0 0 20 20"><path d="M2 6a2 2 0 012-2h12a2 2 0 012 2v8a2 2 0 01-2 2H4a2 2 0 01-2-2V6zM14.553 7.106A1 1 0 0014 8v4a1 1 0 00.553.894l2 1A1 1 0 0018 13V7a1 1 0 00-1.447-.894l-2 1z"></path></svg>
+      <span class="flex flex-col text-left">
+        <span>Frigate Event</span>
+        <span>Viewer</span>
+      </span>
+    </div>
+    <button id="mobileMenuBtn" type="button" class="text-gray-300 hover:text-white focus:outline-none p-1" aria-label="Toggle menu">
+      <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16m-7 6h7"></path></svg>
+    </button>
+  </div>
+
+  <!-- Sidebar -->
+  <aside id="sidebar" class="bg-navbg border-r border-navborder w-64 flex-shrink-0 flex flex-col transition-transform duration-300 ease-in-out fixed md:sticky top-0 left-0 h-screen z-50" style="transform: translateX(-100%);" data-open="false">
+    <div class="p-4 border-b border-navborder flex items-center justify-between">
+      <div class="text-brand font-bold text-xl flex items-start gap-2 leading-tight text-left min-w-0">
+        <svg class="w-6 h-6 flex-shrink-0 mt-0.5" fill="currentColor" viewBox="0 0 20 20"><path d="M2 6a2 2 0 012-2h12a2 2 0 012 2v8a2 2 0 01-2 2H4a2 2 0 01-2-2V6zM14.553 7.106A1 1 0 0014 8v4a1 1 0 00.553.894l2 1A1 1 0 0018 13V7a1 1 0 00-1.447-.894l-2 1z"></path></svg>
+        <span class="hidden md:inline flex flex-col text-left">
+          <span>Frigate Event</span>
+          <span>Viewer</span>
+        </span>
+        <span class="md:hidden flex flex-col text-left">
+          <span>Frigate Event</span>
+          <span>Viewer</span>
+        </span>
+      </div>
+      <div class="flex items-center gap-1 flex-shrink-0">
+        <button id="collapseSidebarBtn" type="button" class="hidden md:flex text-gray-400 hover:text-white p-1 rounded" aria-label="Collapse sidebar">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 19l-7-7 7-7m8 14l-7-7 7-7"></path></svg>
+        </button>
+        <button id="closeSidebarBtn" type="button" class="md:hidden text-gray-400 hover:text-white p-1 rounded" aria-label="Close menu">
+          <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+        </button>
+      </div>
+    </div>
+    
+    <nav class="flex-1 overflow-y-auto p-4 space-y-2">
+      <a href="/player" class="flex items-center gap-3 px-3 py-2 rounded-lg text-gray-300 hover:bg-gray-800 hover:text-white transition-colors group">
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+        Events Player
+      </a>
+      {% if request.path == '/player' %}
+      <div id="sidebarPlayerExtras" class="pl-8 pr-2 space-y-1 border-l-2 border-navborder ml-3 my-1">
+        <!-- Filled by player.html script -->
+      </div>
+      {% endif %}
+      <a href="/stats-page" class="flex items-center gap-3 px-3 py-2 rounded-lg text-gray-300 hover:bg-gray-800 hover:text-white transition-colors group">
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"></path></svg>
+        Stats Dashboard
+      </a>
+      <a href="/daily-review" class="flex items-center gap-3 px-3 py-2 rounded-lg text-gray-300 hover:bg-gray-800 hover:text-white transition-colors group">
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
+        Daily Review
+      </a>
+      <a href="/test-multi-cam" id="navLinkTest" class="flex items-center gap-3 px-3 py-2 rounded-lg text-gray-300 hover:bg-gray-800 hover:text-white transition-colors group">
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+        Test
+      </a>
+      {% if request.path == '/test-multi-cam' %}
+      <div id="sidebarTestExtras" class="pl-8 pr-2 space-y-1 border-l-2 border-navborder ml-3 my-1">
+        <!-- Filled by test_run.html script -->
+      </div>
+      {% endif %}
+    </nav>
+  </aside>
+
+  <!-- Mobile Sidebar Overlay -->
+  <div id="sidebarOverlay" class="fixed inset-0 bg-black bg-opacity-50 z-40 hidden" aria-hidden="true"></div>
+
+  <!-- Expand sidebar button (when collapsed on desktop) -->
+  <button id="expandSidebarBtn" type="button" class="hidden fixed top-4 left-4 z-30 p-2 rounded-lg bg-navbg border border-navborder text-gray-300 hover:text-white hover:bg-gray-800 transition-colors" aria-label="Open menu">
+    <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16m-7 6h7"></path></svg>
+  </button>
+
+  <!-- Main Content -->
+  <main class="flex-1 flex flex-col min-w-0">
+    <div class="flex-1 p-4 lg:p-6 mx-auto w-full max-w-7xl">
+      {% block content %}{% endblock %}
+    </div>
+  </main>
+
+  <script>
+    document.addEventListener('DOMContentLoaded', () => {
+      const sidebar = document.getElementById('sidebar');
+      const mobileMenuBtn = document.getElementById('mobileMenuBtn');
+      const closeSidebarBtn = document.getElementById('closeSidebarBtn');
+      const collapseSidebarBtn = document.getElementById('collapseSidebarBtn');
+      const expandSidebarBtn = document.getElementById('expandSidebarBtn');
+      const sidebarOverlay = document.getElementById('sidebarOverlay');
+
+      function setSidebarOpen(open) {
+        const isOpen = !!open;
+        sidebar.dataset.open = isOpen ? 'true' : 'false';
+        sidebar.style.transform = isOpen ? 'translateX(0)' : 'translateX(-100%)';
+        if (sidebarOverlay) {
+          sidebarOverlay.classList.toggle('hidden', !isOpen);
+          sidebarOverlay.setAttribute('aria-hidden', isOpen ? 'false' : 'true');
+        }
+        if (expandSidebarBtn && window.innerWidth < 768) expandSidebarBtn.classList.add('hidden');
+      }
+
+      function setSidebarCollapsed(collapsed) {
+        document.body.dataset.sidebarCollapsed = collapsed ? 'true' : 'false';
+        if (collapsed) {
+          sidebar.style.transform = 'translateX(-100%)';
+          if (expandSidebarBtn && window.innerWidth >= 768) expandSidebarBtn.classList.remove('hidden');
+        } else {
+          sidebar.style.transform = 'translateX(0)';
+          if (expandSidebarBtn) expandSidebarBtn.classList.add('hidden');
+        }
+      }
+
+      function isMobile() {
+        return window.getComputedStyle(sidebar).position === 'fixed' && window.innerWidth < 768;
+      }
+
+      if (mobileMenuBtn) {
+        mobileMenuBtn.addEventListener('click', () => {
+          if (isMobile()) setSidebarOpen(sidebar.dataset.open !== 'true');
+          else setSidebarCollapsed(document.body.dataset.sidebarCollapsed === 'true');
+        });
+      }
+      if (closeSidebarBtn) closeSidebarBtn.addEventListener('click', () => setSidebarOpen(false));
+      if (collapseSidebarBtn) collapseSidebarBtn.addEventListener('click', () => setSidebarCollapsed(true));
+      if (expandSidebarBtn) expandSidebarBtn.addEventListener('click', () => {
+        if (isMobile()) setSidebarOpen(true);
+        else setSidebarCollapsed(false);
+      });
+      if (sidebarOverlay) sidebarOverlay.addEventListener('click', () => setSidebarOpen(false));
+
+      // Desktop: start visible unless previously collapsed
+      if (window.innerWidth >= 768) {
+        const collapsed = document.body.dataset.sidebarCollapsed === 'true';
+        if (!collapsed) {
+          sidebar.style.transform = 'translateX(0)';
+          if (expandSidebarBtn) expandSidebarBtn.classList.add('hidden');
+        } else {
+          if (expandSidebarBtn) expandSidebarBtn.classList.remove('hidden');
+        }
+        sidebar.dataset.open = 'true';
+      }
+
+      // Persist Test page: point Test nav link at current test_run when set (so returning from another page restores test)
+      try {
+        const testRun = sessionStorage.getItem('frigate_test_run');
+        const navLinkTest = document.getElementById('navLinkTest');
+        if (navLinkTest && testRun) {
+          navLinkTest.setAttribute('href', '/test-multi-cam?test_run=' + encodeURIComponent(testRun));
+        }
+      } catch (e) {}
+
+      // Mark active nav link
+      const currentPath = window.location.pathname;
+      const navLinks = sidebar.querySelectorAll('nav a');
+      navLinks.forEach(link => {
+        const href = link.getAttribute('href') || '';
+        const isActive = (href === currentPath) || (currentPath === '/' && href === '/player') || (href.startsWith('/test-multi-cam') && currentPath === '/test-multi-cam');
+        if (isActive) {
+          link.classList.add('bg-brand', 'bg-opacity-20', 'text-brand');
+          link.classList.remove('text-gray-300');
+        }
+      });
+    });
+  </script>
+  {% block scripts %}{% endblock %}
+</body>
+</html>
