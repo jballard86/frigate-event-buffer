@@ -47,7 +47,8 @@ class TestVideoService(unittest.TestCase):
     def test_generate_detection_sidecar_opens_clip_and_writes_json_schema(
         self, mock_get_metadata, mock_run_batch
     ):
-        """generate_detection_sidecar uses gpu_decoder create_decoder, batches frames, writes detection.json with expected schema."""
+        """generate_detection_sidecar uses gpu_decoder create_decoder, batches
+        frames, writes detection.json with expected schema."""
         try:
             import torch
         except ImportError:
@@ -92,7 +93,7 @@ class TestVideoService(unittest.TestCase):
                     "frigate_buffer.services.video.get_detection_model_path",
                     return_value=os.path.join("/tmp", "yolo_models", "yolov8n.pt"),
                 ):
-                    with patch("ultralytics.YOLO") as mock_yolo:
+                    with patch("ultralytics.YOLO", create=True) as mock_yolo:
                         mock_yolo.return_value = MagicMock()
                         result = self.video_service.generate_detection_sidecar(
                             clip_path, sidecar_path, config
@@ -127,7 +128,8 @@ class TestVideoService(unittest.TestCase):
 
     @patch("frigate_buffer.services.video.subprocess.run")
     def test_get_video_metadata_caches_result(self, mock_run):
-        """Second call with same path returns cached result and does not run ffprobe again."""
+        """Second call with same path returns cached result and does not run
+        ffprobe again."""
         ffprobe_json = json.dumps(
             {
                 "streams": [{"width": 1920, "height": 1080, "r_frame_rate": "30/1"}],
@@ -149,7 +151,8 @@ class TestVideoService(unittest.TestCase):
 
     @patch("frigate_buffer.services.video.subprocess.run")
     def test_get_video_metadata_clears_cache_when_over_max_size(self, mock_run):
-        """When cache size exceeds _METADATA_CACHE_MAX_SIZE, cache is cleared before lookup/insert."""
+        """When cache size exceeds _METADATA_CACHE_MAX_SIZE, cache is cleared
+        before lookup/insert."""
         ffprobe_json = json.dumps(
             {
                 "streams": [{"width": 640, "height": 480, "r_frame_rate": "30/1"}],
@@ -174,7 +177,8 @@ class TestVideoService(unittest.TestCase):
         _METADATA_CACHE.clear()
 
     def test_decoder_reader_ready(self):
-        """_decoder_reader_ready returns True for DecoderContext (frame_count) or reader with _decoder."""
+        """_decoder_reader_ready returns True for DecoderContext (frame_count) or
+        reader with _decoder."""
         reader_no_decoder = MagicMock(spec=["fps", "get_frames"])
         reader_no_decoder.fps = 30.0
         self.assertFalse(_decoder_reader_ready(reader_no_decoder))
@@ -190,7 +194,8 @@ class TestVideoService(unittest.TestCase):
     def test_generate_detection_sidecar_calls_get_frames(
         self, mock_get_metadata, mock_run_batch
     ):
-        """generate_detection_sidecar uses create_decoder and calls get_frames on context."""
+        """generate_detection_sidecar uses create_decoder and calls get_frames on
+        context."""
         try:
             import torch
         except ImportError:
@@ -272,7 +277,8 @@ class TestVideoService(unittest.TestCase):
     def test_generate_detection_sidecar_uses_metadata_fallback_when_len_reader_raises(
         self, mock_get_metadata, mock_run_batch
     ):
-        """When decoder reports 0 frames, frame count comes from ffprobe metadata (duration*fps) and sidecar still succeeds."""
+        """When decoder reports 0 frames, frame count comes from ffprobe metadata
+        (duration*fps) and sidecar still succeeds."""
         try:
             import torch
         except ImportError:
@@ -315,7 +321,7 @@ class TestVideoService(unittest.TestCase):
                     "frigate_buffer.services.video.get_detection_model_path",
                     return_value=os.path.join("/tmp", "yolo_models", "yolov8n.pt"),
                 ):
-                    with patch("ultralytics.YOLO") as mock_yolo:
+                    with patch("ultralytics.YOLO", create=True) as mock_yolo:
                         mock_yolo.return_value = MagicMock()
                         result = self.video_service.generate_detection_sidecar(
                             clip_path, sidecar_path, config
@@ -371,7 +377,7 @@ class TestEnsureDetectionModelReady(unittest.TestCase):
         self.assertFalse(ensure_detection_model_ready({}))
         self.assertFalse(ensure_detection_model_ready({"DETECTION_MODEL": ""}))
 
-    @patch("ultralytics.YOLO")
+    @patch("ultralytics.YOLO", create=True)
     def test_ensure_detection_model_ready_loads_and_reports(self, mock_yolo_cls):
         mock_model = MagicMock()
         storage = "/tmp/test_storage"
@@ -404,14 +410,16 @@ class TestDecoderFrameCount(unittest.TestCase):
     """Tests for _decoder_frame_count."""
 
     def test_decoder_frame_count_uses_frame_count_when_available(self):
-        """When reader has frame_count (e.g. DecoderContext), _decoder_frame_count returns it."""
+        """When reader has frame_count (e.g. DecoderContext), _decoder_frame_count
+        returns it."""
         reader = MagicMock(spec=["frame_count"])
         reader.frame_count = 42
         result = _decoder_frame_count(reader, 30.0, 10.0)
         self.assertEqual(result, 42)
 
     def test_decoder_frame_count_uses_len_when_available(self):
-        """When len(reader) works and no frame_count, _decoder_frame_count returns it."""
+        """When len(reader) works and no frame_count, _decoder_frame_count
+        returns it."""
 
         class ReaderWithLen:
             def __len__(self):
@@ -421,7 +429,8 @@ class TestDecoderFrameCount(unittest.TestCase):
         self.assertEqual(result, 42)
 
     def test_decoder_frame_count_fallback_when_len_raises(self):
-        """When len(reader) raises (e.g. missing _decoder), _decoder_frame_count returns duration * fps."""
+        """When len(reader) raises (e.g. missing _decoder), _decoder_frame_count
+        returns duration * fps."""
 
         class ReaderNoLen:
             pass
@@ -430,7 +439,8 @@ class TestDecoderFrameCount(unittest.TestCase):
         self.assertEqual(result, 300)
 
     def test_decoder_frame_count_uses_shape_when_len_raises(self):
-        """When len(reader) raises but reader.shape is (N, ...), _decoder_frame_count returns N."""
+        """When len(reader) raises but reader.shape is (N, ...),
+        _decoder_frame_count returns N."""
 
         class ReaderShapeOnly:
             shape = (100, 3, 480, 640)
@@ -439,7 +449,8 @@ class TestDecoderFrameCount(unittest.TestCase):
         self.assertEqual(result, 100)
 
     def test_decoder_frame_count_fallback_zero_duration_returns_zero(self):
-        """When both len and shape fail and duration is 0, _decoder_frame_count returns 0."""
+        """When both len and shape fail and duration is 0, _decoder_frame_count
+        returns 0."""
 
         class ReaderNoLen:
             shape = ()
@@ -452,12 +463,14 @@ class TestRunDetectionOnBatch(unittest.TestCase):
     """Tests for _run_detection_on_batch resize and bbox scale-back."""
 
     def test_run_detection_on_batch_scales_bboxes_back_to_read_space(self):
-        """YOLO returns xyxy in resized space; detections are scaled back to decoder (read) space."""
+        """YOLO returns xyxy in resized space; detections are scaled back to
+        decoder (read) space."""
         try:
             import torch
         except ImportError:
             self.skipTest("torch/numpy not available")
-        # Batch: 1 frame, 3 channels, read_h=1920, read_w=2560 -> target 1280x960, scale_x=2, scale_y=2
+        # Batch: 1 frame, 3 channels, read_h=1920, read_w=2560 -> target 1280x960,
+        # scale_x=2, scale_y=2
         batch = torch.zeros((1, 3, 1920, 2560), dtype=torch.float32) * 0.5
         mock_result = MagicMock()
         # One box in resized space (1280x960): x1=100, y1=200, x2=300, y2=400
@@ -474,7 +487,8 @@ class TestRunDetectionOnBatch(unittest.TestCase):
         self.assertEqual(det["area"], 160000)
 
     def test_run_detection_on_batch_small_batch_no_crash(self):
-        """Batch already 640x480 with imgsz=640 returns detections in read space without error."""
+        """Batch already 640x480 with imgsz=640 returns detections in read space
+        without error."""
         try:
             import torch
         except ImportError:

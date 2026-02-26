@@ -103,7 +103,8 @@ class TestEventLifecycleService(unittest.TestCase):
         # Act
         self.service.process_event_end(event)
 
-        # Assert: did not discard (duration 10s >= min 5s) (would call remove_event_from_ce and delete_event_folder)
+        # Assert: did not discard (duration 10s >= min 5s)
+        # (would call remove_event_from_ce and delete_event_folder)
         self.consolidated_manager.remove_event_from_ce.assert_not_called()
         self.file_manager.delete_event_folder.assert_not_called()
         # CE path: update_activity, schedule_close_timer, write_summary, cleanup
@@ -193,7 +194,8 @@ class TestEventLifecycleService(unittest.TestCase):
         self.notifier.mark_last_event_ended.assert_called_once()
 
     def test_process_event_end_max_length_does_not_call_clip_ready_or_export(self):
-        """When duration >= max_event_length_seconds, no export (event canceled, API never sent)."""
+        """When duration >= max_event_length_seconds, no export
+        (event canceled, API never sent)."""
         self.config["MAX_EVENT_LENGTH_SECONDS"] = 120
 
         event = EventState("evt1", "cam1", "person", created_at=100.0)
@@ -220,7 +222,8 @@ class TestEventLifecycleService(unittest.TestCase):
         self.download_service.export_and_download_clip.assert_not_called()
 
     def test_process_event_end_duration_exactly_max_is_canceled(self):
-        """Duration exactly equal to max_event_length_seconds is treated as canceled (>=)."""
+        """Duration exactly equal to max_event_length_seconds is
+        treated as canceled (>=)."""
         self.config["MAX_EVENT_LENGTH_SECONDS"] = 120
 
         event = EventState("evt1", "cam1", "person", created_at=100.0)
@@ -239,7 +242,8 @@ class TestEventLifecycleService(unittest.TestCase):
         self.assertEqual(self.notifier.publish_notification.call_args[0][1], "canceled")
 
     def test_finalize_consolidated_event_max_length_does_not_call_analysis(self):
-        """When any event in CE has duration >= max, no export and no on_ce_ready_for_analysis (API never sent)."""
+        """When any event in CE has duration >= max, no export and no
+        on_ce_ready_for_analysis (API never sent)."""
         on_ce_ready_mock = MagicMock()
         self.service.on_ce_ready_for_analysis = on_ce_ready_mock
         self.config["MAX_EVENT_LENGTH_SECONDS"] = 120
@@ -281,7 +285,8 @@ class TestEventLifecycleService(unittest.TestCase):
         self.consolidated_manager.remove.assert_called_with(ce_id)
 
     def test_finalize_consolidated_event_external_api_only_clip_ready(self):
-        """When AI_MODE is external_api, do not fetch review summary; send only clip_ready (no finalized/summarized)."""
+        """When AI_MODE is external_api, do not fetch review summary;
+        send only clip_ready (no finalized/summarized)."""
         self.config["AI_MODE"] = "external_api"
         ce_id = "ce1"
         ce = ConsolidatedEvent(ce_id, "folder", "/tmp/ce1", 100.0, 110.0)
@@ -317,7 +322,8 @@ class TestEventLifecycleService(unittest.TestCase):
         self.notifier.mark_last_event_ended.assert_called_once()
 
     def test_finalize_consolidated_event_multi_cam_uses_download_then_sidecar(self):
-        """With 2+ cameras, lifecycle uses export_and_download_clip then generate_detection_sidecars_for_cameras (no transcode)."""
+        """With 2+ cameras, lifecycle uses export_and_download_clip then
+        generate_detection_sidecars_for_cameras (no transcode)."""
         ce_id = "ce1"
         ce = ConsolidatedEvent(ce_id, "folder", "path", 100.0, 110.0)
         ce.frigate_event_ids = ["evt1", "evt2"]

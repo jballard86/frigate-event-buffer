@@ -1,4 +1,5 @@
-"""Tests for Phase 1 timeline logic: dense grid, EMA, hysteresis, merge (including first-segment roll-forward)."""
+"""Tests for Phase 1 timeline logic: dense grid, EMA, hysteresis, merge
+(including first-segment roll-forward)."""
 
 from frigate_buffer.services.timeline_ema import (
     build_dense_times,
@@ -7,7 +8,8 @@ from frigate_buffer.services.timeline_ema import (
 
 
 class TestBuildDenseTimes:
-    """build_dense_times produces a grid with step_sec interval and max_frames_min cap."""
+    """build_dense_times produces a grid with step_sec interval and
+    max_frames_min cap."""
 
     def test_returns_empty_for_invalid_inputs(self):
         assert build_dense_times(0, 60, 2, 10.0) == []
@@ -67,7 +69,8 @@ class TestBuildPhase1Assignments:
         assert "cam1" in cameras
 
     def test_first_segment_short_merges_forward(self):
-        # First run = 2 frames of cam2, then cam1 for 10. Should become cam1 for first 2 as well (roll forward).
+        # First run = 2 frames of cam2, then cam1 for 10. Should become cam1 for
+        # first 2 as well (roll forward).
         times = [0.0 + i * 0.5 for i in range(14)]  # 14 times
 
         def area(cam: str, t: float) -> float:

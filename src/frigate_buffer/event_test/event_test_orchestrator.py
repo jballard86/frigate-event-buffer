@@ -1,10 +1,12 @@
 """
-Test-button-only orchestrator: runs the post-download pipeline (generate detection sidecar, frame extraction,
-build payload) for a copied event folder without sending to the AI proxy. Yields log events for SSE streaming.
+Test-button-only orchestrator: runs the post-download pipeline (generate
+detection sidecar, frame extraction, build payload) for a copied event folder
+without sending to the AI proxy. Yields log events for SSE streaming.
 
-This module is only used for test-button orchestration. No core behavior may depend on it—deleting
-src/frigate_buffer/event_test/ would break only the TEST button and event_test tests. All logic here
-only delegates to the main codebase (no YOLO, no sidecar lock, no ThreadPoolExecutor); it must stay thin.
+This module is only used for test-button orchestration. No core behavior may
+depend on it—deleting src/frigate_buffer/event_test/ would break only the TEST
+button and event_test tests. All logic here only delegates to the main codebase
+(no YOLO, no sidecar lock, no ThreadPoolExecutor); it must stay thin.
 """
 
 from __future__ import annotations
@@ -84,7 +86,8 @@ def _yield_error(msg: str) -> dict[str, Any]:
 def _get_camera_subdirs_with_clip(folder_path: str) -> list[str]:
     """
     List camera subdir names under folder_path that contain a resolvable clip (*.mp4).
-    Raises OSError if folder_path is not readable. Used by prepare_test_folder and pipeline runners.
+    Raises OSError if folder_path is not readable.
+    Used by prepare_test_folder and pipeline runners.
     """
     from frigate_buffer.services.query import resolve_clip_in_folder
 
@@ -100,7 +103,8 @@ def _get_camera_subdirs_with_clip(folder_path: str) -> list[str]:
 def _allocate_test_folder(events_dir: str) -> tuple[str, str]:
     """
     Allocate next events/testN under events_dir. Holds _alloc_lock.
-    Returns (test_run_id, test_folder_path). Raises FileExistsError or OSError on failure.
+    Returns (test_run_id, test_folder_path).
+    Raises FileExistsError or OSError on failure.
     """
     with _alloc_lock:
         existing = set()
@@ -126,7 +130,8 @@ def _copy_source_to_test_folder(
     camera_subdirs: list[str],
 ) -> None:
     """
-    Copy camera subdirs and CE-root files from source to test folder. Raises OSError on failure.
+    Copy camera subdirs and CE-root files from source to test folder.
+    Raises OSError on failure.
     """
     for cam in camera_subdirs:
         src_cam = os.path.join(source_folder_path, cam)
@@ -147,7 +152,8 @@ def prepare_test_folder(
 ) -> tuple[str, str]:
     """
     Allocate testN and copy source event into it (copy only, no sidecars or pipeline).
-    Returns (test_run_id, test_folder_path). Raises ValueError on validation or copy failure.
+    Returns (test_run_id, test_folder_path).
+    Raises ValueError on validation or copy failure.
     """
     events_dir = os.path.join(storage_path, "events")
     if not os.path.isdir(events_dir):
@@ -159,7 +165,8 @@ def prepare_test_folder(
         raise ValueError(f"Source folder not readable: {e}") from e
     if not camera_subdirs:
         raise ValueError(
-            "Need clip and data from at least one camera. No camera in this event has an .mp4 clip yet."
+            "Need clip and data from at least one camera. "
+            "No camera in this event has an .mp4 clip yet."
         )
 
     try:
@@ -190,7 +197,8 @@ def get_export_time_range_from_folder(
     """
     Derive (global_min_start, global_max_end) from folder timeline for Frigate export.
     Returns logical event start/end; caller passes these plus export_before/export_after
-    to DownloadService.export_and_download_clip. Falls back to folder mtime if no timeline.
+    to DownloadService.export_and_download_clip.
+    Falls back to folder mtime if no timeline.
     """
     merged = read_timeline_merged(folder_path)
     entries = merged.get("entries") or []
@@ -238,8 +246,10 @@ def get_export_time_range_from_folder(
 
 def _get_start_time_from_timeline_entries(entries: list[Any]) -> float | None:
     """
-    Extract minimum start time from timeline entries (same structure as get_export_time_range_from_folder).
-    Returns None if no valid start times. Used for test runs when folder name has no timestamp.
+    Extract minimum start time from timeline entries (same structure as
+    get_export_time_range_from_folder).
+    Returns None if no valid start times. Used for test runs when folder name
+    has no timestamp.
     """
     start_times: list[float] = []
     for e in entries:
@@ -287,12 +297,15 @@ def _write_system_prompt_and_ai_request_html(
         "<!DOCTYPE html><html><head><meta charset='UTF-8'><title>AI request – "
         + test_run_id
         + "</title>",
-        "<style>body{font-family:sans-serif;background:#1a1a2e;color:#e0e0e0;padding:16px;}",
+        "<style>body{font-family:sans-serif;background:#1a1a2e;color:#e0e0e0;"
+        "padding:16px;}",
         "pre{background:#0f3460;padding:12px;border-radius:8px;overflow:auto;}",
-        "a{color:#e94560;} .frame{margin:12px 0;} .frame img{max-width:100%;}</style></head><body>",
+        "a{color:#e94560;} .frame{margin:12px 0;} "
+        ".frame img{max-width:100%;}</style></head><body>",
         "<h1>AI request – " + test_run_id + "</h1>",
         "<h2>System prompt</h2>",
-        f"<p><a href='{base_url}/system_prompt.txt' download>Download system_prompt.txt</a></p>",
+        f"<p><a href='{base_url}/system_prompt.txt' download>"
+        "Download system_prompt.txt</a></p>",
         "<pre>" + _html_escape(system_prompt) + "</pre>",
         "<h2>Frames</h2>",
     ]
@@ -300,16 +313,19 @@ def _write_system_prompt_and_ai_request_html(
         url = f"{base_url}/{rel.replace(os.sep, '/')}"
         fname = os.path.basename(rel)
         lines.append(
-            f"<div class='frame'><a href='{url}' download>{fname}</a><br><img src='{url}' alt='{fname}' /></div>"
+            f"<div class='frame'><a href='{url}' download>{fname}</a><br>"
+            f"<img src='{url}' alt='{fname}' /></div>"
         )
     lines.append(
-        "<p><button id='sendBtn' type='button'>Send prompt to AI</button> <span id='sendStatus'></span></p>"
+        "<p><button id='sendBtn' type='button'>Send prompt to AI</button> "
+        "<span id='sendStatus'></span></p>"
     )
     lines.append(
         "<script>document.getElementById('sendBtn').onclick=function(){"
         "var s=document.getElementById('sendStatus'); s.textContent='Sending...';"
         "fetch('/api/test-multi-cam/send?test_run=" + test_run_id + "',{method:'POST'})"
-        ".then(r=>r.json()).then(d=>{ s.textContent='OK: '+JSON.stringify(d).slice(0,200); })"
+        ".then(r=>r.json()).then(d=>{ "
+        "s.textContent='OK: '+JSON.stringify(d).slice(0,200); })"
         ".catch(e=>{ s.textContent='Error: '+e.message; }); };</script>"
     )
     lines.append("</body></html>")
@@ -333,7 +349,8 @@ def _run_post_copy_steps(
 ) -> Iterator[dict[str, Any]]:
     """
     Run post-copy pipeline steps: timeline log, remove sidecars, generate sidecars,
-    compilation, build payload, write system_prompt.txt and ai_request.html, yield done.
+    compilation, build payload, write system_prompt.txt and ai_request.html,
+    yield done.
     """
     from frigate_buffer.services.query import resolve_clip_in_folder
 
@@ -345,7 +362,8 @@ def _run_post_copy_steps(
     except Exception as e:
         yield _yield_log(f"Timeline read warning: {e}")
 
-    # For test runs (folder name test1, test2, ...) folder has no timestamp; use timeline start if available.
+    # For test runs (folder name test1, test2, ...) folder has no timestamp;
+    # use timeline start if available.
     from_timeline = False
     if ce_start_time <= 0 and entries:
         timeline_start = _get_start_time_from_timeline_entries(entries)
@@ -354,7 +372,8 @@ def _run_post_copy_steps(
             from_timeline = True
     if ce_start_time > 0:
         yield _yield_log(
-            f"ce_start_time from {'timeline' if from_timeline else 'folder'}: {ce_start_time}"
+            f"ce_start_time from {'timeline' if from_timeline else 'folder'}: "
+            f"{ce_start_time}"
         )
     else:
         yield _yield_log("Test run: ce_start_time 0 (prompt will use current time)")
@@ -445,7 +464,8 @@ def _run_test_pipeline_inner(
 ) -> Iterator[dict[str, Any]]:
     """
     Inner pipeline: same steps as run_test_pipeline. Yields log/done/error events.
-    Used by run_test_pipeline with a capture handler so Python log output is also streamed.
+    Used by run_test_pipeline with a capture handler so Python log output is
+    also streamed.
     """
     events_dir = os.path.join(storage_path, "events")
     if not os.path.isdir(events_dir):
@@ -459,7 +479,8 @@ def _run_test_pipeline_inner(
         return
     if not camera_subdirs:
         yield _yield_error(
-            "Need clip and data from at least one camera. No camera in this event has an .mp4 clip yet."
+            "Need clip and data from at least one camera. "
+            "No camera in this event has an .mp4 clip yet."
         )
         return
     yield _yield_log(f"Source validated: {len(camera_subdirs)} camera(s) with clip")
@@ -580,9 +601,8 @@ def run_test_pipeline(
 ) -> Iterator[dict[str, Any]]:
     """
     Run the post-download pipeline on a copy of the source event. Yields events for SSE:
-    {"type": "log", "message": "..."} | {"type": "done", "test_run_id", "ai_request_url"} | {"type": "error", "message": "..."}.
-
-    Attaches a logging handler so all non-MQTT Python log output is also streamed to the test run page.
+    {"type": "log"} | {"type": "done"} | {"type": "error"}.
+    Attaches handler so non-MQTT log output is streamed to test run page.
     """
     captured_logs: list[str] = []
     handler = StreamCaptureHandler(captured=captured_logs)

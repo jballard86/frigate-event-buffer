@@ -236,9 +236,9 @@ def _trim_slices_to_action_window(
     global_end: float,
 ) -> list[dict]:
     """
-    Compute first/last detection time across all cameras' sidecar entries (with detections),
-    then discard slices entirely outside [action_start, action_end] and clamp overlapping
-    slices to that window. Returns a new list; does not mutate input.
+    Compute first/last detection time across cameras' sidecar entries (with detections),
+    discard slices outside [action_start, action_end], clamp overlapping
+    slices to that window. Returns new list; does not mutate input.
     """
     first_detection_sec: float = global_end
     last_detection_sec: float = 0.0

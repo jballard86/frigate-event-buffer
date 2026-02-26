@@ -79,7 +79,7 @@ class DecoderContext:
                 warnings.showwarning = old_showwarning
         # Each frame supports __dlpack__; RGBP gives (3, H, W).
         # torch.from_dlpack exists at runtime but is not in type stubs; use getattr.
-        from_dlpack = getattr(torch, "from_dlpack")
+        from_dlpack = torch.from_dlpack
         tensors = [from_dlpack(f) for f in raw_frames]
         # Stack to BCHW. Cloning avoids sharing memory with decoder's internal buffer
         # so decoder can be closed or reconfigured without invalidating tensors.
@@ -95,7 +95,7 @@ class DecoderContext:
         import torch
 
         # torch.from_dlpack exists at runtime but is not in type stubs; use getattr.
-        from_dlpack = getattr(torch, "from_dlpack")
+        from_dlpack = torch.from_dlpack
         frame = self._decoder[index]
         t = from_dlpack(frame).unsqueeze(0).clone()
         return t
@@ -128,7 +128,7 @@ def _create_simple_decoder(clip_path: str, gpu_id: int) -> Any:
     import PyNvVideoCodec as nvc
 
     # OutputColorType exists at runtime but is not in type stubs; use getattr.
-    output_color_type = getattr(nvc, "OutputColorType").RGBP
+    output_color_type = nvc.OutputColorType.RGBP
     return nvc.SimpleDecoder(
         clip_path,
         gpu_id=gpu_id,

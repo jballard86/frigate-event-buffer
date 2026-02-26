@@ -1,4 +1,5 @@
-"""Tests for logging_utils: ErrorBuffer, suppress_review_debug_logs flag, and StreamCaptureHandler."""
+"""Tests for logging_utils: ErrorBuffer, suppress_review_debug_logs flag,
+and StreamCaptureHandler."""
 
 import logging
 import unittest

@@ -37,7 +37,8 @@ class TestConfigSchema(unittest.TestCase):
     def test_notifications_block_optional_legacy_default(
         self, mock_yaml_load, mock_exists, mock_file
     ):
-        """When notifications block is absent, NOTIFICATIONS_HOME_ASSISTANT_ENABLED is True (legacy behavior)."""
+        """When notifications block is absent, NOTIFICATIONS_HOME_ASSISTANT_ENABLED
+        is True (legacy behavior)."""
         valid_yaml = {
             "cameras": [{"name": "cam1"}],
             "network": {
@@ -59,7 +60,8 @@ class TestConfigSchema(unittest.TestCase):
     def test_notifications_home_assistant_enabled_false(
         self, mock_yaml_load, mock_exists, mock_file
     ):
-        """When notifications.home_assistant.enabled is False, NOTIFICATIONS_HOME_ASSISTANT_ENABLED is False."""
+        """When notifications.home_assistant.enabled is False,
+        NOTIFICATIONS_HOME_ASSISTANT_ENABLED is False."""
         valid_yaml = {
             "cameras": [{"name": "cam1"}],
             "network": {
@@ -84,7 +86,8 @@ class TestConfigSchema(unittest.TestCase):
     def test_notifications_home_assistant_enabled_default_true(
         self, mock_yaml_load, mock_exists, mock_file
     ):
-        """When notifications.home_assistant is present but enabled omitted, default is True."""
+        """When notifications.home_assistant is present but enabled omitted,
+        default is True."""
         valid_yaml = {
             "cameras": [{"name": "cam1"}],
             "network": {
@@ -107,7 +110,8 @@ class TestConfigSchema(unittest.TestCase):
     @patch("os.path.exists")
     @patch("frigate_buffer.config.yaml.safe_load")
     def test_minimum_event_seconds_config(self, mock_yaml_load, mock_exists, mock_file):
-        """minimum_event_seconds from settings is merged into config as MINIMUM_EVENT_SECONDS."""
+        """minimum_event_seconds from settings is merged into config as
+        MINIMUM_EVENT_SECONDS."""
         valid_yaml = {
             "cameras": [{"name": "cam1"}],
             "network": {
@@ -132,7 +136,8 @@ class TestConfigSchema(unittest.TestCase):
     def test_max_event_length_seconds_config(
         self, mock_yaml_load, mock_exists, mock_file
     ):
-        """max_event_length_seconds from settings is merged into config as MAX_EVENT_LENGTH_SECONDS."""
+        """max_event_length_seconds from settings is merged into config as
+        MAX_EVENT_LENGTH_SECONDS."""
         valid_yaml = {
             "cameras": [{"name": "cam1"}],
             "network": {
@@ -157,7 +162,8 @@ class TestConfigSchema(unittest.TestCase):
     def test_max_event_length_seconds_default(
         self, mock_yaml_load, mock_exists, mock_file
     ):
-        """MAX_EVENT_LENGTH_SECONDS defaults to 120 when max_event_length_seconds omitted."""
+        """MAX_EVENT_LENGTH_SECONDS defaults to 120 when
+        max_event_length_seconds omitted."""
         valid_yaml = {
             "cameras": [{"name": "cam1"}],
             "network": {
@@ -179,7 +185,8 @@ class TestConfigSchema(unittest.TestCase):
     def test_gemini_frames_per_hour_cap_config(
         self, mock_yaml_load, mock_exists, mock_file
     ):
-        """gemini_frames_per_hour_cap from settings is merged; default 200 when omitted."""
+        """gemini_frames_per_hour_cap from settings is merged;
+        default 200 when omitted."""
         valid_yaml = {
             "cameras": [{"name": "cam1"}],
             "network": {
@@ -226,7 +233,8 @@ class TestConfigSchema(unittest.TestCase):
     def test_quick_title_config_from_settings(
         self, mock_yaml_load, mock_exists, mock_file
     ):
-        """quick_title_delay_seconds and quick_title_enabled from settings are merged."""
+        """quick_title_delay_seconds and quick_title_enabled from settings
+        are merged."""
         valid_yaml = {
             "cameras": [{"name": "cam1"}],
             "network": {
@@ -345,7 +353,8 @@ class TestConfigSchema(unittest.TestCase):
     def test_multi_cam_and_gemini_proxy_config(
         self, mock_yaml_load, mock_exists, mock_file
     ):
-        """Valid config with multi_cam and gemini_proxy passes and flattens correctly."""
+        """Valid config with multi_cam and gemini_proxy passes and
+        flattens correctly."""
         yaml_with_new = {
             "cameras": [{"name": "cam1"}],
             "network": {
@@ -396,7 +405,8 @@ class TestConfigSchema(unittest.TestCase):
     def test_max_multi_cam_frames_sec_accepts_decimal(
         self, mock_yaml_load, mock_exists, mock_file
     ):
-        """max_multi_cam_frames_sec accepts decimal values (e.g. 0.5, 1.5) and is stored as float."""
+        """max_multi_cam_frames_sec accepts decimal values (e.g. 0.5, 1.5)
+        and is stored as float."""
         yaml_with_decimal = {
             "cameras": [{"name": "cam1"}],
             "network": {
@@ -422,7 +432,8 @@ class TestConfigSchema(unittest.TestCase):
     def test_multi_cam_gemini_proxy_defaults_when_omitted(
         self, mock_yaml_load, mock_exists, mock_file
     ):
-        """When multi_cam and gemini_proxy are omitted, flat keys use source defaults."""
+        """When multi_cam and gemini_proxy are omitted, flat keys use
+        source defaults."""
         yaml_minimal = {
             "cameras": [{"name": "cam1"}],
             "network": {
@@ -456,7 +467,8 @@ class TestConfigSchema(unittest.TestCase):
     def test_gemini_proxy_from_gemini_when_gemini_proxy_absent(
         self, mock_yaml_load, mock_exists, mock_file
     ):
-        """When only gemini is set (no gemini_proxy), GEMINI_PROXY_URL and MODEL come from gemini."""
+        """When only gemini is set (no gemini_proxy), GEMINI_PROXY_URL and
+        MODEL come from gemini."""
         yaml_gemini_only = {
             "cameras": [{"name": "cam1"}],
             "network": {
@@ -519,7 +531,8 @@ class TestConfigSchema(unittest.TestCase):
     def test_decode_second_camera_cpu_only_default_and_override(
         self, mock_yaml_load, mock_exists, mock_file
     ):
-        """DECODE_SECOND_CAMERA_CPU_ONLY defaults to False; multi_cam.decode_second_camera_cpu_only: true overrides to True."""
+        """DECODE_SECOND_CAMERA_CPU_ONLY defaults to False;
+        multi_cam.decode_second_camera_cpu_only: true overrides to True."""
         yaml_default = {
             "cameras": [{"name": "cam1"}],
             "network": {
@@ -584,7 +597,8 @@ class TestConfigSchema(unittest.TestCase):
     @patch("os.path.exists")
     @patch("frigate_buffer.config.yaml.safe_load")
     def test_pushover_block_valid(self, mock_yaml_load, mock_exists, mock_file):
-        """Valid pushover block under notifications is stored in config['pushover']; validation passes."""
+        """Valid pushover block under notifications is stored in
+        config['pushover']; validation passes."""
         valid_yaml = {
             "cameras": [{"name": "cam1"}],
             "network": {
@@ -624,7 +638,8 @@ class TestConfigSchema(unittest.TestCase):
     def test_pushover_empty_normalized_to_dict(
         self, mock_yaml_load, mock_exists, mock_file
     ):
-        """When notifications.pushover is present but blank (None), config['pushover'] is {} so .get() never raises."""
+        """When notifications.pushover is present but blank (None),
+        config['pushover'] is {} so .get() never raises."""
         valid_yaml = {
             "cameras": [{"name": "cam1"}],
             "network": {
@@ -644,7 +659,8 @@ class TestConfigSchema(unittest.TestCase):
         self.assertIn("pushover", config)
         po = config["pushover"]
         self.assertIsInstance(po, dict)
-        # Must not raise AttributeError (env overrides may add pushover_user_key/pushover_api_token).
+        # Must not raise AttributeError (env overrides may add
+        # pushover_user_key/pushover_api_token).
         _ = po.get("enabled")
         _ = po.get("pushover_api_token")
         _ = po.get("pushover_user_key")

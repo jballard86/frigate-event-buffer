@@ -131,10 +131,10 @@ class TestAssignmentsToSlices(unittest.TestCase):
 
 
 class TestTrimSlicesToActionWindow(unittest.TestCase):
-    """Tests for _trim_slices_to_action_window (dynamic trimming to first/last detection ± pre/post roll)."""
+    """Tests for _trim_slices_to_action_window (trim to first/last detection ± roll)."""
 
     def test_trims_to_action_window_and_clamps_overlapping_slices(self):
-        """First detection at 2s, last at 10s, global_end=20 → action [0, 13]; slices outside dropped, overlapping clamped."""
+        """First 2s, last 10s, end=20 → [0,13]; outside dropped, overlapping clamped."""
         sidecars = {
             "cam1": [
                 {
@@ -163,7 +163,7 @@ class TestTrimSlicesToActionWindow(unittest.TestCase):
         # Slice [15, 20] is entirely outside [0, 13] so dropped
 
     def test_no_detections_keeps_full_range(self):
-        """When no sidecar has any entry with detections, no trimming (full 0..global_end)."""
+        """When no sidecar has detections, no trimming (full 0..global_end)."""
         sidecars = {
             "cam1": [
                 {"timestamp_sec": 1.0, "detections": []},
@@ -178,20 +178,23 @@ class TestTrimSlicesToActionWindow(unittest.TestCase):
 
     def test_discards_slice_entirely_after_action_end(self):
         """Slice entirely after action_end is discarded."""
-        sidecars = {"cam1": [{"timestamp_sec": 1.0, "detections": [{"area": 1.0}]}]}
+        sidecars = {
+            "cam1": [{"timestamp_sec": 1.0, "detections": [{"area": 1.0}]}]
+        }
         slices = [{"camera": "cam1", "start_sec": 20.0, "end_sec": 30.0}]
         result = _trim_slices_to_action_window(slices, sidecars, global_end=30.0)
         self.assertEqual(len(result), 0)
 
     def test_discards_slice_entirely_before_action_start(self):
-        """Slice entirely before action_start is discarded when first detection is late."""
+        """Slice entirely before action_start discarded when first detection is late."""
         sidecars = {"cam1": [{"timestamp_sec": 10.0, "detections": [{"area": 1.0}]}]}
         slices = [
             {"camera": "cam1", "start_sec": 0.0, "end_sec": 5.0},
             {"camera": "cam1", "start_sec": 7.0, "end_sec": 15.0},
         ]
         result = _trim_slices_to_action_window(slices, sidecars, global_end=20.0)
-        # action_start = 10-3 = 7, action_end = 13. First slice [0,5] entirely before 7 → dropped.
+        # action_start = 10-3 = 7, action_end = 13.
+        # First slice [0,5] entirely before 7 → dropped.
         self.assertEqual(len(result), 1)
         self.assertEqual(result[0]["start_sec"], 7.0)
         self.assertEqual(result[0]["end_sec"], 13.0)
@@ -244,7 +247,8 @@ class TestCalculateCropAtTime(unittest.TestCase):
         self.assertEqual(h, 1080)
 
     def test_hold_last_known_crop_when_nearest_has_no_detections(self):
-        """When person leaves at t=4, query at t=6: nearest entry (t=6) has no detections; entry at t=4 has detections within 5s → crop holds at t=4 position, not center."""
+        """When person leaves at t=4, query at t=6: nearest (t=6) has no detections;
+        entry at t=4 has detections within 5s → crop holds at t=4 position."""
         sidecar = {
             "entries": [
                 {
@@ -283,7 +287,7 @@ class TestCalculateCropAtTime(unittest.TestCase):
         self.assertEqual(h, 1080)
 
     def test_nearest_entry_has_detections_unchanged(self):
-        """When the nearest entry already has detections, behavior unchanged (no regression)."""
+        """Nearest entry has detections → behavior unchanged (no regression)."""
         sidecar = {
             "entries": [
                 {
@@ -304,7 +308,7 @@ class TestCalculateCropAtTime(unittest.TestCase):
         self.assertEqual(y, expected_y)
 
     def test_zoom_uses_content_area_when_tracking_target_frame_percent_set(self):
-        """When tracking_target_frame_percent > 0 and detections exist, crop (w,h) is derived from content area and target percent."""
+        """tracking_target_frame_percent>0 + detections → crop from content, target%."""
         sidecar = {
             "entries": [
                 {
@@ -322,8 +326,8 @@ class TestCalculateCropAtTime(unittest.TestCase):
             1080,
             tracking_target_frame_percent=40,
         )
-        # Content = bbox + 10% padding; desired crop area = content / 0.4; aspect 1440/1080.
-        # Crop (w,h) should be clamped to [0.4*1920, 1920] and [0.4*1080, 1080], and even.
+        # Content = bbox + 10% padding; crop area = content/0.4; aspect 1440/1080.
+        # Crop (w,h) clamped to [0.4*1920,1920] and [0.4*1080,1080].
         self.assertGreater(w, 0)
         self.assertLessEqual(w, 1920)
         self.assertGreater(h, 0)
@@ -338,7 +342,7 @@ class TestCalculateCropAtTime(unittest.TestCase):
         self.assertLessEqual(y + h, 1080)
 
     def test_no_zoom_when_tracking_target_frame_percent_zero(self):
-        """When tracking_target_frame_percent=0, crop size is fixed target_w x target_h."""
+        """When tracking_target_frame_percent=0, crop is fixed target_w x target_h."""
         sidecar = {
             "entries": [
                 {
@@ -408,7 +412,7 @@ class TestSmoothZoomEma(unittest.TestCase):
         self.assertEqual(slices[0]["crop_start"][3], orig_h)
 
     def test_smooth_zoom_ema_updates_crop_size_in_place(self):
-        """smooth_zoom_ema updates (w,h) on each slice; dimensions stay even and in bounds."""
+        """smooth_zoom_ema updates (w,h) per slice; dimensions even and in bounds."""
         slices = [
             {
                 "crop_start": (100, 50, 960, 540),
@@ -544,7 +548,7 @@ class TestGenerateCompilationVideo(unittest.TestCase):
         mock_isfile,
         mock_run_pynv,
     ):
-        """PyNv pipeline is called with tmp path; on success temp file is renamed to final output."""
+        """PyNv pipeline uses tmp path; on success temp file renamed to final output."""
         mock_resolve.return_value = "doorbell-123.mp4"
         mock_isfile.return_value = True
         mock_getsize.return_value = 1000
@@ -579,7 +583,7 @@ class TestGenerateCompilationVideo(unittest.TestCase):
         mock_isfile,
         mock_run_pynv,
     ):
-        """_run_pynv_compilation is invoked with correct slices and target dimensions."""
+        """_run_pynv_compilation called with correct slices and target dimensions."""
         mock_resolve.return_value = "doorbell-123.mp4"
         mock_isfile.return_value = True
         mock_getsize.return_value = 1000
@@ -666,7 +670,7 @@ class TestGenerateCompilationVideo(unittest.TestCase):
         mock_isfile,
         mock_run_pynv,
     ):
-        """Multiple slices are passed to _run_pynv_compilation (one segment per slice)."""
+        """Multiple slices passed to _run_pynv_compilation (one segment per slice)."""
         mock_resolve.return_value = "doorbell.mp4"
         mock_isfile.return_value = True
         mock_getsize.return_value = 1000
@@ -712,7 +716,7 @@ class TestGenerateCompilationVideo(unittest.TestCase):
         mock_isfile,
         mock_run_pynv,
     ):
-        """Last slice before a camera switch must have crop_end == crop_start (smooth hold)."""
+        """Last slice before camera switch: crop_end == crop_start (smooth hold)."""
         mock_resolve.return_value = "cam.mp4"
         mock_isfile.return_value = True
         mock_getsize.return_value = 1000
@@ -746,11 +750,11 @@ class TestGenerateCompilationVideo(unittest.TestCase):
         mock_run_pynv,
         mock_logger,
     ):
-        """When multiple slices have no detections at start/end, only one ERROR is logged per camera."""
+        """No detections at start/end → one ERROR per camera."""
         mock_resolve.return_value = "doorbell.mp4"
         mock_isfile.return_value = True
         mock_getsize.return_value = 1000
-        # Sidecar has entries but with empty detections at slice boundaries (nearest to 0, 0.75, 1.5 will have no dets).
+        # Sidecar: empty detections at boundaries (0, 0.75, 1.5 have no dets).
         sidecars = {
             "doorbell": {
                 "native_width": 1920,
@@ -804,7 +808,7 @@ class TestGenerateCompilationVideo(unittest.TestCase):
         mock_run_pynv,
         mock_logger,
     ):
-        """When multiple slices have no sidecar entries for a camera, only one ERROR is logged per camera."""
+        """No sidecar entries for camera → one ERROR logged per camera."""
         mock_resolve.return_value = "doorbell.mp4"
         mock_isfile.return_value = True
         mock_getsize.return_value = 1000
@@ -855,7 +859,7 @@ class TestGenerateCompilationVideo(unittest.TestCase):
         mock_popen,
         mock_create_decoder,
     ):
-        """When decoder reports len 0, frame count uses _get_video_metadata fallback and _run_pynv_compilation completes; encode via FFmpeg streaming."""
+        """Decoder len 0 → _get_video_metadata; _run_pynv completes; FFmpeg encode."""
         try:
             import torch
         except ImportError:
@@ -925,7 +929,7 @@ class TestGenerateCompilationVideo(unittest.TestCase):
         mock_popen,
         mock_create_decoder,
     ):
-        """Compilation encode is via FFmpeg streaming (h264_nvenc only; no CPU fallback)."""
+        """Compilation encode via FFmpeg (h264_nvenc; no CPU fallback)."""
         import importlib.util
 
         if importlib.util.find_spec("torch") is None:
@@ -994,7 +998,7 @@ class TestGenerateCompilationVideo(unittest.TestCase):
         mock_popen,
         mock_create_decoder,
     ):
-        """When create_decoder raises for a slice, that slice is skipped; FFmpeg is opened but no frames are written."""
+        """create_decoder raises → slice skipped; FFmpeg opened, no frames written."""
         mock_isfile.return_value = True
         mock_get_metadata.return_value = (640, 480, 20.0, 2.0)
         mock_create_decoder.side_effect = RuntimeError("NVDEC init failed")
@@ -1045,7 +1049,7 @@ class TestGenerateCompilationVideo(unittest.TestCase):
         mock_popen,
         mock_create_decoder,
     ):
-        """When get_frames returns 0 frames (post-decode), slice is skipped; log is clear it is not hardware init."""
+        """get_frames returns 0 → slice skipped; log clarifies not hardware init."""
         try:
             import torch
         except ImportError:
@@ -1109,7 +1113,7 @@ class TestGenerateCompilationVideo(unittest.TestCase):
         mock_popen,
         mock_create_decoder,
     ):
-        """get_frames is called in chunks of BATCH_SIZE; empty_cache after each chunk and in finally."""
+        """get_frames in BATCH_SIZE chunks; empty_cache after each and in finally."""
         try:
             import torch
         except ImportError:
@@ -1197,7 +1201,7 @@ class TestGenerateCompilationVideo(unittest.TestCase):
         mock_popen,
         mock_create_decoder,
     ):
-        """When get_frames returns fewer frames than requested (e.g. de-dup), repeat last frame; no IndexError."""
+        """get_frames fewer than requested → repeat last frame; no IndexError."""
         try:
             import torch
         except ImportError:
@@ -1268,7 +1272,7 @@ class TestGenerateCompilationVideo(unittest.TestCase):
         mock_popen,
         mock_create_decoder,
     ):
-        """When decoder returns fewer frames than requested, log DEBUG and one INFO per camera per event."""
+        """Decoder fewer than requested → DEBUG + one INFO per camera per event."""
         try:
             import torch
         except ImportError:
@@ -1345,7 +1349,7 @@ class TestGenerateCompilationVideo(unittest.TestCase):
         mock_popen,
         mock_create_decoder,
     ):
-        """_run_pynv_compilation uses crop_utils.crop_around_center_to_size (variable crop, fixed output); frames streamed to FFmpeg are target resolution."""
+        """_run_pynv uses crop_around_center_to_size; frames to FFmpeg at target res."""
         try:
             import torch
         except ImportError:
@@ -1401,7 +1405,7 @@ class TestGenerateCompilationVideo(unittest.TestCase):
         self.assertEqual(args[5], target_w, "output_w should be target_w")
         self.assertEqual(args[6], target_h, "output_h should be target_h")
         mock_popen.assert_called_once()
-        # 2 s at 20 fps = 40 frames; each write is one frame (target_h * target_w * 3 bytes)
+        # 2s at 20fps = 40 frames; each write one frame (target_h*target_w*3 bytes)
         self.assertEqual(proc.stdin.write.call_count, 40)
         expected_frame_bytes = target_h * target_w * 3
         for call in proc.stdin.write.call_args_list:
@@ -1419,7 +1423,7 @@ class TestGenerateCompilationVideo(unittest.TestCase):
     def test_run_pynv_compilation_logs_error_when_all_src_indices_identical(
         self, mock_isfile, mock_logger, mock_open_fn, mock_popen, mock_create_decoder
     ):
-        """When decoder returns same frame index for all times, log at DEBUG and INFO once per camera (static frame)."""
+        """Same frame index for all → DEBUG and INFO once per camera (static)."""
         try:
             import torch
         except ImportError:
@@ -1472,7 +1476,7 @@ class TestGenerateCompilationVideo(unittest.TestCase):
         self.assertGreater(
             len(debug_calls),
             0,
-            "Expected at least one DEBUG log for static frame (same index for all frames)",
+            "Expected at least one DEBUG for static frame (same index for all)",
         )
         info_calls = [
             c
@@ -1483,7 +1487,7 @@ class TestGenerateCompilationVideo(unittest.TestCase):
         self.assertGreater(
             len(info_calls),
             0,
-            "Expected at least one INFO log for stutter/missing frames (once per camera per event)",
+            "Expected one INFO for stutter/missing (once per camera per event)",
         )
         self.assertIn("doorbell", str(info_calls[0]))
         self.assertIn("doorbell-1.mp4", str(info_calls[0]))
@@ -1497,7 +1501,7 @@ class TestGenerateCompilationVideo(unittest.TestCase):
     def test_run_pynv_compilation_logs_once_per_camera_not_per_slice(
         self, mock_isfile, mock_logger, mock_open_fn, mock_popen, mock_create_decoder
     ):
-        """DEBUG compilation log is emitted once per distinct camera, not once per slice."""
+        """DEBUG compilation log emitted once per camera, not per slice."""
         try:
             import torch
         except ImportError:
@@ -1576,16 +1580,16 @@ class TestGenerateCompilationVideo(unittest.TestCase):
         self.assertEqual(
             len(compilation_debug_calls),
             2,
-            "Expected exactly 2 DEBUG logs (one per distinct camera), not one per slice. "
+            "Expected 2 DEBUG (one per camera), not per slice. "
             f"Got {len(compilation_debug_calls)} calls.",
         )
 
 
 class TestEncodeFramesViaFfmpeg(unittest.TestCase):
-    """Tests for _encode_frames_via_ffmpeg: h264_nvenc only, descriptive error on failure."""
+    """Tests for _encode_frames_via_ffmpeg: h264_nvenc, descriptive error on failure."""
 
     def test_encode_uses_h264_nvenc_in_command(self):
-        """FFmpeg is invoked with -c:v h264_nvenc (GPU only; no libx264) and -pix_fmt yuv420p."""
+        """FFmpeg -c:v h264_nvenc and -pix_fmt yuv420p (no libx264)."""
         import numpy as np
 
         frames = [np.zeros((1080, 1440, 3), dtype=np.uint8)]
@@ -1604,7 +1608,7 @@ class TestEncodeFramesViaFfmpeg(unittest.TestCase):
         self.assertIn("yuv420p", call_args)
 
     def test_encode_uses_thread_queue_size_and_nvenc_tune(self):
-        """FFmpeg command includes -thread_queue_size 512 and h264_nvenc preset/tune/rc/cq for stability."""
+        """FFmpeg: -thread_queue_size 512, h264_nvenc preset/tune/rc/cq."""
         import numpy as np
 
         frames = [np.zeros((1080, 1440, 3), dtype=np.uint8)]
@@ -1627,7 +1631,7 @@ class TestEncodeFramesViaFfmpeg(unittest.TestCase):
         self.assertIn("24", cmd_str)
 
     def test_encode_failure_raises_with_descriptive_message(self):
-        """On non-zero exit, RuntimeError is raised advising to check ffmpeg_compile.log."""
+        """On non-zero exit, RuntimeError advises checking ffmpeg_compile.log."""
         import numpy as np
 
         frames = [np.zeros((1080, 1440, 3), dtype=np.uint8)]
@@ -1645,7 +1649,7 @@ class TestEncodeFramesViaFfmpeg(unittest.TestCase):
         self.assertIn("ffmpeg_compile.log", str(ctx.exception))
 
     def test_broken_pipe_logs_and_raises_with_log_path(self):
-        """When FFmpeg crashes and closes stdin, BrokenPipeError is caught; RuntimeError advises checking ffmpeg_compile.log."""
+        """FFmpeg closes stdin → BrokenPipeError; RuntimeError re ffmpeg_compile.log."""
         import numpy as np
 
         frames = [np.zeros((1080, 1440, 3), dtype=np.uint8)]
@@ -1676,7 +1680,7 @@ class TestCompileCeVideoConfig(unittest.TestCase):
     def test_uses_max_multi_cam_frames_config_keys(
         self, mock_resolve, mock_build_dense, mock_build_assignments, mock_gen
     ):
-        """compile_ce_video must use MAX_MULTI_CAM_FRAMES_SEC and MAX_MULTI_CAM_FRAMES_MIN."""
+        """Uses MAX_MULTI_CAM_FRAMES_SEC and MAX_MULTI_CAM_FRAMES_MIN."""
         mock_resolve.return_value = "cam1.mp4"
         mock_build_dense.return_value = [0.0, 1.0, 2.0]
         mock_build_assignments.return_value = [
@@ -1737,7 +1741,7 @@ class TestCompileCeVideoConfig(unittest.TestCase):
         mock_trim,
         mock_gen,
     ):
-        """When _trim_slices_to_action_window returns empty list, compile_ce_video returns None and does not call generate_compilation_video."""
+        """_trim_slices empty → returns None, no generate_compilation_video."""
         mock_resolve.return_value = "cam1.mp4"
         mock_build_dense.return_value = [0.0, 1.0, 2.0]
         mock_build_assignments.return_value = [
@@ -1792,7 +1796,7 @@ class TestCompileCeVideoConfig(unittest.TestCase):
     def test_extends_global_end_when_sidecar_longer_than_requested_window(
         self, mock_resolve, mock_build_dense, mock_build_assignments, mock_gen
     ):
-        """When sidecar content is longer than passed global_end, compile_ce_video extends timeline to sidecar duration."""
+        """Sidecar longer than global_end → extends timeline to sidecar duration."""
         mock_resolve.return_value = "cam1.mp4"
         mock_build_dense.return_value = [0.0, 2.0, 4.0]
         mock_build_assignments.return_value = [
@@ -1841,7 +1845,7 @@ class TestCompileCeVideoConfig(unittest.TestCase):
                     mock_ent.path = "/ce/cam1"
                     mock_scandir.return_value.__enter__.return_value = [mock_ent]
                     compile_ce_video("/ce", 50.0, config, None)
-        # build_dense_times(step_sec, max_frames_min, multiplier, global_end) -> global_end should be 87
+        # build_dense_times(step_sec, max_frames_min, mult, global_end) -> global_end=87
         call_args = mock_build_dense.call_args[0]
         self.assertEqual(
             call_args[3], 87.0, "global_end should extend to sidecar last timestamp"
@@ -1856,7 +1860,7 @@ class TestCompileCeVideoConfig(unittest.TestCase):
     def test_keeps_global_end_when_sidecar_shorter_than_requested_window(
         self, mock_resolve, mock_build_dense, mock_build_assignments, mock_gen
     ):
-        """When sidecar content is shorter than passed global_end, compile_ce_video keeps caller global_end."""
+        """Sidecar shorter than global_end → keeps caller global_end."""
         mock_resolve.return_value = "cam1.mp4"
         mock_build_dense.return_value = [0.0, 2.0, 4.0]
         mock_build_assignments.return_value = [
@@ -1915,7 +1919,7 @@ class TestCompileCeVideoConfig(unittest.TestCase):
 
 
 class TestCompilationDecoderImport(unittest.TestCase):
-    """Compilation uses gpu_decoder.create_decoder (PyNvVideoCodec); this test guards the import."""
+    """Compilation uses gpu_decoder.create_decoder; test guards import."""
 
     def test_video_compilation_imports_create_decoder(self):
         """video_compilation module uses create_decoder from gpu_decoder for decode."""

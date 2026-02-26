@@ -34,7 +34,8 @@ def _make_event(
 
 
 def _ce_like_event(event_id: str = "ce_100_abc", folder_name: str = "100_abc"):
-    """Event-like object with folder_name (ConsolidatedEvent style). Uses a simple mock."""
+    """Event-like object with folder_name (ConsolidatedEvent style).
+    Uses a simple mock."""
     m = MagicMock()
     m.event_id = event_id
     m.camera = "events"
@@ -51,7 +52,8 @@ def _ce_like_event(event_id: str = "ce_100_abc", folder_name: str = "100_abc"):
 
 
 class TestPushoverPhaseFilter(unittest.TestCase):
-    """Phase filter: only snapshot_ready, clip_ready, finalized are sent; others skipped."""
+    """Phase filter: only snapshot_ready, clip_ready, finalized are sent;
+    others skipped."""
 
     def setUp(self):
         self.config = {"pushover_api_token": "tok", "pushover_user_key": "uk"}
@@ -82,7 +84,8 @@ class TestPushoverPhaseFilter(unittest.TestCase):
 
 
 class TestPushoverSnapshotReady(unittest.TestCase):
-    """snapshot_ready: priority 0 or 1 by threat_level; optional latest.jpg attachment."""
+    """snapshot_ready: priority 0 or 1 by threat_level; optional
+    latest.jpg attachment."""
 
     def setUp(self):
         self.config = {"pushover_api_token": "tok", "pushover_user_key": "uk"}

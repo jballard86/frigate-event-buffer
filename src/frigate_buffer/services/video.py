@@ -1,9 +1,9 @@
 """
-Video service: PyNvVideoCodec GPU decode, YOLO detection, sidecar writing, GIF via FFmpeg.
+Video service: PyNvVideoCodec GPU decode, YOLO detection, sidecars, GIF via FFmpeg.
 
-Decode path uses gpu_decoder (SimpleDecoder, use_device_memory=True, max_width=4096); no sanitizer.
-Frames are BCHW RGB from decoder, normalized to float32 [0,1] before YOLO. VRAM is released
-after each chunk (del + torch.cuda.empty_cache). GPU_LOCK serializes decoder open and get_frames app-wide.
+Decode path uses gpu_decoder (SimpleDecoder, use_device_memory=True, max_width=4096).
+Frames are BCHW RGB from decoder, normalized to float32 [0,1] before YOLO. VRAM released
+after each chunk (del + empty_cache). GPU_LOCK serializes decoder and get_frames.
 """
 
 from __future__ import annotations
@@ -23,12 +23,12 @@ from frigate_buffer.services.gpu_decoder import create_decoder
 
 logger = logging.getLogger("frigate-buffer")
 
-# Serialize PyNvVideoCodec decoder access across threads (create_decoder and get_frames).
+# Serialize PyNvVideoCodec decoder access (create_decoder and get_frames).
 GPU_LOCK = threading.Lock()
 
 # In-memory cache for ffprobe results keyed by clip path (realpath when exists).
-# Reduces redundant subprocess I/O when the same clip is probed by sidecar, extraction, and compilation.
-# Bounded: clear when over this many entries so metadata for deleted clips does not stay in RAM forever.
+# Reduces redundant subprocess I/O when clip probed by sidecar, extraction, compilation.
+# Bounded: clear when over limit so metadata for deleted clips does not stay in RAM.
 _METADATA_CACHE_MAX_SIZE = 500
 _METADATA_CACHE: dict[str, tuple[int, int, float, float] | None] = {}
 
@@ -54,7 +54,7 @@ BATCH_SIZE = 4
 # COCO class 0 = person; we restrict YOLO to this class only for sidecar.
 _PERSON_CLASS_ID = 0
 
-# Throttle YOLO inference logs to at most once per this many seconds (avoids log spam per batch).
+# Throttle YOLO inference logs to at most once per this many seconds.
 _YOLO_INFERENCE_LOG_INTERVAL = 5.0
 _last_yolo_inference_log_time: float = 0.0
 
@@ -84,7 +84,7 @@ def log_gpu_status() -> None:
                 "utf-8", errors="replace"
             ).strip().split("\n")[0] or "?"
             logger.info(
-                "GPU status: nvidia-smi OK, GPUs=%s, driver=%s (PyNvVideoCodec NVDEC used for decode)",
+                "GPU status: nvidia-smi OK, GPUs=%s, driver=%s (NVDEC for decode)",
                 gpu_count,
                 driver,
             )
@@ -110,13 +110,13 @@ def get_detection_model_path(config: dict) -> str:
 
 def ensure_detection_model_ready(config: dict) -> bool:
     """
-    At startup: check if the multi-cam detection model is downloaded; download if not; log result.
-    Call after config is loaded. Returns True if model is ready, False if skipped or failed.
+    At startup: check if multi-cam detection model is downloaded; download if not.
+    Call after config is loaded. Returns True if ready, False if skipped or failed.
     """
     model_name = (config.get("DETECTION_MODEL") or "").strip()
     if not model_name:
         logger.info(
-            "Multi-cam detection model not configured (DETECTION_MODEL empty), skipping preload"
+            "Multi-cam detection model not configured (DETECTION_MODEL empty), skip",
         )
         return False
     model_path = get_detection_model_path(config)
@@ -242,8 +242,7 @@ def _decoder_frame_count(
     fallback_duration_sec: float,
 ) -> int:
     """
-    Get frame count from a decoder/reader, falling back to ffprobe-derived duration * fps.
-
+    Get frame count from decoder/reader, or ffprobe-derived duration * fps.
     Supports DecoderContext (len(ctx), ctx.frame_count) and readers with shape/len.
     """
     if hasattr(reader, "frame_count"):
@@ -268,7 +267,7 @@ def _scale_detections_to_native(
     native_w: int,
     native_h: int,
 ) -> list[dict[str, Any]]:
-    """Scale bbox, centerpoint, and area from decoded (read) frame coordinates to native resolution."""
+    """Scale bbox, centerpoint, area from decoded frame coords to native resolution."""
     if read_w <= 0 or read_h <= 0 or native_w <= 0 or native_h <= 0:
         return detections
     scale_x = native_w / read_w
@@ -316,9 +315,8 @@ def _run_detection_on_frame(
     imgsz: int = 640,
 ) -> list[dict[str, Any]]:
     """
-    Run YOLO on one frame (person class only); return list of {label, bbox, centerpoint, area}.
-
-    frame: numpy HWC BGR or torch.Tensor BCHW. If uint8, normalized to float32 [0,1] before YOLO.
+    Run YOLO on one frame (person class); return {label, bbox, centerpoint, area}.
+    frame: numpy HWC BGR or torch.Tensor BCHW; if uint8, normalized to float32 [0,1].
     """
     import torch
 
@@ -399,11 +397,8 @@ def _run_detection_on_batch(
     imgsz: int = 640,
 ) -> list[list[dict[str, Any]]]:
     """
-    Run YOLO on a batch of frames (BCHW float32 [0,1]); return list of detection lists (one per frame).
-
-    Frames are resized on GPU to imgsz (aspect ratio, multiples of 32) before inference so that
-    Ultralytics receives a correctly sized tensor; bboxes are then scaled back to decoder (read)
-    space so the caller can pass them to _scale_detections_to_native.
+    Run YOLO on batch (BCHW float32 [0,1]); return list of detection lists per frame.
+    Frames resized on GPU to imgsz (aspect ratio, 32-multiple); bboxes scaled.
     """
     global _last_yolo_inference_log_time
     import torch
@@ -489,7 +484,7 @@ def _run_detection_on_batch(
 
 
 class VideoService:
-    """Handles video decode (PyNvVideoCodec NVDEC), YOLO detection, sidecar writing, GIF via FFmpeg subprocess."""
+    """Video decode (NVDEC), YOLO detection, sidecars, GIF via FFmpeg subprocess."""
 
     DEFAULT_FFMPEG_TIMEOUT = 60
 
@@ -502,7 +497,7 @@ class VideoService:
         )
 
     def set_sidecar_app_lock(self, lock: threading.Lock) -> None:
-        """Set app-level lock so only one sidecar batch (TEST or lifecycle) runs at a time."""
+        """Set app-level lock so one sidecar batch (TEST or lifecycle) runs at once."""
         self._sidecar_app_lock = lock
 
     def run_detection_on_image(
@@ -510,9 +505,8 @@ class VideoService:
     ) -> list[dict[str, Any]]:
         """
         Run YOLO person detection on a single image (e.g. from latest.jpg).
-
-        Accepts numpy HWC BGR or torch.Tensor BCHW; normalizes to float32 [0,1] before YOLO.
-        Uses the app-level sidecar lock. Returns list of {label, bbox, centerpoint, area}.
+        Accepts numpy HWC BGR or torch.Tensor BCHW; normalizes to float32 [0,1].
+        Uses app-level sidecar lock. Returns list of {label, bbox, centerpoint, area}.
         """
         lock = self._sidecar_app_lock
         if lock is not None:
@@ -548,10 +542,9 @@ class VideoService:
         yolo_lock: threading.Lock | None = None,
     ) -> bool:
         """
-        Decode clip with PyNvVideoCodec (gpu_decoder), run YOLO every N frames in batches of BATCH_SIZE, write detection.json.
-
-        No CPU/ffmpegcv fallback; on decoder or YOLO failure logs context and returns False.
-        Frames are BCHW RGB from decoder, normalized to float32 [0,1] before YOLO. After each chunk, del batch and torch.cuda.empty_cache().
+        Decode clip with PyNvVideoCodec, run YOLO every N frames, write detection.json.
+        No CPU/ffmpegcv fallback; on failure logs context and returns False.
+        Frames BCHW RGB, float32 [0,1]; after each chunk del batch and empty_cache().
         """
         import torch
 
@@ -611,7 +604,7 @@ class VideoService:
                             batch = ctx.get_frames(chunk_indices)
                         except Exception as e:
                             logger.error(
-                                "%s (decoder get_frames failed). clip_path=%s indices=%s error=%s",
+                                "%s get_frames failed. clip=%s indices=%s error=%s",
                                 NVDEC_INIT_FAILURE_PREFIX,
                                 clip_path,
                                 chunk_indices,
@@ -694,7 +687,7 @@ class VideoService:
                     "native_height": native_h or read_h,
                     "entries": sidecar_entries,
                 }
-            # GPU_LOCK and decoder exited; disk write outside lock to avoid holding GPU idle.
+            # GPU_LOCK and decoder exited; write outside lock to avoid holding GPU idle.
             with open(sidecar_path, "w", encoding="utf-8") as f:
                 json.dump(payload, f, indent=None, separators=(",", ":"))
             logger.debug(
@@ -705,7 +698,7 @@ class VideoService:
             return True
         except Exception as e:
             logger.error(
-                "%s (decoder open or decode failed). path=%s error=%s Check GPU, drivers; container may restart.",
+                "%s (decoder open or decode failed). path=%s error=%s",
                 NVDEC_INIT_FAILURE_PREFIX,
                 clip_path,
                 e,
@@ -736,9 +729,8 @@ class VideoService:
         config: dict[str, Any],
     ) -> list[tuple[str, bool]]:
         """
-        Generate detection sidecars for multiple cameras in parallel with one shared YOLO model and lock.
-
-        tasks: list of (camera_name, clip_path, sidecar_path). Returns list of (camera_name, ok) in same order.
+        Generate detection sidecars for multiple cams in parallel; shared YOLO and lock.
+        tasks: (camera_name, clip_path, sidecar_path). Returns (camera_name, ok).
         """
         if not tasks:
             return []
@@ -790,8 +782,7 @@ class VideoService:
     ) -> bool:
         """
         Generate animated GIF from video clip using FFmpeg subprocess.
-
-        No GPU GIF encoder; this is the only remaining FFmpeg use (decode/encode for GIF).
+        No GPU GIF encoder; only remaining FFmpeg use (decode/encode for GIF).
         Returns True on success.
         """
         try:

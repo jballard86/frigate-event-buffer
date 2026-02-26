@@ -90,7 +90,7 @@ class EventQueryService:
         self.storage_path = storage_path
         self._cache = {}
         self._cache_ttl = cache_ttl
-        self._event_cache: OrderedDict = OrderedDict()  # LRU cache keyed by folder path
+        self._event_cache: OrderedDict = OrderedDict()  # LRU keyed by folder
         self._event_cache_max = event_cache_max
 
     def _get_cached(self, key: str) -> Any | None:
@@ -297,7 +297,8 @@ class EventQueryService:
     def _extract_cameras_zones_from_timeline(
         self, timeline_data: dict[str, Any]
     ) -> list[dict[str, Any]]:
-        """Extract cameras and zones from frigate_mqtt entries in notification_timeline.json."""
+        """Extract cameras and zones from frigate_mqtt entries in
+        notification_timeline.json."""
         data = timeline_data
 
         camera_zones = {}
@@ -340,7 +341,7 @@ class EventQueryService:
         for entry in entries:
             ce_id = entry.name
             # Consolidated event folders must follow pattern: {timestamp}_{id}
-            # Strictly enforce this to prevent non-event folders from appearing as events
+            # Strictly enforce to prevent non-event folders appearing as events
             parts = ce_id.split("_", 1)
             if len(parts) < 2 or not parts[0].isdigit():
                 continue
@@ -348,7 +349,8 @@ class EventQueryService:
             if re.match(r"^test\d+$", ce_id):
                 continue
 
-            # Cache key uses content mtime so adding a clip (*.mp4) in any camera subdir invalidates cache
+            # Cache key uses content mtime so adding a clip (*.mp4) in any
+            # camera subdir invalidates cache
             content_mtime = entry.stat().st_mtime
             try:
                 with os.scandir(entry.path) as it:
@@ -404,7 +406,8 @@ class EventQueryService:
                     primary_snapshot = f"/files/events/{ce_id}/{cam}/snapshot.jpg"
                     break
 
-            # When the edited summary video exists in the CE root, add it to the dropdown and make it primary.
+            # When the edited summary video exists in the CE root, add it to
+            # the dropdown and make it primary.
             summary_basename = f"{ce_id}_summary.mp4"
             summary_path = os.path.join(entry.path, summary_basename)
             if os.path.isfile(summary_path):
@@ -420,7 +423,8 @@ class EventQueryService:
                 subdirs.get(cam, {}).get("has_snapshot") for cam in cameras
             )
 
-            # hosted_clip: only set when we have an actual clip (camera or summary); no fallback to non-existent file
+            # hosted_clip: only set when we have an actual clip (camera or
+            # summary); no fallback to non-existent file
             hosted_clip_url = primary_clip if has_clip else None
             hosted_snapshot_url = (
                 primary_snapshot
@@ -794,7 +798,8 @@ class EventQueryService:
     def _build_saved_single_cam_event_dict(
         self, camera_name: str, subdir: str, data: dict[str, Any]
     ) -> dict[str, Any]:
-        """Build event dict for a saved CE folder with one camera (saved/camera/subdir). Pipeline is always CE; this is folder layout only."""
+        """Build event dict for a saved CE folder with one camera
+        (saved/camera/subdir). Pipeline is always CE; folder layout only."""
         parts = subdir.split("_", 1)
         ts = parts[0] if len(parts) > 0 else "0"
         eid = parts[1] if len(parts) > 1 else subdir
@@ -909,7 +914,8 @@ class EventQueryService:
             cameras = sorted(subdirs.keys())
             if not cameras:
                 continue
-            # Use folder mtime as event date so test events show correct date/length (regular events unchanged)
+            # Use folder mtime as event date so test events show correct
+            # date/length (regular events unchanged)
             ts = str(int(content_mtime))
             summary_text = data.get("summary_text", "Analysis pending...")
             metadata = data.get("metadata", {}) or {}

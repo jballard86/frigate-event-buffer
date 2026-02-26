@@ -229,9 +229,10 @@ class DownloadService:
                         if not matched and export_filename:
                             tail = export_filename.lstrip("/").split("/")[-1]
                             for e in exports:
-                                if e.get("name") == export_filename or e.get(
-                                    "name"
-                                ) == tail:
+                                if (
+                                    e.get("name") == export_filename
+                                    or e.get("name") == tail
+                                ):
                                     matched = e
                                     break
                                 e_path = (
@@ -338,9 +339,10 @@ class DownloadService:
                         tail = export_filename.lstrip("/").split("/")[-1]
                         # Prefer match by name so we persist list "id" for DELETE.
                         for e in exports:
-                            if e.get("name") == export_filename or e.get(
-                                "name"
-                            ) == tail:
+                            if (
+                                e.get("name") == export_filename
+                                or e.get("name") == tail
+                            ):
                                 matched = e
                                 break
                         if not matched:
@@ -373,9 +375,7 @@ class DownloadService:
                                 or frigate_response.get("export_id")
                             )
                 except Exception as e:
-                    logger.debug(
-                        "Could not sync export_id from exports list: %s", e
-                    )
+                    logger.debug("Could not sync export_id from exports list: %s", e)
 
             download_path = (
                 export_filename.lstrip("/").split("/")[-1]

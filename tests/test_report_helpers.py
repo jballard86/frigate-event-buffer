@@ -26,7 +26,8 @@ class TestDailyReportsDir(unittest.TestCase):
 
 
 class TestListReportDates(unittest.TestCase):
-    """list_report_dates returns sorted YYYY-MM-DD, newest first; skips invalid names."""
+    """list_report_dates returns sorted YYYY-MM-DD, newest first;
+    skips invalid names."""
 
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
@@ -88,9 +89,11 @@ class TestGetReportForDate(unittest.TestCase):
         self.assertEqual(data["summary"], "# Daily report\n\nNothing to report.")
 
     def test_path_traversal_returns_none(self):
-        """Path escape (e.g. ..) does not read outside storage; returns None for invalid path."""
-        # resolve_under_storage(storage, "daily_reports", "../etc/passwd_report.md") would be
-        # normalized and likely outside base -> None. We don't have a literal file there;
+        """Path escape (e.g. ..) does not read outside storage;
+        returns None for invalid path."""
+        # resolve_under_storage(storage, "daily_reports",
+        # "../etc/passwd_report.md") would be normalized and likely outside
+        # base -> None. We don't have a literal file there;
         # get_report_for_date uses d.isoformat() so we can't inject .. via date.
         # So just ensure missing date file returns None.
         self.assertIsNone(get_report_for_date(self.tmp, date(1999, 1, 1)))

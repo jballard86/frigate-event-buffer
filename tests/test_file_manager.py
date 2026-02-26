@@ -1,6 +1,7 @@
 """
-Tests for FileManager: path validation, cleanup_old_events, max event length (rename/canceled),
-and compute_storage_stats (legacy/consolidated/daily_reports and /stats API format).
+Tests for FileManager: path validation, cleanup_old_events, max event length
+(rename/canceled), and compute_storage_stats (legacy/consolidated/daily_reports
+and /stats API format).
 """
 
 import os
@@ -76,7 +77,8 @@ class TestFileManagerPathValidation(unittest.TestCase):
 
 
 class TestFileManagerCleanup(unittest.TestCase):
-    """cleanup_old_events: testN folders, CE folders, canceled folders by mtime and active sets."""
+    """cleanup_old_events: testN folders, CE folders, canceled folders by
+    mtime and active sets."""
 
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
@@ -177,7 +179,8 @@ class TestFileManagerMaxEventLength(unittest.TestCase):
 
 
 class TestFileManagerTimeline(unittest.TestCase):
-    """append_timeline_entry writes to JSONL only (not full notification_timeline.json)."""
+    """append_timeline_entry writes to JSONL only
+    (not full notification_timeline.json)."""
 
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
@@ -197,7 +200,8 @@ class TestFileManagerTimeline(unittest.TestCase):
 
 
 class TestFileManagerStorageStats(unittest.TestCase):
-    """compute_storage_stats (legacy, consolidated, daily_reports) and /stats API format."""
+    """compute_storage_stats (legacy, consolidated, daily_reports)
+    and /stats API format."""
 
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
@@ -247,12 +251,12 @@ class TestFileManagerStorageStats(unittest.TestCase):
         with open(os.path.join(ce_dir, "review_summary.md"), "w") as f:
             f.write("# Summary")
         stats = self.fm.compute_storage_stats()
-        self.assertIn("events", stats["by_camera"])
+        self.assertIn("carport", stats["by_camera"])
         self.assertGreaterEqual(stats["clips"], 5000)
         self.assertGreaterEqual(stats["snapshots"], 500)
         self.assertGreater(stats["descriptions"], 0)
-        self.assertEqual(stats["by_camera"]["events"]["clips"], 5000)
-        self.assertEqual(stats["by_camera"]["events"]["snapshots"], 500)
+        self.assertEqual(stats["by_camera"]["carport"]["clips"], 5000)
+        self.assertEqual(stats["by_camera"]["carport"]["snapshots"], 500)
 
     def test_daily_reports_and_daily_reviews_included_in_total(self):
         for sub in ("daily_reports", "daily_reviews"):
@@ -279,9 +283,7 @@ class TestFileManagerStorageStats(unittest.TestCase):
         stats = self.fm.compute_storage_stats()
         self.assertEqual(stats["clips"], 100 + 200)
         self.assertIn("doorbell", stats["by_camera"])
-        self.assertIn("events", stats["by_camera"])
-        self.assertEqual(stats["by_camera"]["doorbell"]["clips"], 100)
-        self.assertEqual(stats["by_camera"]["events"]["clips"], 200)
+        self.assertEqual(stats["by_camera"]["doorbell"]["clips"], 100 + 200)
 
     def test_stats_api_returns_storage_with_value_unit_format(self):
         storage = tempfile.mkdtemp()
@@ -318,6 +320,8 @@ class TestFileManagerStorageStats(unittest.TestCase):
             consolidated_manager=MagicMock(get_all=MagicMock(return_value=[])),
             file_manager=MagicMock(),
             mqtt_wrapper=MagicMock(mqtt_connected=False),
+            query_service=MagicMock(),
+            download_service=MagicMock(),
         )
         from frigate_buffer.web.server import create_app
 

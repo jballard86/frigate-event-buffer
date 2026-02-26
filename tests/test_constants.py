@@ -34,7 +34,7 @@ class TestIsTensor(unittest.TestCase):
         self.assertFalse(is_tensor(42))
 
     def test_tensor_like_by_name_returns_true(self):
-        """Object whose type __name__ is 'Tensor' returns True (same check as real torch.Tensor)."""
+        """Object with type __name__ 'Tensor' returns True (same as torch.Tensor)."""
 
         class Tensor:
             pass
@@ -56,8 +56,15 @@ class TestNonCameraDirs(unittest.TestCase):
     """Sanity checks for NON_CAMERA_DIRS constant."""
 
     def test_contains_expected_dirs(self):
-        """NON_CAMERA_DIRS includes ultralytics, yolo_models, daily_reports, daily_reviews."""
-        expected = {"ultralytics", "yolo_models", "daily_reports", "daily_reviews"}
+        """NON_CAMERA_DIRS includes ultralytics, yolo_models, daily_reports,
+        daily_reviews, and saved."""
+        expected = {
+            "ultralytics",
+            "yolo_models",
+            "daily_reports",
+            "daily_reviews",
+            "saved",
+        }
         self.assertEqual(NON_CAMERA_DIRS, frozenset(expected))
 
     def test_is_frozenset(self):
@@ -89,7 +96,7 @@ class TestNvdecInitFailurePrefix(unittest.TestCase):
     """NVDEC init failure log prefix is searchable in crash-loop logs."""
 
     def test_prefix_is_non_empty_and_searchable(self):
-        """NVDEC_INIT_FAILURE_PREFIX is a fixed string used when NVDEC/decoder init fails."""
+        """NVDEC_INIT_FAILURE_PREFIX is used when NVDEC/decoder init fails."""
         self.assertEqual(
             NVDEC_INIT_FAILURE_PREFIX, "NVDEC hardware initialization failed"
         )

@@ -1,6 +1,7 @@
 """
-Tests for web server path safety: /files/<path> and /delete/<path> must not allow path traversal.
-Also tests timeline download route: /events/<camera>/<subdir>/timeline/download.
+Tests for web server path safety: /files/<path> and /delete/<path> must not
+allow path traversal. Also tests timeline download route:
+/events/<camera>/<subdir>/timeline/download.
 """
 
 import json
@@ -16,8 +17,9 @@ from frigate_buffer.services.query import EventQueryService
 
 
 class TestWebServerPathSafety(unittest.TestCase):
-    """Verify path traversal attempts return 400/404 and do not expose files outside storage.
-    Run this file alone (pytest tests/test_web_server_path_safety.py) to avoid create_app
+    """Verify path traversal attempts return 400/404 and do not expose files
+    outside storage. Run this file alone
+    (pytest tests/test_web_server_path_safety.py) to avoid create_app
     being mocked by other tests in the suite.
     """
 
@@ -37,6 +39,7 @@ class TestWebServerPathSafety(unittest.TestCase):
             state_manager=SimpleNamespace(),
             file_manager=SimpleNamespace(),
             query_service=EventQueryService(self.storage),
+            download_service=MagicMock(),
         )
         self.app = create_app(self.orchestrator)
         self.client = self.app.test_client()
@@ -45,11 +48,13 @@ class TestWebServerPathSafety(unittest.TestCase):
     def _skip_if_app_mocked(self):
         if self._app_is_mock:
             self.skipTest(
-                "create_app was mocked (run this file alone: pytest tests/test_web_server_path_safety.py)"
+                "create_app was mocked (run this file alone: "
+                "pytest tests/test_web_server_path_safety.py)"
             )
 
     def test_files_path_traversal_returns_404(self):
-        """Requesting /files/../../../etc/passwd must not serve a file outside storage."""
+        """Requesting /files/../../../etc/passwd must not serve a file
+        outside storage."""
         self._skip_if_app_mocked()
         r = self.client.get("/files/../../../etc/passwd")
         self.assertIn(
@@ -59,7 +64,8 @@ class TestWebServerPathSafety(unittest.TestCase):
         )
 
     def test_files_double_dot_in_path_returns_404_or_400(self):
-        """Requesting /files/cam/..%2f..%2fetc/passwd (URL-encoded) should be rejected."""
+        """Requesting /files/cam/..%2f..%2fetc/passwd (URL-encoded)
+        should be rejected."""
         self._skip_if_app_mocked()
         r = self.client.get("/files/cam/..%2f..%2fetc%2fpasswd")
         self.assertIn(r.status_code, (404, 400))
@@ -80,13 +86,15 @@ class TestWebServerPathSafety(unittest.TestCase):
         self.assertIn(r.status_code, (200, 404))
 
     def test_viewed_path_traversal_rejected(self):
-        """POST /viewed with path traversal must be rejected (400 invalid path or 404 not found)."""
+        """POST /viewed with path traversal must be rejected
+        (400 invalid path or 404 not found)."""
         self._skip_if_app_mocked()
         r = self.client.post("/viewed/cam/..%2f..%2fevil")
         self.assertIn(r.status_code, (400, 404))
 
     def test_timeline_download_returns_merged_json_when_only_append_exists(self):
-        """GET timeline/download returns 200 and merged timeline when only notification_timeline_append.jsonl exists."""
+        """GET timeline/download returns 200 and merged timeline when only
+        append file exists."""
         self._skip_if_app_mocked()
         camera = "Doorbell"
         subdir = "1771359165_3aa0dabd"
@@ -95,7 +103,8 @@ class TestWebServerPathSafety(unittest.TestCase):
         append_path = os.path.join(event_dir, "notification_timeline_append.jsonl")
         with open(append_path, "w") as f:
             f.write(
-                '{"source": "frigate_mqtt", "label": "Event update", "ts": "2026-02-17T15:12:49"}\n'
+                '{"source": "frigate_mqtt", "label": "Event update", '
+                '"ts": "2026-02-17T15:12:49"}\n'
             )
         r = self.client.get(f"/events/{camera}/{subdir}/timeline/download")
         self.assertEqual(r.status_code, 200)
@@ -110,7 +119,8 @@ class TestWebServerPathSafety(unittest.TestCase):
         self.assertIn("notification_timeline.json", r.headers["Content-Disposition"])
 
     def test_timeline_download_returns_merged_json_when_both_files_exist(self):
-        """GET timeline/download returns merged base + append when both timeline files exist."""
+        """GET timeline/download returns merged base + append when both
+        timeline files exist."""
         self._skip_if_app_mocked()
         camera = "front_door"
         subdir = "123_evt1"
@@ -131,7 +141,8 @@ class TestWebServerPathSafety(unittest.TestCase):
         self.assertEqual(data["entries"][1]["label"], "append_entry")
 
     def test_timeline_download_404_when_event_folder_missing(self):
-        """GET timeline/download returns 404 when camera/subdir folder does not exist."""
+        """GET timeline/download returns 404 when camera/subdir folder
+        does not exist."""
         self._skip_if_app_mocked()
         r = self.client.get("/events/Doorbell/nonexistent_subdir/timeline/download")
         self.assertEqual(r.status_code, 404)

@@ -33,7 +33,8 @@ class TestProxySnapshot(unittest.TestCase):
 
 
 class TestProxyCameraLatest(unittest.TestCase):
-    """proxy_camera_latest validates name and allowed_cameras, returns 503/502 on errors."""
+    """proxy_camera_latest validates name and allowed_cameras,
+    returns 503/502 on errors."""
 
     def test_invalid_camera_name_returns_400(self):
         """Camera name with invalid characters returns 400."""

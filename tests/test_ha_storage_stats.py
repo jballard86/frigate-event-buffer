@@ -3,6 +3,8 @@
 import unittest
 from unittest.mock import MagicMock, patch
 
+import requests
+
 from frigate_buffer.services.ha_storage_stats import (
     DEFAULT_STORAGE_STATS_MAX_AGE_SECONDS,
     StorageStatsAndHaHelper,
@@ -32,8 +34,6 @@ class TestFetchHaState(unittest.TestCase):
 
     @patch("frigate_buffer.services.ha_storage_stats.requests.get")
     def test_returns_none_on_request_exception(self, mock_get):
-        import requests
-
         mock_get.side_effect = requests.RequestException("network error")
         result = fetch_ha_state("http://ha:8123", "t", "sensor.foo")
         self.assertIsNone(result)

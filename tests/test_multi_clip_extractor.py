@@ -9,7 +9,8 @@ from unittest.mock import MagicMock, patch
 
 
 def _fake_create_decoder(path, gpu_id=0):
-    """Context manager that yields a mock DecoderContext (used when patching gpu_decoder.create_decoder)."""
+    """Context manager that yields a mock DecoderContext (used when patching
+    gpu_decoder.create_decoder)."""
     try:
         import torch
     except ImportError:
@@ -124,14 +125,18 @@ class TestMultiClipExtractorHelpers(unittest.TestCase):
             shutil.rmtree(d, ignore_errors=True)
 
     def test_load_sidecar_valid_returns_list(self):
-        """Valid detection.json (legacy list) returns (entries, native_w, native_h) with entries list."""
+        """Valid detection.json (legacy list) returns (entries, native_w,
+        native_h) with entries list."""
         test_dir = os.path.dirname(os.path.abspath(__file__))
         d = os.path.join(test_dir, "_sidecar_fixture", str(id(self)))
         os.makedirs(d, exist_ok=True)
         try:
             path = os.path.join(d, DETECTION_SIDECAR_FILENAME)
             data = [
-                {"timestamp_sec": 0.0, "detections": [{"label": "person", "area": 100}]}
+                {
+                    "timestamp_sec": 0.0,
+                    "detections": [{"label": "person", "area": 100}],
+                }
             ]
             with open(path, "w", encoding="utf-8") as f:
                 json.dump(data, f)
@@ -147,10 +152,14 @@ class TestMultiClipExtractorHelpers(unittest.TestCase):
             shutil.rmtree(d, ignore_errors=True)
 
     def test_detection_timestamps_with_person_empty_sidecar_safe(self):
-        """One camera has entries with person area, other is None/empty; no exception."""
+        """One camera has entries with person area, other is None/empty;
+        no exception."""
         sidecars = {
             "cam1": [
-                {"timestamp_sec": 0.0, "detections": [{"label": "person", "area": 100}]}
+                {
+                    "timestamp_sec": 0.0,
+                    "detections": [{"label": "person", "area": 100}],
+                }
             ],
             "cam2": None,
         }
@@ -173,7 +182,8 @@ class TestMultiClipExtractorHelpers(unittest.TestCase):
         self.assertEqual(result, [0.0])
 
     def test_subsample_with_min_gap_enforces_step(self):
-        """Selected timestamps have at least step_sec between them; not all from start."""
+        """Selected timestamps have at least step_sec between them;
+        not all from start."""
         timestamps = [0.0, 0.1, 0.2, 1.0, 1.05, 2.0, 2.1, 3.0]
         result = _subsample_with_min_gap(timestamps, step_sec=1.0, max_count=5)
         self.assertEqual(result, [0.0, 1.0, 2.0, 3.0])
@@ -191,7 +201,8 @@ class TestMultiClipExtractor(unittest.TestCase):
     """Tests for extract_target_centric_frames."""
 
     def setUp(self):
-        # Use a deterministic workspace path so sandbox/Windows can create subdirs (mkdtemp can block makedirs on Windows).
+        # Use a deterministic workspace path so sandbox/Windows can create subdirs
+        # (mkdtemp can block makedirs on Windows).
         self._test_dir = os.path.dirname(os.path.abspath(__file__))
         base = os.path.join(self._test_dir, "_extractor_fixture")
         self.tmp = os.path.join(base, str(id(self)))
@@ -218,7 +229,8 @@ class TestMultiClipExtractor(unittest.TestCase):
         self.assertEqual(result, [])
 
     def _make_decoder_context_mock(self, frame_count=10, height=480, width=640):
-        """Create a mock DecoderContext: __len__, get_index_from_time_in_seconds, get_frames(indices) -> BCHW uint8 tensor."""
+        """Create a mock DecoderContext: __len__,
+        get_index_from_time_in_seconds, get_frames(indices) -> BCHW uint8 tensor."""
         try:
             import torch
         except ImportError:
@@ -241,7 +253,8 @@ class TestMultiClipExtractor(unittest.TestCase):
         side_effect=_fake_create_decoder,
     )
     def test_extract_with_decoder_mock_returns_tensor_frames(self, mock_create_decoder):
-        """extract_target_centric_frames uses create_decoder and get_frames; returns ExtractedFrame with tensor .frame."""
+        """extract_target_centric_frames uses create_decoder and get_frames;
+        returns ExtractedFrame with tensor .frame."""
         os.makedirs(os.path.join(self.tmp, "cam1"))
         os.makedirs(os.path.join(self.tmp, "cam2"))
         for c in ("cam1", "cam2"):
@@ -286,7 +299,8 @@ class TestMultiClipExtractor(unittest.TestCase):
         side_effect=_fake_create_decoder,
     )
     def test_extract_calls_get_frames(self, mock_create_decoder):
-        """extract_target_centric_frames uses create_decoder and get_frames is called on the context."""
+        """extract_target_centric_frames uses create_decoder and get_frames
+        is called on the context."""
         os.makedirs(os.path.join(self.tmp, "cam1"))
         with open(os.path.join(self.tmp, "cam1", "clip.mp4"), "wb"):
             pass
@@ -313,7 +327,8 @@ class TestMultiClipExtractor(unittest.TestCase):
 
     @patch("frigate_buffer.services.multi_clip_extractor.create_decoder")
     def test_extract_drops_camera_when_get_frames_raises(self, mock_create_decoder):
-        """When one camera's get_frames raises, that camera is dropped and extraction continues with the other(s)."""
+        """When one camera's get_frames raises, that camera is dropped and
+        extraction continues with the other(s)."""
         try:
             import torch
         except ImportError:
@@ -382,7 +397,8 @@ class TestMultiClipExtractor(unittest.TestCase):
     def test_extract_uses_metadata_fallback_when_len_zero(
         self, mock_create_decoder, mock_get_fps_duration
     ):
-        """When decoder reports 0 frames, frame count comes from _get_fps_duration_from_path and extraction does not crash."""
+        """When decoder reports 0 frames, frame count comes from
+        _get_fps_duration_from_path and extraction does not crash."""
         os.makedirs(os.path.join(self.tmp, "cam1"))
         with open(os.path.join(self.tmp, "cam1", "clip.mp4"), "wb"):
             pass
@@ -403,7 +419,8 @@ class TestMultiClipExtractor(unittest.TestCase):
                 f,
             )
         mock_get_fps_duration.return_value = (1.0, 10.0)
-        # Default _fake_create_decoder yields ctx with len 10; extraction uses it. Test just verifies metadata is used when needed.
+        # Default _fake_create_decoder yields ctx with len 10; extraction uses it.
+        # Test just verifies metadata is used when needed.
         result = extract_target_centric_frames(
             self.tmp, max_frames_sec=1.0, max_frames_min=5
         )
@@ -454,7 +471,8 @@ class TestMultiClipExtractor(unittest.TestCase):
         side_effect=_fake_create_decoder,
     )
     def test_primary_camera_accepted(self, mock_create_decoder):
-        """extract_target_centric_frames accepts primary_camera (EMA pipeline); returns frames without error."""
+        """extract_target_centric_frames accepts primary_camera (EMA pipeline);
+        returns frames without error."""
         os.makedirs(os.path.join(self.tmp, "cam1"))
         os.makedirs(os.path.join(self.tmp, "cam2"))
         for c in ("cam1", "cam2"):
@@ -490,7 +508,8 @@ class TestMultiClipExtractor(unittest.TestCase):
         side_effect=_fake_create_decoder,
     )
     def test_ema_drop_no_person_excludes_zero_area_frames(self, mock_create_decoder):
-        """With camera_timeline_final_yolo_drop_no_person=True, frames with person_area=0 are not in the result."""
+        """With camera_timeline_final_yolo_drop_no_person=True, frames with
+        person_area=0 are not in the result."""
         os.makedirs(os.path.join(self.tmp, "cam1"))
         os.makedirs(os.path.join(self.tmp, "cam2"))
         for c in ("cam1", "cam2"):
@@ -522,5 +541,6 @@ class TestMultiClipExtractor(unittest.TestCase):
             self.assertGreater(
                 ef.metadata.get("person_area", 0),
                 0,
-                "With camera_timeline_final_yolo_drop_no_person=True, no frame should have person_area=0",
+                "With camera_timeline_final_yolo_drop_no_person=True, "
+                "no frame should have person_area=0",
             )

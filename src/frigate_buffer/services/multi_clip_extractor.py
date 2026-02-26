@@ -1,13 +1,14 @@
 """
 Target-centric multi-clip frame extraction for consolidated events.
 
-Requires detection sidecars (detection.json per camera) from generate_detection_sidecar.
-Reads sidecars and picks the camera with largest person area per time step.
-If any camera lacks a sidecar, returns [] (no on-frame detector fallback). No Frigate metadata.
+Requires detection sidecars (detection.json per camera) from
+generate_detection_sidecar. Reads sidecars and picks the camera with largest
+person area per time step. If any camera lacks a sidecar, returns [] (no
+on-frame detector fallback). No Frigate metadata.
 
-Uses gpu_decoder (PyNvVideoCodec) for GPU decode: one decoder per camera, get_frames([frame_idx])
-per sample time. ExtractedFrame.frame is torch.Tensor BCHW RGB. GPU_LOCK serializes decoder
-access. No ffmpegcv fallback.
+Uses gpu_decoder (PyNvVideoCodec) for GPU decode: one decoder per camera,
+get_frames([frame_idx]) per sample time. ExtractedFrame.frame is torch.Tensor
+BCHW RGB. GPU_LOCK serializes decoder access. No ffmpegcv fallback.
 """
 
 from __future__ import annotations
@@ -50,7 +51,8 @@ DETECTION_SIDECAR_FILENAME = "detection.json"
 
 
 def _person_area_from_detections(detections: list[dict[str, Any]]) -> float:
-    """Sum area of detections whose label is in PREFERRED_LABELS. Used for sidecar entries."""
+    """Sum area of detections whose label is in PREFERRED_LABELS.
+    Used for sidecar entries."""
     total = 0.0
     for d in detections or []:
         label = (d.get("label") or "").lower()
@@ -64,8 +66,9 @@ def _load_sidecar_for_camera(
 ) -> tuple[list[dict[str, Any]], int, int] | None:
     """
     Load detection.json from camera folder.
-    Returns (entries, native_width, native_height) or None. Supports both legacy list format
-    and new dict format with "entries" and "native_width"/"native_height".
+    Returns (entries, native_width, native_height) or None. Supports both legacy
+    list format and new dict format with "entries" and "native_width"/
+    "native_height".
     """
     path = os.path.join(camera_folder, DETECTION_SIDECAR_FILENAME)
     if not os.path.isfile(path):
@@ -91,7 +94,8 @@ def _load_sidecar_for_camera(
 def _nearest_sidecar_entry(
     sidecar_entries: list[dict[str, Any]], t_sec: float
 ) -> dict[str, Any] | None:
-    """Return the sidecar entry with timestamp_sec closest to t_sec, or None if empty."""
+    """Return the sidecar entry with timestamp_sec closest to t_sec, or None
+    if empty."""
     if not sidecar_entries:
         return None
     return min(
@@ -100,8 +104,8 @@ def _nearest_sidecar_entry(
 
 
 def _person_area_at_time(sidecar_entries: list[dict[str, Any]], t_sec: float) -> float:
-    """Return person area at timestamp t_sec using nearest sidecar entry (by timestamp_sec).
-    Empty sidecar or missing detections defaults to 0.0."""
+    """Return person area at timestamp t_sec using nearest sidecar entry
+    (by timestamp_sec). Empty sidecar or missing detections defaults to 0.0."""
     entry = _nearest_sidecar_entry(sidecar_entries, t_sec)
     if entry is None:
         return 0.0
@@ -147,7 +151,8 @@ def _subsample_with_min_gap(
 def _get_fps_duration_from_path(path: str) -> tuple[float, float] | None:
     """
     Get (fps, duration_sec) from clip path via a single ffprobe call.
-    Avoids opening the video capture for metadata so caps can be opened once and not reopened.
+    Avoids opening the video capture for metadata so caps can be opened once
+    and not reopened.
     """
     try:
         from frigate_buffer.services.video import _get_video_metadata
@@ -171,7 +176,7 @@ def extract_target_centric_frames(
     crop_height: int = 0,
     tracking_target_frame_percent: int = 40,
     primary_camera: str | None = None,
-    decode_second_camera_cpu_only: bool = False,  # Ignored: GPU decode only (PyNvVideoCodec), no CPU path
+    decode_second_camera_cpu_only: bool = False,  # Ignored: GPU only, no CPU path
     log_callback: Callable[[str], None] | None = None,
     config: dict[str, Any] | None = None,
     camera_timeline_analysis_multiplier: float = 2.0,
@@ -185,13 +190,16 @@ def extract_target_centric_frames(
     Extract time-ordered, target-centric frames from all clips under a CE folder.
 
     Uses the EMA pipeline (dense grid + EMA smoothing + hysteresis + segment merge)
-    to assign one camera per sample time from detection sidecars. Decode via gpu_decoder
-    (PyNvVideoCodec): one decoder per camera, get_frames([frame_idx]) per sample time.
-    ExtractedFrame.frame is torch.Tensor BCHW RGB. When person area >= tracking_target_frame_percent
-    of reference_area, uses full-frame resize with letterbox and sets metadata is_full_frame_resize=True.
-    Caps at max_frames_min. Returns [] if any camera lacks detection.json or if torch unavailable.
+    to assign one camera per sample time from detection sidecars. Decode via
+    gpu_decoder (PyNvVideoCodec): one decoder per camera, get_frames([frame_idx])
+    per sample time. ExtractedFrame.frame is torch.Tensor BCHW RGB. When person
+    area >= tracking_target_frame_percent of reference_area, uses full-frame
+    resize with letterbox and sets metadata is_full_frame_resize=True. Caps at
+    max_frames_min. Returns [] if any camera lacks detection.json or if torch
+    unavailable.
 
-    Optional config: LOG_EXTRACTION_PHASE_TIMING (bool), CUDA_DEVICE_INDEX (int, default 0).
+    Optional config: LOG_EXTRACTION_PHASE_TIMING (bool), CUDA_DEVICE_INDEX
+    (int, default 0).
     """
     if ExtractedFrame is None:
         logger.warning("ExtractedFrame not available, skipping multi-clip extraction")
@@ -202,7 +210,8 @@ def extract_target_centric_frames(
         logger.warning("torch not available, skipping multi-clip extraction")
         return []
 
-    # Single scan: discover camera clips ce_folder/CameraName/*.mp4 (dynamic clip names)
+    # Single scan: discover camera clips ce_folder/CameraName/*.mp4
+    # (dynamic clip names)
     from frigate_buffer.services.query import resolve_clip_in_folder
 
     clip_paths: list[tuple[str, str]] = []  # (camera_name, path)
@@ -278,7 +287,8 @@ def extract_target_centric_frames(
     frame_count_per_cam: dict[str, int] = {}
     if log_callback:
         log_callback("Opening clips (PyNvVideoCodec NVDEC).")
-    # ffprobe outside GPU_LOCK so the GPU is not held during subprocess I/O (Finding 4.2).
+    # ffprobe outside GPU_LOCK so the GPU is not held during subprocess I/O
+    # (Finding 4.2).
     clip_metadata: dict[str, tuple[float, float] | None] = {}
     for _cam, path in clip_paths:
         clip_metadata[path] = _get_fps_duration_from_path(path)
@@ -291,7 +301,8 @@ def extract_target_centric_frames(
                     )
                 except Exception as e:
                     logger.error(
-                        "%s (decoder open failed). cam=%s path=%s error=%s Check GPU, drivers; container may restart.",
+                        "%s (decoder open failed). cam=%s path=%s error=%s "
+                        "Check GPU, drivers; container may restart.",
                         NVDEC_INIT_FAILURE_PREFIX,
                         cam,
                         path,
@@ -351,7 +362,8 @@ def extract_target_centric_frames(
         if not use_sidecar:
             missing_cameras = [cam for cam, _ in clip_paths if cam not in sidecars]
             logger.warning(
-                "Skipping multi-clip extraction: not all cameras have detection sidecars. CE folder=%s cameras_missing_sidecar=%s",
+                "Skipping multi-clip extraction: not all cameras have "
+                "detection sidecars. CE folder=%s cameras_missing_sidecar=%s",
                 ce_folder_path,
                 missing_cameras,
             )
@@ -381,7 +393,8 @@ def extract_target_centric_frames(
         assignment_list = [c for _, c in assignments]
         if log_callback:
             log_callback(
-                f"Phase 1 EMA: {len(sample_times_list)} sample times, segment merge (min {camera_switch_min_segment_frames} frames)."
+                f"Phase 1 EMA: {len(sample_times_list)} sample times, segment merge "
+                f"(min {camera_switch_min_segment_frames} frames)."
             )
 
         current_camera: str | None = None
@@ -411,7 +424,8 @@ def extract_target_centric_frames(
             frame_idx = 0  # set before try so except can log it
             try:
                 with GPU_LOCK:
-                    # PTS-based index to reduce variable frame rate jitter (decoder time→index mapping).
+                    # PTS-based index to reduce variable frame rate jitter
+                    # (decoder time→index mapping).
                     frame_idx = (
                         min(max(0, ctx.get_index_from_time_in_seconds(T)), fcount - 1)
                         if fcount > 0
@@ -420,7 +434,8 @@ def extract_target_centric_frames(
                     batch = ctx.get_frames([frame_idx])
             except Exception as e:
                 logger.error(
-                    "%s (decoder get_frames failed). cam=%s T=%.2f frame_idx=%s error=%s",
+                    "%s (decoder get_frames failed). cam=%s T=%.2f frame_idx=%s "
+                    "error=%s",
                     NVDEC_INIT_FAILURE_PREFIX,
                     best_camera,
                     T,

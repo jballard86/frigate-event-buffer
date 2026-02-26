@@ -162,7 +162,8 @@ class TestFrameToBase64Url(unittest.TestCase):
         self.assertGreater(len(url), 50)
 
     def test_frame_to_base64_url_tensor_delegates_to_tensor_path(self):
-        """Tensor input must use _frame_tensor_to_base64_url (GPU path), not cv2 path."""
+        """Tensor input must use _frame_tensor_to_base64_url (GPU path),
+        not cv2 path."""
         try:
             import torch
         except ImportError:
@@ -185,7 +186,8 @@ class TestGeminiFrameCapAndLogging(unittest.TestCase):
 
     @patch("frigate_buffer.services.gemini_proxy_client.requests.post")
     def test_cap_disabled_sends_and_logs(self, mock_post):
-        """When GEMINI_FRAMES_PER_HOUR_CAP is 0, request is sent and log mentions cap=disabled."""
+        """When GEMINI_FRAMES_PER_HOUR_CAP is 0, request is sent and log
+        mentions cap=disabled."""
         mock_post.return_value.status_code = 200
         mock_post.return_value.json.return_value = {
             "choices": [
@@ -227,7 +229,8 @@ class TestGeminiFrameCapAndLogging(unittest.TestCase):
 
     @patch("frigate_buffer.services.gemini_proxy_client.requests.post")
     def test_cap_enforced_blocks_second_request(self, mock_post):
-        """When cap is 2, first send (2 frames) succeeds; second send (1 frame) is blocked."""
+        """When cap is 2, first send (2 frames) succeeds; second send (1 frame)
+        is blocked."""
         mock_post.return_value.status_code = 200
         mock_post.return_value.json.return_value = {
             "choices": [
@@ -308,7 +311,8 @@ class TestGeminiFrameCapAndLogging(unittest.TestCase):
 
 
 class TestGeminiAnalysisServiceSendTextPrompt(unittest.TestCase):
-    """Test send_text_prompt: text-only POST, no images; returns raw content string or None."""
+    """Test send_text_prompt: text-only POST, no images; returns raw content
+    string or None."""
 
     @patch("frigate_buffer.services.gemini_proxy_client.requests.post")
     def test_send_text_prompt_returns_content_on_success(self, mock_post):
@@ -484,7 +488,8 @@ class TestGeminiAnalysisServiceFlatConfig(unittest.TestCase):
 
 
 class TestGeminiAnalysisServiceProxyTuningPayload(unittest.TestCase):
-    """Test that proxy request body includes temperature, top_p, frequency_penalty, presence_penalty."""
+    """Test that proxy request body includes temperature, top_p,
+    frequency_penalty, presence_penalty."""
 
     @patch("frigate_buffer.services.gemini_proxy_client.requests.post")
     def test_payload_includes_tuning_params(self, mock_post):
@@ -535,7 +540,8 @@ class TestGeminiAnalysisServicePromptFile(unittest.TestCase):
             mode="w", suffix=".txt", delete=False, encoding="utf-8"
         ) as f:
             f.write(
-                "Custom system prompt with {image_count} and {global_event_camera_list}."
+                "Custom system prompt with {image_count} and "
+                "{global_event_camera_list}."
             )
             prompt_path = f.name
         self.addCleanup(lambda: os.path.exists(prompt_path) and os.unlink(prompt_path))
@@ -584,10 +590,12 @@ class TestGeminiAnalysisServiceConfigMisc(unittest.TestCase):
 
 
 class TestGeminiAnalysisServiceAnalyzeMultiClipCe(unittest.TestCase):
-    """Test analyze_multi_clip_ce: exception handling returns None and does not propagate."""
+    """Test analyze_multi_clip_ce: exception handling returns None and
+    does not propagate."""
 
     def test_analyze_multi_clip_ce_returns_none_when_extraction_raises(self):
-        """When extract_target_centric_frames raises, analyze_multi_clip_ce catches and returns None."""
+        """When extract_target_centric_frames raises, analyze_multi_clip_ce
+        catches and returns None."""
         ce_dir = tempfile.mkdtemp()
         self.addCleanup(
             lambda: (
@@ -606,10 +614,12 @@ class TestGeminiAnalysisServiceAnalyzeMultiClipCe(unittest.TestCase):
 
 
 class TestBuildMultiCamPayloadForPreview(unittest.TestCase):
-    """Test build_multi_cam_payload_for_preview return (result, error_message) and log_messages."""
+    """Test build_multi_cam_payload_for_preview return (result, error_message)
+    and log_messages."""
 
     def test_nonexistent_folder_returns_error_and_no_logs(self):
-        """When CE folder does not exist, returns (None, error) and does not append to log_messages."""
+        """When CE folder does not exist, returns (None, error) and does not
+        append to log_messages."""
         config = {"GEMINI": {"enabled": False}}
         service = GeminiAnalysisService(config)
         log_messages = []
@@ -621,7 +631,8 @@ class TestBuildMultiCamPayloadForPreview(unittest.TestCase):
         self.assertEqual(log_messages, [])
 
     def test_no_frames_extracted_returns_error_and_appends_logs(self):
-        """When extraction returns no frames, returns (None, error) and log_messages contains frame selection line."""
+        """When extraction returns no frames, returns (None, error) and
+        log_messages contains frame selection line."""
         ce_dir = tempfile.mkdtemp()
         self.addCleanup(
             lambda: (
@@ -737,7 +748,8 @@ class TestProxyFailureAfterTwoAttempts(unittest.TestCase):
 
 
 class TestSendToProxyNativeGeminiFormat(unittest.TestCase):
-    """send_to_proxy parses native Gemini API response (candidates[].content.parts[].text)."""
+    """send_to_proxy parses native Gemini API response
+    (candidates[].content.parts[].text)."""
 
     @patch("frigate_buffer.services.gemini_proxy_client.requests.post")
     def test_send_to_proxy_parses_native_gemini_response(self, mock_post):
@@ -780,7 +792,8 @@ def _mock_imwrite(path, img):
 
 
 class TestAiFrameAnalysisWriting(unittest.TestCase):
-    """write_ai_frame_analysis_multi_cam: multi-cam frames, manifest, zip; numpy and tensor frames."""
+    """write_ai_frame_analysis_multi_cam: multi-cam frames, manifest, zip;
+    numpy and tensor frames."""
 
     def setUp(self):
         self.test_dir = tempfile.mkdtemp()
@@ -844,7 +857,8 @@ class TestAiFrameAnalysisWriting(unittest.TestCase):
 
     @patch("frigate_buffer.managers.file.cv2")
     def test_multi_cam_writing_tensor_frames(self, mock_cv2):
-        """write_ai_frame_analysis_multi_cam accepts ExtractedFrame with tensor .frame (BCHW RGB)."""
+        """write_ai_frame_analysis_multi_cam accepts ExtractedFrame with tensor
+        .frame (BCHW RGB)."""
         try:
             import torch
         except ImportError:

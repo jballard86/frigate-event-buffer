@@ -11,7 +11,7 @@ class TestLoadVersion(unittest.TestCase):
     """Tests for _load_version startup behavior."""
 
     def test_load_version_returns_string_from_version_txt(self) -> None:
-        """When version.txt exists (project root or package dir), return its stripped contents."""
+        """When version.txt exists (root or package), return its stripped contents."""
         result = _load_version()
         self.assertIsInstance(result, str)
         self.assertGreater(len(result), 0)

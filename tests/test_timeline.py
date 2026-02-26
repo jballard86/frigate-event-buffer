@@ -1,24 +1,58 @@
 import sys
 from unittest.mock import MagicMock
 
-# Mock dependencies before importing project modules
-sys.modules["requests"] = MagicMock()
-sys.modules["flask"] = MagicMock()
-sys.modules["paho"] = MagicMock()
-sys.modules["paho.mqtt"] = MagicMock()
-sys.modules["paho.mqtt.client"] = MagicMock()
-sys.modules["schedule"] = MagicMock()
-sys.modules["yaml"] = MagicMock()
-sys.modules["voluptuous"] = MagicMock()
+# Keys to mock so this module can import timeline without pulling in heavy deps.
+# We mock in setup_module and restore in teardown_module so other test modules
+# never see the mocks.
+_MODULE_KEYS = (
+    "requests",
+    "flask",
+    "paho",
+    "paho.mqtt",
+    "paho.mqtt.client",
+    "schedule",
+    "yaml",
+    "voluptuous",
+)
+_saved_modules = {}
 
 import unittest
 
-from frigate_buffer.services.timeline import TimelineLogger
+
+def setup_module():
+    for k in _MODULE_KEYS:
+        _saved_modules[k] = sys.modules.get(k)
+        sys.modules[k] = MagicMock()
+    from frigate_buffer.services.timeline import TimelineLogger as TL
+
+    mod = sys.modules[__name__]
+    mod.TimelineLogger = TL
+
+
+def teardown_module():
+    for k in _MODULE_KEYS:
+        if _saved_modules.get(k) is not None:
+            sys.modules[k] = _saved_modules[k]
+        elif k in sys.modules:
+            del sys.modules[k]
+
+
+TimelineLogger = None
+
+
+def _ensure_imports():
+    """Run when module is executed without pytest (e.g. python -m unittest)."""
+    global TimelineLogger
+    if TimelineLogger is None:
+        from frigate_buffer.services.timeline import TimelineLogger as TL
+
+        globals()["TimelineLogger"] = TL
 
 
 class TestTimelineLogger(unittest.TestCase):
     def setUp(self):
         """Set up the test environment."""
+        _ensure_imports()
         self.mock_file_manager = MagicMock()
         self.mock_consolidated_manager = MagicMock()
         self.logger = TimelineLogger(
@@ -48,7 +82,8 @@ class TestTimelineLogger(unittest.TestCase):
         )
 
     def test_folder_for_event_not_consolidated(self):
-        """Test folder_for_event with an event that is NOT part of a consolidated event."""
+        """Test folder_for_event with an event that is NOT part of a
+        consolidated event."""
         mock_event = MagicMock()
         mock_event.event_id = "test_event"
         mock_event.folder_path = "/path/to/event"

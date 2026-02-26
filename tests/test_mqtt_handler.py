@@ -126,7 +126,8 @@ class TestMqttHandlerRouting(unittest.TestCase):
         lifecycle_service.handle_event_new.assert_not_called()
 
     def test_on_message_tracked_object_update_calls_description_path(self):
-        """tracked_object_update with type description updates state and notifier (frigate mode or no AI_MODE)."""
+        """tracked_object_update with type description updates state and
+        notifier (frigate mode or no AI_MODE)."""
         state_manager = MagicMock()
         state_manager.get_event.return_value = MagicMock(folder_path="/ev/ev1")
         timeline_logger = MagicMock()
@@ -157,7 +158,8 @@ class TestMqttHandlerRouting(unittest.TestCase):
         notifier.publish_notification.assert_called_once()
 
     def test_tracked_object_update_external_api_skips_description_path(self):
-        """When AI_MODE is external_api, description path is skipped (no set_ai_description, no described notification)."""
+        """When AI_MODE is external_api, description path is skipped
+        (no set_ai_description, no described notification)."""
         state_manager = MagicMock()
         state_manager.get_event.return_value = MagicMock(folder_path="/ev/ev1")
         timeline_logger = MagicMock()
@@ -180,7 +182,8 @@ class TestMqttHandlerRouting(unittest.TestCase):
         notifier.publish_notification.assert_not_called()
 
     def test_on_message_reviews_calls_handle_review(self):
-        """frigate/reviews with update type is processed when not external_api; state and notifier used."""
+        """frigate/reviews with update type is processed when not
+        external_api; state and notifier used."""
         state_manager = MagicMock()
         state_manager.get_event.return_value = MagicMock(folder_path="/ev/ev1")
         state_manager.set_genai_metadata.return_value = True
@@ -221,7 +224,8 @@ class TestMqttHandlerRouting(unittest.TestCase):
         self.assertEqual(notifier.publish_notification.call_args[0][1], "finalized")
 
     def test_review_external_api_returns_early(self):
-        """When AI_MODE is external_api, _handle_review does nothing (no set_genai_metadata, no finalized)."""
+        """When AI_MODE is external_api, _handle_review does nothing
+        (no set_genai_metadata, no finalized)."""
         state_manager = MagicMock()
         state_manager.get_event.return_value = MagicMock(folder_path="/ev/ev1")
         timeline_logger = MagicMock()
@@ -257,7 +261,8 @@ class TestMqttHandlerRouting(unittest.TestCase):
         notifier.publish_notification.assert_not_called()
 
     def test_review_debug_logs_suppressed_when_test_run_flag_set(self) -> None:
-        """When suppress_review_debug_logs is True, the three review DEBUG logs are not emitted."""
+        """When suppress_review_debug_logs is True, the three review
+        DEBUG logs are not emitted."""
         state_manager = MagicMock()
         state_manager.get_event.return_value = MagicMock(folder_path="/ev/ev1")
         state_manager.set_genai_metadata.return_value = False

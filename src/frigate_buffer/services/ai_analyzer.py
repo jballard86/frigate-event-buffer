@@ -37,12 +37,12 @@ logger = logging.getLogger("frigate-buffer")
 
 
 class GeminiAnalysisService:
-    """Service that analyzes video clips via Gemini proxy and returns metadata to the caller."""
+    """Analyzes video clips via Gemini proxy; returns metadata to caller."""
 
     def __init__(self, config: dict):
         self.config = config
         gemini = config.get("GEMINI") or {}
-        # Prefer flat keys; fallback to nested for backward compat. API key: config already applies env override in load_config.
+        # Prefer flat keys; fallback to nested. load_config applies env for API key.
         self._proxy_url = (
             (config.get("GEMINI_PROXY_URL") or gemini.get("proxy_url") or "")
             .strip()
@@ -67,6 +67,7 @@ class GeminiAnalysisService:
         self.max_frames_min = config.get("MAX_MULTI_CAM_FRAMES_MIN", 45)
         self.crop_width = int(config.get("CROP_WIDTH", 0) or 0)
         self.crop_height = int(config.get("CROP_HEIGHT", 0) or 0)
+        self.motion_threshold_px = int(config.get("MOTION_THRESHOLD_PX", 0) or 0)
         self.smart_crop_padding = float(config.get("SMART_CROP_PADDING", 0.15))
         # Rolling hourly frame cap for API cost control; 0 = disabled.
         self._frame_cap_per_hour = int(
@@ -103,13 +104,14 @@ class GeminiAnalysisService:
                 self._prompt_template = f.read()
         else:
             self._prompt_template = (
-                "You are a security recap assistant. Describe what happens in the provided "
-                "camera frames. Output a JSON object with: title, scene, shortSummary, confidence, potential_threat_level."
+                "You are a security recap assistant. Describe what happens in the "
+                "provided camera frames. Output a JSON object with: title, scene, "
+                "shortSummary, confidence, potential_threat_level."
             )
         return self._prompt_template
 
     def _load_quick_title_prompt(self) -> str:
-        """Load system prompt for quick-title (single image; expects JSON with title and description)."""
+        """Load quick-title prompt (single image; JSON with title and description)."""
         default_path = os.path.join(
             os.path.dirname(os.path.abspath(__file__)), "quick_title_prompt.txt"
         )
@@ -120,18 +122,18 @@ class GeminiAnalysisService:
             except Exception as e:
                 logger.warning("Could not read quick_title_prompt.txt: %s", e)
         return (
-            'You are a security camera alert titler. Return valid JSON only with keys "title" (max 12 words) and "description" (max 2 sentences). '
-            "No markdown, no explanation."
+            "You are a security camera alert titler. Return valid JSON only with keys "
+            '"title" (max 12 words) and "description" (max 2 sentences). No markdown.'
         )
 
     def _post_messages(
         self, messages: list[dict[str, Any]], timeout: int
     ) -> requests.Response | None:
-        """Delegate to GeminiProxyClient. Returns response on success, None on failure."""
+        """Delegate to GeminiProxyClient. Returns response or None on failure."""
         return self._proxy_client.post_messages(messages, timeout)
 
     def _parse_response_content(self, data: dict[str, Any]) -> str | None:
-        """Extract text content from proxy response (native Gemini or OpenAI format). Returns None if empty."""
+        """Extract text from proxy response (Gemini or OpenAI format). None if empty."""
         content = None
         candidates = data.get("candidates") or []
         if candidates:
@@ -154,7 +156,7 @@ class GeminiAnalysisService:
     def _send_single_image_get_text(
         self, system_prompt: str, image_bgr: Any
     ) -> str | None:
-        """POST one image to proxy and return raw message content (plain text). Used for quick-title."""
+        """POST one image to proxy and return raw message content (quick-title)."""
         user_content = [
             {
                 "type": "text",
@@ -183,9 +185,9 @@ class GeminiAnalysisService:
         self, image: Any, camera: str, label: str
     ) -> dict[str, str] | None:
         """
-        Send a single cropped/live frame to the Gemini proxy and return title and description.
+        Send a single cropped/live frame to Gemini proxy; return title and description.
         image: numpy HWC BGR or torch.Tensor BCHW RGB; encoded via _frame_to_base64_url.
-        Used for the quick-title pipeline shortly after event start.
+        Used for quick-title pipeline shortly after event start.
         Returns a dict with keys "title" and "description", or None on failure or empty.
         """
         if not self._proxy_url or not self._api_key:
@@ -263,7 +265,7 @@ class GeminiAnalysisService:
         return f"data:image/jpeg;base64,{b64}"
 
     def _frame_tensor_to_base64_url(self, t: Any) -> str:
-        """Encode torch.Tensor BCHW/CHW RGB (uint8) as JPEG base64 data URL. Resizes if width > FRAME_MAX_WIDTH."""
+        """Encode torch.Tensor BCHW/CHW RGB as JPEG base64; resize if > max width."""
         try:
             import torch
             from torch.nn import functional as F
@@ -275,7 +277,7 @@ class GeminiAnalysisService:
             t = t.squeeze(0)
         if t.dim() != 3 or t.shape[0] not in (1, 3):
             logger.warning(
-                "_frame_tensor_to_base64_url expected CHW with 1 or 3 channels, got shape %s",
+                "_frame_tensor_to_base64_url expected CHW 1 or 3 channels, got %s",
                 t.shape,
             )
             return "data:image/jpeg;base64,"
@@ -307,9 +309,9 @@ class GeminiAnalysisService:
 
     def _frame_cap_stats_and_check(self, frame_count: int) -> tuple[bool, int, int]:
         """
-        Compute rolling-window stats, log them, and check if this request would exceed the cap.
+        Compute rolling-window stats, log them, check if request would exceed cap.
         Returns (allowed, current_frames_in_window, requests_in_window).
-        Caller must hold _frame_cap_lock when mutating _frame_cap_records; this method acquires it.
+        Caller holds _frame_cap_lock when mutating _frame_cap_records; we acquire it.
         """
         if self._frame_cap_per_hour <= 0:
             logger.info(
@@ -340,7 +342,7 @@ class GeminiAnalysisService:
             return not would_exceed, current_frames, requests_in_window
 
     def _record_frames_sent(self, frame_count: int) -> None:
-        """Record a successful send for the rolling cap. Call with _frame_cap_lock held only from send_to_proxy."""
+        """Record successful send for rolling cap. Lock only from send_to_proxy."""
         if self._frame_cap_per_hour <= 0 or frame_count <= 0:
             return
         with self._frame_cap_lock:
@@ -353,8 +355,8 @@ class GeminiAnalysisService:
     ) -> dict[str, Any] | None:
         """
         POST system prompt and images to Gemini proxy (OpenAI-compatible).
-        image_buffers: list of numpy HWC BGR or torch.Tensor BCHW RGB (Phase 4); encoded via _frame_to_base64_url.
-        Returns parsed JSON with title, shortSummary, scene, confidence, potential_threat_level, or None on failure.
+        image_buffers: numpy HWC BGR or torch BCHW RGB; _frame_to_base64_url.
+        Returns JSON (title, shortSummary, scene, confidence, threat_level) or None.
         """
         if not self._proxy_url or not self._api_key:
             logger.warning("Gemini proxy_url or api_key not configured")
@@ -362,14 +364,14 @@ class GeminiAnalysisService:
         allowed, _, _ = self._frame_cap_stats_and_check(len(image_buffers))
         if not allowed:
             logger.warning(
-                "Gemini API call skipped: hourly frame cap reached (cap=%d). Not sending request.",
+                "Gemini API call skipped: hourly frame cap reached (cap=%d).",
                 self._frame_cap_per_hour,
             )
             return None
         user_content: list[dict[str, Any]] = [
             {
                 "type": "text",
-                "text": "Analyze these security camera frames and respond with the requested JSON.",
+                "text": "Analyze these camera frames; respond with requested JSON.",
             }
         ]
         for frame in image_buffers:
@@ -447,8 +449,8 @@ class GeminiAnalysisService:
     ) -> tuple[tuple[list[Any], str, list[Any]] | None, str | None]:
         """
         Extract frames from CE folder, add timestamp overlays, and build system prompt.
-        Single place for config read, extract_target_centric_frames, overlay loop, and prompt build.
-        Returns ((frames_raw, system_prompt, frames), None) on success, (None, error_message) on failure.
+        Single place: config, extract_target_centric_frames, overlay, prompt build.
+        Returns ((frames_raw, system_prompt, frames), None) or (None, error_message).
         """
         if not os.path.isdir(ce_folder_path):
             return (None, "CE folder not found")
@@ -544,9 +546,9 @@ class GeminiAnalysisService:
     ) -> dict[str, Any] | None:
         """
         Target-centric multi-clip analysis for consolidated events.
-        Extracts frames from full clips via object detection, sends to Gemini, saves to CE root.
-        Handles CEs with one or more cameras (len(cameras) >= 1); same pipeline.
-        primary_camera: optional camera that initiated the event (first-camera bias in selection).
+        Extracts frames via object detection, sends to Gemini, saves to CE root.
+        Handles CEs with one or more cameras; same pipeline.
+        primary_camera: optional initiator (first-camera bias in selection).
         """
         if not self._enabled:
             logger.debug("Gemini analysis disabled, skipping CE %s", ce_id)
@@ -607,15 +609,15 @@ class GeminiAnalysisService:
         log_messages: list[str] | None = None,
     ) -> tuple[tuple[str, list[Any], list[str]] | None, str | None]:
         """
-        Build the same payload as analyze_multi_clip_ce (system prompt + user content with frames)
+        Build same payload as analyze_multi_clip_ce (prompt + user content with frames)
         and write frame files to ce_folder_path, but do not call send_to_proxy.
 
-        Used by the event_test orchestrator to produce system_prompt.txt and ai_request.html
+        Used by event_test orchestrator to produce system_prompt.txt and ai_request.html
         with download links to the written frame files.
 
-        Returns (result, error_message). result is (system_prompt, user_content, frame_relative_paths)
-        or None; error_message is a short string when something failed (no frames, exception).
-        When log_messages is provided, appends human-readable progress strings for SSE.
+        Returns (result, err). result = (system_prompt, user_content, frame_paths);
+        or None; error_message when something failed (no frames, exception).
+        When log_messages is provided, appends progress strings for SSE.
         """
         if not os.path.isdir(ce_folder_path):
             logger.warning("CE folder not found: %s", ce_folder_path)
@@ -644,14 +646,14 @@ class GeminiAnalysisService:
                     all_have_sidecar = False
                     missing.append(cam)
             if all_have_sidecar and camera_subdirs:
-                _log(
-                    "Frame selection: using detection sidecars (picks best camera per moment from pre-computed object detections)."
-                )
+                _log("Frame selection: detection sidecars (best camera per moment).")
             else:
-                part = f" (missing for: {', '.join(missing)})" if missing else ""
-                _log(
-                    f"Frame selection: detection sidecars missing; skipping multi-clip extraction.{part}"
+                part = f" (missing: {', '.join(missing)})" if missing else ""
+                msg = (
+                    "Frame selection: sidecars missing; skipping multi-clip extract."
+                    f"{part}"
                 )
+                _log(msg)
 
             data, err = self._extract_and_prepare_ce_frames(
                 ce_folder_path,
@@ -677,7 +679,7 @@ class GeminiAnalysisService:
             user_content: list[Any] = [
                 {
                     "type": "text",
-                    "text": "Analyze these security camera frames and respond with the requested JSON.",
+                    "text": "Analyze these camera frames; respond with requested JSON.",
                 }
             ]
             for frame in frames:

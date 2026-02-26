@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import bisect
 import math
-from typing import Any
 
 from frigate_buffer.constants import (
     HOLD_CROP_MAX_DISTANCE_SEC,
@@ -117,7 +116,9 @@ def _content_area_and_center(
     (0, frame_center_x, frame_center_y).
     """
     if not detections or source_width <= 0 or source_height <= 0:
-        cx, cy = _weighted_center_from_detections(detections, source_width, source_height)
+        cx, cy = _weighted_center_from_detections(
+            detections, source_width, source_height
+        )
         return (0.0, cx, cy)
     x1_min = float(source_width)
     y1_min = float(source_height)
@@ -132,7 +133,9 @@ def _content_area_and_center(
             x2_max = max(x2_max, x2)
             y2_max = max(y2_max, y2)
     if x1_min >= x2_max or y1_min >= y2_max:
-        cx, cy = _weighted_center_from_detections(detections, source_width, source_height)
+        cx, cy = _weighted_center_from_detections(
+            detections, source_width, source_height
+        )
         return (0.0, cx, cy)
     bw = x2_max - x1_min
     bh = y2_max - y1_min
@@ -196,9 +199,9 @@ def calculate_crop_at_time(
     """
     Compute crop (x, y, w, h) at a single timestamp from the nearest sidecar entry.
     Uses area-weighted center of detections. When tracking_target_frame_percent > 0
-    and detections exist, crop size is derived from content (bbox + padding) vs target
-    percent for dynamic zoom; otherwise uses fixed target_w/target_h. Returns clamped rect.
-    If timestamps_sorted is provided (same order as sidecar entries), lookup is O(log n).
+    and detections exist, crop size from content (bbox + padding) vs target percent
+    for dynamic zoom; else fixed target_w/target_h. Returns clamped rect.
+    If timestamps_sorted is provided (same order as sidecar entries), lookup O(log n).
     """
     entries = sidecar_data.get("entries") or []
     content_area: float = 0.0
@@ -262,10 +265,9 @@ def smooth_zoom_ema(
 ) -> None:
     """
     Smooth zoom (crop size) in-place with EMA so zoom changes are fluid, not snapping.
-    Slices must have crop_start, crop_end as (x, y, w, h) and native_width, native_height.
-    Derives a zoom scalar from crop area / frame area, runs EMA, then recomputes (w, h)
-    from smoothed zoom with aspect ratio target_w/target_h and clamps. Reclamps (x, y)
-    so the crop stays within source bounds after size change.
+    Slices must have crop_start, crop_end as (x, y, w, h), native_width, native_height.
+    Derives zoom scalar from crop area / frame area, runs EMA, recomputes (w, h)
+    from smoothed zoom (aspect target_w/target_h) and clamps; reclamps (x, y) in bounds.
     """
     if alpha <= 0 or alpha >= 1 or not slices or target_w <= 0 or target_h <= 0:
         return
@@ -311,10 +313,9 @@ def smooth_zoom_ema(
 
 def smooth_crop_centers_ema(slices: list[dict], alpha: float) -> None:
     """
-    Smooth crop center trajectory in-place with single-pass EMA to reduce detection jitter.
-    Slices must have "crop_start" and "crop_end" as (x, y, w, h). Updates those with
-    smoothed (x, y) derived from EMA of center (cx, cy) = (x + w/2, y + h/2).
-    Clamps center so the crop stays within native_width/native_height.
+    Smooth crop center trajectory in-place with single-pass EMA to reduce jitter.
+    Slices must have "crop_start" and "crop_end" as (x, y, w, h). Updates with
+    smoothed (x, y) from EMA of center (cx, cy) = (x + w/2, y + h/2). Clamps in bounds.
     """
     if alpha <= 0 or alpha >= 1 or not slices:
         return
@@ -367,8 +368,8 @@ def calculate_segment_crop(
     target_h: int = 1080,
 ) -> tuple[int, int, int, int]:
     """
-    Finds the center of mass for a segment based on sidecar detections in [start_sec, end_sec)
-    and returns clamped (x, y, w, h) crop variables.
+    Center of mass for segment from sidecar detections in [start_sec, end_sec).
+    Returns clamped (x, y, w, h) crop.
     """
     start_sec = segment["start_sec"]
     end_sec = segment["end_sec"]

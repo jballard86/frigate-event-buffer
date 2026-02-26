@@ -22,7 +22,6 @@ from frigate_buffer.services import crop_utils, timeline_ema
 from frigate_buffer.services.compilation_math import (
     _nearest_entry_at_t,
     calculate_crop_at_time,
-    calculate_segment_crop,
     smooth_crop_centers_ema,
     smooth_zoom_ema,
 )  # type: ignore[reportMissingModuleSource]
@@ -52,9 +51,7 @@ def _compilation_ffmpeg_cmd_and_log_path(
     Build FFmpeg h264_nvenc command and log path for compilation encode.
     Shared by _encode_frames_via_ffmpeg and _run_pynv_compilation (streaming path).
     """
-    log_file_path = os.path.join(
-        os.path.dirname(tmp_output_path), "ffmpeg_compile.log"
-    )
+    log_file_path = os.path.join(os.path.dirname(tmp_output_path), "ffmpeg_compile.log")
     cmd = [
         "ffmpeg",
         "-y",
@@ -204,15 +201,11 @@ def _encode_frames_via_ffmpeg(
         raise
 
 
-def _resolve_clip_path(
-    ce_dir: str, camera: str, resolve_clip_in_folder: object
-) -> str:
+def _resolve_clip_path(ce_dir: str, camera: str, resolve_clip_in_folder: object) -> str:
     """Resolve clip path for camera under ce_dir; raise FileNotFoundError if missing."""
     cam_dir = os.path.join(ce_dir, camera)
     clip_name = (
-        resolve_clip_in_folder(cam_dir)
-        if callable(resolve_clip_in_folder)
-        else None
+        resolve_clip_in_folder(cam_dir) if callable(resolve_clip_in_folder) else None
     )
     if not clip_name:
         clip_name = f"{camera}.mp4"
@@ -290,9 +283,7 @@ def _load_sidecars_for_cameras(
     return sidecar_cache, sidecar_timestamps
 
 
-def _log_stutter_once(
-    cam: str, clip_path: str, logged_set: set[str]
-) -> None:
+def _log_stutter_once(cam: str, clip_path: str, logged_set: set[str]) -> None:
     """Log INFO once per camera for stutter/missing frames; add cam to logged_set."""
     if cam not in logged_set:
         logger.info(
@@ -352,12 +343,8 @@ def _run_pynv_compilation(
 
             # ffprobe outside GPU_LOCK so GPU not held during I/O (Finding 4.1).
             slice_meta = _get_video_metadata(clip_path)
-            fallback_fps = (
-                slice_meta[2] if slice_meta and slice_meta[2] > 0 else 30.0
-            )
-            fallback_duration = (
-                slice_meta[3] if slice_meta else duration
-            )
+            fallback_fps = slice_meta[2] if slice_meta and slice_meta[2] > 0 else 30.0
+            fallback_duration = slice_meta[3] if slice_meta else duration
 
             batch_to_free: Any = None
             try:
@@ -656,9 +643,7 @@ def generate_compilation_video(
             )
     else:
         cameras = list(dict.fromkeys(sl["camera"] for sl in slices))
-        sidecar_cache, sidecar_timestamps = _load_sidecars_for_cameras(
-            ce_dir, cameras
-        )
+        sidecar_cache, sidecar_timestamps = _load_sidecars_for_cameras(ce_dir, cameras)
 
     no_entries_by_cam: dict[str, list[tuple[float, float]]] = defaultdict(list)
     no_detections_by_cam: dict[str, list[tuple[float, float]]] = defaultdict(list)
@@ -815,9 +800,7 @@ def compile_ce_video(
     sidecar_cache, _ = _load_sidecars_for_cameras(ce_dir, cameras)
 
     if not sidecar_cache:
-        logger.warning(
-            f"No sidecars available in {ce_dir} for compilation."
-        )
+        logger.warning(f"No sidecars available in {ce_dir} for compilation.")
         return None
 
     # Use actual clip/sidecar duration when longer than requested;
@@ -880,9 +863,7 @@ def compile_ce_video(
         ),
         primary_camera=primary_camera,
         hysteresis_margin=float(config.get("CAMERA_SWITCH_HYSTERESIS_MARGIN", 1.15)),
-        min_segment_frames=int(
-            config.get("CAMERA_SWITCH_MIN_SEGMENT_FRAMES", 5)
-        ),
+        min_segment_frames=int(config.get("CAMERA_SWITCH_MIN_SEGMENT_FRAMES", 5)),
     )
 
     if not assignments:
@@ -903,9 +884,7 @@ def compile_ce_video(
 
     out_name = os.path.basename(os.path.abspath(ce_dir)) + "_summary.mp4"
     output_path = os.path.join(ce_dir, out_name)
-    crop_smooth_alpha = float(
-        config.get("COMPILATION_CROP_SMOOTH_EMA_ALPHA", 0.0)
-    )
+    crop_smooth_alpha = float(config.get("COMPILATION_CROP_SMOOTH_EMA_ALPHA", 0.0))
 
     try:
         generate_compilation_video(

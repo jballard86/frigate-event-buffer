@@ -1,11 +1,17 @@
-"""Tests for QuickTitleService: fetch latest.jpg, YOLO, crop, AI title, state update, notify."""
+"""Tests for QuickTitleService: fetch latest.jpg, YOLO, crop, AI title,
+state update, notify."""
 
 import unittest
 from unittest.mock import MagicMock, patch
 
 import numpy as np
+import requests
 
 from frigate_buffer.services.quick_title_service import QuickTitleService
+
+# Capture real RequestException at import time so the test can raise it even if
+# sys.modules["requests"] is later replaced by other test modules.
+_RequestException = requests.RequestException
 
 
 class TestQuickTitleService(unittest.TestCase):
@@ -39,7 +45,8 @@ class TestQuickTitleService(unittest.TestCase):
         )
 
     def test_run_quick_title_skips_when_no_ai_analyzer(self):
-        """When ai_analyzer is None, run_quick_title returns without calling fetch or notifier."""
+        """When ai_analyzer is None, run_quick_title returns without calling
+        fetch or notifier."""
         notifier = MagicMock()
         service = self._make_service(ai_analyzer=None, notifier=notifier)
         service.run_quick_title(
@@ -59,9 +66,11 @@ class TestQuickTitleService(unittest.TestCase):
     @patch("frigate_buffer.services.quick_title_service.requests.get")
     def test_run_quick_title_fetch_failure_returns_early(self, mock_get):
         """When requests.get raises, run_quick_title returns without notifying."""
-        import requests
 
-        mock_get.side_effect = requests.RequestException("network error")
+        def raise_request_exception(*args, **kwargs):
+            raise _RequestException("network error")
+
+        mock_get.side_effect = raise_request_exception
         notifier = MagicMock()
         service = self._make_service(notifier=notifier)
         service.run_quick_title(
@@ -87,7 +96,8 @@ class TestQuickTitleService(unittest.TestCase):
 
     @patch("frigate_buffer.services.quick_title_service.requests.get")
     def test_run_quick_title_no_title_returned_does_not_notify(self, mock_get):
-        """When generate_quick_title returns None or empty title, no notification is sent."""
+        """When generate_quick_title returns None or empty title,
+        no notification is sent."""
         mock_get.return_value.content = b"\xff\xd8\xff"
         mock_get.return_value.raise_for_status = MagicMock()
         with patch(
@@ -121,7 +131,8 @@ class TestQuickTitleService(unittest.TestCase):
 
     @patch("frigate_buffer.services.quick_title_service.requests.get")
     def test_run_quick_title_updates_state_and_notifies_with_tag(self, mock_get):
-        """Happy path: state updated, write_summary and write_metadata_json called, notification with title and description."""
+        """Happy path: state updated, write_summary and write_metadata_json called,
+        notification with title and description."""
         mock_get.return_value.content = b"\xff\xd8\xff"
         mock_get.return_value.raise_for_status = MagicMock()
         with patch(
@@ -183,7 +194,8 @@ class TestQuickTitleService(unittest.TestCase):
             state_manager.set_genai_metadata.assert_called_once()
             file_manager.write_summary.assert_called_once()
             file_manager.write_metadata_json.assert_called_once()
-            # Quick title does not set CE.final_* (final = CE analysis only for external_api)
+            # Quick title does not set CE.final_* (final = CE analysis only for
+            # external_api)
             notifier.publish_notification.assert_called_once()
             call_args = notifier.publish_notification.call_args
             self.assertEqual(call_args[0][1], "snapshot_ready")
@@ -199,7 +211,8 @@ class TestQuickTitleService(unittest.TestCase):
 
     @patch("frigate_buffer.services.quick_title_service.requests.get")
     def test_run_quick_title_event_gone_does_not_notify(self, mock_get):
-        """When event is no longer in state (first get_event after title returns None), do not notify."""
+        """When event is no longer in state (first get_event after title returns None),
+        do not notify."""
         mock_get.return_value.content = b"\xff\xd8\xff"
         mock_get.return_value.raise_for_status = MagicMock()
         with patch(

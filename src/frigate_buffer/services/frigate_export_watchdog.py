@@ -17,7 +17,8 @@ from frigate_buffer.services.query import read_timeline_merged
 
 logger = logging.getLogger("frigate-buffer")
 
-# Timeout for DELETE /api/export/{id} so the watchdog cannot hang on slow/stuck Frigate or network
+# Timeout for DELETE /api/export/{id} so the watchdog cannot hang on
+# slow/stuck Frigate or network
 DELETE_EXPORT_TIMEOUT = 10
 
 # Cap link verification to avoid unbounded HEAD requests per run
@@ -39,7 +40,8 @@ def _parse_export_response_entries(
     folder_path: str,
 ) -> list[tuple[str, str | None]]:
     """
-    Read merged timeline (base + append JSONL) and return list of (export_id, camera_for_clip).
+    Read merged timeline (base + append JSONL) and return list of
+    (export_id, camera_for_clip).
     camera_for_clip is None for 1-camera CE (clip at root); else camera name for
     multi-camera CE (clip at camera subdir).
     """
@@ -91,7 +93,8 @@ def _clip_path_for_entry(
 def _rel_path_from_storage(
     folder_path: str, storage_path: str
 ) -> tuple[str, str] | None:
-    """Return (camera, subdir) relative to storage_path, or None if not under storage."""
+    """Return (camera, subdir) relative to storage_path, or None if not
+    under storage."""
     try:
         folder_real = os.path.realpath(folder_path)
         storage_real = os.path.realpath(storage_path)
@@ -173,7 +176,8 @@ def _delete_export_from_frigate(
     export_id: str,
 ) -> DeleteOutcome:
     """
-    Call Frigate DELETE /api/export/{export_id}. Log success, already-removed, or failure.
+    Call Frigate DELETE /api/export/{export_id}.
+    Log success, already-removed, or failure.
     Returns outcome so run_once can aggregate counts for the run summary.
     """
     url = f"{frigate_url.rstrip('/')}/api/export/{export_id}"
@@ -246,7 +250,8 @@ def _delete_export_from_frigate(
 def run_once(config: dict[str, Any]) -> None:
     """
     Run one pass of the export watchdog: discover exports from timeline data,
-    verify clips are in event folders, delete from Frigate (with logging), verify download links.
+    verify clips are in event folders, delete from Frigate (with logging),
+    verify download links.
     Logs a run summary (succeeded / failed / already removed) at info.
     """
     storage_path = config.get("STORAGE_PATH") or ""
@@ -306,9 +311,9 @@ def run_once(config: dict[str, Any]) -> None:
                             timeline_append = os.path.join(
                                 event_path, "notification_timeline_append.jsonl"
                             )
-                            if not os.path.isfile(timeline_base) and not os.path.isfile(
-                                timeline_append
-                            ):
+                            has_base = os.path.isfile(timeline_base)
+                            has_append = os.path.isfile(timeline_append)
+                            if not has_base and not has_append:
                                 continue
 
                             folders_with_timeline += 1
@@ -333,7 +338,8 @@ def run_once(config: dict[str, Any]) -> None:
                                 else:
                                     failed += 1
 
-                            # Remember for link verification (any folder with timeline and clip)
+                            # Remember for link verification (any folder with
+                            # timeline and clip)
                             if pairs and any(
                                 (lambda p: p is not None and os.path.isfile(p))(
                                     _clip_path_for_entry(event_path, c)

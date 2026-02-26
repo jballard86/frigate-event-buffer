@@ -1,9 +1,11 @@
 """
-Daily Report Service - Aggregates analysis_result.json by date and generates an AI daily report.
+Daily Report Service - Aggregates analysis_result.json by date and generates
+an AI daily report.
 
-Reads from daily_reports/aggregate_YYYY-MM-DD.jsonl when present (events appended as they are
-analyzed); otherwise scans STORAGE_PATH for analysis_result.json. Fills the report prompt template,
-calls the Gemini proxy via GeminiAnalysisService.send_text_prompt, saves Markdown to daily_reports/,
+Reads from daily_reports/aggregate_YYYY-MM-DD.jsonl when present (events
+appended as they are analyzed); otherwise scans STORAGE_PATH for
+analysis_result.json. Fills the report prompt template, calls the Gemini proxy
+via GeminiAnalysisService.send_text_prompt, saves Markdown to daily_reports/,
 and deletes the aggregate file on success.
 """
 
@@ -46,13 +48,15 @@ class DailyReporterService:
         out_dir = os.path.join(self.storage_path, "daily_reports")
         return os.path.join(
             out_dir,
-            f"{AGGREGATE_FILENAME_PREFIX}{target_date.isoformat()}{AGGREGATE_FILENAME_SUFFIX}",
+            f"{AGGREGATE_FILENAME_PREFIX}{target_date.isoformat()}"
+            f"{AGGREGATE_FILENAME_SUFFIX}",
         )
 
     def _load_events_from_aggregate(self, target_date: date) -> list[dict] | None:
         """
         Load event objects from aggregate_YYYY-MM-DD.jsonl if present.
-        Returns None if file missing or unreadable; returns list (maybe empty) if file exists.
+        Returns None if file missing or unreadable; returns list (maybe empty)
+        if file exists.
         """
         path = self._aggregate_file_path(target_date)
         if not os.path.isfile(path):
@@ -90,7 +94,8 @@ class DailyReporterService:
         """
         Append one event to the per-day aggregate JSONL file (for report-time read).
         Call this when an analysis result is persisted. event_payload must have keys
-        compatible with the report: title, scene, confidence, threat_level, camera, time, context.
+        compatible with the report: title, scene, confidence, threat_level,
+        camera, time, context.
         """
         out_dir = os.path.join(self.storage_path, "daily_reports")
         try:
@@ -106,7 +111,8 @@ class DailyReporterService:
             logger.warning("Could not append to aggregate %s: %s", path, e)
 
     def _load_prompt_template(self) -> str | None:
-        """Load report prompt from file. Returns None if file is missing or unreadable (no fallback)."""
+        """Load report prompt from file. Returns None if file is missing or
+        unreadable (no fallback)."""
         if self._prompt_template is not None:
             return self._prompt_template
         if not self._report_prompt_file:
@@ -133,7 +139,8 @@ class DailyReporterService:
     def _folder_name_and_timestamp(
         self, json_path: str
     ) -> tuple[str | None, int | None]:
-        """Return (folder_name, unix_timestamp) for the event folder containing this analysis_result.json."""
+        """Return (folder_name, unix_timestamp) for the event folder containing
+        this analysis_result.json."""
         event_dir = os.path.dirname(os.path.abspath(json_path))
         parent_dir = os.path.dirname(event_dir)
         parent_basename = os.path.basename(parent_dir)
@@ -153,8 +160,8 @@ class DailyReporterService:
         self, target_date: date
     ) -> tuple[list[tuple[str, dict, int]], int, int]:
         """
-        Scan storage for analysis_result.json; return (events, total_seen, total_matched).
-        total_seen = number of analysis_result.json paths found; total_matched = events for target_date.
+        Scan storage for analysis_result; return (events, total_seen, total_matched).
+        total_seen = paths found; total_matched = events for target_date.
         """
         events: list[tuple[str, dict, int]] = []
         total_seen = 0
@@ -184,7 +191,8 @@ class DailyReporterService:
         return (events, total_seen, len(events))
 
     def _aggregate_event_lines(self, events: list[tuple[str, dict, int]]) -> list[str]:
-        """Build sorted list of lines: '[{time}] {title}: {shortSummary} (Threat: {level})'."""
+        """Build sorted list of lines: '[{time}] {title}: {shortSummary}
+        (Threat: {level})'."""
         lines = []
         for _path, data, unix_ts in events:
             title = (data.get("title") or "").strip()
@@ -233,7 +241,8 @@ class DailyReporterService:
 
     def generate_report(self, target_date: date) -> bool:
         """
-        Build event list from aggregate file (if present) or scan; call AI, save Markdown.
+        Build event list from aggregate file (if present) or scan; call AI,
+        save Markdown.
         Returns True if a report was written, False otherwise.
         On success, deletes the aggregate file for target_date.
         """
@@ -296,7 +305,8 @@ class DailyReporterService:
             for json_path, _data, _ts in events_list:
                 logger.debug("Included event from %s", json_path)
 
-        # Same value for both {event_list} and {list_of_event_json_objects} (JSON array).
+        # Same value for both {event_list} and {list_of_event_json_objects}
+        # (JSON array).
         list_of_event_json_objects = (
             json.dumps(event_objects, indent=2, ensure_ascii=False)
             if event_objects

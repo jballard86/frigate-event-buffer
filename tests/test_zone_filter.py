@@ -180,7 +180,8 @@ class TestSmartZoneFilter(unittest.TestCase):
         )
 
     def test_should_start_event_current_zones(self):
-        """Test that current_zones alone can satisfy tracked_zones (entered_zones empty)."""
+        """Test that current_zones alone can satisfy tracked_zones
+        (entered_zones empty)."""
         # current_zones only, tracked zone present -> True
         self.assertTrue(
             self.filter.should_start_event("cam1", "label", "sub", [], ["zone1"])
@@ -194,7 +195,8 @@ class TestSmartZoneFilter(unittest.TestCase):
         )
         # Both entered and current empty -> False
         self.assertFalse(self.filter.should_start_event("cam1", "label", "sub", [], []))
-        # Backward compat: 4 args only (current_zones defaults to empty) -> same as before
+        # Backward compat: 4 args only (current_zones defaults to empty)
+        # -> same as before
         self.assertFalse(self.filter.should_start_event("cam1", "label", "sub", []))
         self.assertTrue(
             self.filter.should_start_event("cam1", "label", "sub", ["zone1"])

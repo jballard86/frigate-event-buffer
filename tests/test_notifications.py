@@ -1,4 +1,5 @@
-"""Tests for NotificationDispatcher, HomeAssistantMqttProvider, and NotificationEvent protocol compliance."""
+"""Tests for NotificationDispatcher, HomeAssistantMqttProvider, and
+NotificationEvent protocol compliance."""
 
 import json
 import unittest
@@ -38,7 +39,8 @@ def _publish_success():
 
 
 class TestHomeAssistantMqttProvider(unittest.TestCase):
-    """HomeAssistantMqttProvider: payload shape, send() and send_overflow() return NotificationResult."""
+    """HomeAssistantMqttProvider: payload shape, send() and send_overflow()
+    return NotificationResult."""
 
     def setUp(self):
         self.mqtt = MagicMock()
@@ -139,7 +141,8 @@ class TestHomeAssistantMqttProvider(unittest.TestCase):
 
 
 class TestNotificationDispatcher(unittest.TestCase):
-    """NotificationDispatcher: log_dispatch_results called with results; clear_tag via HA provider; empty providers."""
+    """NotificationDispatcher: log_dispatch_results called with results;
+    clear_tag via HA provider; empty providers."""
 
     def setUp(self):
         self.mqtt = MagicMock()
@@ -188,7 +191,8 @@ class TestNotificationDispatcher(unittest.TestCase):
         self.assertEqual(payload["tag"], "frigate_evt2")
 
     def test_dispatcher_empty_providers_calls_log_dispatch_results_no_raise(self):
-        """When HA is disabled (empty providers), publish_notification still logs and does not raise."""
+        """When HA is disabled (empty providers), publish_notification
+        still logs and does not raise."""
         empty_dispatcher = NotificationDispatcher(
             providers=[],
             timeline_logger=self.timeline_logger,
@@ -203,7 +207,8 @@ class TestNotificationDispatcher(unittest.TestCase):
         self.assertFalse(result)  # No provider sent
 
     def test_mock_provider_result_passed_to_log_dispatch_results(self):
-        """Dispatcher collects NotificationResult from each provider and passes to log_dispatch_results."""
+        """Dispatcher collects NotificationResult from each provider and
+        passes to log_dispatch_results."""
         mock_result: NotificationResult = {"provider": "MOCK", "status": "success"}
         mock_provider = MagicMock(spec=BaseNotificationProvider)
         mock_provider.send.return_value = mock_result
@@ -230,7 +235,8 @@ class TestNotificationDispatcher(unittest.TestCase):
 
 
 class TestNotificationEventCompliance(unittest.TestCase):
-    """EventState and ConsolidatedEvent implement NotificationEvent protocol used by dispatcher/provider."""
+    """EventState and ConsolidatedEvent implement NotificationEvent
+    protocol used by dispatcher/provider."""
 
     def setUp(self):
         if NotificationEvent is None:

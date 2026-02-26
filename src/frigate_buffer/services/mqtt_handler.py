@@ -1,9 +1,11 @@
 """
-MQTT message parsing and dispatch for Frigate events, tracked_object_update, and reviews.
+MQTT message parsing and dispatch for Frigate events, tracked_object_update,
+and reviews.
 
 Decodes JSON, routes by topic, and delegates to handlers that use state_manager,
-zone_filter, lifecycle_service, timeline_logger, notifier, file_manager, and download_service.
-Keeps this logic out of the orchestrator so it only wires the handler.
+zone_filter, lifecycle_service, timeline_logger, notifier, file_manager, and
+download_service. Keeps this logic out of the orchestrator so it only wires
+the handler.
 """
 
 import json
@@ -20,7 +22,8 @@ logger = logging.getLogger("frigate-buffer")
 
 
 class MqttMessageHandler:
-    """Handles incoming MQTT messages: frigate/events, tracked_object_update, frigate/reviews."""
+    """Handles incoming MQTT messages: frigate/events, tracked_object_update,
+    frigate/reviews."""
 
     def __init__(
         self,
@@ -129,7 +132,8 @@ class MqttMessageHandler:
             camera, label or "", sub_label, entered_zones, current_zones
         ):
             logger.debug(
-                "Ignoring %s (smart zone filter: not in tracked zones, entered=%s, current=%s)",
+                "Ignoring %s (smart zone filter: not in tracked zones, "
+                "entered=%s, current=%s)",
                 event_id,
                 entered_zones,
                 current_zones,
@@ -381,7 +385,8 @@ class MqttMessageHandler:
                                 },
                             )()
                         else:
-                            # CE already removed; build CE-shaped target so pipeline stays CE-only (e.g. 1-camera CE)
+                            # CE already removed; build CE-shaped target so
+                            # pipeline stays CE-only (e.g. 1-camera CE)
                             notify_target = type(
                                 "NotifyTarget",
                                 (),

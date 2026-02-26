@@ -375,6 +375,7 @@ def draw_timestamp_overlay(
     """
     if is_tensor(frame):
         import torch
+
         t = cast(torch.Tensor, frame)
         # BCHW RGB → HWC BGR for OpenCV
         if t.dim() == 4:

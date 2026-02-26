@@ -1,7 +1,8 @@
 """
 State-Aware Orchestrator - Main coordinator for Frigate Event Buffer.
 
-Coordinates MQTT, file management, event consolidation, notifications, and the web server.
+Coordinates MQTT, file management, event consolidation, notifications,
+and the web server.
 """
 
 import logging
@@ -75,7 +76,7 @@ class StateAwareOrchestrator:
             config["STORAGE_PATH"], config["RETENTION_DAYS"]
         )
 
-        # Initialize ConsolidatedEventManager with None callback first to break circular dependency
+        # ConsolidatedEventManager: None callback first to break circular dependency
         self.consolidated_manager = ConsolidatedEventManager(
             self.file_manager,
             event_gap_seconds=config.get("EVENT_GAP_SECONDS", 120),
@@ -100,7 +101,7 @@ class StateAwareOrchestrator:
 
         self.zone_filter = SmartZoneFilter(config)
 
-        # AI analyzer (Gemini proxy) - only when enabled; returns result to orchestrator (no MQTT publish)
+        # AI analyzer (Gemini proxy) when enabled; result to orchestrator, no MQTT
         gemini = config.get("GEMINI") or {}
         proxy_url = config.get("GEMINI_PROXY_URL") or gemini.get("proxy_url") or ""
         api_key = gemini.get("api_key") or os.getenv("GEMINI_API_KEY") or ""
@@ -190,7 +191,7 @@ class StateAwareOrchestrator:
             self.download_service,
         )
 
-        # Daily reporter (AI report from analysis_result.json) - only when AI analyzer enabled
+        # Daily reporter from analysis_result.json; only when AI analyzer enabled
         if self.ai_analyzer:
             self.daily_reporter = DailyReporterService(
                 config, config["STORAGE_PATH"], self.ai_analyzer
@@ -198,7 +199,7 @@ class StateAwareOrchestrator:
         else:
             self.daily_reporter = None
 
-        # Query service for event lists (shared so test_routes can evict test_events cache)
+        # Query service for event lists (shared so test_routes can evict test_events)
         self.query_service = EventQueryService(config["STORAGE_PATH"])
 
         # Flask app (lazy import to avoid circular deps)
@@ -219,7 +220,7 @@ class StateAwareOrchestrator:
         # Last cleanup tracking delegated to lifecycle service via properties
 
     def _on_mqtt_message(self, client, userdata, message):
-        """Dispatch MQTT message to handler when it is set (avoids None on_message call)."""
+        """Dispatch MQTT to handler when set (avoids None on_message call)."""
         if self._mqtt_handler is not None:
             self._mqtt_handler.on_message(client, userdata, message)
 
@@ -270,7 +271,7 @@ class StateAwareOrchestrator:
         self.lifecycle_service.last_cleanup_deleted = value
 
     def get_storage_stats(self) -> dict:
-        """Return cached storage stats for the stats page. See StorageStatsAndHaHelper.get()."""
+        """Return cached storage stats for stats page. See StorageStatsAndHaHelper."""
         return self.stats_helper.get()
 
     def fetch_ha_state(self, ha_url: str, ha_token: str, entity_id: str) -> str | None:
@@ -278,7 +279,7 @@ class StateAwareOrchestrator:
         return self.stats_helper.fetch_ha_state(ha_url, ha_token, entity_id)
 
     def _handle_analysis_result(self, event_id: str, result: dict):
-        """Handle returned analysis from GeminiAnalysisService: update state, write files, POST to Frigate, notify HA."""
+        """Handle analysis from Gemini: update state, write files, POST Frigate."""
         title = result.get("title") or ""
         description = result.get("shortSummary") or result.get("description") or ""
         scene = result.get("scene") or ""
@@ -286,7 +287,8 @@ class StateAwareOrchestrator:
         severity = "detection"
         if not title and not description:
             logger.debug(
-                f"Analysis result for {event_id} has no title/description, skipping finalization"
+                "Analysis result for %s has no title/description, skipping",
+                event_id,
             )
             return
         if not self.state_manager.set_genai_metadata(
@@ -319,7 +321,9 @@ class StateAwareOrchestrator:
             ce = self.consolidated_manager.get_by_frigate_event(event_id)
             if ce and ce.finalized_sent:
                 logger.debug(
-                    f"Suppressing finalized for {event_id} (CE {ce.consolidated_id} already sent)"
+                    "Suppressing finalized for %s (CE %s already sent)",
+                    event_id,
+                    ce.consolidated_id,
                 )
             else:
                 if ce:
@@ -404,7 +408,10 @@ class StateAwareOrchestrator:
                     else f"frigate_{event.event_id}",
                 )
         logger.info(
-            f"Analysis result applied for {event_id}: title={title or 'N/A'}, threat_level={threat_level}"
+            "Analysis result applied for %s: title=%s, threat_level=%s",
+            event_id,
+            title or "N/A",
+            threat_level,
         )
         if self.daily_reporter and event and event.folder_path:
             try:
@@ -433,7 +440,7 @@ class StateAwareOrchestrator:
     def _handle_ce_analysis_result(
         self, ce_id: str, ce_folder_path: str, result: dict, ce_info: dict
     ):
-        """Handle multi-clip CE analysis result: write summary/metadata to CE root, notify."""
+        """Handle multi-clip CE analysis: write summary/metadata to CE root, notify."""
         title = result.get("title") or ""
         description = result.get("shortSummary") or result.get("description") or ""
         scene = result.get("scene") or ""
@@ -557,8 +564,13 @@ class StateAwareOrchestrator:
             count = self._request_count
             self._request_count = 0
         active = len(self.state_manager._events)
+        mqtt_connected = self.mqtt_wrapper.mqtt_connected
+        mqtt_status = "connected" if mqtt_connected else "disconnected"
         logger.info(
-            f"API stats (5m): {count} requests, {active} active events, MQTT {'connected' if self.mqtt_wrapper.mqtt_connected else 'disconnected'}"
+            "API stats (5m): %s requests, %s active events, MQTT %s",
+            count,
+            active,
+            mqtt_status,
         )
 
     def _update_storage_stats(self):
@@ -566,7 +578,7 @@ class StateAwareOrchestrator:
         self.stats_helper.update(self.file_manager)
 
     def _daily_report_job(self):
-        """Generate yesterday's AI daily report from analysis_result.json. Runs at configured hour (default 1am)."""
+        """Generate yesterday's AI daily report from analysis_result.json (e.g. 1am)."""
         yesterday = date.today() - timedelta(days=1)
         if self.daily_reporter is None:
             logger.debug("Daily reporter disabled (AI analyzer not enabled), skipping")
@@ -586,7 +598,7 @@ class StateAwareOrchestrator:
         self.lifecycle_service.run_cleanup()
 
     def _run_export_watchdog(self):
-        """Check event folders for completed exports, remove from Frigate, verify download links."""
+        """Check folders for completed exports, remove from Frigate, verify links."""
         try:
             export_watchdog_run_once(self.config)
         except Exception as e:
@@ -615,9 +627,10 @@ class StateAwareOrchestrator:
 
         logger.info(f"Storage Path: {self.config['STORAGE_PATH']}")
         logger.info(f"Retention: {self.config['RETENTION_DAYS']} days")
-        logger.info(
-            f"FFmpeg Timeout: {self.config.get('FFMPEG_TIMEOUT', VideoService.DEFAULT_FFMPEG_TIMEOUT)}s"
+        ffmpeg_timeout = self.config.get(
+            "FFMPEG_TIMEOUT", VideoService.DEFAULT_FFMPEG_TIMEOUT
         )
+        logger.info("FFmpeg Timeout: %ss", ffmpeg_timeout)
         logger.info(f"Log Level: {self.config.get('LOG_LEVEL', 'INFO')}")
 
         camera_label_map = self.config.get("CAMERA_LABEL_MAP", {})

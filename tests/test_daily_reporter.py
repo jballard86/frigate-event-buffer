@@ -60,7 +60,8 @@ class TestDailyReporterServiceScan(unittest.TestCase):
         self.assertEqual(events_list[0][1].get("title"), "Person at door")
 
     def test_consolidated_event_folder_date_parsed(self):
-        # events/{ts}_{uuid}/camera/analysis_result.json -> folder name ts_uuid; 1234567890 -> 2009-02-13
+        # events/{ts}_{uuid}/camera/analysis_result.json -> folder name ts_uuid;
+        # 1234567890 -> 2009-02-13
         target = date(2009, 2, 13)
         storage = tempfile.mkdtemp()
         self.addCleanup(lambda: shutil.rmtree(storage, ignore_errors=True))
@@ -131,10 +132,12 @@ class TestDailyReporterServiceAggregate(unittest.TestCase):
 
 
 class TestDailyReporterServicePrompt(unittest.TestCase):
-    """Test that template placeholders are replaced (date, event_list, known_person_name, report_*)."""
+    """Test that template placeholders are replaced (date, event_list,
+    known_person_name, report_*)."""
 
     def test_known_person_name_replaced_in_system_prompt(self):
-        """REPORT_KNOWN_PERSON_NAME from config is used for {known_person_name} placeholder."""
+        """REPORT_KNOWN_PERSON_NAME from config is used for {known_person_name}
+        placeholder."""
         storage = tempfile.mkdtemp()
         self.addCleanup(lambda: shutil.rmtree(storage, ignore_errors=True))
         with tempfile.NamedTemporaryFile(
@@ -170,7 +173,8 @@ class TestDailyReporterServicePrompt(unittest.TestCase):
         self.assertIn("Known: Unspecified", system_prompt)
 
     def test_load_prompt_replaces_date_and_event_list(self):
-        """With no events, {date} and {event_list} are replaced; {event_list} gets JSON []."""
+        """With no events, {date} and {event_list} are replaced;
+        {event_list} gets JSON []."""
         storage = tempfile.mkdtemp()
         self.addCleanup(lambda: shutil.rmtree(storage, ignore_errors=True))
         with tempfile.NamedTemporaryFile(
@@ -193,7 +197,8 @@ class TestDailyReporterServicePrompt(unittest.TestCase):
         self.assertNotIn("{event_list}", system_prompt)
 
     def test_new_placeholders_replaced_in_system_prompt(self):
-        """report_date_string, report_start_time, report_end_time, list_of_event_json_objects are replaced."""
+        """report_date_string, report_start_time, report_end_time,
+        list_of_event_json_objects are replaced."""
         storage = tempfile.mkdtemp()
         self.addCleanup(lambda: shutil.rmtree(storage, ignore_errors=True))
         with tempfile.NamedTemporaryFile(
@@ -221,7 +226,8 @@ class TestDailyReporterServicePrompt(unittest.TestCase):
         self.assertNotIn("{list_of_event_json_objects}", system_prompt)
 
     def test_missing_prompt_file_returns_false_and_does_not_call_proxy(self):
-        """When report prompt file is missing, generate_report returns False and send_text_prompt is not called."""
+        """When report prompt file is missing, generate_report returns False and
+        send_text_prompt is not called."""
         storage = tempfile.mkdtemp()
         self.addCleanup(lambda: shutil.rmtree(storage, ignore_errors=True))
         nonexistent = os.path.join(storage, "nonexistent_report_prompt.txt")
@@ -451,7 +457,8 @@ class TestDailyReporterServiceFolderNameAndTimestamp(unittest.TestCase):
         config = {}
         mock_analyzer = MagicMock()
         service = DailyReporterService(config, "/tmp", mock_analyzer)
-        # Folder name "single" has no underscore -> split("_")[0] is "single" -> int("single") raises ValueError -> returns (None, None)
+        # Folder name "single" has no underscore -> split("_")[0] is "single" ->
+        # int("single") raises ValueError -> returns (None, None)
         json_path = os.path.join("/tmp", "camera", "single", "analysis_result.json")
         folder_name, unix_ts = service._folder_name_and_timestamp(json_path)
         self.assertIsNone(unix_ts)
@@ -478,7 +485,8 @@ class TestDailyReporterServiceFolderNameAndTimestamp(unittest.TestCase):
 
 
 class TestDailyReporterServiceAggregateEdgeCases(unittest.TestCase):
-    """Edge cases for _aggregate_event_lines: missing or invalid potential_threat_level."""
+    """Edge cases for _aggregate_event_lines: missing or invalid
+    potential_threat_level."""
 
     def test_aggregate_handles_missing_threat_level(self):
         config = {}
@@ -509,7 +517,8 @@ class TestDailyReporterServiceAggregateEdgeCases(unittest.TestCase):
             self.assertEqual(len(lines), 1)
         except ValueError:
             self.fail(
-                "_aggregate_event_lines should not raise for non-int potential_threat_level"
+                "_aggregate_event_lines should not raise for non-int "
+                "potential_threat_level"
             )
 
 

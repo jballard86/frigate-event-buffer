@@ -62,7 +62,8 @@ class StorageStatsAndHaHelper:
         )
 
     def update(self, file_manager: Any) -> None:
-        """Refresh cache from file_manager.compute_storage_stats(). Skip if cache is still fresh."""
+        """Refresh cache from file_manager.compute_storage_stats().
+        Skip if cache is still fresh."""
         now = time.time()
         if (
             self._cached_time is not None
@@ -79,9 +80,11 @@ class StorageStatsAndHaHelper:
             logger.error("Failed to update storage stats: %s", e)
 
     def get(self) -> dict[str, Any]:
-        """Return the cached storage stats dict (clips, snapshots, descriptions, total, by_camera)."""
+        """Return the cached storage stats dict (clips, snapshots, descriptions,
+        total, by_camera)."""
         return self._cached
 
     def fetch_ha_state(self, ha_url: str, ha_token: str, entity_id: str) -> str | None:
-        """Fetch entity state from Home Assistant. Delegates to module-level fetch_ha_state."""
+        """Fetch entity state from Home Assistant.
+        Delegates to module-level fetch_ha_state."""
         return fetch_ha_state(ha_url, ha_token, entity_id)

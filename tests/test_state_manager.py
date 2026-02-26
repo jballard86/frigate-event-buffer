@@ -1,25 +1,80 @@
 import sys
 from unittest.mock import MagicMock
 
-# Mock dependencies before importing project modules
-sys.modules["requests"] = MagicMock()
-sys.modules["flask"] = MagicMock()
-sys.modules["paho"] = MagicMock()
-sys.modules["paho.mqtt"] = MagicMock()
-sys.modules["paho.mqtt.client"] = MagicMock()
-sys.modules["schedule"] = MagicMock()
-sys.modules["yaml"] = MagicMock()
-sys.modules["voluptuous"] = MagicMock()
+# Keys to mock so this module can import state without pulling in heavy deps.
+# We mock in setup_module and restore in teardown_module so other test modules
+# never see the mocks.
+_MODULE_KEYS = (
+    "requests",
+    "flask",
+    "paho",
+    "paho.mqtt",
+    "paho.mqtt.client",
+    "schedule",
+    "yaml",
+    "voluptuous",
+)
+_saved_modules = {}
 
 import unittest
 
-from frigate_buffer.managers.state import EventStateManager, _normalize_box
-from frigate_buffer.models import EventPhase, FrameMetadata
+
+def setup_module():
+    for k in _MODULE_KEYS:
+        _saved_modules[k] = sys.modules.get(k)
+        sys.modules[k] = MagicMock()
+    # Import after mocks so state/models don't pull in flask etc.
+    from frigate_buffer.managers.state import (
+        EventStateManager as ESM,
+    )
+    from frigate_buffer.managers.state import (
+        _normalize_box as nb,
+    )
+    from frigate_buffer.models import EventPhase as EP
+    from frigate_buffer.models import FrameMetadata as FM
+
+    mod = sys.modules[__name__]
+    mod.EventStateManager = ESM
+    mod._normalize_box = nb
+    mod.EventPhase = EP
+    mod.FrameMetadata = FM
+
+
+def teardown_module():
+    for k in _MODULE_KEYS:
+        if _saved_modules.get(k) is not None:
+            sys.modules[k] = _saved_modules[k]
+        elif k in sys.modules:
+            del sys.modules[k]
+
+
+# Import for use in test methods (set by setup_module when running under pytest)
+EventStateManager = _normalize_box = EventPhase = FrameMetadata = None
+
+
+def _ensure_imports():
+    """Run when module is executed without pytest (e.g. python -m unittest)."""
+    global EventStateManager, _normalize_box, EventPhase, FrameMetadata
+    if EventStateManager is None:
+        from frigate_buffer.managers.state import (
+            EventStateManager as _ESM,
+        )
+        from frigate_buffer.managers.state import (
+            _normalize_box as _nb,
+        )
+        from frigate_buffer.models import EventPhase as _EP
+        from frigate_buffer.models import FrameMetadata as _FM
+
+        globals()["EventStateManager"] = _ESM
+        globals()["_normalize_box"] = _nb
+        globals()["EventPhase"] = _EP
+        globals()["FrameMetadata"] = _FM
 
 
 class TestEventStateManager(unittest.TestCase):
     def setUp(self):
         """Set up the test environment."""
+        _ensure_imports()
         self.manager = EventStateManager()
 
     def test_create_event_success(self):
@@ -41,7 +96,8 @@ class TestEventStateManager(unittest.TestCase):
         self.assertEqual(self.manager.get_event(event_id), event)
 
     def test_create_event_duplicate(self):
-        """Test creating an event that already exists preserves original (idempotency)."""
+        """Test creating an event that already exists preserves original
+        (idempotency)."""
         event_id = "test_event_1"
         camera = "front_door"
         label = "person"
@@ -242,7 +298,8 @@ class TestEventStateManager(unittest.TestCase):
         self.assertEqual(stats["by_camera"]["cam2"], 1)
 
     def test_normalize_box_pixels(self):
-        """_normalize_box converts pixel coords to normalized [ymin, xmin, ymax, xmax]."""
+        """_normalize_box converts pixel coords to normalized
+        [ymin, xmin, ymax, xmax]."""
         # Frigate [x1, y1, x2, y2] pixels
         out = _normalize_box([100, 200, 300, 400], frame_width=1000, frame_height=800)
         self.assertIsNotNone(out)

@@ -125,7 +125,7 @@ class TestFrigateExportWatchdog(unittest.TestCase):
     def test_folder_with_only_append_timeline_is_considered(
         self, mock_head, mock_delete
     ):
-        """Watchdog considers folder when only notification_timeline_append.jsonl exists."""
+        """Watchdog considers folder when only append timeline (jsonl) exists."""
         mock_delete.return_value = MagicMock(status_code=200)
         mock_head.return_value = MagicMock(status_code=200)
         with tempfile.TemporaryDirectory() as tmp:

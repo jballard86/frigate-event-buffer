@@ -31,7 +31,8 @@ class TestGetCeStartTimeFromFolderPath:
 
 
 class TestRunTestPipelineValidation:
-    """Tests that run_test_pipeline yields error when source is invalid or incomplete."""
+    """Tests that run_test_pipeline yields error when source is invalid
+    or incomplete."""
 
     def test_nonexistent_source_yields_error(self):
         tmp = os.path.join(os.path.dirname(__file__), "tmp_event_test")

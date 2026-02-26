@@ -24,7 +24,8 @@ class TestResolveUnderStorage(unittest.TestCase):
         subdir = os.path.join("camera", "123_evt")
         result = resolve_under_storage(self.tmp, subdir)
         self.assertIsNotNone(result)
-        self.assertTrue(os.path.normpath(result).startswith(os.path.realpath(self.tmp)))
+        base = os.path.realpath(self.tmp)
+        self.assertTrue(os.path.normpath(result).startswith(base))
         self.assertIn("camera", result)
         self.assertIn("123_evt", result)
 
@@ -51,7 +52,7 @@ class TestResolveUnderStorage(unittest.TestCase):
         self.assertNotEqual(result, os.path.realpath(self.tmp))
 
     def test_storage_root_only_returns_none(self):
-        """Explicit storage root as only segment can still resolve; must not equal base."""
-        # resolve_under_storage(tmp, ".") or (tmp, "") - "." normalizes to tmp, which equals base -> None
+        """Only segment "." resolves to base; must not equal base (returns None)."""
+        # resolve_under_storage(tmp, ".") normalizes to tmp, equals base -> None
         result = resolve_under_storage(self.tmp, ".")
         self.assertIsNone(result)

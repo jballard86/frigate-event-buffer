@@ -11,7 +11,8 @@ from frigate_buffer.services.query import EventQueryService, read_timeline_merge
 
 class TestEventQueryService(unittest.TestCase):
     def setUp(self):
-        # Use a unique subdir per test to avoid Windows rmtree permission errors on open files.
+        # Use a unique subdir per test to avoid Windows rmtree permission
+        # errors on open files.
         base = os.path.join(os.path.dirname(__file__), "_query_test_fixture")
         self.test_dir = os.path.join(base, str(id(self)))
         os.makedirs(self.test_dir, exist_ok=True)
@@ -95,7 +96,8 @@ class TestEventQueryService(unittest.TestCase):
         self.assertIn("clip.mp4", ev["hosted_clips"][0]["url"])
 
     def test_consolidated_event_includes_summary_video_when_file_exists(self):
-        """When {ce_id}_summary.mp4 exists in the CE root, event has Summary video in hosted_clips and as hosted_clip."""
+        """When {ce_id}_summary.mp4 exists in the CE root, event has
+        Summary video in hosted_clips and as hosted_clip."""
         summary_basename = f"{self.ce_id}_summary.mp4"
         with open(os.path.join(self.ce_dir, summary_basename), "w") as f:
             f.write("dummy")
@@ -139,7 +141,8 @@ class TestEventQueryService(unittest.TestCase):
         )
 
     def test_camera_event_includes_end_timestamp_when_in_timeline(self):
-        """When timeline has an entry with payload.after.end_time, event dict includes end_timestamp."""
+        """When timeline has an entry with payload.after.end_time, event
+        dict includes end_timestamp."""
         timeline = {
             "event_id": self.ev1_id,
             "entries": [
@@ -162,7 +165,8 @@ class TestEventQueryService(unittest.TestCase):
         self.assertEqual(ev["end_timestamp"], 1234567890.5)
 
     def test_camera_event_end_timestamp_fallback_from_metadata(self):
-        """When metadata.json has end_time but timeline has none, event gets end_timestamp from metadata."""
+        """When metadata.json has end_time but timeline has none, event
+        gets end_timestamp from metadata."""
         with open(os.path.join(self.ev1_dir, "metadata.json"), "w") as f:
             json.dump(
                 {"label": "person", "threat_level": 0, "end_time": 1234567895.25}, f
@@ -175,7 +179,8 @@ class TestEventQueryService(unittest.TestCase):
 
     def test_ultralytics_folder_excluded_from_events(self):
         """The ultralytics config folder should not appear as an event."""
-        # Create an ultralytics folder in the events directory (simulating config folder misplaced or created there)
+        # Create an ultralytics folder in the events directory (simulating
+        # config folder misplaced or created there)
         ultralytics_dir = os.path.join(self.events_dir, "ultralytics")
         os.makedirs(ultralytics_dir, exist_ok=True)
 
@@ -196,7 +201,8 @@ class TestEventQueryService(unittest.TestCase):
             self.assertNotEqual(ev.get("event_id"), "ultralytics")
 
     def test_ultralytics_capital_u_excluded_from_events(self):
-        """The Ultralytics folder with capital U should not appear as an event (case sensitivity test)."""
+        """The Ultralytics folder with capital U should not appear as an
+        event (case sensitivity test)."""
         # Create an Ultralytics folder with capital U (as shown in bug report)
         ultralytics_dir = os.path.join(self.events_dir, "Ultralytics")
         os.makedirs(ultralytics_dir, exist_ok=True)
@@ -251,8 +257,10 @@ class TestEventQueryService(unittest.TestCase):
         self.assertIn("events", cameras)
 
     def test_get_all_events_excludes_ultralytics_folder(self):
-        """get_all_events() must not include any events from the ultralytics directory."""
-        # Create ultralytics at storage root with a subdir (simulates Ultralytics lib creating e.g. Ultralytics/runs)
+        """get_all_events() must not include any events from the
+        ultralytics directory."""
+        # Create ultralytics at storage root with a subdir (simulates
+        # Ultralytics lib creating e.g. Ultralytics/runs)
         ultralytics_dir = os.path.join(self.test_dir, "ultralytics")
         os.makedirs(ultralytics_dir, exist_ok=True)
         subdir = os.path.join(ultralytics_dir, "Ultralytics")
@@ -345,7 +353,8 @@ class TestQueryCaching(unittest.TestCase):
 
 
 class TestExtractEndTimestampFromTimeline(unittest.TestCase):
-    """_extract_end_timestamp_from_timeline: Frigate payload.after.end_time and test_ai_prompt data.end_time (test events only)."""
+    """_extract_end_timestamp_from_timeline: Frigate payload.after.end_time
+    and test_ai_prompt data.end_time (test events only)."""
 
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
@@ -421,7 +430,8 @@ class TestExtractEndTimestampFromTimeline(unittest.TestCase):
         )
 
     def test_returns_max_when_frigate_and_test_ai_prompt_both_have_end_time(self):
-        """When both Frigate and test_ai_prompt have end_time, result is the latest (max)."""
+        """When both Frigate and test_ai_prompt have end_time, result is
+        the latest (max)."""
         timeline = {
             "entries": [
                 {
@@ -437,7 +447,8 @@ class TestExtractEndTimestampFromTimeline(unittest.TestCase):
 
 
 class TestEvictCache(unittest.TestCase):
-    """evict_cache removes a key so next request refetches (e.g. test_events after Send prompt to AI)."""
+    """evict_cache removes a key so next request refetches (e.g. test_events
+    after Send prompt to AI)."""
 
     def test_evict_cache_removes_key(self):
         storage = tempfile.mkdtemp()
@@ -450,7 +461,8 @@ class TestEvictCache(unittest.TestCase):
 
 
 class TestGetTestEventsSortAndTimestamp(unittest.TestCase):
-    """get_test_events: sorted by folder mtime desc; timestamp from content_mtime (test events only)."""
+    """get_test_events: sorted by folder mtime desc; timestamp from
+    content_mtime (test events only)."""
 
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
@@ -471,7 +483,8 @@ class TestGetTestEventsSortAndTimestamp(unittest.TestCase):
         os.makedirs(os.path.join(test2, "cam1"))
         with open(os.path.join(test2, "cam1", "clip.mp4"), "w") as f:
             f.write("x")
-        # Make test2 older (e.g. 100s ago); set mtime on folder and contents so content_mtime is t_old
+        # Make test2 older (e.g. 100s ago); set mtime on folder and contents
+        # so content_mtime is t_old
         t_old = time.time() - 100
         os.utime(test2, (t_old, t_old))
         os.utime(os.path.join(test2, "cam1"), (t_old, t_old))

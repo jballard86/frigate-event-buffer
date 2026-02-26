@@ -77,7 +77,8 @@ class TestDownloadService(unittest.TestCase):
     @patch("frigate_buffer.services.download.requests.post")
     @patch("frigate_buffer.services.download.requests.get")
     @patch(
-        "frigate_buffer.services.download.DownloadService._download_clip_events_api_to_path"
+        "frigate_buffer.services.download.DownloadService."
+        "_download_clip_events_api_to_path"
     )  # Mock fallback
     @patch("time.sleep")  # Speed up polling
     def test_export_success_false_logs_warning(
@@ -173,7 +174,8 @@ class TestDownloadService(unittest.TestCase):
     @patch("frigate_buffer.services.download.requests.get")
     @patch("time.sleep")
     def test_download_400_retries(self, mock_sleep, mock_get):
-        # Scenario: Download clip returns 400 (Not Ready) then succeeds (or fails after retries)
+        # Scenario: Download clip returns 400 (Not Ready) then succeeds
+        # (or fails after retries)
 
         # Mock 400 response
         mock_response_400 = MagicMock()
@@ -196,18 +198,21 @@ class TestDownloadService(unittest.TestCase):
         self.assertFalse(result)
         self.assertEqual(mock_get.call_count, 3, "Should retry 3 times on 400")
 
-    # ---- Export API (Frigate 0.17+): POST with JSON body, log non-200 response.text ----
+    # ---- Export API (Frigate 0.17+): POST with JSON body,
+    # log non-200 response.text ----
 
     @patch("frigate_buffer.services.download.requests.get")
     @patch("frigate_buffer.services.download.requests.post")
     @patch(
-        "frigate_buffer.services.download.DownloadService._download_clip_events_api_to_path"
+        "frigate_buffer.services.download.DownloadService."
+        "_download_clip_events_api_to_path"
     )
     @patch("time.sleep")
     def test_export_post_always_sends_json_body(
         self, mock_sleep, mock_fallback, mock_post, mock_get
     ):
-        """POST must be called with json= dict (Frigate 0.17+ requires body to exist)."""
+        """POST must be called with json= dict (Frigate 0.17+ requires
+        body to exist)."""
         mock_post.return_value = MagicMock(
             status_code=200, headers={"content-type": "application/json"}, text="{}"
         )
@@ -232,16 +237,21 @@ class TestDownloadService(unittest.TestCase):
 
     @patch("frigate_buffer.services.download.requests.post")
     @patch(
-        "frigate_buffer.services.download.DownloadService._download_clip_events_api_to_path"
+        "frigate_buffer.services.download.DownloadService."
+        "_download_clip_events_api_to_path"
     )
     @patch("time.sleep")
     def test_export_422_logs_response_text(self, mock_sleep, mock_fallback, mock_post):
-        """Non-200 (422) must log response.text so Pydantic validation errors are visible."""
+        """Non-200 (422) must log response.text so Pydantic validation
+        errors are visible."""
         mock_post.return_value = MagicMock(
             status_code=422,
             ok=False,
             headers={"content-type": "application/json"},
-            text='{"detail":[{"loc":["body","field"],"msg":"Field required","type":"value_error.missing"}]}',
+            text=(
+                '{"detail":[{"loc":["body","field"],"msg":"Field required",'
+                '"type":"value_error.missing"}]}'
+            ),
         )
         mock_post.return_value.raise_for_status.side_effect = (
             requests.exceptions.HTTPError("422", response=mock_post.return_value)
@@ -269,7 +279,8 @@ class TestDownloadService(unittest.TestCase):
 
     @patch("frigate_buffer.services.download.requests.post")
     @patch(
-        "frigate_buffer.services.download.DownloadService._download_clip_events_api_to_path"
+        "frigate_buffer.services.download.DownloadService."
+        "_download_clip_events_api_to_path"
     )
     @patch("time.sleep")
     def test_export_405_logs_response_text(self, mock_sleep, mock_fallback, mock_post):
@@ -301,7 +312,8 @@ class TestDownloadService(unittest.TestCase):
 
     @patch("frigate_buffer.services.download.requests.post")
     @patch(
-        "frigate_buffer.services.download.DownloadService._download_clip_events_api_to_path"
+        "frigate_buffer.services.download.DownloadService."
+        "_download_clip_events_api_to_path"
     )
     @patch("time.sleep")
     def test_export_500_logs_response_text(self, mock_sleep, mock_fallback, mock_post):
@@ -331,7 +343,8 @@ class TestDownloadService(unittest.TestCase):
 
     @patch("frigate_buffer.services.download.requests.post")
     @patch(
-        "frigate_buffer.services.download.DownloadService._download_clip_events_api_to_path"
+        "frigate_buffer.services.download.DownloadService."
+        "_download_clip_events_api_to_path"
     )
     @patch("time.sleep")
     def test_export_non200_empty_body_logs_status(
@@ -360,13 +373,15 @@ class TestDownloadService(unittest.TestCase):
 
     @patch("frigate_buffer.services.download.requests.post")
     @patch(
-        "frigate_buffer.services.download.DownloadService._download_clip_events_api_to_path"
+        "frigate_buffer.services.download.DownloadService."
+        "_download_clip_events_api_to_path"
     )
     @patch("time.sleep")
     def test_export_timeout_no_response_does_not_crash(
         self, mock_sleep, mock_fallback, mock_post
     ):
-        """RequestException with no response (e.g. timeout): log exception, do not access e.response.text."""
+        """RequestException with no response (e.g. timeout): log exception,
+        do not access e.response.text."""
         mock_post.side_effect = requests.exceptions.Timeout("Connection timed out")
         mock_fallback.return_value = {"success": False, "clip_path": None}
         self.download_service.export_and_download_clip(
@@ -385,13 +400,15 @@ class TestDownloadService(unittest.TestCase):
 
     @patch("frigate_buffer.services.download.requests.post")
     @patch(
-        "frigate_buffer.services.download.DownloadService._download_clip_events_api_to_path"
+        "frigate_buffer.services.download.DownloadService."
+        "_download_clip_events_api_to_path"
     )
     @patch("time.sleep")
     def test_export_url_uses_integer_timestamps(
         self, mock_sleep, mock_fallback, mock_post
     ):
-        """URL path must use integer start/end (Frigate 0.17 Pydantic rejects float/string)."""
+        """URL path must use integer start/end (Frigate 0.17 Pydantic
+        rejects float/string)."""
         mock_post.return_value = MagicMock(
             status_code=200, headers={"content-type": "application/json"}, text="{}"
         )
@@ -416,13 +433,15 @@ class TestDownloadService(unittest.TestCase):
 
     @patch("frigate_buffer.services.download.requests.post")
     @patch(
-        "frigate_buffer.services.download.DownloadService._download_clip_events_api_to_path"
+        "frigate_buffer.services.download.DownloadService."
+        "_download_clip_events_api_to_path"
     )
     @patch("time.sleep")
     def test_export_long_event_id_name_truncated(
         self, mock_sleep, mock_fallback, mock_post
     ):
-        """Long event_id: name in body must be <= 256 chars, request still valid JSON."""
+        """Long event_id: name in body must be <= 256 chars, request still
+        valid JSON."""
         mock_post.return_value = MagicMock(
             status_code=200, headers={"content-type": "application/json"}, text="{}"
         )
@@ -449,13 +468,15 @@ class TestDownloadService(unittest.TestCase):
     @patch("frigate_buffer.services.download.requests.get")
     @patch("frigate_buffer.services.download.requests.post")
     @patch(
-        "frigate_buffer.services.download.DownloadService._download_clip_events_api_to_path"
+        "frigate_buffer.services.download.DownloadService."
+        "_download_clip_events_api_to_path"
     )
     @patch("time.sleep")
     def test_export_in_progress_true_waits_does_not_download_immediately(
         self, mock_sleep, mock_fallback, mock_post, mock_get
     ):
-        """When GET /api/exports returns in_progress True, do not set export_filename; keep polling until timeout then fall back."""
+        """When GET /api/exports returns in_progress True, do not set
+        export_filename; keep polling until timeout then fall back."""
         mock_post.return_value = MagicMock(
             status_code=200, headers={"content-type": "application/json"}, text="{}"
         )
@@ -499,14 +520,16 @@ class TestDownloadService(unittest.TestCase):
     def test_export_in_progress_false_proceeds_to_download(
         self, mock_sleep, mock_post, mock_get
     ):
-        """When GET /api/exports returns in_progress False, proceed to download (no transcode)."""
+        """When GET /api/exports returns in_progress False, proceed to
+        download (no transcode)."""
         mock_post.return_value = MagicMock(
             status_code=200, headers={"content-type": "application/json"}, text="{}"
         )
         mock_post.return_value.json.return_value = {"export_id": "exp1"}
         mock_post.return_value.ok = True
         mock_post.return_value.raise_for_status = MagicMock()
-        # First get: exports list with in_progress False (completed); second get: sync export_id from list; third: download
+        # First get: exports list with in_progress False (completed);
+        # second get: sync export_id from list; third: download
         list_resp = MagicMock()
         list_resp.raise_for_status = MagicMock()
         list_resp.json.return_value = [
@@ -547,7 +570,8 @@ class TestDownloadService(unittest.TestCase):
     def test_export_in_progress_missing_proceeds_backward_compat(
         self, mock_sleep, mock_post, mock_get
     ):
-        """When in_progress key is missing (older Frigate), treat as completed and proceed."""
+        """When in_progress key is missing (older Frigate), treat as
+        completed and proceed."""
         mock_post.return_value = MagicMock(
             status_code=200, headers={"content-type": "application/json"}, text="{}"
         )
@@ -597,13 +621,17 @@ class TestDownloadService(unittest.TestCase):
     def test_export_and_download_clip_returns_clip_path_on_success(
         self, mock_sleep, mock_post, mock_get
     ):
-        """export_and_download_clip returns success and clip_path when export and download succeed (no transcode)."""
-        # Use a workspace folder so the write succeeds (sandbox allows workspace writes).
+        """export_and_download_clip returns success and clip_path when
+        export and download succeed (no transcode)."""
+        # Use a workspace folder so the write succeeds
+        # (sandbox allows workspace writes).
         folder = os.path.join(os.path.dirname(__file__), "_download_test_out")
         os.makedirs(folder, exist_ok=True)
         try:
             mock_post.return_value = MagicMock(
-                status_code=200, headers={"content-type": "application/json"}, text="{}"
+                status_code=200,
+                headers={"content-type": "application/json"},
+                text="{}",
             )
             mock_post.return_value.json.return_value = {"export_id": "exp1"}
             mock_post.return_value.ok = True

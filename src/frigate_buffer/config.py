@@ -140,9 +140,7 @@ CONFIG_SCHEMA = Schema(
             ): str,  # HA API base URL (e.g. http://host:8123/api); preferred over url.
             Optional("url"): str,  # Alternative to base_url for HA API endpoint.
             Optional("token"): str,  # Long-lived access token for HA API.
-            Optional(
-                "gemini_cost_entity"
-            ): str,  # HA entity ID for Gemini cost.
+            Optional("gemini_cost_entity"): str,  # HA entity ID for Gemini cost.
             Optional(
                 "gemini_tokens_entity"
             ): str,  # HA entity ID for Gemini token count.
@@ -439,9 +437,7 @@ def load_config() -> dict:
                     config["NOTIFICATION_DELAY"] = settings.get(
                         "notification_delay_seconds", config["NOTIFICATION_DELAY"]
                     )
-                    config["LOG_LEVEL"] = settings.get(
-                        "log_level", config["LOG_LEVEL"]
-                    )
+                    config["LOG_LEVEL"] = settings.get("log_level", config["LOG_LEVEL"])
                     config["SUMMARY_PADDING_BEFORE"] = settings.get(
                         "summary_padding_before", config["SUMMARY_PADDING_BEFORE"]
                     )
@@ -520,12 +516,8 @@ def load_config() -> dict:
                     config["MQTT_BROKER"] = network.get(
                         "mqtt_broker", config["MQTT_BROKER"]
                     )
-                    config["MQTT_PORT"] = network.get(
-                        "mqtt_port", config["MQTT_PORT"]
-                    )
-                    config["MQTT_USER"] = network.get(
-                        "mqtt_user", config["MQTT_USER"]
-                    )
+                    config["MQTT_PORT"] = network.get("mqtt_port", config["MQTT_PORT"])
+                    config["MQTT_USER"] = network.get("mqtt_user", config["MQTT_USER"])
                     config["MQTT_PASSWORD"] = network.get(
                         "mqtt_password", config["MQTT_PASSWORD"]
                     )
@@ -547,13 +539,9 @@ def load_config() -> dict:
                 if "ha" in yaml_config:
                     ha_cfg = yaml_config["ha"]
                     config["HA_URL"] = (
-                        ha_cfg.get("base_url")
-                        or ha_cfg.get("url")
-                        or config["HA_URL"]
+                        ha_cfg.get("base_url") or ha_cfg.get("url") or config["HA_URL"]
                     )
-                    config["HA_TOKEN"] = (
-                        ha_cfg.get("token") or config["HA_TOKEN"]
-                    )
+                    config["HA_TOKEN"] = ha_cfg.get("token") or config["HA_TOKEN"]
                     config["HA_GEMINI_COST_ENTITY"] = ha_cfg.get(
                         "gemini_cost_entity", config["HA_GEMINI_COST_ENTITY"]
                     )

@@ -1,4 +1,5 @@
-"""Tests for ConsolidatedEventManager: mark_closing, schedule_close_timer, get_or_create with closing state."""
+"""Tests for ConsolidatedEventManager: mark_closing, schedule_close_timer,
+get_or_create with closing state."""
 
 import os
 import sys
@@ -128,7 +129,7 @@ class TestConsolidationClosingState(unittest.TestCase):
         self.assertIsNone(result)
 
     def test_set_final_from_frigate_sets_ce_final_fields(self):
-        """set_final_from_frigate sets final_title, final_description, final_threat_level on the CE."""
+        """set_final_from_frigate sets final_title, description, threat_level on CE."""
         now = 1000.0
         ce, _, _ = self.mgr.get_or_create("e1", "cam1", "person", now)
         self.assertIsNone(ce.final_title)

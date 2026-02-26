@@ -26,7 +26,8 @@ class TestDrawTimestampOverlay(unittest.TestCase):
     """Tests for draw_timestamp_overlay return value and read-only frame handling."""
 
     def test_draw_timestamp_overlay_readonly_returns_writable_copy(self):
-        """When frame is read-only numpy, overlay copies and returns a writable array."""
+        """When frame is read-only numpy, overlay copies and returns
+        a writable array."""
         frame = np.zeros((100, 100, 3), dtype=np.uint8)
         frame.setflags(write=False)
         self.assertFalse(frame.flags.writeable)
@@ -44,7 +45,8 @@ class TestDrawTimestampOverlay(unittest.TestCase):
         self.assertIsNot(result, frame)
 
     def test_draw_timestamp_overlay_writable_returns_same_object(self):
-        """When frame is writable numpy, overlay draws in-place and returns same array."""
+        """When frame is writable numpy, overlay draws in-place and
+        returns same array."""
         frame = np.zeros((100, 100, 3), dtype=np.uint8)
         self.assertTrue(frame.flags.writeable)
 
@@ -60,7 +62,8 @@ class TestDrawTimestampOverlay(unittest.TestCase):
         self.assertTrue(result.flags.writeable)
 
     def test_draw_timestamp_overlay_with_person_area_draws_bottom_right(self):
-        """When person_area is set, overlay draws at bottom-right; returned frame has same shape and is writable."""
+        """When person_area is set, overlay draws at bottom-right;
+        returned frame has same shape and is writable."""
         frame = np.zeros((120, 200, 3), dtype=np.uint8)
         result = crop_utils.draw_timestamp_overlay(
             frame,
@@ -95,7 +98,8 @@ class TestDrawTimestampOverlay(unittest.TestCase):
 
 
 class TestCropAroundCenterToSize(unittest.TestCase):
-    """Tests for crop_around_center_to_size (variable crop, fixed output; used by video_compilation)."""
+    """Tests for crop_around_center_to_size (variable crop, fixed output;
+    used by video_compilation)."""
 
     def test_crop_around_center_to_size_returns_bchw_output_shape(self):
         if not _TORCH_AVAILABLE:
@@ -129,10 +133,12 @@ class TestCenterCrop(unittest.TestCase):
 
 
 class TestFullFrameResizeToTarget(unittest.TestCase):
-    """Tests for full_frame_resize_to_target (letterbox to target size) with tensor BCHW."""
+    """Tests for full_frame_resize_to_target (letterbox to target size)
+    with tensor BCHW."""
 
     def test_full_frame_resize_to_target_returns_exact_shape(self):
-        """Output is exactly (1, 3, target_h, target_w) with aspect ratio preserved (letterbox)."""
+        """Output is exactly (1, 3, target_h, target_w) with aspect ratio
+        preserved (letterbox)."""
         if not _TORCH_AVAILABLE:
             self.skipTest("torch not available")
         frame = _bchw_tensor(360, 640)  # 640x360
@@ -140,7 +146,8 @@ class TestFullFrameResizeToTarget(unittest.TestCase):
         self.assertEqual(result.shape, (1, 3, 720, 1280))
 
     def test_full_frame_resize_to_target_preserves_aspect_ratio(self):
-        """Wider frame gets horizontal letterbox (black bars left/right); BCHW so check padding."""
+        """Wider frame gets horizontal letterbox (black bars left/right);
+        BCHW so check padding."""
         if not _TORCH_AVAILABLE:
             self.skipTest("torch not available")
         frame = _bchw_tensor(480, 640)  # 4:3
@@ -167,7 +174,8 @@ class TestCropAroundDetectionsWithPadding(unittest.TestCase):
         self.assertEqual(result.shape, (1, 3, 100, 200))
 
     def test_single_detection_crops_with_padding(self):
-        """One bbox yields a crop that contains the bbox region plus padding. BCHW out."""
+        """One bbox yields a crop that contains the bbox region plus
+        padding. BCHW out."""
         if not _TORCH_AVAILABLE:
             self.skipTest("torch not available")
         frame = _bchw_tensor(100, 200)
@@ -182,7 +190,8 @@ class TestCropAroundDetectionsWithPadding(unittest.TestCase):
         self.assertEqual(result.shape[3], 48)  # 94-46
 
     def test_multiple_detections_master_bbox_encompasses_all(self):
-        """Multiple detections produce one master bbox (union) then padding. BCHW out."""
+        """Multiple detections produce one master bbox (union) then
+        padding. BCHW out."""
         if not _TORCH_AVAILABLE:
             self.skipTest("torch not available")
         frame = _bchw_tensor(200, 300)
