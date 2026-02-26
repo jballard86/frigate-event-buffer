@@ -1,7 +1,8 @@
 """Home Assistant MQTT notification provider.
 
-Publishes to frigate/custom/notifications. Builds HA-specific payload (URLs, tags, clear_tag).
-No queue or rate limiting; the Dispatcher owns that. Returns NotificationResult for timeline.
+Publishes to frigate/custom/notifications. Builds HA-specific payload (URLs,
+tags, clear_tag). No queue or rate limiting; the Dispatcher owns that.
+Returns NotificationResult for timeline.
 """
 
 import json
@@ -63,7 +64,9 @@ class HomeAssistantMqttProvider(BaseNotificationProvider):
             )
             clear_flag_after_send = next_is_new
 
-        payload = self._build_payload(event, status, message, current_tag, add_clear_tag, last_tag)
+        payload = self._build_payload(
+            event, status, message, current_tag, add_clear_tag, last_tag
+        )
 
         try:
             result = self.mqtt_client.publish(
@@ -84,7 +87,11 @@ class HomeAssistantMqttProvider(BaseNotificationProvider):
                     "payload": payload,
                 }
             logger.warning("Failed to publish notification: rc=%s", result.rc)
-            return {"provider": "HA_MQTT", "status": "failure", "message": f"rc={result.rc}"}
+            return {
+                "provider": "HA_MQTT",
+                "status": "failure",
+                "message": f"rc={result.rc}",
+            }
         except Exception as e:
             logger.error("Error publishing notification: %s", e)
             return {"provider": "HA_MQTT", "status": "failure", "message": str(e)}
@@ -100,7 +107,10 @@ class HomeAssistantMqttProvider(BaseNotificationProvider):
             "camera": "multiple",
             "label": "multiple",
             "title": "Multiple Security Events",
-            "message": "Multiple notifications were queued. Click to review all events on your Security Alert Dashboard.",
+            "message": (
+                "Multiple notifications were queued. Click to review all events "
+                "on your Security Alert Dashboard."
+            ),
             "image_url": None,
             "video_url": None,
             "tag": "frigate_overflow",
@@ -116,7 +126,11 @@ class HomeAssistantMqttProvider(BaseNotificationProvider):
                 logger.info("Published overflow notification")
                 return {"provider": "HA_MQTT", "status": "success", "payload": payload}
             logger.warning("Failed to publish overflow notification: rc=%s", result.rc)
-            return {"provider": "HA_MQTT", "status": "failure", "message": f"rc={result.rc}"}
+            return {
+                "provider": "HA_MQTT",
+                "status": "failure",
+                "message": f"rc={result.rc}",
+            }
         except Exception as e:
             logger.error("Error publishing overflow notification: %s", e)
             return {"provider": "HA_MQTT", "status": "failure", "message": str(e)}
@@ -197,7 +211,9 @@ class HomeAssistantMqttProvider(BaseNotificationProvider):
             player_url = f"http://{self.buffer_ip}:{self.flask_port}/player"
 
         phase = getattr(event, "phase", None)
-        phase_name = "NEW" if phase is None else (getattr(phase, "name", None) or str(phase))
+        phase_name = (
+            "NEW" if phase is None else (getattr(phase, "name", None) or str(phase))
+        )
         threat_level = getattr(event, "threat_level", 0)
         created_at = getattr(event, "created_at", 0.0)
 
@@ -238,16 +254,18 @@ class HomeAssistantMqttProvider(BaseNotificationProvider):
         return self._get_default_title(event)
 
     def _build_message(self, event: NotificationEventLike, status: str) -> str:
-        best_desc = getattr(event, "genai_description", None) or getattr(event, "ai_description", None)
+        best_desc = getattr(event, "genai_description", None) or getattr(
+            event, "ai_description", None
+        )
         fallback = self._get_default_title(event)
         review_summary = getattr(event, "review_summary", None)
 
         match status:
             case "summarized" if review_summary:
                 lines = [
-                    l.strip()
-                    for l in review_summary.split("\n")
-                    if l.strip() and not l.strip().startswith("#")
+                    line.strip()
+                    for line in review_summary.split("\n")
+                    if line.strip() and not line.strip().startswith("#")
                 ]
                 excerpt = lines[0] if lines else "Review summary available"
                 return excerpt[:200] + ("..." if len(excerpt) > 200 else "")
@@ -259,6 +277,9 @@ class HomeAssistantMqttProvider(BaseNotificationProvider):
             case "finalized":
                 return best_desc or f"Event complete: {fallback}"
             case "described":
-                return getattr(event, "ai_description", None) or f"{fallback} (details updating)"
+                return (
+                    getattr(event, "ai_description", None)
+                    or f"{fallback} (details updating)"
+                )
             case _:
                 return best_desc or fallback

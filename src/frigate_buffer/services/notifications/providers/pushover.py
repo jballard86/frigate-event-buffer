@@ -1,8 +1,9 @@
 """Pushover notification provider.
 
-Sends notifications via Pushover API with phase-based priority (loud snapshot_ready,
-silent clip_ready/finalized) and optional image/GIF attachments. Uses event properties
-only for player URL construction (no folder_path string parsing).
+Sends notifications via Pushover API with phase-based priority (loud
+snapshot_ready, silent clip_ready/finalized) and optional image/GIF
+attachments. Uses event properties only for player URL construction
+(no folder_path string parsing).
 """
 
 import logging
@@ -82,7 +83,8 @@ def _build_message(
 
 
 class PushoverProvider(BaseNotificationProvider):
-    """Sends notifications via Pushover API with phase filter and priority/attachments."""
+    """Sends notifications via Pushover API with phase filter and
+    priority/attachments."""
 
     def __init__(self, pushover_config: dict, player_base_url: str) -> None:
         self._config = pushover_config or {}
@@ -161,7 +163,8 @@ class PushoverProvider(BaseNotificationProvider):
 
         try:
             if files:
-                # Multipart: send fields as form data; requests will use multipart/form-data.
+                # Multipart: send fields as form data; requests will use
+                # multipart/form-data.
                 resp = requests.post(
                     PUSHOVER_API_URL,
                     data=payload,
@@ -194,7 +197,11 @@ class PushoverProvider(BaseNotificationProvider):
 
         if resp.status_code >= 400 or data.get("status") != 1:
             errors = data.get("errors") or [resp.text or f"HTTP {resp.status_code}"]
-            err_msg = "; ".join(str(e) for e in errors) if isinstance(errors, list) else str(errors)
+            err_msg = (
+                "; ".join(str(e) for e in errors)
+                if isinstance(errors, list)
+                else str(errors)
+            )
             logger.warning("Pushover API error: %s", err_msg)
             return {
                 "provider": "PUSHOVER",
@@ -202,7 +209,11 @@ class PushoverProvider(BaseNotificationProvider):
                 "message": err_msg[:500],
             }
 
-        logger.info("Pushover notification sent for %s: %s", getattr(event, "event_id", "?"), status)
+        logger.info(
+            "Pushover notification sent for %s: %s",
+            getattr(event, "event_id", "?"),
+            status,
+        )
         return {"provider": "PUSHOVER", "status": "success"}
 
     def send_overflow(self) -> NotificationResult | None:
@@ -221,11 +232,23 @@ class PushoverProvider(BaseNotificationProvider):
             payload["sound"] = self._sound
         try:
             resp = requests.post(PUSHOVER_API_URL, data=payload, timeout=30)
-            data = resp.json() if resp.headers.get("content-type", "").startswith("application/json") else {}
+            data = (
+                resp.json()
+                if resp.headers.get("content-type", "").startswith("application/json")
+                else {}
+            )
             if resp.status_code >= 400 or data.get("status") != 1:
                 errors = data.get("errors") or [resp.text or f"HTTP {resp.status_code}"]
-                err_msg = "; ".join(str(e) for e in errors) if isinstance(errors, list) else str(errors)
-                return {"provider": "PUSHOVER", "status": "failure", "message": err_msg[:500]}
+                err_msg = (
+                    "; ".join(str(e) for e in errors)
+                    if isinstance(errors, list)
+                    else str(errors)
+                )
+                return {
+                    "provider": "PUSHOVER",
+                    "status": "failure",
+                    "message": err_msg[:500],
+                }
             logger.info("Pushover overflow notification sent")
             return {"provider": "PUSHOVER", "status": "success"}
         except requests.RequestException as e:

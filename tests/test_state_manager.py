@@ -2,18 +2,20 @@ import sys
 from unittest.mock import MagicMock
 
 # Mock dependencies before importing project modules
-sys.modules['requests'] = MagicMock()
-sys.modules['flask'] = MagicMock()
-sys.modules['paho'] = MagicMock()
-sys.modules['paho.mqtt'] = MagicMock()
-sys.modules['paho.mqtt.client'] = MagicMock()
-sys.modules['schedule'] = MagicMock()
-sys.modules['yaml'] = MagicMock()
-sys.modules['voluptuous'] = MagicMock()
+sys.modules["requests"] = MagicMock()
+sys.modules["flask"] = MagicMock()
+sys.modules["paho"] = MagicMock()
+sys.modules["paho.mqtt"] = MagicMock()
+sys.modules["paho.mqtt.client"] = MagicMock()
+sys.modules["schedule"] = MagicMock()
+sys.modules["yaml"] = MagicMock()
+sys.modules["voluptuous"] = MagicMock()
 
 import unittest
+
 from frigate_buffer.managers.state import EventStateManager, _normalize_box
 from frigate_buffer.models import EventPhase, FrameMetadata
+
 
 class TestEventStateManager(unittest.TestCase):
     def setUp(self):
@@ -48,7 +50,9 @@ class TestEventStateManager(unittest.TestCase):
         event1 = self.manager.create_event(event_id, camera, label, start_time)
 
         # Try creating again with same ID but different parameters
-        event2 = self.manager.create_event(event_id, "other_camera", "other_label", start_time + 10)
+        event2 = self.manager.create_event(
+            event_id, "other_camera", "other_label", start_time + 10
+        )
 
         # Should return the exact same object
         self.assertIs(event1, event2)
@@ -72,7 +76,9 @@ class TestEventStateManager(unittest.TestCase):
         event2 = self.manager.create_event(event_id, camera, label, start_time)
 
         self.assertEqual(event1, event2)
-        self.assertEqual(event2.phase, EventPhase.DESCRIBED)  # Should still be DESCRIBED
+        self.assertEqual(
+            event2.phase, EventPhase.DESCRIBED
+        )  # Should still be DESCRIBED
 
     def test_get_event(self):
         """Test retrieving events."""
@@ -137,7 +143,7 @@ class TestEventStateManager(unittest.TestCase):
             description="Person looking into windows",
             severity="suspicious",
             threat_level=1,
-            scene="Front yard at night"
+            scene="Front yard at night",
         )
 
         self.assertTrue(success)
@@ -151,7 +157,9 @@ class TestEventStateManager(unittest.TestCase):
 
     def test_set_genai_metadata_nonexistent(self):
         """Test setting GenAI metadata for non-existent event."""
-        success = self.manager.set_genai_metadata("nonexistent", "title", "desc", "severity")
+        success = self.manager.set_genai_metadata(
+            "nonexistent", "title", "desc", "severity"
+        )
         self.assertFalse(success)
 
     def test_set_review_summary(self):
@@ -286,5 +294,6 @@ class TestEventStateManager(unittest.TestCase):
         self.manager.remove_event("e1")
         self.assertEqual(self.manager.get_frame_metadata("e1"), [])
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     unittest.main()

@@ -78,8 +78,8 @@ If you use Compose, copy from `docker-compose.example.yaml` (if present) to `doc
 
 ## Docs
 
-- — Full install: clone, config, build, run, update, troubleshooting.
+- **INSTALL.md** — Full install: clone, config, build, run, update, troubleshooting.
 - **MAP.md** — Project layout and architecture (for contributors/agents).
 - **examples/home-assistant/** — Sample HA notification automation and dashboard YAML.
 
-Would you like me to help you draft the **INSTALL.md** to complete the documentation set?
+**Development:** Lint and format with Ruff: `pip install -e ".[dev]"` then `ruff check src tests` and `ruff format src tests`. If `ruff` is not on your PATH, use `python -m ruff check src tests` and `python -m ruff format src tests`.

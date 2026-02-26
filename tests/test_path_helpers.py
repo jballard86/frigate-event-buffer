@@ -15,7 +15,9 @@ class TestResolveUnderStorage(unittest.TestCase):
 
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
-        self.addCleanup(lambda: __import__("shutil").rmtree(self.tmp, ignore_errors=True))
+        self.addCleanup(
+            lambda: __import__("shutil").rmtree(self.tmp, ignore_errors=True)
+        )
 
     def test_valid_subpath_returns_resolved_path(self):
         """A path under storage returns the normalized absolute path."""

@@ -9,7 +9,7 @@ import shutil
 import tempfile
 import unittest
 from datetime import date
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 from frigate_buffer.services.daily_reporter import DailyReporterService
 
@@ -27,22 +27,34 @@ class TestDailyReporterServiceScan(unittest.TestCase):
         out_date_dir = os.path.join(cam, "1000000000_evt2")
         os.makedirs(in_date_dir, exist_ok=True)
         os.makedirs(out_date_dir, exist_ok=True)
-        with open(os.path.join(in_date_dir, "analysis_result.json"), "w", encoding="utf-8") as f:
-            json.dump({
-                "title": "Person at door",
-                "shortSummary": "Someone rang.",
-                "potential_threat_level": 0,
-            }, f)
-        with open(os.path.join(out_date_dir, "analysis_result.json"), "w", encoding="utf-8") as f:
-            json.dump({
-                "title": "Other",
-                "shortSummary": "Other day.",
-                "potential_threat_level": 1,
-            }, f)
+        with open(
+            os.path.join(in_date_dir, "analysis_result.json"), "w", encoding="utf-8"
+        ) as f:
+            json.dump(
+                {
+                    "title": "Person at door",
+                    "shortSummary": "Someone rang.",
+                    "potential_threat_level": 0,
+                },
+                f,
+            )
+        with open(
+            os.path.join(out_date_dir, "analysis_result.json"), "w", encoding="utf-8"
+        ) as f:
+            json.dump(
+                {
+                    "title": "Other",
+                    "shortSummary": "Other day.",
+                    "potential_threat_level": 1,
+                },
+                f,
+            )
         config = {}
         mock_analyzer = MagicMock()
         service = DailyReporterService(config, storage, mock_analyzer)
-        events_list, total_seen, total_matched = service._collect_events_for_date(target)
+        events_list, total_seen, total_matched = service._collect_events_for_date(
+            target
+        )
         self.assertEqual(len(events_list), 1)
         self.assertEqual(total_matched, 1)
         self.assertEqual(events_list[0][1].get("title"), "Person at door")
@@ -56,16 +68,23 @@ class TestDailyReporterServiceScan(unittest.TestCase):
         ce_dir = os.path.join(events_dir, "1234567890_abc12")
         cam_dir = os.path.join(ce_dir, "doorbell")
         os.makedirs(cam_dir, exist_ok=True)
-        with open(os.path.join(cam_dir, "analysis_result.json"), "w", encoding="utf-8") as f:
-            json.dump({
-                "title": "CE event",
-                "shortSummary": "Consolidated.",
-                "potential_threat_level": 1,
-            }, f)
+        with open(
+            os.path.join(cam_dir, "analysis_result.json"), "w", encoding="utf-8"
+        ) as f:
+            json.dump(
+                {
+                    "title": "CE event",
+                    "shortSummary": "Consolidated.",
+                    "potential_threat_level": 1,
+                },
+                f,
+            )
         config = {}
         mock_analyzer = MagicMock()
         service = DailyReporterService(config, storage, mock_analyzer)
-        events_list, total_seen, total_matched = service._collect_events_for_date(target)
+        events_list, total_seen, total_matched = service._collect_events_for_date(
+            target
+        )
         self.assertEqual(len(events_list), 1)
         self.assertEqual(total_matched, 1)
         self.assertEqual(events_list[0][1].get("title"), "CE event")
@@ -73,6 +92,7 @@ class TestDailyReporterServiceScan(unittest.TestCase):
     def test_collect_events_for_date_returns_tuple_of_list_and_counts(self):
         """_collect_events_for_date returns (events_list, total_seen, total_matched)."""
         import datetime
+
         config = {}
         mock_analyzer = MagicMock()
         service = DailyReporterService(config, tempfile.gettempdir(), mock_analyzer)
@@ -94,11 +114,15 @@ class TestDailyReporterServiceAggregate(unittest.TestCase):
         mock_analyzer = MagicMock()
         service = DailyReporterService(config, "/tmp", mock_analyzer)
         events = [
-            ("/path/to/1234567890_evt/analysis_result.json", {
-                "title": "Delivery",
-                "shortSummary": "Package left.",
-                "potential_threat_level": 0,
-            }, 1234567890),
+            (
+                "/path/to/1234567890_evt/analysis_result.json",
+                {
+                    "title": "Delivery",
+                    "shortSummary": "Package left.",
+                    "potential_threat_level": 0,
+                },
+                1234567890,
+            ),
         ]
         lines = service._aggregate_event_lines(events)
         self.assertEqual(len(lines), 1)
@@ -113,7 +137,9 @@ class TestDailyReporterServicePrompt(unittest.TestCase):
         """REPORT_KNOWN_PERSON_NAME from config is used for {known_person_name} placeholder."""
         storage = tempfile.mkdtemp()
         self.addCleanup(lambda: shutil.rmtree(storage, ignore_errors=True))
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False, encoding="utf-8") as f:
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".txt", delete=False, encoding="utf-8"
+        ) as f:
             f.write("Report for {date}. Known person: {known_person_name}.")
             prompt_path = f.name
         self.addCleanup(lambda: os.path.exists(prompt_path) and os.unlink(prompt_path))
@@ -129,7 +155,9 @@ class TestDailyReporterServicePrompt(unittest.TestCase):
     def test_known_person_name_defaults_to_unspecified_when_empty(self):
         storage = tempfile.mkdtemp()
         self.addCleanup(lambda: shutil.rmtree(storage, ignore_errors=True))
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False, encoding="utf-8") as f:
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".txt", delete=False, encoding="utf-8"
+        ) as f:
             f.write("Known: {known_person_name}")
             prompt_path = f.name
         self.addCleanup(lambda: os.path.exists(prompt_path) and os.unlink(prompt_path))
@@ -145,7 +173,9 @@ class TestDailyReporterServicePrompt(unittest.TestCase):
         """With no events, {date} and {event_list} are replaced; {event_list} gets JSON []."""
         storage = tempfile.mkdtemp()
         self.addCleanup(lambda: shutil.rmtree(storage, ignore_errors=True))
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False, encoding="utf-8") as f:
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".txt", delete=False, encoding="utf-8"
+        ) as f:
             f.write("Date: {date}\nEvents:\n{event_list}")
             prompt_path = f.name
         self.addCleanup(lambda: os.path.exists(prompt_path) and os.unlink(prompt_path))
@@ -166,7 +196,9 @@ class TestDailyReporterServicePrompt(unittest.TestCase):
         """report_date_string, report_start_time, report_end_time, list_of_event_json_objects are replaced."""
         storage = tempfile.mkdtemp()
         self.addCleanup(lambda: shutil.rmtree(storage, ignore_errors=True))
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False, encoding="utf-8") as f:
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".txt", delete=False, encoding="utf-8"
+        ) as f:
             f.write(
                 "Range: {report_start_time} to {report_end_time}. "
                 "Title: {report_date_string}. Events: {list_of_event_json_objects}."
@@ -205,16 +237,25 @@ class TestDailyReporterServicePrompt(unittest.TestCase):
         """Two event folders for same date produce two event objects in the prompt."""
         storage = tempfile.mkdtemp()
         self.addCleanup(lambda: shutil.rmtree(storage, ignore_errors=True))
-        for i, (cam, evt_id) in enumerate([("cam1", "1739617200_evt1"), ("cam2", "1739617300_evt2")]):
+        for i, (cam, evt_id) in enumerate(
+            [("cam1", "1739617200_evt1"), ("cam2", "1739617300_evt2")]
+        ):
             event_dir = os.path.join(storage, cam, evt_id)
             os.makedirs(event_dir, exist_ok=True)
-            with open(os.path.join(event_dir, "analysis_result.json"), "w", encoding="utf-8") as f:
-                json.dump({
-                    "title": f"Event {i+1}",
-                    "shortSummary": f"Summary {i+1}.",
-                    "potential_threat_level": 0,
-                }, f)
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False, encoding="utf-8") as f:
+            with open(
+                os.path.join(event_dir, "analysis_result.json"), "w", encoding="utf-8"
+            ) as f:
+                json.dump(
+                    {
+                        "title": f"Event {i + 1}",
+                        "shortSummary": f"Summary {i + 1}.",
+                        "potential_threat_level": 0,
+                    },
+                    f,
+                )
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".txt", delete=False, encoding="utf-8"
+        ) as f:
             f.write("Events: {list_of_event_json_objects}")
             prompt_path = f.name
         self.addCleanup(lambda: os.path.exists(prompt_path) and os.unlink(prompt_path))
@@ -240,10 +281,27 @@ class TestDailyReporterServiceAggregateFile(unittest.TestCase):
         storage = tempfile.mkdtemp()
         self.addCleanup(lambda: shutil.rmtree(storage, ignore_errors=True))
         os.makedirs(os.path.join(storage, "daily_reports"), exist_ok=True)
-        aggregate_path = os.path.join(storage, "daily_reports", "aggregate_2025-02-15.jsonl")
+        aggregate_path = os.path.join(
+            storage, "daily_reports", "aggregate_2025-02-15.jsonl"
+        )
         with open(aggregate_path, "w", encoding="utf-8") as f:
-            f.write(json.dumps({"title": "From aggregate", "camera": "cam1", "time": "2025-02-15 10:00:00", "threat_level": 0, "scene": "", "confidence": 0, "context": []}) + "\n")
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False, encoding="utf-8") as f:
+            f.write(
+                json.dumps(
+                    {
+                        "title": "From aggregate",
+                        "camera": "cam1",
+                        "time": "2025-02-15 10:00:00",
+                        "threat_level": 0,
+                        "scene": "",
+                        "confidence": 0,
+                        "context": [],
+                    }
+                )
+                + "\n"
+            )
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".txt", delete=False, encoding="utf-8"
+        ) as f:
             f.write("Events: {list_of_event_json_objects}")
             prompt_path = f.name
         self.addCleanup(lambda: os.path.exists(prompt_path) and os.unlink(prompt_path))
@@ -260,9 +318,13 @@ class TestDailyReporterServiceAggregateFile(unittest.TestCase):
         self.addCleanup(lambda: shutil.rmtree(storage, ignore_errors=True))
         event_dir = os.path.join(storage, "cam", "1739617200_evt1")
         os.makedirs(event_dir, exist_ok=True)
-        with open(os.path.join(event_dir, "analysis_result.json"), "w", encoding="utf-8") as f:
+        with open(
+            os.path.join(event_dir, "analysis_result.json"), "w", encoding="utf-8"
+        ) as f:
             json.dump({"title": "From scan", "potential_threat_level": 0}, f)
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False, encoding="utf-8") as f:
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".txt", delete=False, encoding="utf-8"
+        ) as f:
             f.write("Events: {list_of_event_json_objects}")
             prompt_path = f.name
         self.addCleanup(lambda: os.path.exists(prompt_path) and os.unlink(prompt_path))
@@ -278,11 +340,28 @@ class TestDailyReporterServiceAggregateFile(unittest.TestCase):
         storage = tempfile.mkdtemp()
         self.addCleanup(lambda: shutil.rmtree(storage, ignore_errors=True))
         os.makedirs(os.path.join(storage, "daily_reports"), exist_ok=True)
-        aggregate_path = os.path.join(storage, "daily_reports", "aggregate_2025-02-15.jsonl")
+        aggregate_path = os.path.join(
+            storage, "daily_reports", "aggregate_2025-02-15.jsonl"
+        )
         with open(aggregate_path, "w", encoding="utf-8") as f:
-            f.write(json.dumps({"title": "One", "camera": "c", "time": "2025-02-15 10:00:00", "threat_level": 0, "scene": "", "confidence": 0, "context": []}) + "\n")
+            f.write(
+                json.dumps(
+                    {
+                        "title": "One",
+                        "camera": "c",
+                        "time": "2025-02-15 10:00:00",
+                        "threat_level": 0,
+                        "scene": "",
+                        "confidence": 0,
+                        "context": [],
+                    }
+                )
+                + "\n"
+            )
         self.assertTrue(os.path.isfile(aggregate_path))
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False, encoding="utf-8") as f:
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".txt", delete=False, encoding="utf-8"
+        ) as f:
             f.write("Report")
             prompt_path = f.name
         self.addCleanup(lambda: os.path.exists(prompt_path) and os.unlink(prompt_path))
@@ -304,12 +383,17 @@ class TestDailyReporterServiceSave(unittest.TestCase):
         cam_dir = os.path.join(storage, "cam")
         event_dir = os.path.join(cam_dir, "1739617200_evt1")  # 2025-02-15
         os.makedirs(event_dir, exist_ok=True)
-        with open(os.path.join(event_dir, "analysis_result.json"), "w", encoding="utf-8") as f:
-            json.dump({
-                "title": "Test",
-                "shortSummary": "Summary.",
-                "potential_threat_level": 0,
-            }, f)
+        with open(
+            os.path.join(event_dir, "analysis_result.json"), "w", encoding="utf-8"
+        ) as f:
+            json.dump(
+                {
+                    "title": "Test",
+                    "shortSummary": "Summary.",
+                    "potential_threat_level": 0,
+                },
+                f,
+            )
         config = {}
         mock_analyzer = MagicMock()
         mock_analyzer.send_text_prompt.return_value = "# Report\nDone."
@@ -319,7 +403,7 @@ class TestDailyReporterServiceSave(unittest.TestCase):
         self.assertTrue(result)
         out_path = os.path.join(storage, "daily_reports", "2025-02-15_report.md")
         self.assertTrue(os.path.isfile(out_path))
-        with open(out_path, "r", encoding="utf-8") as f:
+        with open(out_path, encoding="utf-8") as f:
             content = f.read()
         self.assertEqual(content, "# Report\nDone.")
 
@@ -344,8 +428,12 @@ class TestDailyReporterServiceEdgeCases(unittest.TestCase):
         cam_dir = os.path.join(storage, "cam")
         event_dir = os.path.join(cam_dir, "1739617200_evt1")
         os.makedirs(event_dir, exist_ok=True)
-        with open(os.path.join(event_dir, "analysis_result.json"), "w", encoding="utf-8") as f:
-            json.dump({"title": "T", "shortSummary": "S", "potential_threat_level": 0}, f)
+        with open(
+            os.path.join(event_dir, "analysis_result.json"), "w", encoding="utf-8"
+        ) as f:
+            json.dump(
+                {"title": "T", "shortSummary": "S", "potential_threat_level": 0}, f
+            )
         config = {}
         mock_analyzer = MagicMock()
         mock_analyzer.send_text_prompt.return_value = None
@@ -381,7 +469,9 @@ class TestDailyReporterServiceFolderNameAndTimestamp(unittest.TestCase):
         config = {}
         mock_analyzer = MagicMock()
         service = DailyReporterService(config, "/tmp", mock_analyzer)
-        json_path = os.path.join("/tmp", "events", "1739617200_abc12", "doorbell", "analysis_result.json")
+        json_path = os.path.join(
+            "/tmp", "events", "1739617200_abc12", "doorbell", "analysis_result.json"
+        )
         folder_name, unix_ts = service._folder_name_and_timestamp(json_path)
         self.assertEqual(folder_name, "1739617200_abc12")
         self.assertEqual(unix_ts, 1739617200)
@@ -407,14 +497,20 @@ class TestDailyReporterServiceAggregateEdgeCases(unittest.TestCase):
         mock_analyzer = MagicMock()
         service = DailyReporterService(config, "/tmp", mock_analyzer)
         events = [
-            ("/path/a.json", {"title": "T", "shortSummary": "S", "potential_threat_level": "high"}, 1234567890),
+            (
+                "/path/a.json",
+                {"title": "T", "shortSummary": "S", "potential_threat_level": "high"},
+                1234567890,
+            ),
         ]
         # int("high") would raise ValueError; we need the code to tolerate that
         try:
             lines = service._aggregate_event_lines(events)
             self.assertEqual(len(lines), 1)
         except ValueError:
-            self.fail("_aggregate_event_lines should not raise for non-int potential_threat_level")
+            self.fail(
+                "_aggregate_event_lines should not raise for non-int potential_threat_level"
+            )
 
 
 class TestDailyReporterServiceCleanupOldReports(unittest.TestCase):
@@ -432,6 +528,7 @@ class TestDailyReporterServiceCleanupOldReports(unittest.TestCase):
             f.write("# Old report\n")
         # Recent: 5 days ago (we'll use retention_days=10 so this is kept)
         from datetime import timedelta
+
         recent = date.today() - timedelta(days=5)
         recent_path = os.path.join(reports_dir, f"{recent.isoformat()}_report.md")
         with open(recent_path, "w", encoding="utf-8") as f:

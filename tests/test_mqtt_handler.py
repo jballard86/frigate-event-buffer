@@ -151,7 +151,9 @@ class TestMqttHandlerRouting(unittest.TestCase):
         state_manager.set_ai_description.return_value = True
         state_manager.get_event.return_value = MagicMock(folder_path="/ev/ev1")
         handler.on_message(None, None, msg)
-        state_manager.set_ai_description.assert_called_once_with("ev1", "A person walking")
+        state_manager.set_ai_description.assert_called_once_with(
+            "ev1", "A person walking"
+        )
         notifier.publish_notification.assert_called_once()
 
     def test_tracked_object_update_external_api_skips_description_path(self):
@@ -240,7 +242,11 @@ class TestMqttHandlerRouting(unittest.TestCase):
                 "after": {
                     "data": {
                         "detections": ["ev1"],
-                        "metadata": {"title": "Person", "shortSummary": "Summary", "potential_threat_level": 0},
+                        "metadata": {
+                            "title": "Person",
+                            "shortSummary": "Summary",
+                            "potential_threat_level": 0,
+                        },
                     },
                     "severity": "detection",
                 },
@@ -280,9 +286,7 @@ class TestMqttHandlerRouting(unittest.TestCase):
             "frigate_buffer.services.mqtt_handler.should_suppress_review_debug_logs",
             return_value=True,
         ):
-            with patch(
-                "frigate_buffer.services.mqtt_handler.logger"
-            ) as mock_logger:
+            with patch("frigate_buffer.services.mqtt_handler.logger") as mock_logger:
                 handler.on_message(None, None, msg)
         suppress_patterns = (
             "Processing review:",

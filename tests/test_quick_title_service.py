@@ -60,6 +60,7 @@ class TestQuickTitleService(unittest.TestCase):
     def test_run_quick_title_fetch_failure_returns_early(self, mock_get):
         """When requests.get raises, run_quick_title returns without notifying."""
         import requests
+
         mock_get.side_effect = requests.RequestException("network error")
         notifier = MagicMock()
         service = self._make_service(notifier=notifier)
@@ -70,7 +71,9 @@ class TestQuickTitleService(unittest.TestCase):
 
     @patch("frigate_buffer.services.quick_title_service.cv2.imdecode")
     @patch("frigate_buffer.services.quick_title_service.requests.get")
-    def test_run_quick_title_decode_failure_returns_early(self, mock_get, mock_imdecode):
+    def test_run_quick_title_decode_failure_returns_early(
+        self, mock_get, mock_imdecode
+    ):
         """When imdecode returns None, run_quick_title returns without notifying."""
         mock_get.return_value.content = b"\xff\xd8\xff"
         mock_get.return_value.raise_for_status = MagicMock()
@@ -87,7 +90,9 @@ class TestQuickTitleService(unittest.TestCase):
         """When generate_quick_title returns None or empty title, no notification is sent."""
         mock_get.return_value.content = b"\xff\xd8\xff"
         mock_get.return_value.raise_for_status = MagicMock()
-        with patch("frigate_buffer.services.quick_title_service.cv2.imdecode") as mock_decode:
+        with patch(
+            "frigate_buffer.services.quick_title_service.cv2.imdecode"
+        ) as mock_decode:
             mock_decode.return_value = np.zeros((100, 100, 3), dtype=np.uint8)
             video_service = MagicMock()
             video_service.run_detection_on_image.return_value = []
@@ -119,7 +124,9 @@ class TestQuickTitleService(unittest.TestCase):
         """Happy path: state updated, write_summary and write_metadata_json called, notification with title and description."""
         mock_get.return_value.content = b"\xff\xd8\xff"
         mock_get.return_value.raise_for_status = MagicMock()
-        with patch("frigate_buffer.services.quick_title_service.cv2.imdecode") as mock_decode:
+        with patch(
+            "frigate_buffer.services.quick_title_service.cv2.imdecode"
+        ) as mock_decode:
             mock_decode.return_value = np.zeros((100, 100, 3), dtype=np.uint8)
             video_service = MagicMock()
             video_service.run_detection_on_image.return_value = []
@@ -166,7 +173,12 @@ class TestQuickTitleService(unittest.TestCase):
                 notifier=notifier,
             )
             service.run_quick_title(
-                "ev1", "cam1", "person", "ce1", "/storage/events/ce1/cam1", tag_override=None
+                "ev1",
+                "cam1",
+                "person",
+                "ce1",
+                "/storage/events/ce1/cam1",
+                tag_override=None,
             )
             state_manager.set_genai_metadata.assert_called_once()
             file_manager.write_summary.assert_called_once()
@@ -177,20 +189,30 @@ class TestQuickTitleService(unittest.TestCase):
             self.assertEqual(call_args[0][1], "snapshot_ready")
             self.assertEqual(call_args[1]["tag_override"], "frigate_ce1")
             notify_target = call_args[0][0]
-            self.assertEqual(getattr(notify_target, "genai_title", None), "Person at door")
-            self.assertEqual(getattr(notify_target, "genai_description", None), "A person is standing at the front door.")
+            self.assertEqual(
+                getattr(notify_target, "genai_title", None), "Person at door"
+            )
+            self.assertEqual(
+                getattr(notify_target, "genai_description", None),
+                "A person is standing at the front door.",
+            )
 
     @patch("frigate_buffer.services.quick_title_service.requests.get")
     def test_run_quick_title_event_gone_does_not_notify(self, mock_get):
         """When event is no longer in state (first get_event after title returns None), do not notify."""
         mock_get.return_value.content = b"\xff\xd8\xff"
         mock_get.return_value.raise_for_status = MagicMock()
-        with patch("frigate_buffer.services.quick_title_service.cv2.imdecode") as mock_decode:
+        with patch(
+            "frigate_buffer.services.quick_title_service.cv2.imdecode"
+        ) as mock_decode:
             mock_decode.return_value = np.zeros((100, 100, 3), dtype=np.uint8)
             video_service = MagicMock()
             video_service.run_detection_on_image.return_value = []
             ai_analyzer = MagicMock()
-            ai_analyzer.generate_quick_title.return_value = {"title": "Title", "description": ""}
+            ai_analyzer.generate_quick_title.return_value = {
+                "title": "Title",
+                "description": "",
+            }
             state_manager = MagicMock()
             state_manager.get_event.return_value = None
             notifier = MagicMock()

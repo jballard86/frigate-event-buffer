@@ -56,7 +56,9 @@ class StorageStatsAndHaHelper:
         }
         self._cached_time: float | None = None
         self._max_age_seconds = int(
-            config.get("STORAGE_STATS_MAX_AGE_SECONDS", DEFAULT_STORAGE_STATS_MAX_AGE_SECONDS)
+            config.get(
+                "STORAGE_STATS_MAX_AGE_SECONDS", DEFAULT_STORAGE_STATS_MAX_AGE_SECONDS
+            )
         )
 
     def update(self, file_manager: Any) -> None:

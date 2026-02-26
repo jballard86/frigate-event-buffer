@@ -2,15 +2,17 @@
 
 import time
 import uuid
-from enum import Enum, auto
 from dataclasses import dataclass, field
+from enum import Enum, auto
 from typing import Any, Protocol, runtime_checkable
 
 
 @dataclass
 class ExtractedFrame:
-    """Single frame from multi-clip extraction: image, timestamp, camera, and optional metadata (e.g. is_full_frame_resize)."""
-    frame: Any  # numpy HWC BGR or torch.Tensor BCHW RGB (Phase 3 extractor outputs tensor)
+    """Single frame from multi-clip extraction: image, timestamp, camera, and
+    optional metadata (e.g. is_full_frame_resize)."""
+
+    frame: Any  # numpy HWC BGR or torch.Tensor BCHW RGB (Phase 3: tensor)
     timestamp_sec: float
     camera: str
     metadata: dict[str, Any] = field(default_factory=dict)
@@ -19,14 +21,17 @@ class ExtractedFrame:
 @dataclass(frozen=True)
 class FrameMetadata:
     """Per-frame tracked object data from Frigate MQTT (tracked_object_update).
-    Box is always [ymin, xmin, ymax, xmax] normalized 0-1 (see state manager normalization).
+    Box is always [ymin, xmin, ymax, xmax] normalized 0-1 (see state manager).
     """
+
     frame_time: float
     box: tuple[float, float, float, float]  # ymin, xmin, ymax, xmax normalized 0-1
     area: float
     score: float
 
-# Patterns that indicate "no concerns" from GenAI review summary (skip summarized notification)
+
+# Patterns that indicate "no concerns" from GenAI review summary (skip
+# summarized notification)
 NO_CONCERNS_PATTERNS = (
     "no concerns were found during this time period",
     "no concerns were found",
@@ -35,22 +40,25 @@ NO_CONCERNS_PATTERNS = (
 
 
 def _is_no_concerns(summary: str) -> bool:
-    """Return True if the summary indicates no concerns (skip summarized notification)."""
+    """Return True if the summary indicates no concerns (skip summarized
+    notification)."""
     normalized = (summary or "").strip().lower()
     return any(p in normalized for p in NO_CONCERNS_PATTERNS)
 
 
 class EventPhase(Enum):
     """Tracks the lifecycle phase of a Frigate event."""
-    NEW = auto()        # Phase 1: Initial detection from frigate/events type=new
+
+    NEW = auto()  # Phase 1: Initial detection from frigate/events type=new
     DESCRIBED = auto()  # Phase 2: AI description received from tracked_object_update
     FINALIZED = auto()  # Phase 3: GenAI metadata received from frigate/reviews
-    SUMMARIZED = auto() # Phase 4: Review summary received from Frigate API
+    SUMMARIZED = auto()  # Phase 4: Review summary received from Frigate API
 
 
 @runtime_checkable
 class NotificationEvent(Protocol):
     """Protocol for event notification data."""
+
     event_id: str
     camera: str
     label: str
@@ -72,6 +80,7 @@ class NotificationEvent(Protocol):
 @dataclass(slots=True)
 class EventState:
     """Represents the current state of a tracked Frigate event."""
+
     event_id: str
     camera: str
     label: str
@@ -108,7 +117,8 @@ class EventState:
 
 
 def _generate_consolidated_id(start_ts: float) -> tuple:
-    """Generate our internal consolidated event ID. Returns (full_id, folder_name)."""
+    """Generate our internal consolidated event ID. Returns (full_id,
+    folder_name)."""
     ts_int = int(start_ts)
     short_uuid = uuid.uuid4().hex[:8]
     full_id = f"ce_{ts_int}_{short_uuid}"
@@ -118,7 +128,8 @@ def _generate_consolidated_id(start_ts: float) -> tuple:
 
 @dataclass(slots=True)
 class ConsolidatedEvent:
-    """A consolidated event grouping multiple Frigate events (same real-world activity)."""
+    """A consolidated event grouping multiple Frigate events (same real-world
+    activity)."""
 
     consolidated_id: str
     folder_name: str
@@ -130,7 +141,8 @@ class ConsolidatedEvent:
     frigate_event_ids: list[str] = field(default_factory=list)
     labels: list[str] = field(default_factory=list)
 
-    # Final title/description from canonical source only (Frigate GenAI or CE analysis)
+    # Final title/description from canonical source only (Frigate GenAI or CE
+    # analysis)
     final_title: str | None = None
     final_description: str | None = None
     final_threat_level: int = 0
@@ -163,7 +175,7 @@ class ConsolidatedEvent:
         """Return comma-separated list of unique labels."""
         if not self.labels:
             return "person"  # Fallback
-        unique = sorted(list(set(self.labels)))
+        unique = sorted(set(self.labels))
         return ", ".join(unique)
 
     @property

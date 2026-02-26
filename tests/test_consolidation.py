@@ -1,40 +1,43 @@
 """Tests for ConsolidatedEventManager: mark_closing, schedule_close_timer, get_or_create with closing state."""
+
 import os
 import sys
 import tempfile
 import unittest
 from unittest.mock import MagicMock
 
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from frigate_buffer.managers.consolidation import ConsolidatedEventManager
-from frigate_buffer.models import ConsolidatedEvent
 
 
 def _make_file_manager_mock():
     fm = MagicMock()
     tmp = tempfile.mkdtemp()
+
     def _create_folder(name):
         p = os.path.join(tmp, "events", name)
         os.makedirs(p, exist_ok=True)
         return p
+
     def _ensure_camera(ce_path, camera):
         p = os.path.join(ce_path, camera.replace(" ", "_").lower())
         os.makedirs(p, exist_ok=True)
         return p
+
     fm.create_consolidated_event_folder.side_effect = _create_folder
     fm.ensure_consolidated_camera_folder.side_effect = _ensure_camera
     return fm, tmp
 
 
 class TestConsolidationClosingState(unittest.TestCase):
-
     def setUp(self):
         self.fm, self.tmp = _make_file_manager_mock()
         self.mgr = ConsolidatedEventManager(self.fm, event_gap_seconds=120)
 
     def tearDown(self):
         import shutil
+
         if os.path.exists(self.tmp):
             try:
                 shutil.rmtree(self.tmp)
@@ -60,11 +63,15 @@ class TestConsolidationClosingState(unittest.TestCase):
         """get_active_ce_folders() returns tuple of folder names (no full CE list)."""
         ce1, _, _ = self.mgr.get_or_create("e1", "cam1", "person", 1000.0)
         folders = self.mgr.get_active_ce_folders()
-        self.assertIsInstance(folders, tuple, "get_active_ce_folders must return a tuple")
+        self.assertIsInstance(
+            folders, tuple, "get_active_ce_folders must return a tuple"
+        )
         self.assertGreaterEqual(len(folders), 1)
         self.assertIn(ce1.folder_name, folders)
         for f in folders:
-            self.assertIsInstance(f, str, "each folder must be a string (folder_name), not a CE object")
+            self.assertIsInstance(
+                f, str, "each folder must be a string (folder_name), not a CE object"
+            )
 
     def test_schedule_close_timer_noop_when_closing(self):
         now = 1000.0
@@ -91,9 +98,7 @@ class TestConsolidationClosingState(unittest.TestCase):
         ce_id = ce1.consolidated_id
         self.mgr.mark_closing(ce_id)
 
-        ce2, is_new2, _ = self.mgr.get_or_create(
-            "e2", "cam2", "car", now + 10
-        )
+        ce2, is_new2, _ = self.mgr.get_or_create("e2", "cam2", "car", now + 10)
         self.assertTrue(is_new2)
         self.assertIsNot(ce2.consolidated_id, ce_id)
         self.assertEqual(len(ce1.frigate_event_ids), 1)
@@ -154,12 +159,10 @@ class TestConsolidationClosingState(unittest.TestCase):
         ce1.closed = True
         ce_id = ce1.consolidated_id
 
-        ce2, is_new2, _ = self.mgr.get_or_create(
-            "e2", "cam2", "car", now + 10
-        )
+        ce2, is_new2, _ = self.mgr.get_or_create("e2", "cam2", "car", now + 10)
         self.assertTrue(is_new2)
         self.assertIsNot(ce2.consolidated_id, ce_id)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     unittest.main()

@@ -77,7 +77,8 @@ frigate-event-buffer/
 ├── Dockerfile
 ├── pyproject.toml
 ├── requirements.txt
-├── MAP.md
+├── RULE.md
+├── map.md
 ├── README.md
 ├── INSTALL.md
 ├── USER_GUIDE.md
@@ -85,6 +86,8 @@ frigate-event-buffer/
 ├── DIAGNOSTIC_SIDECAR_TIMELINE_COMPILATION.md  # Diagnostic: sidecar write, timeline EMA, compilation fallback
 ├── gpu_pipeline_audit_report.md               # GPU performance audit: CPU/GPU boundary, memory, I/O, lock contention
 ├── performance_final_verification.md          # Final GPU pipeline verification, status table 1.1–4.4, architectural health grade
+├── .cursor/
+│   └── rules/                                 # Cursor rule files (.mdc); see RULE.md
 │
 ├── scripts/
 │   ├── bench_post_download_pre_api.py          # Benchmark: post-download pre-API segment (run with pytest)
@@ -220,11 +223,12 @@ frigate-event-buffer/
 |-----------|---------|---------------------------|
 | `config.yaml` | User config: cameras, network, settings, HA, Gemini, multi_cam. | Read by `config.load_config()` at startup. |
 | `config.example.yaml` | Example config with all keys and comments. | Reference only. |
-| `pyproject.toml` | Package metadata, deps, `where = ["src"]`, pytest `pythonpath = ["src"]`, `requires-python = ">=3.12"`. | Used by `pip install -e .` and pytest. |
+| `pyproject.toml` | Package metadata, deps, `where = ["src"]`, pytest `pythonpath = ["src"]`, `requires-python = ">=3.12"`. Optional dev deps: pytest, ruff. Tool config: Ruff (lint + format) for `src` and `tests`. E501 (line-too-long) is re-enabled; per-file-ignores list files to fix gradually—remove a file from the list once under 88 chars. | Used by `pip install -e .` and pytest; run `ruff check src tests` and `ruff format src tests` after `pip install -e ".[dev]"`. |
 | `requirements.txt` | Pip install list; **no ffmpegcv** (forbidden). **PyNvVideoCodec** from PyPI for zero-copy GPU decode; no vendored wheels. | Referenced by Dockerfile. |
 | `Dockerfile` | Single-stage: base `nvidia/cuda:12.6.0-runtime-ubuntu24.04`; installs Python 3.12, FFmpeg from distro (GIF, ffprobe, h264_nvenc encode). **PyNvVideoCodec** from requirements.txt for NVDEC decode; no NeLux or vendored libs. Uses BuildKit (`# syntax=docker/dockerfile:1`); final `pip install .` uses `--mount=type=cache,target=/root/.cache/pip` for faster code-only rebuilds. Build arg `USE_GUI_OPENCV` (default `false`): when `false`, uninstalls opencv-python and reinstalls opencv-python-headless (no X11); when `true`, keeps GUI opencv for faster full rebuilds. Runs `python3 -m frigate_buffer.main`. | Build from repo root. |
 | `docker-compose.yaml` / `docker-compose.example.yaml` | Compose for local run; GPU, env, mounts. No `YOLO_CONFIG_DIR` needed—app uses storage for Ultralytics config and model cache. | Deployment. |
 | `MAP.md` | This file—architecture and context for AI. | Must be updated when structure or flows change. |
+| `RULE.md` | Project rules index: points to map.md as source of truth and to .cursor/rules/ for Cursor-specific rules. | Reference only; no code dependencies. |
 | `DIAGNOSTIC_SIDECAR_TIMELINE_COMPILATION.md` | Diagnostic: sidecar writing (video.py), timeline_ema usage, and compilation fallback conditions. | Reference for debugging frame extraction and static compilation output. |
 | `gpu_pipeline_audit_report.md` | GPU performance audit (no code changes): CPU/GPU boundary, memory, redundant I/O, GPU_LOCK contention. | Reference for optimization and lock refactors. |
 | `performance_final_verification.md` | Final GPU pipeline verification: status of audit items 1.1–4.4, silent performance-leak audit, architectural health grade (A-). | Reference for 100% GPU pipeline and performance. |
@@ -364,6 +368,7 @@ frigate-event-buffer/
 
 ### Coding standards
 
+- **Ruff (lint & format):** The project uses **Ruff** for linting and formatting (`pyproject.toml`). When **creating or editing** any file in `src/` or `tests/`, follow Ruff’s rules: run `ruff check src tests` and `ruff format src tests` (or `python -m ruff check/format` if ruff is not on PATH). Line length is 88 characters (E501); fix or wrap long lines. Files listed in `[tool.ruff.lint.per-file-ignores]` are temporarily exempt from E501 until fixed—remove a file from that list once it complies. Do not introduce new lint/format violations.
 - **Type hints:** Use type hints on all public function signatures and important internal APIs. Prefer Python 3.10+ syntax (e.g. `str | None`).
 - **Config:** Always extend **CONFIG_SCHEMA** in `config.py` for new options; invalid config must exit with code 1.
 - **State / side effects:** Core state lives in EventStateManager and ConsolidatedEventManager; services and FileManager are stateless or hold minimal caches (e.g. EventQueryService TTL cache).

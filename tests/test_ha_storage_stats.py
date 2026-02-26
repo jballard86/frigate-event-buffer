@@ -33,6 +33,7 @@ class TestFetchHaState(unittest.TestCase):
     @patch("frigate_buffer.services.ha_storage_stats.requests.get")
     def test_returns_none_on_request_exception(self, mock_get):
         import requests
+
         mock_get.side_effect = requests.RequestException("network error")
         result = fetch_ha_state("http://ha:8123", "t", "sensor.foo")
         self.assertIsNone(result)
@@ -78,7 +79,14 @@ class TestStorageStatsAndHaHelper(unittest.TestCase):
             "snapshots": 200,
             "descriptions": 50,
             "total": 350,
-            "by_camera": {"cam1": {"total": 350, "clips": 100, "snapshots": 200, "descriptions": 50}},
+            "by_camera": {
+                "cam1": {
+                    "total": 350,
+                    "clips": 100,
+                    "snapshots": 200,
+                    "descriptions": 50,
+                }
+            },
         }
         helper.update(fm)
         out = helper.get()
@@ -93,8 +101,20 @@ class TestStorageStatsAndHaHelper(unittest.TestCase):
         helper = StorageStatsAndHaHelper(self.config)
         fm = MagicMock()
         fm.compute_storage_stats.side_effect = [
-            {"clips": 1, "snapshots": 0, "descriptions": 0, "total": 1, "by_camera": {}},
-            {"clips": 2, "snapshots": 0, "descriptions": 0, "total": 2, "by_camera": {}},
+            {
+                "clips": 1,
+                "snapshots": 0,
+                "descriptions": 0,
+                "total": 1,
+                "by_camera": {},
+            },
+            {
+                "clips": 2,
+                "snapshots": 0,
+                "descriptions": 0,
+                "total": 2,
+                "by_camera": {},
+            },
         ]
         helper.update(fm)
         self.assertEqual(helper.get()["total"], 1)
@@ -104,7 +124,9 @@ class TestStorageStatsAndHaHelper(unittest.TestCase):
 
     def test_fetch_ha_state_delegates_to_module_function(self):
         helper = StorageStatsAndHaHelper(self.config)
-        with patch("frigate_buffer.services.ha_storage_stats.fetch_ha_state", return_value="99") as mock_fetch:
+        with patch(
+            "frigate_buffer.services.ha_storage_stats.fetch_ha_state", return_value="99"
+        ) as mock_fetch:
             result = helper.fetch_ha_state("http://ha", "tok", "sensor.x")
             self.assertEqual(result, "99")
             mock_fetch.assert_called_once_with("http://ha", "tok", "sensor.x")
@@ -124,7 +146,11 @@ class TestStorageStatsAndHaHelper(unittest.TestCase):
         helper = StorageStatsAndHaHelper(self.config)
         fm = MagicMock()
         fm.compute_storage_stats.return_value = {
-            "clips": 10, "snapshots": 0, "descriptions": 0, "total": 10, "by_camera": {}
+            "clips": 10,
+            "snapshots": 0,
+            "descriptions": 0,
+            "total": 10,
+            "by_camera": {},
         }
         helper.update(fm)
         helper.update(fm)

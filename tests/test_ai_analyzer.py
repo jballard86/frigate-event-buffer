@@ -5,9 +5,8 @@ import os
 import shutil
 import tempfile
 import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
-import cv2
 import numpy as np
 import requests
 
@@ -27,17 +26,21 @@ def _minimal_config():
 
 def _success_response_json():
     return {
-        "choices": [{
-            "message": {
-                "content": json.dumps({
-                    "title": "Test",
-                    "shortSummary": "S",
-                    "scene": "Sc",
-                    "confidence": 0.9,
-                    "potential_threat_level": 0,
-                }),
-            },
-        }],
+        "choices": [
+            {
+                "message": {
+                    "content": json.dumps(
+                        {
+                            "title": "Test",
+                            "shortSummary": "S",
+                            "scene": "Sc",
+                            "confidence": 0.9,
+                            "potential_threat_level": 0,
+                        }
+                    ),
+                },
+            }
+        ],
     }
 
 
@@ -80,11 +83,30 @@ class TestGeminiAnalysisServicePayload(unittest.TestCase):
     def test_payload_structure(self, mock_post):
         mock_post.return_value.status_code = 200
         mock_post.return_value.json.return_value = {
-            "choices": [{"message": {"content": json.dumps({
-                "title": "Test", "shortSummary": "S", "scene": "Sc", "confidence": 0.9, "potential_threat_level": 0
-            })}}]
+            "choices": [
+                {
+                    "message": {
+                        "content": json.dumps(
+                            {
+                                "title": "Test",
+                                "shortSummary": "S",
+                                "scene": "Sc",
+                                "confidence": 0.9,
+                                "potential_threat_level": 0,
+                            }
+                        )
+                    }
+                }
+            ]
         }
-        config = {"GEMINI": {"enabled": True, "proxy_url": "http://proxy", "api_key": "key", "model": "m"}}
+        config = {
+            "GEMINI": {
+                "enabled": True,
+                "proxy_url": "http://proxy",
+                "api_key": "key",
+                "model": "m",
+            }
+        }
         service = GeminiAnalysisService(config)
         # One dummy frame (numpy BGR)
         frame = np.zeros((100, 100, 3), dtype=np.uint8)
@@ -109,7 +131,10 @@ class TestGeminiAnalysisServicePayload(unittest.TestCase):
         self.assertGreater(len(image_parts), 0)
         self.assertIn("image_url", image_parts[0])
         url = image_parts[0]["image_url"].get("url", "")
-        self.assertTrue(url.startswith("data:image/jpeg;base64,"), f"Expected data URL, got: {url[:80]}")
+        self.assertTrue(
+            url.startswith("data:image/jpeg;base64,"),
+            f"Expected data URL, got: {url[:80]}",
+        )
 
 
 class TestFrameToBase64Url(unittest.TestCase):
@@ -145,7 +170,11 @@ class TestFrameToBase64Url(unittest.TestCase):
         config = {"GEMINI": {"enabled": True, "proxy_url": "http://p", "api_key": "k"}}
         service = GeminiAnalysisService(config)
         t = torch.zeros((1, 3, 60, 80), dtype=torch.uint8)
-        with patch.object(service, "_frame_tensor_to_base64_url", return_value="data:image/jpeg;base64,MOCK") as mock_tensor_encode:
+        with patch.object(
+            service,
+            "_frame_tensor_to_base64_url",
+            return_value="data:image/jpeg;base64,MOCK",
+        ) as mock_tensor_encode:
             url = service._frame_to_base64_url(t)
         mock_tensor_encode.assert_called_once_with(t)
         self.assertEqual(url, "data:image/jpeg;base64,MOCK")
@@ -159,12 +188,29 @@ class TestGeminiFrameCapAndLogging(unittest.TestCase):
         """When GEMINI_FRAMES_PER_HOUR_CAP is 0, request is sent and log mentions cap=disabled."""
         mock_post.return_value.status_code = 200
         mock_post.return_value.json.return_value = {
-            "choices": [{"message": {"content": json.dumps({
-                "title": "T", "shortSummary": "S", "scene": "Sc", "confidence": 0.9, "potential_threat_level": 0
-            })}}]
+            "choices": [
+                {
+                    "message": {
+                        "content": json.dumps(
+                            {
+                                "title": "T",
+                                "shortSummary": "S",
+                                "scene": "Sc",
+                                "confidence": 0.9,
+                                "potential_threat_level": 0,
+                            }
+                        )
+                    }
+                }
+            ]
         }
         config = {
-            "GEMINI": {"enabled": True, "proxy_url": "http://p", "api_key": "k", "model": "m"},
+            "GEMINI": {
+                "enabled": True,
+                "proxy_url": "http://p",
+                "api_key": "k",
+                "model": "m",
+            },
             "GEMINI_FRAMES_PER_HOUR_CAP": 0,
         }
         service = GeminiAnalysisService(config)
@@ -184,12 +230,29 @@ class TestGeminiFrameCapAndLogging(unittest.TestCase):
         """When cap is 2, first send (2 frames) succeeds; second send (1 frame) is blocked."""
         mock_post.return_value.status_code = 200
         mock_post.return_value.json.return_value = {
-            "choices": [{"message": {"content": json.dumps({
-                "title": "T", "shortSummary": "S", "scene": "Sc", "confidence": 0.9, "potential_threat_level": 0
-            })}}]
+            "choices": [
+                {
+                    "message": {
+                        "content": json.dumps(
+                            {
+                                "title": "T",
+                                "shortSummary": "S",
+                                "scene": "Sc",
+                                "confidence": 0.9,
+                                "potential_threat_level": 0,
+                            }
+                        )
+                    }
+                }
+            ]
         }
         config = {
-            "GEMINI": {"enabled": True, "proxy_url": "http://p", "api_key": "k", "model": "m"},
+            "GEMINI": {
+                "enabled": True,
+                "proxy_url": "http://p",
+                "api_key": "k",
+                "model": "m",
+            },
             "GEMINI_FRAMES_PER_HOUR_CAP": 2,
         }
         service = GeminiAnalysisService(config)
@@ -199,19 +262,38 @@ class TestGeminiFrameCapAndLogging(unittest.TestCase):
         self.assertEqual(mock_post.call_count, 1)
         result2 = service.send_to_proxy("P", [frame])
         self.assertIsNone(result2, "Second request should be blocked by cap")
-        self.assertEqual(mock_post.call_count, 1, "POST should not be called again when blocked")
+        self.assertEqual(
+            mock_post.call_count, 1, "POST should not be called again when blocked"
+        )
 
     @patch("frigate_buffer.services.gemini_proxy_client.requests.post")
     def test_cap_logs_current_rate_status_blocked(self, mock_post):
         """When cap is enabled, info log contains current_frames, status, blocked."""
         mock_post.return_value.status_code = 200
         mock_post.return_value.json.return_value = {
-            "choices": [{"message": {"content": json.dumps({
-                "title": "T", "shortSummary": "S", "scene": "Sc", "confidence": 0.9, "potential_threat_level": 0
-            })}}]
+            "choices": [
+                {
+                    "message": {
+                        "content": json.dumps(
+                            {
+                                "title": "T",
+                                "shortSummary": "S",
+                                "scene": "Sc",
+                                "confidence": 0.9,
+                                "potential_threat_level": 0,
+                            }
+                        )
+                    }
+                }
+            ]
         }
         config = {
-            "GEMINI": {"enabled": True, "proxy_url": "http://p", "api_key": "k", "model": "m"},
+            "GEMINI": {
+                "enabled": True,
+                "proxy_url": "http://p",
+                "api_key": "k",
+                "model": "m",
+            },
             "GEMINI_FRAMES_PER_HOUR_CAP": 10,
         }
         service = GeminiAnalysisService(config)
@@ -234,7 +316,14 @@ class TestGeminiAnalysisServiceSendTextPrompt(unittest.TestCase):
         mock_post.return_value.json.return_value = {
             "choices": [{"message": {"content": "# Report\nDone."}}]
         }
-        config = {"GEMINI": {"enabled": True, "proxy_url": "http://proxy", "api_key": "key", "model": "m"}}
+        config = {
+            "GEMINI": {
+                "enabled": True,
+                "proxy_url": "http://proxy",
+                "api_key": "key",
+                "model": "m",
+            }
+        }
         service = GeminiAnalysisService(config)
         result = service.send_text_prompt("System", "User text")
         self.assertEqual(result, "# Report\nDone.")
@@ -253,8 +342,12 @@ class TestGeminiAnalysisServiceSendTextPrompt(unittest.TestCase):
     @patch("frigate_buffer.services.gemini_proxy_client.requests.post")
     def test_send_text_prompt_returns_none_when_empty_content(self, mock_post):
         mock_post.return_value.status_code = 200
-        mock_post.return_value.json.return_value = {"choices": [{"message": {"content": ""}}]}
-        config = {"GEMINI": {"enabled": True, "proxy_url": "http://proxy", "api_key": "key"}}
+        mock_post.return_value.json.return_value = {
+            "choices": [{"message": {"content": ""}}]
+        }
+        config = {
+            "GEMINI": {"enabled": True, "proxy_url": "http://proxy", "api_key": "key"}
+        }
         service = GeminiAnalysisService(config)
         result = service.send_text_prompt("Sys", "User")
         self.assertIsNone(result)
@@ -265,7 +358,9 @@ class TestGeminiAnalysisServiceSendTextPrompt(unittest.TestCase):
             raise requests.exceptions.HTTPError("500 Server Error")
 
         mock_post.side_effect = raise_http_error
-        config = {"GEMINI": {"enabled": True, "proxy_url": "http://proxy", "api_key": "key"}}
+        config = {
+            "GEMINI": {"enabled": True, "proxy_url": "http://proxy", "api_key": "key"}
+        }
         service = GeminiAnalysisService(config)
         result = service.send_text_prompt("Sys", "User")
         self.assertIsNone(result)
@@ -287,9 +382,19 @@ class TestGeminiAnalysisServiceProxyFailure(unittest.TestCase):
     @patch("frigate_buffer.services.gemini_proxy_client.requests.post")
     def test_proxy_failure_handling_500(self, mock_post):
         import requests as req
-        mock_post.return_value.raise_for_status.side_effect = req.exceptions.HTTPError("500 Server Error")
+
+        mock_post.return_value.raise_for_status.side_effect = req.exceptions.HTTPError(
+            "500 Server Error"
+        )
         mock_post.return_value.status_code = 500
-        config = {"GEMINI": {"enabled": True, "proxy_url": "http://proxy", "api_key": "key", "model": "m"}}
+        config = {
+            "GEMINI": {
+                "enabled": True,
+                "proxy_url": "http://proxy",
+                "api_key": "key",
+                "model": "m",
+            }
+        }
         service = GeminiAnalysisService(config)
         frame = np.zeros((50, 50, 3), dtype=np.uint8)
         result = service.send_to_proxy("Prompt", [frame])
@@ -298,8 +403,16 @@ class TestGeminiAnalysisServiceProxyFailure(unittest.TestCase):
     @patch("frigate_buffer.services.gemini_proxy_client.requests.post")
     def test_proxy_failure_handling_timeout(self, mock_post):
         import requests
+
         mock_post.side_effect = requests.exceptions.Timeout("timeout")
-        config = {"GEMINI": {"enabled": True, "proxy_url": "http://proxy", "api_key": "key", "model": "m"}}
+        config = {
+            "GEMINI": {
+                "enabled": True,
+                "proxy_url": "http://proxy",
+                "api_key": "key",
+                "model": "m",
+            }
+        }
         service = GeminiAnalysisService(config)
         frame = np.zeros((50, 50, 3), dtype=np.uint8)
         result = service.send_to_proxy("Prompt", [frame])
@@ -308,8 +421,17 @@ class TestGeminiAnalysisServiceProxyFailure(unittest.TestCase):
     @patch("frigate_buffer.services.gemini_proxy_client.requests.post")
     def test_proxy_failure_handling_invalid_json(self, mock_post):
         mock_post.return_value.raise_for_status.side_effect = None
-        mock_post.return_value.json.return_value = {"choices": [{"message": {"content": "not valid json {"}}]}
-        config = {"GEMINI": {"enabled": True, "proxy_url": "http://proxy", "api_key": "key", "model": "m"}}
+        mock_post.return_value.json.return_value = {
+            "choices": [{"message": {"content": "not valid json {"}}]
+        }
+        config = {
+            "GEMINI": {
+                "enabled": True,
+                "proxy_url": "http://proxy",
+                "api_key": "key",
+                "model": "m",
+            }
+        }
         service = GeminiAnalysisService(config)
         frame = np.zeros((50, 50, 3), dtype=np.uint8)
         result = service.send_to_proxy("Prompt", [frame])
@@ -321,7 +443,12 @@ class TestGeminiAnalysisServiceFlatConfig(unittest.TestCase):
 
     def test_flat_proxy_url_and_model_override_nested(self):
         config = {
-            "GEMINI": {"enabled": True, "proxy_url": "http://nested", "api_key": "k", "model": "nested-model"},
+            "GEMINI": {
+                "enabled": True,
+                "proxy_url": "http://nested",
+                "api_key": "k",
+                "model": "nested-model",
+            },
             "GEMINI_PROXY_URL": "http://flat-url",
             "GEMINI_PROXY_MODEL": "flat-model",
         }
@@ -363,9 +490,21 @@ class TestGeminiAnalysisServiceProxyTuningPayload(unittest.TestCase):
     def test_payload_includes_tuning_params(self, mock_post):
         mock_post.return_value.status_code = 200
         mock_post.return_value.json.return_value = {
-            "choices": [{"message": {"content": json.dumps({
-                "title": "T", "shortSummary": "S", "scene": "Sc", "confidence": 0.9, "potential_threat_level": 0
-            })}}]
+            "choices": [
+                {
+                    "message": {
+                        "content": json.dumps(
+                            {
+                                "title": "T",
+                                "shortSummary": "S",
+                                "scene": "Sc",
+                                "confidence": 0.9,
+                                "potential_threat_level": 0,
+                            }
+                        )
+                    }
+                }
+            ]
         }
         config = {
             "GEMINI": {"enabled": True, "proxy_url": "http://proxy", "api_key": "key"},
@@ -392,8 +531,12 @@ class TestGeminiAnalysisServicePromptFile(unittest.TestCase):
     """Test MULTI_CAM_SYSTEM_PROMPT_FILE loads prompt from file when set."""
 
     def test_prompt_loaded_from_config_path_when_file_exists(self):
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False, encoding="utf-8") as f:
-            f.write("Custom system prompt with {image_count} and {global_event_camera_list}.")
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".txt", delete=False, encoding="utf-8"
+        ) as f:
+            f.write(
+                "Custom system prompt with {image_count} and {global_event_camera_list}."
+            )
             prompt_path = f.name
         self.addCleanup(lambda: os.path.exists(prompt_path) and os.unlink(prompt_path))
         config = {
@@ -418,7 +561,10 @@ class TestGeminiAnalysisServicePromptFile(unittest.TestCase):
         self.assertIn("Doorbell", filled)
 
     def test_prompt_falls_back_when_config_path_empty(self):
-        config = {"GEMINI": {"enabled": True, "proxy_url": "http://p", "api_key": "k"}, "MULTI_CAM_SYSTEM_PROMPT_FILE": ""}
+        config = {
+            "GEMINI": {"enabled": True, "proxy_url": "http://p", "api_key": "k"},
+            "MULTI_CAM_SYSTEM_PROMPT_FILE": "",
+        }
         service = GeminiAnalysisService(config)
         template = service._load_system_prompt_template()
         self.assertIsNotNone(template)
@@ -429,7 +575,10 @@ class TestGeminiAnalysisServiceConfigMisc(unittest.TestCase):
     """Misc config tests (e.g. smart_crop_padding)."""
 
     def test_smart_crop_padding_from_config(self):
-        config = {"GEMINI": {"enabled": True, "proxy_url": "http://p", "api_key": "k"}, "SMART_CROP_PADDING": 0.25}
+        config = {
+            "GEMINI": {"enabled": True, "proxy_url": "http://p", "api_key": "k"},
+            "SMART_CROP_PADDING": 0.25,
+        }
         service = GeminiAnalysisService(config)
         self.assertEqual(service.smart_crop_padding, 0.25)
 
@@ -440,10 +589,18 @@ class TestGeminiAnalysisServiceAnalyzeMultiClipCe(unittest.TestCase):
     def test_analyze_multi_clip_ce_returns_none_when_extraction_raises(self):
         """When extract_target_centric_frames raises, analyze_multi_clip_ce catches and returns None."""
         ce_dir = tempfile.mkdtemp()
-        self.addCleanup(lambda: os.path.exists(ce_dir) and __import__("shutil").rmtree(ce_dir, ignore_errors=True))
+        self.addCleanup(
+            lambda: (
+                os.path.exists(ce_dir)
+                and __import__("shutil").rmtree(ce_dir, ignore_errors=True)
+            )
+        )
         config = {"GEMINI": {"enabled": True, "proxy_url": "http://p", "api_key": "k"}}
         service = GeminiAnalysisService(config)
-        with patch("frigate_buffer.services.ai_analyzer.extract_target_centric_frames", side_effect=ValueError("read of closed file")):
+        with patch(
+            "frigate_buffer.services.ai_analyzer.extract_target_centric_frames",
+            side_effect=ValueError("read of closed file"),
+        ):
             result = service.analyze_multi_clip_ce("ce_123", ce_dir, ce_start_time=0.0)
         self.assertIsNone(result)
 
@@ -466,11 +623,19 @@ class TestBuildMultiCamPayloadForPreview(unittest.TestCase):
     def test_no_frames_extracted_returns_error_and_appends_logs(self):
         """When extraction returns no frames, returns (None, error) and log_messages contains frame selection line."""
         ce_dir = tempfile.mkdtemp()
-        self.addCleanup(lambda: os.path.exists(ce_dir) and __import__("shutil").rmtree(ce_dir, ignore_errors=True))
+        self.addCleanup(
+            lambda: (
+                os.path.exists(ce_dir)
+                and __import__("shutil").rmtree(ce_dir, ignore_errors=True)
+            )
+        )
         config = {"GEMINI": {"enabled": False}}
         service = GeminiAnalysisService(config)
         log_messages = []
-        with patch("frigate_buffer.services.ai_analyzer.extract_target_centric_frames", return_value=[]):
+        with patch(
+            "frigate_buffer.services.ai_analyzer.extract_target_centric_frames",
+            return_value=[],
+        ):
             result, err = service.build_multi_cam_payload_for_preview(
                 ce_dir, 0.0, log_messages=log_messages
             )
@@ -489,7 +654,9 @@ class TestProxyRetryOnChunkedEncodingError(unittest.TestCase):
     @patch("frigate_buffer.services.gemini_proxy_client.requests.post")
     def test_send_to_proxy_retries_and_succeeds(self, mock_post):
         mock_post.side_effect = [
-            requests.exceptions.ChunkedEncodingError("Connection broken: InvalidChunkLength(...)"),
+            requests.exceptions.ChunkedEncodingError(
+                "Connection broken: InvalidChunkLength(...)"
+            ),
             _MockSuccessResponse(),
         ]
         service = GeminiAnalysisService(_minimal_config())
@@ -497,22 +664,31 @@ class TestProxyRetryOnChunkedEncodingError(unittest.TestCase):
 
         result = service.send_to_proxy("System prompt", [frame])
 
-        self.assertEqual(mock_post.call_count, 2, "requests.post should be called twice (retry)")
+        self.assertEqual(
+            mock_post.call_count, 2, "requests.post should be called twice (retry)"
+        )
         self.assertIsNotNone(result)
         self.assertEqual(result.get("title"), "Test")
 
         first_kw = mock_post.call_args_list[0][1]
         second_kw = mock_post.call_args_list[1][1]
         self.assertNotIn("Accept-Encoding", first_kw.get("headers", {}))
-        self.assertEqual(second_kw.get("headers", {}).get("Accept-Encoding"), "identity")
+        self.assertEqual(
+            second_kw.get("headers", {}).get("Accept-Encoding"), "identity"
+        )
         self.assertEqual(second_kw.get("headers", {}).get("Connection"), "close")
 
     @patch("frigate_buffer.services.gemini_proxy_client.requests.post")
     def test_send_text_prompt_retries_and_succeeds(self, mock_post):
         class _TextResponse:
             status_code = 200
-            def raise_for_status(self): pass
-            def json(self): return {"choices": [{"message": {"content": "OK"}}]}
+
+            def raise_for_status(self):
+                pass
+
+            def json(self):
+                return {"choices": [{"message": {"content": "OK"}}]}
+
         mock_post.side_effect = [
             requests.exceptions.ChunkedEncodingError("Connection broken"),
             _TextResponse(),
@@ -629,7 +805,9 @@ class TestAiFrameAnalysisWriting(unittest.TestCase):
                     self.metadata = metadata or {}
 
             frames = [
-                MockExtractedFrame(frame, 2000.0, "cam1", {"is_full_frame_resize": True}),
+                MockExtractedFrame(
+                    frame, 2000.0, "cam1", {"is_full_frame_resize": True}
+                ),
                 MockExtractedFrame(frame, 2001.0, "cam 2", {}),
             ]
 
@@ -638,16 +816,22 @@ class TestAiFrameAnalysisWriting(unittest.TestCase):
                 frames,
                 write_manifest=True,
                 create_zip_flag=True,
-                save_frames=True
+                save_frames=True,
             )
 
             frames_dir = os.path.join(event_dir, "ai_frame_analysis", "frames")
-            self.assertTrue(os.path.exists(os.path.join(frames_dir, "frame_001_cam1.jpg")))
-            self.assertTrue(os.path.exists(os.path.join(frames_dir, "frame_002_cam_2.jpg")))
+            self.assertTrue(
+                os.path.exists(os.path.join(frames_dir, "frame_001_cam1.jpg"))
+            )
+            self.assertTrue(
+                os.path.exists(os.path.join(frames_dir, "frame_002_cam_2.jpg"))
+            )
 
-            manifest_path = os.path.join(event_dir, "ai_frame_analysis", "manifest.json")
+            manifest_path = os.path.join(
+                event_dir, "ai_frame_analysis", "manifest.json"
+            )
             self.assertTrue(os.path.exists(manifest_path))
-            with open(manifest_path, "r") as f:
+            with open(manifest_path) as f:
                 manifest = json.load(f)
 
             self.assertEqual(len(manifest), 2)
@@ -695,11 +879,17 @@ class TestAiFrameAnalysisWriting(unittest.TestCase):
             )
 
             frames_dir = os.path.join(event_dir, "ai_frame_analysis", "frames")
-            self.assertTrue(os.path.exists(os.path.join(frames_dir, "frame_001_cam1.jpg")))
-            self.assertTrue(os.path.exists(os.path.join(frames_dir, "frame_002_cam2.jpg")))
-            manifest_path = os.path.join(event_dir, "ai_frame_analysis", "manifest.json")
+            self.assertTrue(
+                os.path.exists(os.path.join(frames_dir, "frame_001_cam1.jpg"))
+            )
+            self.assertTrue(
+                os.path.exists(os.path.join(frames_dir, "frame_002_cam2.jpg"))
+            )
+            manifest_path = os.path.join(
+                event_dir, "ai_frame_analysis", "manifest.json"
+            )
             self.assertTrue(os.path.exists(manifest_path))
-            with open(manifest_path, "r", encoding="utf-8") as f:
+            with open(manifest_path, encoding="utf-8") as f:
                 manifest = json.load(f)
             self.assertEqual(len(manifest), 2)
             self.assertEqual(manifest[0]["camera"], "cam1")

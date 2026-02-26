@@ -9,12 +9,11 @@ import threading
 import time
 from typing import Any
 
-from frigate_buffer.services.timeline import TimelineLogger
-
 from frigate_buffer.services.notifications.base import (
     BaseNotificationProvider,
     NotificationResult,
 )
+from frigate_buffer.services.timeline import TimelineLogger
 
 logger = logging.getLogger("frigate-buffer")
 
@@ -25,7 +24,8 @@ MAX_QUEUE_SIZE = 10
 
 
 class NotificationDispatcher:
-    """Single entry point for publish_notification: rate limit, queue, call providers, log results."""
+    """Single entry point for publish_notification: rate limit, queue, call
+    providers, log results."""
 
     def __init__(
         self,
@@ -49,7 +49,9 @@ class NotificationDispatcher:
 
     def _clean_old_timestamps(self) -> None:
         cutoff = time.time() - RATE_WINDOW_SECONDS
-        self._notification_times[:] = [t for t in self._notification_times if t > cutoff]
+        self._notification_times[:] = [
+            t for t in self._notification_times if t > cutoff
+        ]
 
     def _is_rate_limited(self) -> bool:
         self._clean_old_timestamps()
@@ -65,29 +67,47 @@ class NotificationDispatcher:
         message: str | None,
         tag_override: str | None,
     ) -> bool:
-        """Call each provider, collect results, log to timeline. Returns True if at least one send was attempted."""
+        """Call each provider, collect results, log to timeline. Returns True
+        if at least one send was attempted."""
         results: list[NotificationResult | None] = []
         for provider in self._providers:
             try:
-                r = provider.send(event, status, message=message, tag_override=tag_override)
+                r = provider.send(
+                    event, status, message=message, tag_override=tag_override
+                )
                 if r is not None:
                     results.append(r)
             except Exception as e:
-                logger.exception("Provider %s send failed: %s", type(provider).__name__, e)
-                results.append({"provider": type(provider).__name__, "status": "failure", "message": str(e)})
+                logger.exception(
+                    "Provider %s send failed: %s", type(provider).__name__, e
+                )
+                results.append(
+                    {
+                        "provider": type(provider).__name__,
+                        "status": "failure",
+                        "message": str(e),
+                    }
+                )
 
         # Always log dispatch results (event history: phase + who was notified)
-        self._timeline_logger.log_dispatch_results(event, status, [r for r in results if r is not None])
+        self._timeline_logger.log_dispatch_results(
+            event, status, [r for r in results if r is not None]
+        )
 
         return len(results) > 0
 
     def _do_overflow(self) -> None:
-        """Clear queue and call send_overflow() on every provider. Dispatcher does not touch MQTT."""
+        """Clear queue and call send_overflow() on every provider. Dispatcher
+        does not touch MQTT."""
         for provider in self._providers:
             try:
                 provider.send_overflow()
             except Exception as e:
-                logger.exception("Provider %s send_overflow failed: %s", type(provider).__name__, e)
+                logger.exception(
+                    "Provider %s send_overflow failed: %s",
+                    type(provider).__name__,
+                    e,
+                )
 
     def publish_notification(
         self,
@@ -96,7 +116,8 @@ class NotificationDispatcher:
         message: str | None = None,
         tag_override: str | None = None,
     ) -> bool:
-        """Publish via all providers with rate limiting and queue. Same signature as legacy notifier."""
+        """Publish via all providers with rate limiting and queue. Same
+        signature as legacy notifier."""
         with self._lock:
             if self._is_rate_limited():
                 self._pending_queue.append((event, status, message, tag_override))
@@ -105,7 +126,10 @@ class NotificationDispatcher:
                     getattr(event, "event_id", "?"),
                     len(self._pending_queue),
                 )
-                if len(self._pending_queue) > MAX_QUEUE_SIZE and not self._overflow_sent:
+                if (
+                    len(self._pending_queue) > MAX_QUEUE_SIZE
+                    and not self._overflow_sent
+                ):
                     logger.warning(
                         "Queue overflow (%s items), sending overflow via all providers",
                         len(self._pending_queue),
@@ -151,7 +175,8 @@ class NotificationDispatcher:
         self._queue_processor_running = False
 
     def mark_last_event_ended(self) -> None:
-        """Forward to the HA provider if present (next notification = new event, no clear_tag)."""
+        """Forward to the HA provider if present (next notification = new event,
+        no clear_tag)."""
         if self._ha_provider is not None:
             self._ha_provider.mark_last_event_ended()
 

@@ -1,8 +1,10 @@
-"""MQTT client wrapper: connection lifecycle, subscriptions, and message callback registration."""
+"""MQTT client wrapper: connection lifecycle, subscriptions, and message
+callback registration."""
 
 import logging
 import ssl
-from typing import TYPE_CHECKING, Any, Callable
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any
 
 import paho.mqtt.client as mqtt
 
@@ -10,11 +12,12 @@ if TYPE_CHECKING:
     from paho.mqtt.client import ConnectFlags, DisconnectFlags
     from paho.mqtt.reasoncodes import ReasonCode
 
-logger = logging.getLogger('frigate-buffer')
+logger = logging.getLogger("frigate-buffer")
 
 
 class MqttClientWrapper:
-    """Wraps Paho MQTT client: setup, on_connect/on_disconnect, start/stop loop. Message routing is delegated via callback."""
+    """Wraps Paho MQTT client: setup, on_connect/on_disconnect, start/stop loop.
+    Message routing is delegated via callback."""
 
     DEFAULT_TOPICS: list[tuple[str, int]] = [
         ("frigate/events", 0),
@@ -38,17 +41,22 @@ class MqttClientWrapper:
         self._on_message_callback = on_message_callback
         self.mqtt_connected = False
 
-        # paho-mqtt 2.x: callback_api_version required; type stubs may not export CallbackAPIVersion
+        # paho-mqtt 2.x: callback_api_version required; type stubs may not
+        # export CallbackAPIVersion
         callback_api_version = getattr(mqtt, "CallbackAPIVersion", None)
         if callback_api_version is not None:
-            self._client = mqtt.Client(callback_api_version.VERSION2, client_id=client_id)
+            self._client = mqtt.Client(
+                callback_api_version.VERSION2, client_id=client_id
+            )
         else:
             self._client = mqtt.Client(client_id=client_id)
         if username:
             self._client.username_pw_set(username, password)
         if self._port == 8883:
             logger.info("Configuring MQTT connection with TLS/SSL")
-            self._client.tls_set(cert_reqs=ssl.CERT_REQUIRED, tls_version=ssl.PROTOCOL_TLSv1_2)
+            self._client.tls_set(
+                cert_reqs=ssl.CERT_REQUIRED, tls_version=ssl.PROTOCOL_TLSv1_2
+            )
         self._client.on_connect = self._on_connect
         self._client.on_disconnect = self._on_disconnect
         self._client.on_message = self._on_message
@@ -90,7 +98,9 @@ class MqttClientWrapper:
         else:
             logger.info("MQTT disconnected")
 
-    def _on_message(self, client: mqtt.Client, userdata: Any, msg: mqtt.MQTTMessage) -> None:
+    def _on_message(
+        self, client: mqtt.Client, userdata: Any, msg: mqtt.MQTTMessage
+    ) -> None:
         """Forward messages to the registered callback."""
         if self._on_message_callback:
             self._on_message_callback(client, userdata, msg)

@@ -10,18 +10,24 @@ from frigate_buffer.models import ConsolidatedEvent, _generate_consolidated_id
 if TYPE_CHECKING:
     from frigate_buffer.managers.file import FileManager
 
-logger = logging.getLogger('frigate-buffer')
+logger = logging.getLogger("frigate-buffer")
 
 
 class ConsolidatedEventManager:
     """Manages consolidated events (time-gap grouped). Uses events/{ce_id}/{camera}/ storage."""
 
-    def __init__(self, file_manager: 'FileManager', event_gap_seconds: int = 120,
-                 on_close_callback=None):
+    def __init__(
+        self,
+        file_manager: "FileManager",
+        event_gap_seconds: int = 120,
+        on_close_callback=None,
+    ):
         self._file_manager = file_manager
         self._events: dict[str, ConsolidatedEvent] = {}
         self._frigate_to_ce: dict[str, str] = {}  # frigate_event_id -> consolidated_id
-        self._active_ce_id: str | None = None  # Currently active (receiving new sub-events)
+        self._active_ce_id: str | None = (
+            None  # Currently active (receiving new sub-events)
+        )
         self._close_timers: dict[str, threading.Timer] = {}  # ce_id -> Timer
         self._lock = threading.RLock()
         self.event_gap_seconds = event_gap_seconds
@@ -52,8 +58,12 @@ class ConsolidatedEventManager:
             if self._active_ce_id:
                 ce = self._events.get(self._active_ce_id)
                 # Add to existing CE if within time gap (cross-camera grouping)
-                if (ce and not ce.closing and not ce.closed and
-                        (now - ce.last_activity_time) < self.event_gap_seconds):
+                if (
+                    ce
+                    and not ce.closing
+                    and not ce.closed
+                    and (now - ce.last_activity_time) < self.event_gap_seconds
+                ):
                     ce.frigate_event_ids.append(event_id)
                     ce.last_activity_time = now
                     if camera not in ce.cameras:
@@ -62,15 +72,19 @@ class ConsolidatedEventManager:
                         ce.labels.append(label)
                     self._frigate_to_ce[event_id] = ce.consolidated_id
                     # Ensure camera subdir exists
-                    camera_folder = self._file_manager.ensure_consolidated_camera_folder(
-                        ce.folder_path, camera
+                    camera_folder = (
+                        self._file_manager.ensure_consolidated_camera_folder(
+                            ce.folder_path, camera
+                        )
                     )
                     return ce, False, camera_folder
 
             # New consolidated event: create events/{folder_name}/ and events/{folder_name}/{camera}/
             full_id, folder_name = _generate_consolidated_id(start_time)
             base_path = self._file_manager.create_consolidated_event_folder(folder_name)
-            camera_folder = self._file_manager.ensure_consolidated_camera_folder(base_path, camera)
+            camera_folder = self._file_manager.ensure_consolidated_camera_folder(
+                base_path, camera
+            )
             ce = ConsolidatedEvent(
                 consolidated_id=full_id,
                 folder_name=folder_name,
@@ -107,7 +121,9 @@ class ConsolidatedEventManager:
             except ValueError:
                 return None
             if ce.primary_event_id == event_id:
-                ce.primary_event_id = ce.frigate_event_ids[0] if ce.frigate_event_ids else None
+                ce.primary_event_id = (
+                    ce.frigate_event_ids[0] if ce.frigate_event_ids else None
+                )
                 ce.primary_camera = ce.cameras[0] if ce.cameras else None
             self._frigate_to_ce.pop(event_id, None)
             if not ce.frigate_event_ids:
@@ -117,8 +133,12 @@ class ConsolidatedEventManager:
                 return ce_folder_path
             return None
 
-    def update_activity(self, event_id: str, activity_time: float | None = None,
-                       end_time: float | None = None) -> None:
+    def update_activity(
+        self,
+        event_id: str,
+        activity_time: float | None = None,
+        end_time: float | None = None,
+    ) -> None:
         with self._lock:
             ce_id = self._frigate_to_ce.get(event_id)
             if ce_id and ce_id in self._events:
@@ -127,7 +147,9 @@ class ConsolidatedEventManager:
                 if end_time is not None and end_time > ce.end_time_max:
                     ce.end_time_max = end_time
 
-    def schedule_close_timer(self, ce_id: str, delay_seconds: float | None = None) -> None:
+    def schedule_close_timer(
+        self, ce_id: str, delay_seconds: float | None = None
+    ) -> None:
         """Schedule or reschedule the close timer for this CE. When it fires, CE is closed.
 
         delay_seconds: If set, use this delay instead of event_gap_seconds. None = use event_gap_seconds.
@@ -142,11 +164,17 @@ class ConsolidatedEventManager:
             if ce_id in self._close_timers:
                 self._close_timers[ce_id].cancel()
                 del self._close_timers[ce_id]
-            delay = float(delay_seconds) if delay_seconds is not None else float(self.event_gap_seconds)
+            delay = (
+                float(delay_seconds)
+                if delay_seconds is not None
+                else float(self.event_gap_seconds)
+            )
             delay = max(0.0, delay)
+
             # Schedule new timer
             def _fire():
                 self._on_close_timer(ce_id)
+
             t = threading.Timer(delay, _fire)
             t.daemon = True
             self._close_timers[ce_id] = t
@@ -180,8 +208,13 @@ class ConsolidatedEventManager:
             except Exception as e:
                 logger.exception(f"CE close callback error for {ce_id}: {e}")
 
-    def set_final_from_frigate(self, event_id: str, title: str | None = None,
-                               description: str | None = None, threat_level: int | None = None) -> None:
+    def set_final_from_frigate(
+        self,
+        event_id: str,
+        title: str | None = None,
+        description: str | None = None,
+        threat_level: int | None = None,
+    ) -> None:
         """Set CE final title/description from Frigate GenAI (Path 1). Overwrites so last wins."""
         with self._lock:
             ce_id = self._frigate_to_ce.get(event_id)
@@ -195,8 +228,13 @@ class ConsolidatedEventManager:
             if threat_level is not None and threat_level > ce.final_threat_level:
                 ce.final_threat_level = threat_level
 
-    def set_final_from_ce_analysis(self, ce_id: str, title: str | None = None,
-                                   description: str | None = None, threat_level: int | None = None) -> None:
+    def set_final_from_ce_analysis(
+        self,
+        ce_id: str,
+        title: str | None = None,
+        description: str | None = None,
+        threat_level: int | None = None,
+    ) -> None:
         """Set CE final title/description from CE analysis result (Path 2). CE may already be removed."""
         with self._lock:
             if ce_id not in self._events:

@@ -4,15 +4,12 @@ import json
 import unittest
 from unittest.mock import MagicMock, patch
 
-from frigate_buffer.models import EventState, EventPhase, ConsolidatedEvent
+from frigate_buffer.models import ConsolidatedEvent, EventPhase, EventState
 from frigate_buffer.services.notifications import (
-    NotificationDispatcher,
-    HomeAssistantMqttProvider,
-    NotificationResult,
     BaseNotificationProvider,
-)
-from frigate_buffer.services.notifications.dispatcher import (
-    MAX_NOTIFICATIONS_PER_WINDOW,
+    HomeAssistantMqttProvider,
+    NotificationDispatcher,
+    NotificationResult,
 )
 
 try:
@@ -46,9 +43,7 @@ class TestHomeAssistantMqttProvider(unittest.TestCase):
     def setUp(self):
         self.mqtt = MagicMock()
         self.mqtt.publish.return_value = _publish_success()
-        self.provider = HomeAssistantMqttProvider(
-            self.mqtt, "127.0.0.1", 5055, "", ""
-        )
+        self.provider = HomeAssistantMqttProvider(self.mqtt, "127.0.0.1", 5055, "", "")
 
     def _last_payload(self) -> dict:
         """Last JSON payload passed to mqtt.publish."""
@@ -90,33 +85,39 @@ class TestHomeAssistantMqttProvider(unittest.TestCase):
         self.assertEqual(payload["tag"], "frigate_evt2")
 
     def test_tag_override_used(self):
-        self.provider.send(
-            _make_event("evt1"), "new", tag_override="frigate_ce_abc"
-        )
+        self.provider.send(_make_event("evt1"), "new", tag_override="frigate_ce_abc")
         payload = self._last_payload()
         self.assertEqual(payload["tag"], "frigate_ce_abc")
 
     def test_send_accepts_phase_as_string(self):
         """CE path can pass event-like object with phase as string."""
-        event_like = type("NotifyTarget", (), {
-            "event_id": "ce_123",
-            "camera": "events",
-            "label": "person",
-            "folder_path": "/storage/events/ce_123/doorbell",
-            "created_at": 1234567890.0,
-            "end_time": 1234567900.0,
-            "phase": "finalized",
-            "threat_level": 0,
-            "snapshot_downloaded": True,
-            "clip_downloaded": True,
-            "genai_title": "Title",
-            "genai_description": None,
-            "ai_description": None,
-            "review_summary": None,
-            "image_url_override": None,
-        })()
-        with patch("frigate_buffer.services.query.resolve_clip_in_folder", return_value=None):
-            result = self.provider.send(event_like, "finalized", tag_override="frigate_ce_123")
+        event_like = type(
+            "NotifyTarget",
+            (),
+            {
+                "event_id": "ce_123",
+                "camera": "events",
+                "label": "person",
+                "folder_path": "/storage/events/ce_123/doorbell",
+                "created_at": 1234567890.0,
+                "end_time": 1234567900.0,
+                "phase": "finalized",
+                "threat_level": 0,
+                "snapshot_downloaded": True,
+                "clip_downloaded": True,
+                "genai_title": "Title",
+                "genai_description": None,
+                "ai_description": None,
+                "review_summary": None,
+                "image_url_override": None,
+            },
+        )()
+        with patch(
+            "frigate_buffer.services.query.resolve_clip_in_folder", return_value=None
+        ):
+            result = self.provider.send(
+                event_like, "finalized", tag_override="frigate_ce_123"
+            )
         self.assertEqual(result.get("provider"), "HA_MQTT")
         self.assertEqual(result.get("status"), "success")
         payload = self._last_payload()
@@ -206,9 +207,14 @@ class TestNotificationDispatcher(unittest.TestCase):
         mock_result: NotificationResult = {"provider": "MOCK", "status": "success"}
         mock_provider = MagicMock(spec=BaseNotificationProvider)
         mock_provider.send.return_value = mock_result
-        mock_provider.send_overflow.return_value = {"provider": "MOCK", "status": "success"}
+        mock_provider.send_overflow.return_value = {
+            "provider": "MOCK",
+            "status": "success",
+        }
         timeline = MagicMock()
-        dispatcher = NotificationDispatcher(providers=[mock_provider], timeline_logger=timeline)
+        dispatcher = NotificationDispatcher(
+            providers=[mock_provider], timeline_logger=timeline
+        )
         dispatcher._notification_times.clear()
 
         event = _make_event("evt1")
@@ -235,18 +241,18 @@ class TestNotificationEventCompliance(unittest.TestCase):
             event_id="test_event",
             camera="test_cam",
             label="person",
-            created_at=1234567890.0
+            created_at=1234567890.0,
         )
         self.assertIsInstance(event, NotificationEvent)
-        self.assertTrue(hasattr(event, 'image_url_override'))
-        self.assertTrue(hasattr(event, 'ai_description'))
-        self.assertTrue(hasattr(event, 'genai_title'))
-        self.assertTrue(hasattr(event, 'genai_description'))
-        self.assertTrue(hasattr(event, 'review_summary'))
-        self.assertTrue(hasattr(event, 'folder_path'))
-        self.assertTrue(hasattr(event, 'clip_downloaded'))
-        self.assertTrue(hasattr(event, 'snapshot_downloaded'))
-        self.assertTrue(hasattr(event, 'threat_level'))
+        self.assertTrue(hasattr(event, "image_url_override"))
+        self.assertTrue(hasattr(event, "ai_description"))
+        self.assertTrue(hasattr(event, "genai_title"))
+        self.assertTrue(hasattr(event, "genai_description"))
+        self.assertTrue(hasattr(event, "review_summary"))
+        self.assertTrue(hasattr(event, "folder_path"))
+        self.assertTrue(hasattr(event, "clip_downloaded"))
+        self.assertTrue(hasattr(event, "snapshot_downloaded"))
+        self.assertTrue(hasattr(event, "threat_level"))
 
     def test_consolidated_event_implements_protocol(self):
         ce = ConsolidatedEvent(
@@ -254,14 +260,14 @@ class TestNotificationEventCompliance(unittest.TestCase):
             folder_name="123_uuid",
             folder_path="/tmp/events/123_uuid",
             start_time=1234567890.0,
-            last_activity_time=1234567900.0
+            last_activity_time=1234567900.0,
         )
         self.assertIsInstance(ce, NotificationEvent)
-        self.assertTrue(hasattr(ce, 'image_url_override'))
-        self.assertTrue(hasattr(ce, 'ai_description'))
-        self.assertTrue(hasattr(ce, 'genai_title'))
-        self.assertTrue(hasattr(ce, 'genai_description'))
-        self.assertTrue(hasattr(ce, 'review_summary'))
+        self.assertTrue(hasattr(ce, "image_url_override"))
+        self.assertTrue(hasattr(ce, "ai_description"))
+        self.assertTrue(hasattr(ce, "genai_title"))
+        self.assertTrue(hasattr(ce, "genai_description"))
+        self.assertTrue(hasattr(ce, "review_summary"))
         self.assertIsNone(ce.image_url_override)
         self.assertIsNone(ce.ai_description)
         self.assertIsNone(ce.review_summary)

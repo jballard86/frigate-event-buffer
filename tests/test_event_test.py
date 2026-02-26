@@ -1,17 +1,16 @@
 """
 Tests for event_test package: ce_start_time helper and orchestrator validation.
 """
+
 import os
 import shutil
-import tempfile
-import pytest
 
 from frigate_buffer.event_test.event_test_orchestrator import (
+    _yield_done,
+    _yield_error,
+    _yield_log,
     get_ce_start_time_from_folder_path,
     run_test_pipeline,
-    _yield_error,
-    _yield_done,
-    _yield_log,
 )
 
 
@@ -52,7 +51,10 @@ class TestRunTestPipelineValidation:
             )
             errs = [e for e in events if e.get("type") == "error"]
             assert len(errs) == 1
-            assert "readable" in errs[0].get("message", "").lower() or "not found" in errs[0].get("message", "").lower()
+            assert (
+                "readable" in errs[0].get("message", "").lower()
+                or "not found" in errs[0].get("message", "").lower()
+            )
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 
@@ -78,7 +80,10 @@ class TestRunTestPipelineValidation:
             )
             errs = [e for e in events if e.get("type") == "error"]
             assert len(errs) == 1
-            assert "camera" in errs[0].get("message", "").lower() or "clip" in errs[0].get("message", "").lower()
+            assert (
+                "camera" in errs[0].get("message", "").lower()
+                or "clip" in errs[0].get("message", "").lower()
+            )
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 

@@ -45,11 +45,13 @@ def get_report_for_date(storage_path: str, d: date) -> dict | None:
 
     Uses resolve_under_storage so the path cannot escape storage.
     """
-    path = resolve_under_storage(storage_path, "daily_reports", f"{d.isoformat()}_report.md")
+    path = resolve_under_storage(
+        storage_path, "daily_reports", f"{d.isoformat()}_report.md"
+    )
     if path is None or not os.path.isfile(path):
         return None
     try:
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             return {"summary": f.read()}
     except OSError:
         return None

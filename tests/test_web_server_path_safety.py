@@ -23,10 +23,15 @@ class TestWebServerPathSafety(unittest.TestCase):
 
     def setUp(self):
         from frigate_buffer.web.server import create_app
+
         self.storage = tempfile.mkdtemp()
         self.addCleanup(lambda: shutil.rmtree(self.storage, ignore_errors=True))
         self.orchestrator = SimpleNamespace(
-            config={"STORAGE_PATH": self.storage, "ALLOWED_CAMERAS": [], "STATS_REFRESH_SECONDS": 60},
+            config={
+                "STORAGE_PATH": self.storage,
+                "ALLOWED_CAMERAS": [],
+                "STATS_REFRESH_SECONDS": 60,
+            },
             _request_count_lock=threading.Lock(),
             _request_count=0,
             state_manager=SimpleNamespace(),
@@ -39,13 +44,19 @@ class TestWebServerPathSafety(unittest.TestCase):
 
     def _skip_if_app_mocked(self):
         if self._app_is_mock:
-            self.skipTest("create_app was mocked (run this file alone: pytest tests/test_web_server_path_safety.py)")
+            self.skipTest(
+                "create_app was mocked (run this file alone: pytest tests/test_web_server_path_safety.py)"
+            )
 
     def test_files_path_traversal_returns_404(self):
         """Requesting /files/../../../etc/passwd must not serve a file outside storage."""
         self._skip_if_app_mocked()
         r = self.client.get("/files/../../../etc/passwd")
-        self.assertIn(r.status_code, (404, 400), "Path traversal should be rejected with 404 or 400")
+        self.assertIn(
+            r.status_code,
+            (404, 400),
+            "Path traversal should be rejected with 404 or 400",
+        )
 
     def test_files_double_dot_in_path_returns_404_or_400(self):
         """Requesting /files/cam/..%2f..%2fetc/passwd (URL-encoded) should be rejected."""
@@ -83,7 +94,9 @@ class TestWebServerPathSafety(unittest.TestCase):
         os.makedirs(event_dir, exist_ok=True)
         append_path = os.path.join(event_dir, "notification_timeline_append.jsonl")
         with open(append_path, "w") as f:
-            f.write('{"source": "frigate_mqtt", "label": "Event update", "ts": "2026-02-17T15:12:49"}\n')
+            f.write(
+                '{"source": "frigate_mqtt", "label": "Event update", "ts": "2026-02-17T15:12:49"}\n'
+            )
         r = self.client.get(f"/events/{camera}/{subdir}/timeline/download")
         self.assertEqual(r.status_code, 200)
         self.assertEqual(r.content_type, "application/json")

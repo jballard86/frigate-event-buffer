@@ -24,7 +24,9 @@ def resolve_under_storage(storage_path: str, *path_parts: str) -> str | None:
     base = os.path.realpath(storage_path)
     if not path_parts:
         return None
-    candidate = os.path.normpath(os.path.abspath(os.path.join(storage_path, *path_parts)))
+    candidate = os.path.normpath(
+        os.path.abspath(os.path.join(storage_path, *path_parts))
+    )
     if not candidate.startswith(base) or candidate == base:
         return None
     return candidate

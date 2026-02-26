@@ -14,7 +14,10 @@ from frigate_buffer.web.routes import (
 
 
 def create_app(orchestrator):
-    """Create Flask app with all endpoints. Registers blueprints; routes close over orchestrator."""
+    """Create Flask app with all endpoints.
+
+    Registers blueprints; routes close over orchestrator.
+    """
     _template_dir = os.path.join(os.path.dirname(__file__), "templates")
     _static_dir = os.path.join(os.path.dirname(__file__), "static")
     app = Flask(__name__, template_folder=_template_dir, static_folder=_static_dir)

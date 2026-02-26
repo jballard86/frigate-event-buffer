@@ -25,11 +25,11 @@ from frigate_buffer.services.video import (
 # Early logging for config loading (reconfigured after config is loaded)
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[logging.StreamHandler(sys.stdout)]
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    handlers=[logging.StreamHandler(sys.stdout)],
 )
 
-logger = logging.getLogger('frigate-buffer')
+logger = logging.getLogger("frigate-buffer")
 
 orchestrator = None
 
@@ -45,7 +45,10 @@ def _load_version() -> str:
     """
     try:
         pkg_dir = Path(__file__).resolve().parent
-        for candidate in (pkg_dir / "version.txt", pkg_dir.parent.parent / "version.txt"):
+        for candidate in (
+            pkg_dir / "version.txt",
+            pkg_dir.parent.parent / "version.txt",
+        ):
             if candidate.exists():
                 return candidate.read_text().strip()
     except OSError:
@@ -68,9 +71,10 @@ def main():
     config = load_config()
 
     # Setup logging with configured level
-    setup_logging(config.get('LOG_LEVEL', 'INFO'))
+    setup_logging(config.get("LOG_LEVEL", "INFO"))
 
-    # Ultralytics config and model cache under storage so they persist and are writable (no warning, no re-download each boot).
+    # Ultralytics config and model cache under storage so they persist and are writable
+    # (no warning, no re-download each boot).
     storage_path = config.get("STORAGE_PATH", "/app/storage")
     yolo_config_dir = os.path.join(storage_path, "ultralytics")
     os.makedirs(yolo_config_dir, exist_ok=True)
@@ -96,5 +100,5 @@ def main():
     orchestrator.start()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

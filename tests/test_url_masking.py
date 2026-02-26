@@ -1,5 +1,6 @@
-from urllib.parse import urlparse, urlunparse
 import unittest
+from urllib.parse import urlparse, urlunparse
+
 
 def mask_url(url):
     try:
@@ -12,6 +13,7 @@ def mask_url(url):
         return urlunparse(parsed)
     except Exception as e:
         return f"Error masking URL: {e}"
+
 
 class TestUrlMasking(unittest.TestCase):
     def test_masking_standard(self):
@@ -40,5 +42,6 @@ class TestUrlMasking(unittest.TestCase):
         expected = "http://host:5000"
         self.assertEqual(mask_url(url), expected)
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     unittest.main()

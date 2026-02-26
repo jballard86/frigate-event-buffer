@@ -12,10 +12,14 @@ import logging
 import os
 import subprocess
 from collections import Counter, defaultdict
+from typing import Any
 
-from frigate_buffer.constants import NVDEC_INIT_FAILURE_PREFIX, ZOOM_CONTENT_PADDING, ZOOM_MIN_FRAME_FRACTION
-from frigate_buffer.services import crop_utils
-from frigate_buffer.services import timeline_ema
+from frigate_buffer.constants import (
+    NVDEC_INIT_FAILURE_PREFIX,
+    ZOOM_CONTENT_PADDING,
+    ZOOM_MIN_FRAME_FRACTION,
+)
+from frigate_buffer.services import crop_utils, timeline_ema
 from frigate_buffer.services.gpu_decoder import create_decoder
 from frigate_buffer.services.video import GPU_LOCK, _get_video_metadata
 
@@ -37,7 +41,9 @@ ACTION_PREROLL_SEC = 3.0
 ACTION_POSTROLL_SEC = 3.0
 
 
-def convert_timeline_to_segments(timeline_points: list[tuple[float, str]], global_end: float) -> list[dict]:
+def convert_timeline_to_segments(
+    timeline_points: list[tuple[float, str]], global_end: float
+) -> list[dict]:
     """
     Groups continuous time steps for the same camera into segments.
     global_end is required, but if for some reason it is 0 or None, it falls back
@@ -59,19 +65,15 @@ def convert_timeline_to_segments(timeline_points: list[tuple[float, str]], globa
     for i in range(1, len(timeline_points)):
         t, cam = timeline_points[i]
         if cam != current_cam:
-            segments.append({
-                "camera": current_cam,
-                "start_sec": seg_start,
-                "end_sec": t
-            })
+            segments.append(
+                {"camera": current_cam, "start_sec": seg_start, "end_sec": t}
+            )
             current_cam = cam
             seg_start = t
 
-    segments.append({
-        "camera": current_cam,
-        "start_sec": seg_start,
-        "end_sec": global_end
-    })
+    segments.append(
+        {"camera": current_cam, "start_sec": seg_start, "end_sec": global_end}
+    )
 
     return segments
 
@@ -88,11 +90,13 @@ def assignments_to_slices(
     slices: list[dict] = []
     for i, (t_sec, camera) in enumerate(assignments):
         end_sec = assignments[i + 1][0] if i + 1 < len(assignments) else global_end
-        slices.append({
-            "camera": camera,
-            "start_sec": t_sec,
-            "end_sec": end_sec,
-        })
+        slices.append(
+            {
+                "camera": camera,
+                "start_sec": t_sec,
+                "end_sec": end_sec,
+            }
+        )
     return slices
 
 
@@ -152,7 +156,9 @@ def _nearest_entry_at_t(
             return entries[-1]
         if idx == 0:
             return entries[0]
-        if abs(timestamps_sorted[idx] - t_sec) < abs(timestamps_sorted[idx - 1] - t_sec):
+        if abs(timestamps_sorted[idx] - t_sec) < abs(
+            timestamps_sorted[idx - 1] - t_sec
+        ):
             return entries[idx]
         return entries[idx - 1]
     return min(entries, key=lambda e: abs((e.get("timestamp_sec") or 0) - t_sec))
@@ -170,7 +176,8 @@ def _nearest_entry_with_detections_at_t(
     the frame instead of panning to center.
     """
     candidates = [
-        e for e in entries
+        e
+        for e in entries
         if len(e.get("detections") or []) > 0
         and abs((e.get("timestamp_sec") or 0) - t_sec) <= max_distance_sec
     ]
@@ -257,6 +264,7 @@ def _zoom_crop_size(
     Clamps to [ZOOM_MIN_FRAME_FRACTION * source, source] and returns even dimensions.
     """
     import math
+
     if content_area <= 0 or target_percent <= 0 or target_w <= 0 or target_h <= 0:
         return (target_w, target_h)
     if source_width <= 0 or source_height <= 0:
@@ -356,8 +364,12 @@ def calculate_crop_at_time(
 
     if use_zoom:
         crop_w, crop_h = _zoom_crop_size(
-            content_area, source_width, source_height,
-            tracking_target_frame_percent, target_w, target_h,
+            content_area,
+            source_width,
+            source_height,
+            tracking_target_frame_percent,
+            target_w,
+            target_h,
         )
     else:
         if source_width < target_w or source_height < target_h:
@@ -387,6 +399,7 @@ def smooth_zoom_ema(
     so the crop stays within source bounds after size change.
     """
     import math
+
     if alpha <= 0 or alpha >= 1 or not slices or target_w <= 0 or target_h <= 0:
         return
     aspect = target_w / target_h
@@ -409,8 +422,8 @@ def smooth_zoom_ema(
         else:
             smooth_zoom_s = alpha * zoom_s + (1.0 - alpha) * smooth_zoom_s
             smooth_zoom_e = alpha * zoom_e + (1.0 - alpha) * smooth_zoom_e
-        crop_area_s = (smooth_zoom_s ** 2) * frame_area
-        crop_area_e = (smooth_zoom_e ** 2) * frame_area
+        crop_area_s = (smooth_zoom_s**2) * frame_area
+        crop_area_e = (smooth_zoom_e**2) * frame_area
         nw_s = max(1, min(sw, int(math.sqrt(crop_area_s * aspect))))
         nh_s = max(1, min(sh, int(math.sqrt(crop_area_s / aspect))))
         nw_e = max(1, min(sw, int(math.sqrt(crop_area_e * aspect))))
@@ -429,9 +442,7 @@ def smooth_zoom_ema(
         sl["crop_end"] = (new_xe, new_ye, nw_e, nh_e)
 
 
-def smooth_crop_centers_ema(
-    slices: list[dict], alpha: float
-) -> None:
+def smooth_crop_centers_ema(slices: list[dict], alpha: float) -> None:
     """
     Smooth crop center trajectory in-place with single-pass EMA to reduce detection jitter.
     Slices must have "crop_start" and "crop_end" as (x, y, w, h). Updates those with
@@ -487,7 +498,7 @@ def calculate_segment_crop(
     source_width: int,
     source_height: int,
     target_w: int = 1440,
-    target_h: int = 1080
+    target_h: int = 1080,
 ) -> tuple[int, int, int, int]:
     """
     Finds the center of mass for a segment based on sidecar detections
@@ -514,7 +525,7 @@ def calculate_segment_crop(
                 area = float(det.get("area", 1.0))
                 if area <= 0:
                     area = 1.0
-                    
+
                 cp = det.get("centerpoint")
                 if isinstance(cp, (list, tuple)) and len(cp) >= 2:
                     weighted_cx_sum += float(cp[0]) * area
@@ -560,19 +571,31 @@ def _compilation_ffmpeg_cmd_and_log_path(
     cmd = [
         "ffmpeg",
         "-y",
-        "-f", "rawvideo",
-        "-pix_fmt", "rgb24",
-        "-s", f"{target_w}x{target_h}",
-        "-r", "20",
-        "-thread_queue_size", "512",
-        "-i", "pipe:0",
-        "-c:v", "h264_nvenc",
-        "-preset", "p1",
-        "-tune", "hq",
-        "-rc", "vbr",
-        "-cq", "24",
+        "-f",
+        "rawvideo",
+        "-pix_fmt",
+        "rgb24",
+        "-s",
+        f"{target_w}x{target_h}",
+        "-r",
+        "20",
+        "-thread_queue_size",
+        "512",
+        "-i",
+        "pipe:0",
+        "-c:v",
+        "h264_nvenc",
+        "-preset",
+        "p1",
+        "-tune",
+        "hq",
+        "-rc",
+        "vbr",
+        "-cq",
+        "24",
         "-an",
-        "-pix_fmt", "yuv420p",
+        "-pix_fmt",
+        "yuv420p",
         tmp_output_path,
     ]
     return cmd, log_file_path
@@ -658,7 +681,9 @@ def _encode_frames_via_ffmpeg(
 def _resolve_clip_path(ce_dir: str, camera: str, resolve_clip_in_folder: object) -> str:
     """Resolve clip path for a camera under ce_dir; raise FileNotFoundError if missing."""
     cam_dir = os.path.join(ce_dir, camera)
-    clip_name = resolve_clip_in_folder(cam_dir) if callable(resolve_clip_in_folder) else None
+    clip_name = (
+        resolve_clip_in_folder(cam_dir) if callable(resolve_clip_in_folder) else None
+    )
     if not clip_name:
         clip_name = f"{camera}.mp4"
     # Coerce to str so join() gets StrPath (resolve_clip_in_folder is typed object for test mocks).
@@ -713,7 +738,9 @@ def _run_pynv_compilation(
     assert proc is not None and proc.stdin is not None
 
     logged_cameras: set[str] = set()
-    logged_stutter_cameras: set[str] = set()  # One INFO per camera per event for stutter/missing frames.
+    logged_stutter_cameras: set[str] = (
+        set()
+    )  # One INFO per camera per event for stutter/missing frames.
     slices_per_cam = Counter(sl["camera"] for sl in slices)
     missing_crop_by_cam: dict[str, list[tuple[float, float]]] = defaultdict(list)
     try:
@@ -728,14 +755,16 @@ def _run_pynv_compilation(
                 missing_crop_by_cam[cam].append((t0, t1))
             crop_start = sl.get("crop_start")
             crop_end = sl.get("crop_end")
-            output_times = [t0 + i / float(COMPILATION_OUTPUT_FPS) for i in range(n_frames)]
+            output_times = [
+                t0 + i / float(COMPILATION_OUTPUT_FPS) for i in range(n_frames)
+            ]
 
             # ffprobe outside GPU_LOCK so the GPU is not held during subprocess I/O (Finding 4.1).
             slice_meta = _get_video_metadata(clip_path)
-            fallback_fps = (slice_meta[2] if slice_meta and slice_meta[2] > 0 else 30.0)
+            fallback_fps = slice_meta[2] if slice_meta and slice_meta[2] > 0 else 30.0
             fallback_duration = slice_meta[3] if slice_meta else duration
 
-            batch = None  # So slice finally can always try to del batch after chunk loop or on error.
+            batch_to_free: Any = None
             try:
                 with GPU_LOCK:
                     with create_decoder(clip_path, gpu_id=cuda_device_index) as ctx:
@@ -745,16 +774,28 @@ def _run_pynv_compilation(
                             frame_count = max(1, int(fallback_duration * fps))
                         # PTS-based frame indices to reduce jitter (decoder time→index mapping).
                         src_indices = [
-                            min(max(0, ctx.get_index_from_time_in_seconds(t)), frame_count - 1)
+                            min(
+                                max(0, ctx.get_index_from_time_in_seconds(t)),
+                                frame_count - 1,
+                            )
                             for t in output_times
                         ]
                         if not src_indices:
                             continue
-                        ih, iw = None, None  # Set from first chunk batch shape; crop params computed once.
+                        ih, iw = (
+                            None,
+                            None,
+                        )  # Set from first chunk batch shape; crop params computed once.
+                        # Initialize so type checker sees they're always bound (set properly when ih is None).
+                        start_cx = start_cy = end_cx = end_cy = 0.0
+                        w_d = h_d = we_d = he_d = 1
                         for chunk_start in range(0, len(src_indices), BATCH_SIZE):
-                            chunk_indices = src_indices[chunk_start : chunk_start + BATCH_SIZE]
+                            chunk_indices = src_indices[
+                                chunk_start : chunk_start + BATCH_SIZE
+                            ]
                             try:
                                 batch = ctx.get_frames(chunk_indices)
+                                batch_to_free = batch
                             except Exception as e:
                                 logger.error(
                                     "%s (decoder get_frames failed). path=%s chunk_indices=%s error=%s",
@@ -772,7 +813,10 @@ def _run_pynv_compilation(
                                 )
                                 if torch.cuda.is_available():
                                     try:
-                                        logger.debug("VRAM summary: %s", torch.cuda.memory_summary())
+                                        logger.debug(
+                                            "VRAM summary: %s",
+                                            torch.cuda.memory_summary(),
+                                        )
                                     except Exception:
                                         pass
                                 break
@@ -783,6 +827,7 @@ def _run_pynv_compilation(
                                     clip_path,
                                 )
                                 del batch
+                                batch_to_free = None
                                 if torch.cuda.is_available():
                                     torch.cuda.empty_cache()
                                 continue
@@ -817,31 +862,50 @@ def _run_pynv_compilation(
                                 if len(src_indices) > 1 and len(set(src_indices)) == 1:
                                     logger.debug(
                                         "Compilation static frame: decoder returned same frame index %s for all %s frames for camera=%s slice [%.2f, %.2f]; check decoder/time mapping.",
-                                        src_indices[0], n_frames, cam, t0, t1,
+                                        src_indices[0],
+                                        n_frames,
+                                        cam,
+                                        t0,
+                                        t1,
                                     )
                                     if cam not in logged_stutter_cameras:
                                         logger.info(
                                             "Possible stutter or missing frames from %s, check original file for confirmation. path=%s",
-                                            cam, clip_path,
+                                            cam,
+                                            clip_path,
                                         )
                                         logged_stutter_cameras.add(cam)
                                 if cam not in logged_cameras:
                                     logger.debug(
                                         "Compilation camera=%s: frame %sx%s, crop center (%.0f,%.0f)->(%.0f,%.0f), target %sx%s, n_slices=%s, n_frames=%s",
-                                        cam, iw, ih, start_cx, start_cy, end_cx, end_cy, target_w, target_h,
-                                        slices_per_cam.get(cam, 0), n_frames,
+                                        cam,
+                                        iw,
+                                        ih,
+                                        start_cx,
+                                        start_cy,
+                                        end_cx,
+                                        end_cy,
+                                        target_w,
+                                        target_h,
+                                        slices_per_cam.get(cam, 0),
+                                        n_frames,
                                     )
                                     logged_cameras.add(cam)
                             # Every chunk: fewer frames than requested — repeat last frame of chunk to keep sync.
                             if batch.shape[0] < len(chunk_indices):
                                 logger.debug(
                                     "Compilation: decoder returned fewer frames than requested for chunk camera=%s slice [%.2f, %.2f] (%s of %s). Repeating last frame of chunk.",
-                                    cam, t0, t1, batch.shape[0], len(chunk_indices),
+                                    cam,
+                                    t0,
+                                    t1,
+                                    batch.shape[0],
+                                    len(chunk_indices),
                                 )
                                 if cam not in logged_stutter_cameras:
                                     logger.info(
                                         "Possible stutter or missing frames from %s, check original file for confirmation. path=%s",
-                                        cam, clip_path,
+                                        cam,
+                                        clip_path,
                                     )
                                     logged_stutter_cameras.add(cam)
                             for j in range(len(chunk_indices)):
@@ -849,28 +913,49 @@ def _run_pynv_compilation(
                                 frame = batch[safe_j : safe_j + 1]
                                 i = chunk_start + j
                                 t = output_times[i]
-                                t_progress = (t - t0) / duration if duration > 1e-6 else 0.0
+                                t_progress = (
+                                    (t - t0) / duration if duration > 1e-6 else 0.0
+                                )
                                 current_cx = start_cx + t_progress * (end_cx - start_cx)
                                 current_cy = start_cy + t_progress * (end_cy - start_cy)
                                 if crop_start and crop_end:
-                                    current_w_d = max(2, int(w_d + t_progress * (we_d - w_d)) & ~1)
-                                    current_h_d = max(2, int(h_d + t_progress * (he_d - h_d)) & ~1)
-                                    current_w_d = min(iw, max(1, current_w_d))
-                                    current_h_d = min(ih, max(1, current_h_d))
+                                    current_w_d = max(
+                                        2, int(w_d + t_progress * (we_d - w_d)) & ~1
+                                    )
+                                    current_h_d = max(
+                                        2, int(h_d + t_progress * (he_d - h_d)) & ~1
+                                    )
+                                    current_w_d = min(
+                                        iw if iw is not None else target_w,
+                                        max(1, current_w_d),
+                                    )
+                                    current_h_d = min(
+                                        ih if ih is not None else target_h,
+                                        max(1, current_h_d),
+                                    )
                                 else:
-                                    current_w_d = min(iw, target_w)
-                                    current_h_d = min(ih, target_h)
+                                    current_w_d = min(
+                                        iw if iw is not None else target_w, target_w
+                                    )
+                                    current_h_d = min(
+                                        ih if ih is not None else target_h, target_h
+                                    )
                                 current_cx_int = int(current_cx)
                                 current_cy_int = int(current_cy)
                                 cropped = crop_utils.crop_around_center_to_size(
-                                    frame, current_cx_int, current_cy_int,
-                                    current_w_d, current_h_d,
-                                    target_w, target_h,
+                                    frame,
+                                    current_cx_int,
+                                    current_cy_int,
+                                    current_w_d,
+                                    current_h_d,
+                                    target_w,
+                                    target_h,
                                 )
                                 arr = cropped[0].permute(1, 2, 0).cpu().numpy()
                                 proc.stdin.write(arr.tobytes())
                                 proc.stdin.flush()
                             del batch
+                            batch_to_free = None
                             if torch.cuda.is_available():
                                 torch.cuda.empty_cache()
             except Exception as e:
@@ -884,10 +969,8 @@ def _run_pynv_compilation(
                 )
                 logger.warning("Skipping slice %s (%s): %s", slice_idx, clip_path, e)
             finally:
-                try:
-                    del batch
-                except NameError:
-                    pass
+                if batch_to_free is not None:
+                    del batch_to_free
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
         for cam, pairs in missing_crop_by_cam.items():
@@ -895,7 +978,12 @@ def _run_pynv_compilation(
             first, last = pairs[0], pairs[-1]
             logger.error(
                 "Compilation: slice missing crop_start/crop_end for camera=%s in %s slices (e.g. [%.2f, %.2f]–[%.2f, %.2f]); using fallback crop.",
-                cam, n, first[0], first[1], last[0], last[1],
+                cam,
+                n,
+                first[0],
+                first[1],
+                last[0],
+                last[1],
             )
     except BrokenPipeError:
         logger.error(
@@ -964,7 +1052,9 @@ def generate_compilation_video(
             if cam in sidecar_timestamps:
                 continue
             entries = sidecar_cache.get(cam, {}).get("entries") or []
-            sidecar_timestamps[cam] = sorted(float(e.get("timestamp_sec") or 0) for e in entries)
+            sidecar_timestamps[cam] = sorted(
+                float(e.get("timestamp_sec") or 0) for e in entries
+            )
     else:
         for sl in slices:
             cam = sl["camera"]
@@ -974,21 +1064,40 @@ def generate_compilation_video(
             sidecar_path = os.path.join(cam_dir, "detection.json")
             if os.path.isfile(sidecar_path):
                 try:
-                    with open(sidecar_path, "r", encoding="utf-8") as f:
+                    with open(sidecar_path, encoding="utf-8") as f:
                         data = json.load(f)
-                        sidecar_cache[cam] = data if isinstance(data, dict) else {"entries": data or [], "native_width": 1920, "native_height": 1080}
+                        sidecar_cache[cam] = (
+                            data
+                            if isinstance(data, dict)
+                            else {
+                                "entries": data or [],
+                                "native_width": 1920,
+                                "native_height": 1080,
+                            }
+                        )
                 except Exception as e:
                     logger.error(
                         "Compilation fallback to center crop: error loading sidecar for camera=%s path=%s error=%s; output will be static.",
-                        cam, sidecar_path, e,
+                        cam,
+                        sidecar_path,
+                        e,
                     )
-                    sidecar_cache[cam] = {"entries": [], "native_width": 1920, "native_height": 1080}
+                    sidecar_cache[cam] = {
+                        "entries": [],
+                        "native_width": 1920,
+                        "native_height": 1080,
+                    }
             else:
                 logger.error(
                     "Compilation fallback to center crop: sidecar missing for camera=%s path=%s; output will be static.",
-                    cam, sidecar_path,
+                    cam,
+                    sidecar_path,
                 )
-                sidecar_cache[cam] = {"entries": [], "native_width": 1920, "native_height": 1080}
+                sidecar_cache[cam] = {
+                    "entries": [],
+                    "native_width": 1920,
+                    "native_height": 1080,
+                }
             entries = sidecar_cache[cam].get("entries") or []
             timestamps = sorted(float(e.get("timestamp_sec") or 0) for e in entries)
             sidecar_timestamps[cam] = timestamps
@@ -1015,9 +1124,17 @@ def generate_compilation_video(
             dets1 = (entry1 or {}).get("detections") or []
             if not dets0 or not dets1:
                 no_detections_by_cam[cam].append((t0, t1))
-        tracking_target_frame_percent = int(config.get("TRACKING_TARGET_FRAME_PERCENT", 40)) if config else 40
+        tracking_target_frame_percent = (
+            int(config.get("TRACKING_TARGET_FRAME_PERCENT", 40)) if config else 40
+        )
         sl["crop_start"] = calculate_crop_at_time(
-            sidecar_data, t0, sw, sh, target_w, target_h, timestamps_sorted=ts_sorted,
+            sidecar_data,
+            t0,
+            sw,
+            sh,
+            target_w,
+            target_h,
+            timestamps_sorted=ts_sorted,
             tracking_target_frame_percent=tracking_target_frame_percent,
         )
         # Last slice of a camera run: hold crop (no pan to switch-time position) to avoid panning away from the person at the cut.
@@ -1026,7 +1143,13 @@ def generate_compilation_video(
             sl["crop_end"] = sl["crop_start"]
         else:
             sl["crop_end"] = calculate_crop_at_time(
-                sidecar_data, t1, sw, sh, target_w, target_h, timestamps_sorted=ts_sorted,
+                sidecar_data,
+                t1,
+                sw,
+                sh,
+                target_w,
+                target_h,
+                timestamps_sorted=ts_sorted,
                 tracking_target_frame_percent=tracking_target_frame_percent,
             )
         sl["native_width"] = sw
@@ -1037,16 +1160,24 @@ def generate_compilation_video(
         first, last = pairs[0], pairs[-1]
         logger.error(
             "Compilation: no sidecar entries for camera=%s in %s slices (e.g. [%.2f, %.2f]–[%.2f, %.2f]); using fallback crop.",
-            cam, n, first[0], first[1], last[0], last[1],
+            cam,
+            n,
+            first[0],
+            first[1],
+            last[0],
+            last[1],
         )
     for cam, pairs in no_detections_by_cam.items():
         n = len(pairs)
         logger.error(
             "Compilation: no detections at slice start/end for camera=%s in %s slices; using fallback crop (center or nearby detection within 5s).",
-            cam, n,
+            cam,
+            n,
         )
 
-    zoom_smooth_alpha = float(config.get("COMPILATION_ZOOM_SMOOTH_EMA_ALPHA", 0.25)) if config else 0.25
+    zoom_smooth_alpha = (
+        float(config.get("COMPILATION_ZOOM_SMOOTH_EMA_ALPHA", 0.25)) if config else 0.25
+    )
     if zoom_smooth_alpha > 0:
         smooth_zoom_ema(slices, zoom_smooth_alpha, target_w, target_h)
 
@@ -1084,15 +1215,18 @@ def generate_compilation_video(
         logger.error(f"Compilation failed: {e}")
         raise
 
-def compile_ce_video(ce_dir: str, global_end: float, config: dict, primary_camera: str | None = None) -> str | None:
+
+def compile_ce_video(
+    ce_dir: str, global_end: float, config: dict, primary_camera: str | None = None
+) -> str | None:
     """
     High-level orchestrator for video compilation.
-    Scans the CE directory, parses detection sidecars, uses timeline_ema to establish segment assignments, 
+    Scans the CE directory, parses detection sidecars, uses timeline_ema to establish segment assignments,
     and then generates the hardware-accelerated summary video.
     Returns the path to the compiled video if successful, None otherwise.
     """
     logger.info(f"Starting compilation process for {ce_dir}")
-    
+
     # 1. Gather sidecars once (full structure: entries, native_width, native_height) for timeline and compilation
     sidecar_cache: dict[str, dict] = {}
     from frigate_buffer.services.query import resolve_clip_in_folder
@@ -1117,20 +1251,36 @@ def compile_ce_video(ce_dir: str, global_end: float, config: dict, primary_camer
         path = os.path.join(ce_dir, cam, "detection.json")
         if os.path.isfile(path):
             try:
-                with open(path, "r", encoding="utf-8") as f:
+                with open(path, encoding="utf-8") as f:
                     data = json.load(f)
                     if isinstance(data, dict):
                         entries = data.get("entries") or []
                         nw = int(data.get("native_width", 0) or 0) or 1920
                         nh = int(data.get("native_height", 0) or 0) or 1080
-                        sidecar_cache[cam] = {"entries": entries, "native_width": nw, "native_height": nh}
+                        sidecar_cache[cam] = {
+                            "entries": entries,
+                            "native_width": nw,
+                            "native_height": nh,
+                        }
                     else:
-                        sidecar_cache[cam] = {"entries": data or [], "native_width": 1920, "native_height": 1080}
+                        sidecar_cache[cam] = {
+                            "entries": data or [],
+                            "native_width": 1920,
+                            "native_height": 1080,
+                        }
             except Exception as e:
                 logger.error(f"Failed to load sidecar for {cam}: {e}")
-                sidecar_cache[cam] = {"entries": [], "native_width": 1920, "native_height": 1080}
+                sidecar_cache[cam] = {
+                    "entries": [],
+                    "native_width": 1920,
+                    "native_height": 1080,
+                }
         else:
-            sidecar_cache[cam] = {"entries": [], "native_width": 1920, "native_height": 1080}
+            sidecar_cache[cam] = {
+                "entries": [],
+                "native_width": 1920,
+                "native_height": 1080,
+            }
 
     if not sidecar_cache:
         logger.warning(f"No sidecars available in {ce_dir} for compilation.")
@@ -1152,7 +1302,10 @@ def compile_ce_video(ce_dir: str, global_end: float, config: dict, primary_camer
         )
     global_end = max(global_end, actual_duration_sec)
 
-    native_sizes = {cam: (sidecar_cache[cam]["native_width"], sidecar_cache[cam]["native_height"]) for cam in sidecar_cache}
+    native_sizes = {
+        cam: (sidecar_cache[cam]["native_width"], sidecar_cache[cam]["native_height"])
+        for cam in sidecar_cache
+    }
 
     # Helper to calculate area of person targets at t_sec
     def _person_area_at_time(cam_name: str, t_sec: float) -> float:
@@ -1166,7 +1319,7 @@ def compile_ce_video(ce_dir: str, global_end: float, config: dict, primary_camer
             if (d.get("label") or "").lower() in ("person", "people", "pedestrian"):
                 area += float(d.get("area") or 0)
         return area
-        
+
     # 2. Compute timeline using same config as frame timeline (AI prompt)
     step_sec = float(config.get("MAX_MULTI_CAM_FRAMES_SEC", 2))
     if step_sec <= 0:
@@ -1174,7 +1327,9 @@ def compile_ce_video(ce_dir: str, global_end: float, config: dict, primary_camer
     max_frames_min = int(config.get("MAX_MULTI_CAM_FRAMES_MIN", 45))
     multiplier = float(config.get("CAMERA_TIMELINE_ANALYSIS_MULTIPLIER", 2.0))
 
-    dense_times = timeline_ema.build_dense_times(step_sec, max_frames_min, multiplier, global_end)
+    dense_times = timeline_ema.build_dense_times(
+        step_sec, max_frames_min, multiplier, global_end
+    )
 
     assignments = timeline_ema.build_phase1_assignments(
         dense_times,
@@ -1182,7 +1337,9 @@ def compile_ce_video(ce_dir: str, global_end: float, config: dict, primary_camer
         _person_area_at_time,
         native_sizes,
         ema_alpha=float(config.get("CAMERA_TIMELINE_EMA_ALPHA", 0.4)),
-        primary_bias_multiplier=float(config.get("CAMERA_TIMELINE_PRIMARY_BIAS_MULTIPLIER", 1.2)),
+        primary_bias_multiplier=float(
+            config.get("CAMERA_TIMELINE_PRIMARY_BIAS_MULTIPLIER", 1.2)
+        ),
         primary_camera=primary_camera,
         hysteresis_margin=float(config.get("CAMERA_SWITCH_HYSTERESIS_MARGIN", 1.15)),
         min_segment_frames=int(config.get("CAMERA_SWITCH_MIN_SEGMENT_FRAMES", 5)),
@@ -1199,7 +1356,9 @@ def compile_ce_video(ce_dir: str, global_end: float, config: dict, primary_camer
     sidecars_entries = {cam: sidecar_cache[cam]["entries"] for cam in sidecar_cache}
     slices = _trim_slices_to_action_window(slices, sidecars_entries, global_end)
     if not slices:
-        logger.warning("No slices remain after trimming to action window; skipping compilation.")
+        logger.warning(
+            "No slices remain after trimming to action window; skipping compilation."
+        )
         return None
 
     out_name = os.path.basename(os.path.abspath(ce_dir)) + "_summary.mp4"

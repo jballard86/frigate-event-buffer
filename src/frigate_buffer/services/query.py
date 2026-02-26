@@ -2,30 +2,32 @@
 Event Query Service - Handles reading and parsing event data from the filesystem.
 """
 
+import json
+import logging
 import os
 import re
-import json
 import time
-import logging
 from collections import OrderedDict
 from typing import Any
 
 from frigate_buffer.constants import NON_CAMERA_DIRS
 
-logger = logging.getLogger('frigate-buffer')
+logger = logging.getLogger("frigate-buffer")
 
 
 def resolve_clip_in_folder(folder_path: str) -> str | None:
     """
     Return the basename of the clip file in folder_path, or None if no clip.
 
-    Lists *.mp4 in folder_path; if multiple, returns the newest by mtime (most recently modified).
+    Lists *.mp4 in folder_path; if multiple, returns the newest by mtime
+    (most recently modified).
     """
     try:
         candidates = [
             os.path.join(folder_path, n)
             for n in os.listdir(folder_path)
-            if n.lower().endswith(".mp4") and os.path.isfile(os.path.join(folder_path, n))
+            if n.lower().endswith(".mp4")
+            and os.path.isfile(os.path.join(folder_path, n))
         ]
     except OSError:
         return None
@@ -48,11 +50,11 @@ def read_timeline_merged(folder_path: str) -> dict[str, Any]:
     append_path = os.path.join(folder_path, "notification_timeline_append.jsonl")
     if os.path.exists(base_path):
         try:
-            with open(base_path, 'r') as f:
+            with open(base_path) as f:
                 base = json.load(f)
             data["event_id"] = base.get("event_id")
             data["entries"] = list(base.get("entries") or [])
-        except (IOError, json.JSONDecodeError):
+        except (OSError, json.JSONDecodeError):
             pass
     if data["event_id"] is None:
         folder_name = os.path.basename(folder_path)
@@ -60,7 +62,7 @@ def read_timeline_merged(folder_path: str) -> dict[str, Any]:
         data["event_id"] = parts[1] if len(parts) > 1 else folder_name
     if os.path.exists(append_path):
         try:
-            with open(append_path, 'r') as f:
+            with open(append_path) as f:
                 for line in f:
                     line = line.strip()
                     if not line:
@@ -68,11 +70,13 @@ def read_timeline_merged(folder_path: str) -> dict[str, Any]:
                     try:
                         entry = json.loads(line)
                         data["entries"].append(entry)
-                        if data["event_id"] is None and entry.get("data", {}).get("event_id"):
+                        if data["event_id"] is None and entry.get("data", {}).get(
+                            "event_id"
+                        ):
                             data["event_id"] = entry["data"]["event_id"]
                     except json.JSONDecodeError:
                         continue
-        except IOError:
+        except OSError:
             pass
     return data
 
@@ -80,7 +84,9 @@ def read_timeline_merged(folder_path: str) -> dict[str, Any]:
 class EventQueryService:
     """Service for querying events from the filesystem."""
 
-    def __init__(self, storage_path: str, cache_ttl: int = 5, event_cache_max: int = 500):
+    def __init__(
+        self, storage_path: str, cache_ttl: int = 5, event_cache_max: int = 500
+    ):
         self.storage_path = storage_path
         self._cache = {}
         self._cache_ttl = cache_ttl
@@ -90,34 +96,30 @@ class EventQueryService:
     def _get_cached(self, key: str) -> Any | None:
         if key in self._cache:
             entry = self._cache[key]
-            if time.monotonic() - entry['timestamp'] < self._cache_ttl:
-                return entry['data']
+            if time.monotonic() - entry["timestamp"] < self._cache_ttl:
+                return entry["data"]
         return None
 
     def _set_cache(self, key: str, data: Any):
-        self._cache[key] = {
-            'timestamp': time.monotonic(),
-            'data': data
-        }
+        self._cache[key] = {"timestamp": time.monotonic(), "data": data}
 
     def evict_cache(self, key: str) -> None:
-        """Remove a key from the list cache so the next request refetches. Used for test_events after Send prompt to AI."""
+        """Remove a key from the list cache so the next request refetches.
+        Used for test_events after Send prompt to AI."""
         self._cache.pop(key, None)
 
     def _get_event_cached(self, folder_path: str, mtime: float) -> dict[str, Any]:
-        """Get parsed event data from cache if valid, otherwise parse and cache (LRU eviction when over cap)."""
+        """Get parsed event data from cache if valid, otherwise parse and cache
+        (LRU eviction when over cap)."""
         if folder_path in self._event_cache:
             self._event_cache.move_to_end(folder_path)
             entry = self._event_cache[folder_path]
-            if entry['mtime'] == mtime:
-                return entry['data']
+            if entry["mtime"] == mtime:
+                return entry["data"]
 
         # Cache miss or invalid
         data = self._parse_event_files(folder_path)
-        self._event_cache[folder_path] = {
-            'mtime': mtime,
-            'data': data
-        }
+        self._event_cache[folder_path] = {"mtime": mtime, "data": data}
         if len(self._event_cache) > self._event_cache_max:
             self._event_cache.popitem(last=False)
         return data
@@ -125,85 +127,87 @@ class EventQueryService:
     def _parse_event_files(self, folder_path: str) -> dict[str, Any]:
         """Read all event files in one go and return data dict."""
         data = {
-            'summary_text': "Analysis pending...",
-            'metadata': {},
-            'timeline': {},
-            'review_summary': None,
-            'has_clip': False,
-            'has_snapshot': False,
-            'viewed': False
+            "summary_text": "Analysis pending...",
+            "metadata": {},
+            "timeline": {},
+            "review_summary": None,
+            "has_clip": False,
+            "has_snapshot": False,
+            "viewed": False,
         }
 
         try:
-            with open(os.path.join(folder_path, 'summary.txt'), 'r') as f:
-                data['summary_text'] = f.read().strip()
-        except (FileNotFoundError, IOError):
+            with open(os.path.join(folder_path, "summary.txt")) as f:
+                data["summary_text"] = f.read().strip()
+        except (OSError, FileNotFoundError):
             pass
 
         try:
-            with open(os.path.join(folder_path, 'metadata.json'), 'r') as f:
-                data['metadata'] = json.load(f)
-        except (FileNotFoundError, IOError, json.JSONDecodeError):
+            with open(os.path.join(folder_path, "metadata.json")) as f:
+                data["metadata"] = json.load(f)
+        except (OSError, FileNotFoundError, json.JSONDecodeError):
             pass
 
         try:
-            data['timeline'] = read_timeline_merged(folder_path)
-        except (FileNotFoundError, IOError, json.JSONDecodeError):
+            data["timeline"] = read_timeline_merged(folder_path)
+        except (OSError, FileNotFoundError, json.JSONDecodeError):
             pass
 
         try:
-            with open(os.path.join(folder_path, 'review_summary.md'), 'r') as f:
-                data['review_summary'] = f.read().strip()
-        except (FileNotFoundError, IOError):
+            with open(os.path.join(folder_path, "review_summary.md")) as f:
+                data["review_summary"] = f.read().strip()
+        except (OSError, FileNotFoundError):
             pass
 
         clip_basename = resolve_clip_in_folder(folder_path)
-        data['has_clip'] = clip_basename is not None
-        data['clip_basename'] = clip_basename
-        data['has_snapshot'] = os.path.exists(os.path.join(folder_path, 'snapshot.jpg'))
-        data['viewed'] = os.path.exists(os.path.join(folder_path, '.viewed'))
+        data["has_clip"] = clip_basename is not None
+        data["clip_basename"] = clip_basename
+        data["has_snapshot"] = os.path.exists(os.path.join(folder_path, "snapshot.jpg"))
+        data["viewed"] = os.path.exists(os.path.join(folder_path, ".viewed"))
 
         # Scan subdirectories (for consolidated events)
         subdirs_map = {}
         try:
             with os.scandir(folder_path) as it:
                 for entry in it:
-                    if entry.is_dir() and not entry.name.startswith('.'):
+                    if entry.is_dir() and not entry.name.startswith("."):
                         sub_clip_basename = resolve_clip_in_folder(entry.path)
-                        sub_snap = os.path.join(entry.path, 'snapshot.jpg')
-                        sub_meta = os.path.join(entry.path, 'metadata.json')
+                        sub_snap = os.path.join(entry.path, "snapshot.jpg")
+                        sub_meta = os.path.join(entry.path, "metadata.json")
 
                         sub_data = {
-                            'has_clip': sub_clip_basename is not None,
-                            'clip_basename': sub_clip_basename,
-                            'has_snapshot': os.path.exists(sub_snap),
-                            'metadata': None
+                            "has_clip": sub_clip_basename is not None,
+                            "clip_basename": sub_clip_basename,
+                            "has_snapshot": os.path.exists(sub_snap),
+                            "metadata": None,
                         }
 
                         if os.path.exists(sub_meta):
                             try:
-                                with open(sub_meta, 'r') as f:
-                                    sub_data['metadata'] = json.load(f)
-                            except (FileNotFoundError, IOError, json.JSONDecodeError):
+                                with open(sub_meta) as f:
+                                    sub_data["metadata"] = json.load(f)
+                            except (OSError, FileNotFoundError, json.JSONDecodeError):
                                 pass
 
                         subdirs_map[entry.name] = sub_data
         except OSError:
             pass
 
-        data['subdirs'] = subdirs_map
+        data["subdirs"] = subdirs_map
         return data
 
     def _parse_summary(self, summary_text: str) -> dict[str, str]:
         """Parse key-value pairs from summary.txt format."""
         parsed = {}
-        for line in summary_text.split('\n'):
-            if ':' in line:
-                key, _, value = line.partition(':')
+        for line in summary_text.split("\n"):
+            if ":" in line:
+                key, _, value = line.partition(":")
                 parsed[key.strip()] = value.strip()
         return parsed
 
-    def _extract_genai_entries(self, timeline_data: dict[str, Any]) -> list[dict[str, Any]]:
+    def _extract_genai_entries(
+        self, timeline_data: dict[str, Any]
+    ) -> list[dict[str, Any]]:
         """Extract GenAI metadata entries from notification_timeline.json.
         Identical descriptions (same title, shortSummary, scene) are deduplicated
         so the AI Analysis section shows each unique analysis once; the raw timeline
@@ -212,70 +216,77 @@ class EventQueryService:
         seen = set()
         data = timeline_data
 
-        for e in data.get('entries', []):
-            payload = (e.get('data') or {}).get('payload') or {}
-            if payload.get('type') != 'genai':
+        for e in data.get("entries", []):
+            payload = (e.get("data") or {}).get("payload") or {}
+            if payload.get("type") != "genai":
                 continue
-            after = payload.get('after') or {}
-            meta = (after.get('data') or {}).get('metadata')
+            after = payload.get("after") or {}
+            meta = (after.get("data") or {}).get("metadata")
             if not meta:
                 continue
-            title = meta.get('title') or ''
-            scene = meta.get('scene') or ''
-            short_summary = meta.get('shortSummary') or meta.get('description') or ''
+            title = meta.get("title") or ""
+            scene = meta.get("scene") or ""
+            short_summary = meta.get("shortSummary") or meta.get("description") or ""
             # Skip boilerplate "no concerns/activity" entries to avoid noise
-            lower = (title + ' ' + short_summary + ' ' + scene).lower()
-            if 'no concerns' in lower or 'no activity' in lower:
+            lower = (title + " " + short_summary + " " + scene).lower()
+            if "no concerns" in lower or "no activity" in lower:
                 if not title and not scene and len(short_summary) < 80:
                     continue
             content_key = (title.strip(), short_summary.strip(), scene.strip())
             if content_key in seen:
                 continue
             seen.add(content_key)
-            entries.append({
-                'title': title,
-                'scene': scene,
-                'shortSummary': short_summary,
-                'time': meta.get('time'),
-                'potential_threat_level': meta.get('potential_threat_level', 0),
-            })
+            entries.append(
+                {
+                    "title": title,
+                    "scene": scene,
+                    "shortSummary": short_summary,
+                    "time": meta.get("time"),
+                    "potential_threat_level": meta.get("potential_threat_level", 0),
+                }
+            )
         return entries
 
     def _event_ended_in_timeline(self, timeline_data: dict[str, Any]) -> bool:
-        """Check if event has ended based on timeline (Event end from Frigate, or end_time set)."""
+        """Check if event has ended based on timeline (Event end from Frigate,
+        or end_time set)."""
         data = timeline_data
 
-        for e in data.get('entries', []):
-            label = (e.get('label') or '').lower()
-            if 'event end' in label:
+        for e in data.get("entries", []):
+            label = (e.get("label") or "").lower()
+            if "event end" in label:
                 return True
-            payload = (e.get('data') or {}).get('payload') or {}
-            if payload.get('type') == 'end':
+            payload = (e.get("data") or {}).get("payload") or {}
+            if payload.get("type") == "end":
                 return True
-            after = payload.get('after') or {}
-            if after.get('end_time') is not None:
+            after = payload.get("after") or {}
+            if after.get("end_time") is not None:
                 return True
         return False
 
-    def _extract_end_timestamp_from_timeline(self, timeline_data: dict[str, Any]) -> float | None:
-        """Return the latest end_time from timeline entries (payload.after.end_time for Frigate,
-        or data.end_time for test_ai_prompt entries). Used so the player can show event end time
-        and duration. We use the maximum so consolidated events and multiple event-end MQTT messages
-        show the true span. Regular events only have Frigate entries; test events may have test_ai_prompt."""
+    def _extract_end_timestamp_from_timeline(
+        self, timeline_data: dict[str, Any]
+    ) -> float | None:
+        """Return the latest end_time from timeline entries
+        (payload.after.end_time for Frigate, or data.end_time for test_ai_prompt
+        entries). Used so the player can show event end time and duration. We use
+        the maximum so consolidated events and multiple event-end MQTT messages
+        show the true span. Regular events only have Frigate entries; test events
+        may have test_ai_prompt."""
         end_times: list[float] = []
-        for e in (timeline_data or {}).get('entries', []):
+        for e in (timeline_data or {}).get("entries", []):
             # Frigate event end (regular events only)
-            payload = (e.get('data') or {}).get('payload') or {}
-            after = payload.get('after') or {}
-            end_time = after.get('end_time')
+            payload = (e.get("data") or {}).get("payload") or {}
+            after = payload.get("after") or {}
+            end_time = after.get("end_time")
             if end_time is not None:
                 try:
                     end_times.append(float(end_time))
                 except (TypeError, ValueError):
                     pass
             # Test-event-only: Send prompt to AI writes this source
-            if e.get('source') == 'test_ai_prompt':
-                end_time = (e.get('data') or {}).get('end_time')
+            if e.get("source") == "test_ai_prompt":
+                end_time = (e.get("data") or {}).get("end_time")
                 if end_time is not None:
                     try:
                         end_times.append(float(end_time))
@@ -283,27 +294,32 @@ class EventQueryService:
                         pass
         return max(end_times) if end_times else None
 
-    def _extract_cameras_zones_from_timeline(self, timeline_data: dict[str, Any]) -> list[dict[str, Any]]:
+    def _extract_cameras_zones_from_timeline(
+        self, timeline_data: dict[str, Any]
+    ) -> list[dict[str, Any]]:
         """Extract cameras and zones from frigate_mqtt entries in notification_timeline.json."""
         data = timeline_data
 
         camera_zones = {}
-        for e in data.get('entries', []):
-            if e.get('source') != 'frigate_mqtt':
+        for e in data.get("entries", []):
+            if e.get("source") != "frigate_mqtt":
                 continue
-            payload = (e.get('data') or {}).get('payload') or {}
-            after = payload.get('after') or payload.get('before') or {}
-            camera = after.get('camera')
+            payload = (e.get("data") or {}).get("payload") or {}
+            after = payload.get("after") or payload.get("before") or {}
+            camera = after.get("camera")
             if not camera:
                 continue
             zones = camera_zones.setdefault(camera, set())
-            for z in (after.get('entered_zones') or []):
+            for z in after.get("entered_zones") or []:
                 if z:
                     zones.add(z)
-            for z in (after.get('current_zones') or []):
+            for z in after.get("current_zones") or []:
                 if z:
                     zones.add(z)
-        return [{"camera": cam, "zones": sorted(zones)} for cam, zones in sorted(camera_zones.items())]
+        return [
+            {"camera": cam, "zones": sorted(zones)}
+            for cam, zones in sorted(camera_zones.items())
+        ]
 
     def _get_consolidated_events(self) -> list[dict[str, Any]]:
         """Get consolidated events from events/{ce_id}/{camera}/ structure."""
@@ -315,7 +331,9 @@ class EventQueryService:
         entries = []
         try:
             with os.scandir(events_dir) as it:
-                entries = sorted([e for e in it if e.is_dir()], key=lambda e: e.name, reverse=True)
+                entries = sorted(
+                    [e for e in it if e.is_dir()], key=lambda e: e.name, reverse=True
+                )
         except OSError:
             pass
 
@@ -323,7 +341,7 @@ class EventQueryService:
             ce_id = entry.name
             # Consolidated event folders must follow pattern: {timestamp}_{id}
             # Strictly enforce this to prevent non-event folders from appearing as events
-            parts = ce_id.split('_', 1)
+            parts = ce_id.split("_", 1)
             if len(parts) < 2 or not parts[0].isdigit():
                 continue
             # Skip test folders (test1, test2, etc.)
@@ -335,33 +353,35 @@ class EventQueryService:
             try:
                 with os.scandir(entry.path) as it:
                     for child in it:
-                        if child.is_dir() and not child.name.startswith('.'):
+                        if child.is_dir() and not child.name.startswith("."):
                             try:
-                                content_mtime = max(content_mtime, child.stat().st_mtime)
+                                content_mtime = max(
+                                    content_mtime, child.stat().st_mtime
+                                )
                             except OSError:
                                 pass
             except OSError:
                 pass
             data = self._get_event_cached(entry.path, content_mtime)
 
-            parts = ce_id.split('_', 1)
+            parts = ce_id.split("_", 1)
             ts = parts[0] if len(parts) > 0 else "0"
 
-            summary_text = data.get('summary_text', "Analysis pending...")
-            metadata = data.get('metadata', {}) or {}
-            timeline = data.get('timeline', {})
-            review_summary = data.get('review_summary')
-            viewed = data.get('viewed', False)
-            subdirs = data.get('subdirs', {})
+            summary_text = data.get("summary_text", "Analysis pending...")
+            metadata = data.get("metadata", {}) or {}
+            timeline = data.get("timeline", {})
+            review_summary = data.get("review_summary")
+            viewed = data.get("viewed", False)
+            subdirs = data.get("subdirs", {})
 
             parsed = self._parse_summary(summary_text)
 
-            cameras = sorted(list(subdirs.keys()))
+            cameras = sorted(subdirs.keys())
 
             # Consolidated: metadata may live in primary camera folder
             if not metadata and cameras:
                 for cam in cameras:
-                    cam_meta = subdirs.get(cam, {}).get('metadata')
+                    cam_meta = subdirs.get(cam, {}).get("metadata")
                     if cam_meta:
                         metadata = cam_meta
                         break
@@ -372,15 +392,15 @@ class EventQueryService:
             hosted_clips: list[dict[str, str]] = []
             for cam in cameras:
                 cam_data = subdirs.get(cam, {})
-                clip_basename = cam_data.get('clip_basename')
-                if cam_data.get('has_clip') and clip_basename:
+                clip_basename = cam_data.get("clip_basename")
+                if cam_data.get("has_clip") and clip_basename:
                     url = f"/files/events/{ce_id}/{cam}/{clip_basename}"
                     if primary_clip is None:
                         primary_clip = url
                     hosted_clips.append({"camera": cam, "url": url})
             for cam in cameras:
                 cam_data = subdirs.get(cam, {})
-                if cam_data.get('has_snapshot'):
+                if cam_data.get("has_snapshot"):
                     primary_snapshot = f"/files/events/{ce_id}/{cam}/snapshot.jpg"
                     break
 
@@ -392,22 +412,34 @@ class EventQueryService:
                 hosted_clips.append({"camera": "Summary video", "url": summary_url})
                 primary_clip = summary_url
 
-            has_clip = any(subdirs.get(cam, {}).get('has_clip') for cam in cameras)
+            has_clip = any(subdirs.get(cam, {}).get("has_clip") for cam in cameras)
             has_summary = os.path.isfile(summary_path)
             if has_summary:
                 has_clip = True
-            has_snapshot = any(subdirs.get(cam, {}).get('has_snapshot') for cam in cameras)
+            has_snapshot = any(
+                subdirs.get(cam, {}).get("has_snapshot") for cam in cameras
+            )
 
             # hosted_clip: only set when we have an actual clip (camera or summary); no fallback to non-existent file
             hosted_clip_url = primary_clip if has_clip else None
-            hosted_snapshot_url = primary_snapshot if has_snapshot else (f"/files/events/{ce_id}/{cameras[0]}/snapshot.jpg" if cameras else None)
+            hosted_snapshot_url = (
+                primary_snapshot
+                if has_snapshot
+                else (
+                    f"/files/events/{ce_id}/{cameras[0]}/snapshot.jpg"
+                    if cameras
+                    else None
+                )
+            )
 
             # "Not ongoing": event ended in timeline, or has clip, or older than 90 min
             event_ended = self._event_ended_in_timeline(timeline)
             try:
                 ts_float = float(ts)
                 age_seconds = time.time() - ts_float
-                ongoing = not has_clip and age_seconds < 5400 and not event_ended  # 90 min
+                ongoing = (
+                    not has_clip and age_seconds < 5400 and not event_ended
+                )  # 90 min
             except (ValueError, TypeError):
                 ongoing = not has_clip and not event_ended
 
@@ -415,7 +447,9 @@ class EventQueryService:
             if not cameras_with_zones and cameras:
                 cameras_with_zones = [{"camera": c, "zones": []} for c in cameras]
 
-            end_ts = self._extract_end_timestamp_from_timeline(timeline) or metadata.get('end_time')
+            end_ts = self._extract_end_timestamp_from_timeline(
+                timeline
+            ) or metadata.get("end_time")
             event_dict = {
                 "event_id": ce_id,
                 "camera": "events",
@@ -423,7 +457,9 @@ class EventQueryService:
                 "timestamp": ts,
                 "summary": summary_text,
                 "title": metadata.get("genai_title") or parsed.get("Title"),
-                "description": metadata.get("genai_description") or parsed.get("Description") or parsed.get("AI Description"),
+                "description": metadata.get("genai_description")
+                or parsed.get("Description")
+                or parsed.get("AI Description"),
                 "scene": metadata.get("genai_scene") or parsed.get("Scene"),
                 "label": metadata.get("label") or parsed.get("Label", "unknown"),
                 "severity": metadata.get("severity") or parsed.get("Severity"),
@@ -439,7 +475,7 @@ class EventQueryService:
                 "cameras_with_zones": cameras_with_zones,
                 "consolidated": True,
                 "ongoing": ongoing,
-                "genai_entries": genai_entries
+                "genai_entries": genai_entries,
             }
             if end_ts is not None:
                 event_dict["end_timestamp"] = end_ts
@@ -458,7 +494,9 @@ class EventQueryService:
         entries = []
         try:
             with os.scandir(camera_path) as it:
-                entries = sorted([e for e in it if e.is_dir()], key=lambda e: e.name, reverse=True)
+                entries = sorted(
+                    [e for e in it if e.is_dir()], key=lambda e: e.name, reverse=True
+                )
         except OSError:
             pass
 
@@ -468,18 +506,18 @@ class EventQueryService:
             # Get cached data
             data = self._get_event_cached(entry.path, entry.stat().st_mtime)
 
-            parts = subdir.split('_', 1)
+            parts = subdir.split("_", 1)
             ts = parts[0] if len(parts) > 0 else "0"
             eid = parts[1] if len(parts) > 1 else subdir
 
-            summary_text = data.get('summary_text', "Analysis pending...")
-            metadata = data.get('metadata', {}) or {}
-            timeline = data.get('timeline', {})
-            review_summary = data.get('review_summary')
+            summary_text = data.get("summary_text", "Analysis pending...")
+            metadata = data.get("metadata", {}) or {}
+            timeline = data.get("timeline", {})
+            review_summary = data.get("review_summary")
 
-            has_clip = data.get('has_clip', False)
-            has_snapshot = data.get('has_snapshot', False)
-            viewed = data.get('viewed', False)
+            has_clip = data.get("has_clip", False)
+            has_snapshot = data.get("has_snapshot", False)
+            viewed = data.get("viewed", False)
 
             parsed = self._parse_summary(summary_text)
 
@@ -497,10 +535,18 @@ class EventQueryService:
             if not cameras_with_zones:
                 cameras_with_zones = [{"camera": camera_name, "zones": []}]
 
-            end_ts = self._extract_end_timestamp_from_timeline(timeline) or metadata.get('end_time')
-            clip_basename = data.get('clip_basename')
-            clip_url = f"/files/{camera_name}/{subdir}/{clip_basename}" if (has_clip and clip_basename) else None
-            legacy_hosted_clips = [{"camera": camera_name, "url": clip_url}] if has_clip else []
+            end_ts = self._extract_end_timestamp_from_timeline(
+                timeline
+            ) or metadata.get("end_time")
+            clip_basename = data.get("clip_basename")
+            clip_url = (
+                f"/files/{camera_name}/{subdir}/{clip_basename}"
+                if (has_clip and clip_basename)
+                else None
+            )
+            legacy_hosted_clips = (
+                [{"camera": camera_name, "url": clip_url}] if has_clip else []
+            )
             event_dict = {
                 "event_id": eid,
                 "camera": camera_name,
@@ -508,7 +554,9 @@ class EventQueryService:
                 "timestamp": ts,
                 "summary": summary_text,
                 "title": metadata.get("genai_title") or parsed.get("Title"),
-                "description": metadata.get("genai_description") or parsed.get("Description") or parsed.get("AI Description"),
+                "description": metadata.get("genai_description")
+                or parsed.get("Description")
+                or parsed.get("AI Description"),
                 "scene": metadata.get("genai_scene") or parsed.get("Scene"),
                 "label": metadata.get("label") or parsed.get("Label", "unknown"),
                 "severity": metadata.get("severity") or parsed.get("Severity"),
@@ -518,11 +566,13 @@ class EventQueryService:
                 "has_snapshot": has_snapshot,
                 "viewed": viewed,
                 "hosted_clip": clip_url,
-                "hosted_snapshot": f"/files/{camera_name}/{subdir}/snapshot.jpg" if has_snapshot else None,
+                "hosted_snapshot": f"/files/{camera_name}/{subdir}/snapshot.jpg"
+                if has_snapshot
+                else None,
                 "hosted_clips": legacy_hosted_clips,
                 "cameras_with_zones": cameras_with_zones,
                 "ongoing": ongoing,
-                "genai_entries": genai_entries
+                "genai_entries": genai_entries,
             }
             if end_ts is not None:
                 event_dict["end_timestamp"] = end_ts
@@ -560,7 +610,7 @@ class EventQueryService:
                 camera_path = os.path.join(self.storage_path, camera_dir)
                 if not os.path.isdir(camera_path):
                     continue
-                if camera_dir.split('_')[0].isdigit():
+                if camera_dir.split("_")[0].isdigit():
                     continue
                 if camera_dir in NON_CAMERA_DIRS:
                     continue
@@ -569,7 +619,7 @@ class EventQueryService:
                 events = self.get_events(camera_dir)
                 all_events.extend(events)
 
-            all_events.sort(key=lambda x: x['timestamp'], reverse=True)
+            all_events.sort(key=lambda x: x["timestamp"], reverse=True)
 
         except Exception as e:
             logger.error(f"Error listing events: {e}")
@@ -608,7 +658,11 @@ class EventQueryService:
                 entries = []
                 try:
                     with os.scandir(camera_path) as it:
-                        entries = sorted([e for e in it if e.is_dir()], key=lambda e: e.name, reverse=True)
+                        entries = sorted(
+                            [e for e in it if e.is_dir()],
+                            key=lambda e: e.name,
+                            reverse=True,
+                        )
                 except OSError:
                     continue
                 for entry in entries:
@@ -639,7 +693,7 @@ class EventQueryService:
     ) -> dict[str, Any] | None:
         """Build event dict for a saved consolidated event (saved/events/ce_id)."""
         subdirs = data.get("subdirs", {})
-        cameras = sorted(list(subdirs.keys()))
+        cameras = sorted(subdirs.keys())
         if not cameras:
             return None
         parts = ce_id.split("_", 1)
@@ -678,20 +732,34 @@ class EventQueryService:
             summary_url = f"/files/{files_prefix}/{ce_id}/{summary_basename}"
             hosted_clips.append({"camera": "Summary video", "url": summary_url})
             primary_clip = summary_url
-        has_clip = any(subdirs.get(c, {}).get("has_clip") for c in cameras) or os.path.isfile(summary_path)
+        has_clip = any(
+            subdirs.get(c, {}).get("has_clip") for c in cameras
+        ) or os.path.isfile(summary_path)
         has_snapshot = any(subdirs.get(c, {}).get("has_snapshot") for c in cameras)
         hosted_clip_url = primary_clip if has_clip else None
-        hosted_snapshot_url = primary_snapshot if has_snapshot else (f"/files/{files_prefix}/{ce_id}/{cameras[0]}/snapshot.jpg" if cameras else None)
+        hosted_snapshot_url = (
+            primary_snapshot
+            if has_snapshot
+            else (
+                f"/files/{files_prefix}/{ce_id}/{cameras[0]}/snapshot.jpg"
+                if cameras
+                else None
+            )
+        )
         event_ended = self._event_ended_in_timeline(timeline)
         try:
             ts_float = float(ts)
-            ongoing = not has_clip and (time.time() - ts_float) < 5400 and not event_ended
+            ongoing = (
+                not has_clip and (time.time() - ts_float) < 5400 and not event_ended
+            )
         except (ValueError, TypeError):
             ongoing = not has_clip and not event_ended
         cameras_with_zones = self._extract_cameras_zones_from_timeline(timeline)
         if not cameras_with_zones and cameras:
             cameras_with_zones = [{"camera": c, "zones": []} for c in cameras]
-        end_ts = self._extract_end_timestamp_from_timeline(timeline) or metadata.get("end_time")
+        end_ts = self._extract_end_timestamp_from_timeline(timeline) or metadata.get(
+            "end_time"
+        )
         event_dict: dict[str, Any] = {
             "event_id": ce_id,
             "camera": "events",
@@ -699,7 +767,9 @@ class EventQueryService:
             "timestamp": ts,
             "summary": summary_text,
             "title": metadata.get("genai_title") or parsed.get("Title"),
-            "description": metadata.get("genai_description") or parsed.get("Description") or parsed.get("AI Description"),
+            "description": metadata.get("genai_description")
+            or parsed.get("Description")
+            or parsed.get("AI Description"),
             "scene": metadata.get("genai_scene") or parsed.get("Scene"),
             "label": metadata.get("label") or parsed.get("Label", "unknown"),
             "severity": metadata.get("severity") or parsed.get("Severity"),
@@ -739,18 +809,28 @@ class EventQueryService:
         event_ended = self._event_ended_in_timeline(timeline)
         try:
             ts_float = float(ts)
-            ongoing = not has_clip and (time.time() - ts_float) < 5400 and not event_ended
+            ongoing = (
+                not has_clip and (time.time() - ts_float) < 5400 and not event_ended
+            )
         except (ValueError, TypeError):
             ongoing = not has_clip and not event_ended
         genai_entries = self._extract_genai_entries(timeline)
         cameras_with_zones = self._extract_cameras_zones_from_timeline(timeline)
         if not cameras_with_zones:
             cameras_with_zones = [{"camera": camera_name, "zones": []}]
-        end_ts = self._extract_end_timestamp_from_timeline(timeline) or metadata.get("end_time")
+        end_ts = self._extract_end_timestamp_from_timeline(timeline) or metadata.get(
+            "end_time"
+        )
         clip_basename = data.get("clip_basename")
         files_prefix = f"saved/{camera_name}"
-        clip_url = f"/files/{files_prefix}/{subdir}/{clip_basename}" if (has_clip and clip_basename) else None
-        legacy_hosted_clips = [{"camera": camera_name, "url": clip_url}] if has_clip else []
+        clip_url = (
+            f"/files/{files_prefix}/{subdir}/{clip_basename}"
+            if (has_clip and clip_basename)
+            else None
+        )
+        legacy_hosted_clips = (
+            [{"camera": camera_name, "url": clip_url}] if has_clip else []
+        )
         event_dict: dict[str, Any] = {
             "event_id": eid,
             "camera": camera_name,
@@ -758,7 +838,9 @@ class EventQueryService:
             "timestamp": ts,
             "summary": summary_text,
             "title": metadata.get("genai_title") or parsed.get("Title"),
-            "description": metadata.get("genai_description") or parsed.get("Description") or parsed.get("AI Description"),
+            "description": metadata.get("genai_description")
+            or parsed.get("Description")
+            or parsed.get("AI Description"),
             "scene": metadata.get("genai_scene") or parsed.get("Scene"),
             "label": metadata.get("label") or parsed.get("Label", "unknown"),
             "severity": metadata.get("severity") or parsed.get("Severity"),
@@ -768,7 +850,9 @@ class EventQueryService:
             "has_snapshot": has_snapshot,
             "viewed": viewed,
             "hosted_clip": clip_url,
-            "hosted_snapshot": f"/files/{files_prefix}/{subdir}/snapshot.jpg" if has_snapshot else None,
+            "hosted_snapshot": f"/files/{files_prefix}/{subdir}/snapshot.jpg"
+            if has_snapshot
+            else None,
             "hosted_clips": legacy_hosted_clips,
             "cameras_with_zones": cameras_with_zones,
             "ongoing": ongoing,
@@ -813,14 +897,16 @@ class EventQueryService:
                     for child in it:
                         if child.is_dir() and not child.name.startswith("."):
                             try:
-                                content_mtime = max(content_mtime, child.stat().st_mtime)
+                                content_mtime = max(
+                                    content_mtime, child.stat().st_mtime
+                                )
                             except OSError:
                                 pass
             except OSError:
                 pass
             data = self._get_event_cached(entry.path, content_mtime)
             subdirs = data.get("subdirs", {})
-            cameras = sorted(list(subdirs.keys()))
+            cameras = sorted(subdirs.keys())
             if not cameras:
                 continue
             # Use folder mtime as event date so test events show correct date/length (regular events unchanged)
@@ -855,18 +941,35 @@ class EventQueryService:
             summary_basename = f"{ce_id}_summary.mp4"
             summary_path = os.path.join(entry.path, summary_basename)
             if os.path.isfile(summary_path):
-                hosted_clips.append({"camera": "Summary video", "url": f"/files/events/{ce_id}/{summary_basename}"})
+                hosted_clips.append(
+                    {
+                        "camera": "Summary video",
+                        "url": f"/files/events/{ce_id}/{summary_basename}",
+                    }
+                )
                 primary_clip = f"/files/events/{ce_id}/{summary_basename}"
-            has_clip = any(subdirs.get(c, {}).get("has_clip") for c in cameras) or os.path.isfile(summary_path)
+            has_clip = any(
+                subdirs.get(c, {}).get("has_clip") for c in cameras
+            ) or os.path.isfile(summary_path)
             has_snapshot = any(subdirs.get(c, {}).get("has_snapshot") for c in cameras)
             hosted_clip_url = primary_clip if has_clip else None
-            hosted_snapshot_url = primary_snapshot if has_snapshot else (f"/files/events/{ce_id}/{cameras[0]}/snapshot.jpg" if cameras else None)
+            hosted_snapshot_url = (
+                primary_snapshot
+                if has_snapshot
+                else (
+                    f"/files/events/{ce_id}/{cameras[0]}/snapshot.jpg"
+                    if cameras
+                    else None
+                )
+            )
             event_ended = self._event_ended_in_timeline(timeline)
             ongoing = not has_clip and not event_ended
             cameras_with_zones = self._extract_cameras_zones_from_timeline(timeline)
             if not cameras_with_zones and cameras:
                 cameras_with_zones = [{"camera": c, "zones": []} for c in cameras]
-            end_ts = self._extract_end_timestamp_from_timeline(timeline) or metadata.get("end_time")
+            end_ts = self._extract_end_timestamp_from_timeline(
+                timeline
+            ) or metadata.get("end_time")
             event_dict = {
                 "event_id": ce_id,
                 "camera": "events",
@@ -874,7 +977,9 @@ class EventQueryService:
                 "timestamp": ts,
                 "summary": summary_text,
                 "title": metadata.get("genai_title") or parsed.get("Title"),
-                "description": metadata.get("genai_description") or parsed.get("Description") or parsed.get("AI Description"),
+                "description": metadata.get("genai_description")
+                or parsed.get("Description")
+                or parsed.get("AI Description"),
                 "scene": metadata.get("genai_scene") or parsed.get("Scene"),
                 "label": metadata.get("label") or parsed.get("Label", "unknown"),
                 "severity": metadata.get("severity") or parsed.get("Severity"),
@@ -912,7 +1017,7 @@ class EventQueryService:
                 item_path = os.path.join(self.storage_path, item)
                 if os.path.isdir(item_path):
                     # Skip if it starts with a numeric prefix (event folder pattern)
-                    if item.split('_')[0].isdigit():
+                    if item.split("_")[0].isdigit():
                         continue
                     # Skip known non-camera directories
                     if item in NON_CAMERA_DIRS:
@@ -921,7 +1026,10 @@ class EventQueryService:
         except Exception as e:
             logger.error(f"Error listing cameras: {e}")
 
-        if os.path.isdir(os.path.join(self.storage_path, "events")) and "events" not in active_cameras:
+        if (
+            os.path.isdir(os.path.join(self.storage_path, "events"))
+            and "events" not in active_cameras
+        ):
             active_cameras.append("events")
 
         result = sorted(active_cameras)

@@ -9,12 +9,13 @@ only delegates to the main codebase (no YOLO, no sidecar lock, no ThreadPoolExec
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 import shutil
 import threading
-import logging
-from typing import Any, Iterator
+from collections.abc import Iterator
+from typing import Any
 
 from frigate_buffer.logging_utils import StreamCaptureHandler
 from frigate_buffer.services.query import read_timeline_merged
@@ -69,7 +70,11 @@ def _yield_log(msg: str) -> dict[str, Any]:
 
 
 def _yield_done(test_run_id: str, ai_request_url: str) -> dict[str, Any]:
-    return {"type": "done", "test_run_id": test_run_id, "ai_request_url": ai_request_url}
+    return {
+        "type": "done",
+        "test_run_id": test_run_id,
+        "ai_request_url": ai_request_url,
+    }
 
 
 def _yield_error(msg: str) -> dict[str, Any]:
@@ -86,7 +91,8 @@ def _get_camera_subdirs_with_clip(folder_path: str) -> list[str]:
     with os.scandir(folder_path) as it:
         all_subdirs = [e.name for e in it if e.is_dir() and not e.name.startswith(".")]
     return [
-        cam for cam in all_subdirs
+        cam
+        for cam in all_subdirs
         if resolve_clip_in_folder(os.path.join(folder_path, cam))
     ]
 
@@ -164,7 +170,9 @@ def prepare_test_folder(
         raise ValueError(f"Could not create test folder: {e}") from e
 
     try:
-        _copy_source_to_test_folder(source_folder_path, test_folder_path, camera_subdirs)
+        _copy_source_to_test_folder(
+            source_folder_path, test_folder_path, camera_subdirs
+        )
     except OSError as e:
         try:
             shutil.rmtree(test_folder_path, ignore_errors=True)
@@ -193,7 +201,11 @@ def get_export_time_range_from_folder(
         payload = data.get("payload") or {}
         after = payload.get("after") or {}
         before = payload.get("before") or {}
-        created = after.get("created_at") or before.get("created_at") or after.get("start_time")
+        created = (
+            after.get("created_at")
+            or before.get("created_at")
+            or after.get("start_time")
+        )
         if created is not None:
             try:
                 start_times.append(float(created))
@@ -235,7 +247,11 @@ def _get_start_time_from_timeline_entries(entries: list[Any]) -> float | None:
         payload = data.get("payload") or {}
         after = payload.get("after") or {}
         before = payload.get("before") or {}
-        created = after.get("created_at") or before.get("created_at") or after.get("start_time")
+        created = (
+            after.get("created_at")
+            or before.get("created_at")
+            or after.get("start_time")
+        )
         if created is not None:
             try:
                 start_times.append(float(created))
@@ -268,7 +284,9 @@ def _write_system_prompt_and_ai_request_html(
 
     base_url = f"/files/events/{test_run_id}"
     lines = [
-        "<!DOCTYPE html><html><head><meta charset='UTF-8'><title>AI request – " + test_run_id + "</title>",
+        "<!DOCTYPE html><html><head><meta charset='UTF-8'><title>AI request – "
+        + test_run_id
+        + "</title>",
         "<style>body{font-family:sans-serif;background:#1a1a2e;color:#e0e0e0;padding:16px;}",
         "pre{background:#0f3460;padding:12px;border-radius:8px;overflow:auto;}",
         "a{color:#e94560;} .frame{margin:12px 0;} .frame img{max-width:100%;}</style></head><body>",
@@ -281,7 +299,9 @@ def _write_system_prompt_and_ai_request_html(
     for rel in frame_relative_paths:
         url = f"{base_url}/{rel.replace(os.sep, '/')}"
         fname = os.path.basename(rel)
-        lines.append(f"<div class='frame'><a href='{url}' download>{fname}</a><br><img src='{url}' alt='{fname}' /></div>")
+        lines.append(
+            f"<div class='frame'><a href='{url}' download>{fname}</a><br><img src='{url}' alt='{fname}' /></div>"
+        )
     lines.append(
         "<p><button id='sendBtn' type='button'>Send prompt to AI</button> <span id='sendStatus'></span></p>"
     )
@@ -333,7 +353,9 @@ def _run_post_copy_steps(
             ce_start_time = timeline_start
             from_timeline = True
     if ce_start_time > 0:
-        yield _yield_log(f"ce_start_time from {'timeline' if from_timeline else 'folder'}: {ce_start_time}")
+        yield _yield_log(
+            f"ce_start_time from {'timeline' if from_timeline else 'folder'}: {ce_start_time}"
+        )
     else:
         yield _yield_log("Test run: ce_start_time 0 (prompt will use current time)")
 
@@ -360,19 +382,26 @@ def _run_post_copy_steps(
     for cam, _clip, _sidecar in sidecar_tasks:
         yield _yield_log(f"Generating detection sidecar for {cam}...")
     if sidecar_tasks:
-        results = video_service.generate_detection_sidecars_for_cameras(sidecar_tasks, config)
+        results = video_service.generate_detection_sidecars_for_cameras(
+            sidecar_tasks, config
+        )
         for cam, ok in results:
             yield _yield_log(f"Sidecar {cam}: {'OK' if ok else 'failed'}.")
 
     yield _yield_log("Generating hardware-accelerated compilation video...")
     try:
         from frigate_buffer.services.video_compilation import compile_ce_video
+
         events_end_ts_list = [
             e.get("data", {}).get("after", {}).get("end_time")
             for e in entries
             if e.get("data", {}).get("after", {}).get("end_time")
         ]
-        fallback_end = (max(events_end_ts_list) - ce_start_time) if events_end_ts_list and ce_start_time else 60.0
+        fallback_end = (
+            (max(events_end_ts_list) - ce_start_time)
+            if events_end_ts_list and ce_start_time
+            else 60.0
+        )
         comp_output = compile_ce_video(test_folder_path, fallback_end, config)
         if comp_output:
             yield _yield_log(f"Compilation finished at: {comp_output}")
@@ -446,7 +475,9 @@ def _run_test_pipeline_inner(
     yield _yield_log(f"Test run output: events/{test_run_id}")
 
     try:
-        _copy_source_to_test_folder(source_folder_path, test_folder_path, camera_subdirs)
+        _copy_source_to_test_folder(
+            source_folder_path, test_folder_path, camera_subdirs
+        )
     except OSError as e:
         yield _yield_error(f"Copy failed: {e}")
         try:
@@ -458,7 +489,13 @@ def _run_test_pipeline_inner(
 
     ce_start_time = get_ce_start_time_from_folder_path(source_folder_path)
     yield from _run_post_copy_steps(
-        test_folder_path, test_run_id, video_service, ai_analyzer, config, camera_subdirs, ce_start_time
+        test_folder_path,
+        test_run_id,
+        video_service,
+        ai_analyzer,
+        config,
+        camera_subdirs,
+        ce_start_time,
     )
 
 
@@ -482,11 +519,19 @@ def _run_test_pipeline_post_copy(
     if not camera_subdirs:
         yield _yield_error("No camera in this test folder has an .mp4 clip.")
         return
-    yield _yield_log(f"Test folder validated: {len(camera_subdirs)} camera(s) with clip")
+    yield _yield_log(
+        f"Test folder validated: {len(camera_subdirs)} camera(s) with clip"
+    )
 
     ce_start_time = get_ce_start_time_from_folder_path(test_folder_path)
     yield from _run_post_copy_steps(
-        test_folder_path, test_run_id, video_service, ai_analyzer, config, camera_subdirs, ce_start_time
+        test_folder_path,
+        test_run_id,
+        video_service,
+        ai_analyzer,
+        config,
+        camera_subdirs,
+        ce_start_time,
     )
 
 

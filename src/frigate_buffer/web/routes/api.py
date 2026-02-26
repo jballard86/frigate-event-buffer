@@ -8,11 +8,21 @@ import threading
 import time
 from datetime import datetime, timedelta
 
-from flask import Blueprint, Response, jsonify, render_template, request, send_from_directory
+from flask import (
+    Blueprint,
+    Response,
+    jsonify,
+    render_template,
+    request,
+    send_from_directory,
+)
 
 from frigate_buffer.constants import NON_CAMERA_DIRS
 from frigate_buffer.logging_utils import error_buffer
-from frigate_buffer.services.query import EventQueryService, read_timeline_merged, resolve_clip_in_folder
+from frigate_buffer.services.query import (
+    read_timeline_merged,
+    resolve_clip_in_folder,
+)
 from frigate_buffer.web.path_helpers import resolve_under_storage
 
 logger = logging.getLogger("frigate-buffer")
@@ -45,7 +55,9 @@ def create_bp(orchestrator):
         if last is not None and (now - last) < 60:
             return
         active_ids = state_manager.get_active_event_ids()
-        active_ce_folders = list(orchestrator.consolidated_manager.get_active_ce_folders())
+        active_ce_folders = list(
+            orchestrator.consolidated_manager.get_active_ce_folders()
+        )
         deleted = file_manager.cleanup_old_events(active_ids, active_ce_folders)
         orchestrator._last_cleanup_time = now
         orchestrator._last_cleanup_deleted = deleted
@@ -54,10 +66,15 @@ def create_bp(orchestrator):
     def list_cameras():
         active_cameras = query_service.get_cameras()
         all_cameras = list(
-            set(active_cameras + [file_manager.sanitize_camera_name(c) for c in allowed_cameras])
+            set(
+                active_cameras
+                + [file_manager.sanitize_camera_name(c) for c in allowed_cameras]
+            )
         )
         all_cameras.sort()
-        return jsonify({"cameras": all_cameras, "default": all_cameras[0] if all_cameras else None})
+        return jsonify(
+            {"cameras": all_cameras, "default": all_cameras[0] if all_cameras else None}
+        )
 
     @bp.route("/events/<camera>")
     def list_camera_events(camera):
@@ -66,12 +83,28 @@ def create_bp(orchestrator):
         if f == "saved":
             sanitized = file_manager.sanitize_camera_name(camera)
             events = query_service.get_saved_events(camera=sanitized)
-            cameras_found = list({e.get("camera") for e in events}) if events else [sanitized]
-            return jsonify({"camera": sanitized, "events": events, "cameras": sorted(cameras_found), "total_count": len(events)})
+            cameras_found = (
+                list({e.get("camera") for e in events}) if events else [sanitized]
+            )
+            return jsonify(
+                {
+                    "camera": sanitized,
+                    "events": events,
+                    "cameras": sorted(cameras_found),
+                    "total_count": len(events),
+                }
+            )
         if f == "test_events":
             events = query_service.get_test_events()
             events = [e for e in events if e.get("camera") == camera]
-            return jsonify({"camera": camera, "events": events, "cameras": [camera], "total_count": len(events)})
+            return jsonify(
+                {
+                    "camera": camera,
+                    "events": events,
+                    "cameras": [camera],
+                    "total_count": len(events),
+                }
+            )
         sanitized = file_manager.sanitize_camera_name(camera)
         events = _filter_events(query_service.get_events(sanitized))
         return jsonify({"camera": sanitized, "events": events})
@@ -83,15 +116,19 @@ def create_bp(orchestrator):
         if f == "saved":
             try:
                 events = query_service.get_saved_events(camera=None)
-                cameras_found = sorted({e.get("camera") for e in events if e.get("camera")})
+                cameras_found = sorted(
+                    {e.get("camera") for e in events if e.get("camera")}
+                )
             except Exception as e:
                 logger.error("Error listing saved events: %s", e)
                 return jsonify({"error": str(e)}), 500
-            return jsonify({
-                "cameras": cameras_found,
-                "total_count": len(events),
-                "events": events,
-            })
+            return jsonify(
+                {
+                    "cameras": cameras_found,
+                    "total_count": len(events),
+                    "events": events,
+                }
+            )
         if f == "test_events":
             try:
                 events = query_service.get_test_events()
@@ -99,61 +136,81 @@ def create_bp(orchestrator):
             except Exception as e:
                 logger.error("Error listing test events: %s", e)
                 return jsonify({"error": str(e)}), 500
-            return jsonify({
-                "cameras": cameras_found,
-                "total_count": len(events),
-                "events": events,
-            })
+            return jsonify(
+                {
+                    "cameras": cameras_found,
+                    "total_count": len(events),
+                    "events": events,
+                }
+            )
         try:
             all_events, cameras_found = query_service.get_all_events()
         except Exception as e:
             logger.error("Error listing events: %s", e)
             return jsonify({"error": str(e)}), 500
         filtered = _filter_events(all_events)
-        return jsonify({
-            "cameras": sorted(cameras_found),
-            "total_count": len(filtered),
-            "events": filtered,
-        })
+        return jsonify(
+            {
+                "cameras": sorted(cameras_found),
+                "total_count": len(filtered),
+                "events": filtered,
+            }
+        )
 
     @bp.route("/keep/<path:event_path>", methods=["POST"])
     def keep_event(event_path):
-        """Move event folder to saved/ (excluded from retention). Source must not be under saved/."""
+        """Move event folder to saved/ (excluded from retention). Source must
+        not be under saved/."""
         path_parts = event_path.split("/")
         if not path_parts:
             return jsonify({"status": "error", "message": "Invalid path"}), 400
         if path_parts[0] == "saved":
-            return jsonify({"status": "error", "message": "Event is already saved"}), 400
+            return jsonify(
+                {"status": "error", "message": "Event is already saved"}
+            ), 400
         source_path = resolve_under_storage(storage_path, *path_parts)
         if source_path is None or not os.path.isdir(source_path):
-            return jsonify({"status": "error", "message": "Event not found or invalid path"}), 404
+            return jsonify(
+                {"status": "error", "message": "Event not found or invalid path"}
+            ), 404
         # Destination: saved/<camera>/<subdir> or saved/events/<ce_id>
         dest_path = resolve_under_storage(storage_path, "saved", *path_parts)
         if dest_path is None:
-            return jsonify({"status": "error", "message": "Invalid destination path"}), 400
+            return jsonify(
+                {"status": "error", "message": "Invalid destination path"}
+            ), 400
         if os.path.exists(dest_path):
-            return jsonify({"status": "error", "message": "Saved event already exists"}), 409
+            return jsonify(
+                {"status": "error", "message": "Saved event already exists"}
+            ), 409
         try:
             dest_parent = os.path.dirname(dest_path)
             os.makedirs(dest_parent, exist_ok=True)
             shutil.move(source_path, dest_path)
             logger.info("Kept event: %s -> saved/%s", event_path, event_path)
-            return jsonify({"status": "success", "message": f"Moved to saved/{event_path}"}), 200
+            return jsonify(
+                {"status": "success", "message": f"Moved to saved/{event_path}"}
+            ), 200
         except Exception as e:
             logger.error("Error keeping event %s: %s", event_path, e)
             return jsonify({"status": "error", "message": str(e)}), 500
 
     @bp.route("/delete/<path:subdir>", methods=["POST"])
     def delete_event(subdir):
-        # Support multi-segment paths (e.g. saved/camera/subdir) for cross-platform resolve.
+        # Support multi-segment paths (e.g. saved/camera/subdir) for
+        # cross-platform resolve.
         path_parts = subdir.split("/")
-        folder_path = resolve_under_storage(storage_path, *path_parts) if path_parts else None
+        folder_path = (
+            resolve_under_storage(storage_path, *path_parts) if path_parts else None
+        )
         if folder_path is not None:
             if os.path.exists(folder_path) and os.path.isdir(folder_path):
                 try:
                     shutil.rmtree(folder_path)
                     logger.info("User manually deleted: %s", subdir)
-                    return jsonify({"status": "success", "message": f"Deleted folder: {subdir}"}), 200
+                    return jsonify(
+                        {"status": "success", "message": f"Deleted folder: {subdir}"}
+                    ), 200
                 except Exception as e:
                     logger.error("Error deleting %s: %s", subdir, e)
                     return jsonify({"status": "error", "message": str(e)}), 500
@@ -163,7 +220,9 @@ def create_bp(orchestrator):
     @bp.route("/viewed/<path:event_path>", methods=["POST"])
     def mark_viewed(event_path):
         path_parts = event_path.split("/")
-        folder_path = resolve_under_storage(storage_path, *path_parts) if path_parts else None
+        folder_path = (
+            resolve_under_storage(storage_path, *path_parts) if path_parts else None
+        )
         if folder_path is None:
             return jsonify({"status": "error", "message": "Invalid path"}), 400
         if not os.path.isdir(folder_path):
@@ -178,7 +237,9 @@ def create_bp(orchestrator):
     @bp.route("/viewed/<path:event_path>", methods=["DELETE"])
     def unmark_viewed(event_path):
         path_parts = event_path.split("/")
-        folder_path = resolve_under_storage(storage_path, *path_parts) if path_parts else None
+        folder_path = (
+            resolve_under_storage(storage_path, *path_parts) if path_parts else None
+        )
         if folder_path is None:
             return jsonify({"status": "error", "message": "Invalid path"}), 400
         viewed_path = os.path.join(folder_path, ".viewed")
@@ -214,9 +275,15 @@ def create_bp(orchestrator):
     @bp.route("/events/<path:event_path>/timeline")
     def event_timeline(event_path):
         path_parts = event_path.split("/")
-        folder_path = resolve_under_storage(storage_path, *path_parts) if path_parts else None
+        folder_path = (
+            resolve_under_storage(storage_path, *path_parts) if path_parts else None
+        )
         camera = path_parts[0] if len(path_parts) >= 1 else ""
-        subdir = "/".join(path_parts[1:]) if len(path_parts) > 1 else (path_parts[0] if path_parts else "")
+        subdir = (
+            "/".join(path_parts[1:])
+            if len(path_parts) > 1
+            else (path_parts[0] if path_parts else "")
+        )
         if folder_path is None:
             return "Invalid path", 400
         if not os.path.isdir(folder_path):
@@ -253,7 +320,8 @@ def create_bp(orchestrator):
         except OSError:
             pass
         zip_entries = [
-            f for f in event_files
+            f
+            for f in event_files
             if f == "ai_analysis_debug.zip" or f.endswith("/ai_analysis_debug.zip")
         ]
         has_ai_analysis_zip = bool(zip_entries)
@@ -261,13 +329,15 @@ def create_bp(orchestrator):
         export_duration_seconds = None
         export_file_list = [f for f in event_files if f.endswith(".mp4")]
         request_entries = [
-            e for e in entries
+            e
+            for e in entries
             if e.get("source") == "frigate_api"
             and e.get("direction") == "out"
             and "Clip export request" in (e.get("label") or "")
         ]
         response_entries = [
-            e for e in entries
+            e
+            for e in entries
             if e.get("source") == "frigate_api"
             and e.get("direction") == "in"
             and "Clip export response" in (e.get("label") or "")
@@ -299,8 +369,9 @@ def create_bp(orchestrator):
     @bp.route("/events/<path:event_path>/timeline/download")
     def event_timeline_download(event_path):
         path_parts = event_path.split("/")
-        folder_path = resolve_under_storage(storage_path, *path_parts) if path_parts else None
-        subdir = path_parts[-1] if len(path_parts) >= 2 else (path_parts[0] if path_parts else "")
+        folder_path = (
+            resolve_under_storage(storage_path, *path_parts) if path_parts else None
+        )
         if folder_path is None:
             return "Invalid path", 400
         if not os.path.isdir(folder_path):
@@ -314,13 +385,19 @@ def create_bp(orchestrator):
         return Response(
             body,
             mimetype="application/json",
-            headers={"Content-Disposition": 'attachment; filename="notification_timeline.json"'},
+            headers={
+                "Content-Disposition": (
+                    'attachment; filename="notification_timeline.json"'
+                )
+            },
         )
 
     @bp.route("/files/<path:filename>")
     def serve_file(filename):
         path_parts = filename.split("/")
-        safe_path = resolve_under_storage(storage_path, *path_parts) if path_parts else None
+        safe_path = (
+            resolve_under_storage(storage_path, *path_parts) if path_parts else None
+        )
         if safe_path is None:
             return "File not found", 404
         return send_from_directory(os.path.realpath(storage_path), filename)
@@ -356,7 +433,9 @@ def create_bp(orchestrator):
                                 ts = float(parts[0])
                             except (ValueError, IndexError):
                                 continue
-                            viewed = os.path.exists(os.path.join(event_entry.path, ".viewed"))
+                            viewed = os.path.exists(
+                                os.path.join(event_entry.path, ".viewed")
+                            )
                             if viewed:
                                 total_reviewed += 1
                             else:
@@ -374,14 +453,23 @@ def create_bp(orchestrator):
                                     try:
                                         with os.scandir(event_entry.path) as it_cam:
                                             for cam_entry in it_cam:
-                                                if cam_entry.is_dir() and not cam_entry.name.startswith("."):
+                                                if (
+                                                    cam_entry.is_dir()
+                                                    and not cam_entry.name.startswith(
+                                                        "."
+                                                    )
+                                                ):
                                                     first_camera_in_ce = cam_entry.name
                                                     break
                                     except OSError:
                                         pass
                                 most_recent = {
-                                    "event_id": parts[1] if len(parts) > 1 else event_dir,
-                                    "camera": camera_dir if camera_dir != "events" else first_camera_in_ce,
+                                    "event_id": parts[1]
+                                    if len(parts) > 1
+                                    else event_dir,
+                                    "camera": camera_dir
+                                    if camera_dir != "events"
+                                    else first_camera_in_ce,
                                     "subdir": event_dir,
                                     "timestamp": ts,
                                 }
@@ -389,10 +477,15 @@ def create_bp(orchestrator):
                                 try:
                                     with os.scandir(event_entry.path) as it_cam:
                                         for cam_entry in it_cam:
-                                            if not cam_entry.is_dir() or cam_entry.name.startswith("."):
+                                            if (
+                                                not cam_entry.is_dir()
+                                                or cam_entry.name.startswith(".")
+                                            ):
                                                 continue
                                             cam_name = cam_entry.name
-                                            by_camera[cam_name] = by_camera.get(cam_name, 0) + 1
+                                            by_camera[cam_name] = (
+                                                by_camera.get(cam_name, 0) + 1
+                                            )
                                 except OSError:
                                     pass
                     if camera_dir != "events":
@@ -449,7 +542,9 @@ def create_bp(orchestrator):
                     "HA_GEMINI_TOKENS_ENTITY", "input_number.gemini_total_tokens"
                 )
                 cost_val = orchestrator.fetch_ha_state(ha_url, ha_token, cost_entity)
-                tokens_val = orchestrator.fetch_ha_state(ha_url, ha_token, tokens_entity)
+                tokens_val = orchestrator.fetch_ha_state(
+                    ha_url, ha_token, tokens_entity
+                )
                 gemini_cost = None
                 if cost_val is not None:
                     try:
@@ -491,9 +586,13 @@ def create_bp(orchestrator):
                 "mqtt_connected": orchestrator.mqtt_wrapper.mqtt_connected,
                 "active_events": len(orchestrator.state_manager.get_active_event_ids()),
                 "retention_days": orchestrator.config["RETENTION_DAYS"],
-                "cleanup_interval_hours": orchestrator.config.get("CLEANUP_INTERVAL_HOURS", 1),
+                "cleanup_interval_hours": orchestrator.config.get(
+                    "CLEANUP_INTERVAL_HOURS", 1
+                ),
                 "storage_path": orchestrator.config["STORAGE_PATH"],
-                "stats_refresh_seconds": orchestrator.config.get("STATS_REFRESH_SECONDS", 60),
+                "stats_refresh_seconds": orchestrator.config.get(
+                    "STATS_REFRESH_SECONDS", 60
+                ),
             },
         }
         if ha_helpers is not None:
@@ -512,12 +611,14 @@ def create_bp(orchestrator):
                     state = "closing"
                 if ce.closed:
                     state = "closed"
-                active_ce.append({
-                    "id": ce.consolidated_id,
-                    "state": state,
-                    "cameras": ce.cameras,
-                    "start_time": ce.start_time,
-                })
+                active_ce.append(
+                    {
+                        "id": ce.consolidated_id,
+                        "state": state,
+                        "cameras": ce.cameras,
+                        "start_time": ce.start_time,
+                    }
+                )
         except Exception as e:
             logger.error("Error gathering consolidated events for status: %s", e)
         metrics = {
@@ -526,23 +627,29 @@ def create_bp(orchestrator):
             "active_consolidated_events": active_ce,
             "recent_errors": error_buffer.get_all()[:5],
         }
-        return jsonify({
-            "online": True,
-            "mqtt_connected": orchestrator.mqtt_wrapper.mqtt_connected,
-            "uptime_seconds": uptime_seconds,
-            "uptime": uptime_str,
-            "started_at": time.strftime(
-                "%Y-%m-%d %H:%M:%S", time.localtime(orchestrator._start_time)
-            ),
-            "active_events": state_manager.get_stats(),
-            "metrics": metrics,
-            "config": {
-                "retention_days": orchestrator.config["RETENTION_DAYS"],
-                "log_level": orchestrator.config.get("LOG_LEVEL", "INFO"),
-                "ffmpeg_timeout": orchestrator.config.get("FFMPEG_TIMEOUT", 60),
-                "summary_padding_before": orchestrator.config.get("SUMMARY_PADDING_BEFORE", 15),
-                "summary_padding_after": orchestrator.config.get("SUMMARY_PADDING_AFTER", 15),
-            },
-        })
+        return jsonify(
+            {
+                "online": True,
+                "mqtt_connected": orchestrator.mqtt_wrapper.mqtt_connected,
+                "uptime_seconds": uptime_seconds,
+                "uptime": uptime_str,
+                "started_at": time.strftime(
+                    "%Y-%m-%d %H:%M:%S", time.localtime(orchestrator._start_time)
+                ),
+                "active_events": state_manager.get_stats(),
+                "metrics": metrics,
+                "config": {
+                    "retention_days": orchestrator.config["RETENTION_DAYS"],
+                    "log_level": orchestrator.config.get("LOG_LEVEL", "INFO"),
+                    "ffmpeg_timeout": orchestrator.config.get("FFMPEG_TIMEOUT", 60),
+                    "summary_padding_before": orchestrator.config.get(
+                        "SUMMARY_PADDING_BEFORE", 15
+                    ),
+                    "summary_padding_after": orchestrator.config.get(
+                        "SUMMARY_PADDING_AFTER", 15
+                    ),
+                },
+            }
+        )
 
     return bp

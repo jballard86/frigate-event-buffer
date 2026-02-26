@@ -7,8 +7,6 @@ import unittest
 from contextlib import contextmanager
 from unittest.mock import MagicMock, patch
 
-import numpy as np
-
 
 def _fake_create_decoder(path, gpu_id=0):
     """Context manager that yields a mock DecoderContext (used when patching gpu_decoder.create_decoder)."""
@@ -20,27 +18,33 @@ def _fake_create_decoder(path, gpu_id=0):
     mock_ctx.frame_count = 10
     mock_ctx.__len__ = lambda self: 10
     # PTS-based index: time (sec) -> frame index (mock uses ~5 fps, clamp to 0..9).
-    mock_ctx.get_index_from_time_in_seconds = lambda t_sec: min(max(0, int(t_sec * 5)), 9)
+    mock_ctx.get_index_from_time_in_seconds = lambda t_sec: min(
+        max(0, int(t_sec * 5)), 9
+    )
     if torch is not None:
+
         def get_frames(indices):
             return torch.zeros((len(indices), 3, 480, 640), dtype=torch.uint8)
+
         mock_ctx.get_frames.side_effect = get_frames
 
     @contextmanager
     def cm():
         yield mock_ctx
+
     return cm()
+
 
 from frigate_buffer.models import ExtractedFrame
 from frigate_buffer.services.multi_clip_extractor import (
-    extract_target_centric_frames,
-    _nearest_sidecar_entry,
-    _person_area_from_detections,
-    _person_area_at_time,
-    _load_sidecar_for_camera,
-    _detection_timestamps_with_person,
-    _subsample_with_min_gap,
     DETECTION_SIDECAR_FILENAME,
+    _detection_timestamps_with_person,
+    _load_sidecar_for_camera,
+    _nearest_sidecar_entry,
+    _person_area_at_time,
+    _person_area_from_detections,
+    _subsample_with_min_gap,
+    extract_target_centric_frames,
 )
 
 
@@ -64,8 +68,18 @@ class TestMultiClipExtractorHelpers(unittest.TestCase):
     def test_person_area_from_detections_new_sidecar_format(self):
         """New sidecar format (label, bbox, centerpoint, area) is summed correctly."""
         dets = [
-            {"label": "person", "bbox": [0, 0, 10, 20], "centerpoint": [5, 10], "area": 200},
-            {"label": "person", "bbox": [10, 0, 30, 15], "centerpoint": [20, 7.5], "area": 300},
+            {
+                "label": "person",
+                "bbox": [0, 0, 10, 20],
+                "centerpoint": [5, 10],
+                "area": 200,
+            },
+            {
+                "label": "person",
+                "bbox": [10, 0, 30, 15],
+                "centerpoint": [20, 7.5],
+                "area": 300,
+            },
         ]
         self.assertEqual(_person_area_from_detections(dets), 500.0)
 
@@ -116,7 +130,9 @@ class TestMultiClipExtractorHelpers(unittest.TestCase):
         os.makedirs(d, exist_ok=True)
         try:
             path = os.path.join(d, DETECTION_SIDECAR_FILENAME)
-            data = [{"timestamp_sec": 0.0, "detections": [{"label": "person", "area": 100}]}]
+            data = [
+                {"timestamp_sec": 0.0, "detections": [{"label": "person", "area": 100}]}
+            ]
             with open(path, "w", encoding="utf-8") as f:
                 json.dump(data, f)
             result = _load_sidecar_for_camera(d)
@@ -133,7 +149,9 @@ class TestMultiClipExtractorHelpers(unittest.TestCase):
     def test_detection_timestamps_with_person_empty_sidecar_safe(self):
         """One camera has entries with person area, other is None/empty; no exception."""
         sidecars = {
-            "cam1": [{"timestamp_sec": 0.0, "detections": [{"label": "person", "area": 100}]}],
+            "cam1": [
+                {"timestamp_sec": 0.0, "detections": [{"label": "person", "area": 100}]}
+            ],
             "cam2": None,
         }
         result = _detection_timestamps_with_person(sidecars, global_end=10.0)
@@ -185,14 +203,18 @@ class TestMultiClipExtractor(unittest.TestCase):
 
     def test_empty_ce_folder_returns_empty(self):
         """When CE folder has no camera subdirs with clips, returns empty list."""
-        result = extract_target_centric_frames(self.tmp, max_frames_sec=1, max_frames_min=60)
+        result = extract_target_centric_frames(
+            self.tmp, max_frames_sec=1, max_frames_min=60
+        )
         self.assertEqual(result, [])
 
     def test_no_clips_in_subdirs_returns_empty(self):
         """When subdirs exist but no clip.mp4, returns empty list."""
         os.makedirs(os.path.join(self.tmp, "Camera1"))
         os.makedirs(os.path.join(self.tmp, "Camera2"))
-        result = extract_target_centric_frames(self.tmp, max_frames_sec=1, max_frames_min=60)
+        result = extract_target_centric_frames(
+            self.tmp, max_frames_sec=1, max_frames_min=60
+        )
         self.assertEqual(result, [])
 
     def _make_decoder_context_mock(self, frame_count=10, height=480, width=640):
@@ -204,7 +226,9 @@ class TestMultiClipExtractor(unittest.TestCase):
         mock_ctx = MagicMock()
         mock_ctx.frame_count = frame_count
         mock_ctx.__len__ = lambda self: frame_count
-        mock_ctx.get_index_from_time_in_seconds = lambda t_sec: min(max(0, int(t_sec * 5)), frame_count - 1)
+        mock_ctx.get_index_from_time_in_seconds = lambda t_sec: min(
+            max(0, int(t_sec * 5)), frame_count - 1
+        )
 
         def get_frames(indices):
             return torch.zeros((len(indices), 3, height, width), dtype=torch.uint8)
@@ -212,7 +236,10 @@ class TestMultiClipExtractor(unittest.TestCase):
         mock_ctx.get_frames.side_effect = get_frames
         return mock_ctx
 
-    @patch("frigate_buffer.services.multi_clip_extractor.create_decoder", side_effect=_fake_create_decoder)
+    @patch(
+        "frigate_buffer.services.multi_clip_extractor.create_decoder",
+        side_effect=_fake_create_decoder,
+    )
     def test_extract_with_decoder_mock_returns_tensor_frames(self, mock_create_decoder):
         """extract_target_centric_frames uses create_decoder and get_frames; returns ExtractedFrame with tensor .frame."""
         os.makedirs(os.path.join(self.tmp, "cam1"))
@@ -223,11 +250,19 @@ class TestMultiClipExtractor(unittest.TestCase):
             sidecar_path = os.path.join(self.tmp, c, DETECTION_SIDECAR_FILENAME)
             with open(sidecar_path, "w", encoding="utf-8") as f:
                 json.dump(
-                    [{"timestamp_sec": t, "detections": [{"label": "person", "area": 100}]} for t in range(11)],
+                    [
+                        {
+                            "timestamp_sec": t,
+                            "detections": [{"label": "person", "area": 100}],
+                        }
+                        for t in range(11)
+                    ],
                     f,
                 )
 
-        result = extract_target_centric_frames(self.tmp, max_frames_sec=1.0, max_frames_min=5)
+        result = extract_target_centric_frames(
+            self.tmp, max_frames_sec=1.0, max_frames_min=5
+        )
 
         self.assertGreaterEqual(len(result), 1)
         self.assertLessEqual(len(result), 5)
@@ -246,7 +281,10 @@ class TestMultiClipExtractor(unittest.TestCase):
         # One get_frames per sample time that yields a frame
         self.assertGreaterEqual(mock_create_decoder.call_count, 1)
 
-    @patch("frigate_buffer.services.multi_clip_extractor.create_decoder", side_effect=_fake_create_decoder)
+    @patch(
+        "frigate_buffer.services.multi_clip_extractor.create_decoder",
+        side_effect=_fake_create_decoder,
+    )
     def test_extract_calls_get_frames(self, mock_create_decoder):
         """extract_target_centric_frames uses create_decoder and get_frames is called on the context."""
         os.makedirs(os.path.join(self.tmp, "cam1"))
@@ -255,10 +293,21 @@ class TestMultiClipExtractor(unittest.TestCase):
         sidecar_path = os.path.join(self.tmp, "cam1", DETECTION_SIDECAR_FILENAME)
         with open(sidecar_path, "w", encoding="utf-8") as f:
             json.dump(
-                {"native_width": 100, "native_height": 100, "entries": [{"timestamp_sec": 0.0, "detections": [{"label": "person", "area": 100}]}]},
+                {
+                    "native_width": 100,
+                    "native_height": 100,
+                    "entries": [
+                        {
+                            "timestamp_sec": 0.0,
+                            "detections": [{"label": "person", "area": 100}],
+                        }
+                    ],
+                },
                 f,
             )
-        result = extract_target_centric_frames(self.tmp, max_frames_sec=1.0, max_frames_min=5)
+        result = extract_target_centric_frames(
+            self.tmp, max_frames_sec=1.0, max_frames_min=5
+        )
         self.assertGreaterEqual(len(result), 1)
         mock_create_decoder.assert_called()
 
@@ -277,7 +326,13 @@ class TestMultiClipExtractor(unittest.TestCase):
             sidecar_path = os.path.join(self.tmp, c, DETECTION_SIDECAR_FILENAME)
             with open(sidecar_path, "w", encoding="utf-8") as f:
                 json.dump(
-                    [{"timestamp_sec": t, "detections": [{"label": "person", "area": 100}]} for t in range(11)],
+                    [
+                        {
+                            "timestamp_sec": t,
+                            "detections": [{"label": "person", "area": 100}],
+                        }
+                        for t in range(11)
+                    ],
                     f,
                 )
 
@@ -285,27 +340,45 @@ class TestMultiClipExtractor(unittest.TestCase):
             mock_ctx = MagicMock()
             mock_ctx.frame_count = 10
             mock_ctx.__len__ = lambda self: 10
-            mock_ctx.get_index_from_time_in_seconds = lambda t_sec: min(max(0, int(t_sec * 5)), 9)
+            mock_ctx.get_index_from_time_in_seconds = lambda t_sec: min(
+                max(0, int(t_sec * 5)), 9
+            )
             if "cam2" in path:
-                mock_ctx.get_frames.side_effect = RuntimeError("Decoder get_frames failed")
+                mock_ctx.get_frames.side_effect = RuntimeError(
+                    "Decoder get_frames failed"
+                )
             else:
-                mock_ctx.get_frames.side_effect = lambda indices: torch.zeros((len(indices), 3, 480, 640), dtype=torch.uint8)
+                mock_ctx.get_frames.side_effect = lambda indices: torch.zeros(
+                    (len(indices), 3, 480, 640), dtype=torch.uint8
+                )
+
             @contextmanager
             def cm():
                 yield mock_ctx
+
             return cm()
+
         mock_create_decoder.side_effect = make_cm
 
-        result = extract_target_centric_frames(self.tmp, max_frames_sec=1.0, max_frames_min=5)
+        result = extract_target_centric_frames(
+            self.tmp, max_frames_sec=1.0, max_frames_min=5
+        )
 
         self.assertIsInstance(result, list)
         for item in result:
             self.assertIsInstance(item, ExtractedFrame)
             self.assertIsNotNone(item.frame)
-            self.assertEqual(item.camera, "cam1", "Failed camera should be dropped; only cam1 should appear")
+            self.assertEqual(
+                item.camera,
+                "cam1",
+                "Failed camera should be dropped; only cam1 should appear",
+            )
 
     @patch("frigate_buffer.services.multi_clip_extractor._get_fps_duration_from_path")
-    @patch("frigate_buffer.services.multi_clip_extractor.create_decoder", side_effect=_fake_create_decoder)
+    @patch(
+        "frigate_buffer.services.multi_clip_extractor.create_decoder",
+        side_effect=_fake_create_decoder,
+    )
     def test_extract_uses_metadata_fallback_when_len_zero(
         self, mock_create_decoder, mock_get_fps_duration
     ):
@@ -316,18 +389,33 @@ class TestMultiClipExtractor(unittest.TestCase):
         sidecar_path = os.path.join(self.tmp, "cam1", DETECTION_SIDECAR_FILENAME)
         with open(sidecar_path, "w", encoding="utf-8") as f:
             json.dump(
-                {"native_width": 100, "native_height": 100, "entries": [{"timestamp_sec": t, "detections": [{"label": "person", "area": 100}]} for t in range(11)]},
+                {
+                    "native_width": 100,
+                    "native_height": 100,
+                    "entries": [
+                        {
+                            "timestamp_sec": t,
+                            "detections": [{"label": "person", "area": 100}],
+                        }
+                        for t in range(11)
+                    ],
+                },
                 f,
             )
         mock_get_fps_duration.return_value = (1.0, 10.0)
         # Default _fake_create_decoder yields ctx with len 10; extraction uses it. Test just verifies metadata is used when needed.
-        result = extract_target_centric_frames(self.tmp, max_frames_sec=1.0, max_frames_min=5)
+        result = extract_target_centric_frames(
+            self.tmp, max_frames_sec=1.0, max_frames_min=5
+        )
         self.assertGreaterEqual(len(result), 1)
         for item in result:
             self.assertIsInstance(item, ExtractedFrame)
             self.assertIsNotNone(item.frame)
 
-    @patch("frigate_buffer.services.multi_clip_extractor.create_decoder", side_effect=_fake_create_decoder)
+    @patch(
+        "frigate_buffer.services.multi_clip_extractor.create_decoder",
+        side_effect=_fake_create_decoder,
+    )
     def test_extract_logs_nvdec(self, mock_create_decoder):
         """log_callback receives Decoding clips ... PyNvVideoCodec NVDEC."""
         os.makedirs(os.path.join(self.tmp, "cam1"))
@@ -336,7 +424,17 @@ class TestMultiClipExtractor(unittest.TestCase):
         sidecar_path = os.path.join(self.tmp, "cam1", DETECTION_SIDECAR_FILENAME)
         with open(sidecar_path, "w", encoding="utf-8") as f:
             json.dump(
-                {"native_width": 100, "native_height": 100, "entries": [{"timestamp_sec": t, "detections": [{"label": "person", "area": 100}]} for t in range(11)]},
+                {
+                    "native_width": 100,
+                    "native_height": 100,
+                    "entries": [
+                        {
+                            "timestamp_sec": t,
+                            "detections": [{"label": "person", "area": 100}],
+                        }
+                        for t in range(11)
+                    ],
+                },
                 f,
             )
         logs = []
@@ -351,7 +449,10 @@ class TestMultiClipExtractor(unittest.TestCase):
             f"Expected PyNvVideoCodec/NVDEC in decode message: {decode_logs}",
         )
 
-    @patch("frigate_buffer.services.multi_clip_extractor.create_decoder", side_effect=_fake_create_decoder)
+    @patch(
+        "frigate_buffer.services.multi_clip_extractor.create_decoder",
+        side_effect=_fake_create_decoder,
+    )
     def test_primary_camera_accepted(self, mock_create_decoder):
         """extract_target_centric_frames accepts primary_camera (EMA pipeline); returns frames without error."""
         os.makedirs(os.path.join(self.tmp, "cam1"))
@@ -362,7 +463,17 @@ class TestMultiClipExtractor(unittest.TestCase):
             sidecar_path = os.path.join(self.tmp, c, DETECTION_SIDECAR_FILENAME)
             with open(sidecar_path, "w", encoding="utf-8") as f:
                 json.dump(
-                    {"native_width": 100, "native_height": 100, "entries": [{"timestamp_sec": t, "detections": [{"label": "person", "area": 100}]} for t in range(11)]},
+                    {
+                        "native_width": 100,
+                        "native_height": 100,
+                        "entries": [
+                            {
+                                "timestamp_sec": t,
+                                "detections": [{"label": "person", "area": 100}],
+                            }
+                            for t in range(11)
+                        ],
+                    },
                     f,
                 )
 
@@ -374,7 +485,10 @@ class TestMultiClipExtractor(unittest.TestCase):
             self.assertIsInstance(item, ExtractedFrame)
             self.assertIn(item.camera, ("cam1", "cam2"))
 
-    @patch("frigate_buffer.services.multi_clip_extractor.create_decoder", side_effect=_fake_create_decoder)
+    @patch(
+        "frigate_buffer.services.multi_clip_extractor.create_decoder",
+        side_effect=_fake_create_decoder,
+    )
     def test_ema_drop_no_person_excludes_zero_area_frames(self, mock_create_decoder):
         """With camera_timeline_final_yolo_drop_no_person=True, frames with person_area=0 are not in the result."""
         os.makedirs(os.path.join(self.tmp, "cam1"))
@@ -384,13 +498,18 @@ class TestMultiClipExtractor(unittest.TestCase):
                 pass
         times = [0.0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0]
         entries = [
-            {"timestamp_sec": t, "detections": [{"label": "person", "area": 0 if t < 1.0 else 100}]}
+            {
+                "timestamp_sec": t,
+                "detections": [{"label": "person", "area": 0 if t < 1.0 else 100}],
+            }
             for t in times
         ]
         for cam_name in ("cam1", "cam2"):
             sidecar_path = os.path.join(self.tmp, cam_name, DETECTION_SIDECAR_FILENAME)
             with open(sidecar_path, "w", encoding="utf-8") as f:
-                json.dump({"native_width": 100, "native_height": 100, "entries": entries}, f)
+                json.dump(
+                    {"native_width": 100, "native_height": 100, "entries": entries}, f
+                )
 
         result = extract_target_centric_frames(
             self.tmp,

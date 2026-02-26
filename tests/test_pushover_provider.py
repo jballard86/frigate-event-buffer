@@ -5,12 +5,12 @@ import tempfile
 import unittest
 from unittest.mock import MagicMock, patch
 
-from frigate_buffer.models import EventState, EventPhase
+from frigate_buffer.models import EventPhase, EventState
 from frigate_buffer.services.notifications.providers.pushover import (
-    PushoverProvider,
-    PUSHOVER_API_URL,
     OVERFLOW_MESSAGE,
     OVERFLOW_TITLE,
+    PUSHOVER_API_URL,
+    PushoverProvider,
 )
 
 
@@ -164,7 +164,10 @@ class TestPushoverEmergencyParams(unittest.TestCase):
     """Emergency constants and priority 2 payload (retry/expire)."""
 
     def test_emergency_constants_defined(self):
-        from frigate_buffer.services.notifications.providers import pushover as po_module
+        from frigate_buffer.services.notifications.providers import (
+            pushover as po_module,
+        )
+
         self.assertEqual(po_module.EMERGENCY_RETRY, 30)
         self.assertEqual(po_module.EMERGENCY_EXPIRE, 3600)
 

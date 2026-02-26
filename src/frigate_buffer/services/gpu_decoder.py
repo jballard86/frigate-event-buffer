@@ -15,8 +15,9 @@ from __future__ import annotations
 
 import logging
 import warnings
+from collections.abc import Iterator
 from contextlib import contextmanager
-from typing import Any, Iterator
+from typing import Any
 
 from frigate_buffer.constants import NVDEC_INIT_FAILURE_PREFIX
 
@@ -58,7 +59,8 @@ class DecoderContext:
         if not indices:
             # Return empty tensor with 4 dims for BCHW (device from decoder).
             return torch.empty((0, 3, 0, 0), dtype=torch.uint8, device="cuda")
-        # PyNvVideoCodec emits UserWarning when duplicate indices are passed (e.g. stutter in source).
+        # PyNvVideoCodec emits UserWarning when duplicate indices are passed
+        # (e.g. stutter in source).
         # Re-log at DEBUG and suppress default WARNING so logs stay clean at INFO.
         with warnings.catch_warnings(record=True):
             warnings.simplefilter("always", UserWarning)
@@ -76,7 +78,9 @@ class DecoderContext:
             finally:
                 warnings.showwarning = old_showwarning
         # Each frame supports __dlpack__; RGBP gives (3, H, W).
-        tensors = [torch.from_dlpack(f) for f in raw_frames]
+        # torch.from_dlpack exists at runtime but is not in type stubs; use getattr.
+        from_dlpack = getattr(torch, "from_dlpack")
+        tensors = [from_dlpack(f) for f in raw_frames]
         # Stack to BCHW. Cloning avoids sharing memory with decoder's internal buffer
         # so decoder can be closed or reconfigured without invalidating tensors.
         batch = torch.stack(tensors, dim=0).clone()
@@ -90,8 +94,10 @@ class DecoderContext:
         """
         import torch
 
+        # torch.from_dlpack exists at runtime but is not in type stubs; use getattr.
+        from_dlpack = getattr(torch, "from_dlpack")
         frame = self._decoder[index]
-        t = torch.from_dlpack(frame).unsqueeze(0).clone()
+        t = from_dlpack(frame).unsqueeze(0).clone()
         return t
 
     def get_batch_frames(self, count: int) -> list[Any]:
@@ -103,7 +109,8 @@ class DecoderContext:
         return self._decoder.get_batch_frames(count)
 
     def seek_to_index(self, index: int) -> None:
-        """Seek decoder to frame index (e.g. segment start). Caller must hold GPU_LOCK."""
+        """Seek decoder to frame index (e.g. segment start). Caller must hold
+        GPU_LOCK."""
         self._decoder.seek_to_index(index)
 
     def get_index_from_time_in_seconds(self, t_sec: float) -> int:
@@ -120,12 +127,14 @@ def _create_simple_decoder(clip_path: str, gpu_id: int) -> Any:
     """
     import PyNvVideoCodec as nvc
 
+    # OutputColorType exists at runtime but is not in type stubs; use getattr.
+    output_color_type = getattr(nvc, "OutputColorType").RGBP
     return nvc.SimpleDecoder(
         clip_path,
         gpu_id=gpu_id,
         use_device_memory=True,
         max_width=DECODER_MAX_WIDTH,
-        output_color_type=nvc.OutputColorType.RGBP,
+        output_color_type=output_color_type,
     )
 
 
@@ -144,8 +153,9 @@ def create_decoder(clip_path: str, gpu_id: int = 0) -> Iterator[DecoderContext]:
         decoder = _create_simple_decoder(clip_path, gpu_id)
         yield DecoderContext(decoder)
     except Exception as e:
-        # PyNvVideoCodec may raise library-specific exceptions; we catch all and log
-        # with NVDEC_INIT_FAILURE_PREFIX so crash-loop and support searches remain effective.
+        # PyNvVideoCodec may raise library-specific exceptions; we catch all and
+        # log with NVDEC_INIT_FAILURE_PREFIX so crash-loop and support searches
+        # remain effective.
         logger.error(
             "%s (PyNvVideoCodec decoder init failed). path=%s error=%s "
             "Check GPU, drivers, and container NVDEC access.",

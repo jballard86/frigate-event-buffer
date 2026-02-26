@@ -2,7 +2,8 @@
 Gemini proxy HTTP client - POST to OpenAI-compatible /v1/chat/completions with retry.
 
 Used by GeminiAnalysisService for all proxy requests. Encapsulates URL, headers,
-tuning params, and 2-attempt retry (second attempt: Accept-Encoding: identity, Connection: close).
+tuning params, and 2-attempt retry (second attempt: Accept-Encoding: identity,
+Connection: close).
 """
 
 import json
@@ -17,7 +18,8 @@ logger = logging.getLogger("frigate-buffer")
 
 
 def _log_proxy_failure(proxy_url: str, attempt: int, exc: Exception) -> None:
-    """Log proxy request failure with URL, optional response body, and a hint for connection errors."""
+    """Log proxy request failure with URL, optional response body,
+    and a hint for connection errors."""
     err_name = type(exc).__name__
     err_msg = str(exc)
     hint = ""
@@ -30,35 +32,52 @@ def _log_proxy_failure(proxy_url: str, attempt: int, exc: Exception) -> None:
             data = resp.json()
             err_obj = data.get("error") if isinstance(data, dict) else None
             if isinstance(err_obj, dict) and err_obj.get("message"):
-                response_body = json.dumps({
-                    "error": {"message": err_obj.get("message"), "type": err_obj.get("type", "unknown")}
-                })
+                response_body = json.dumps(
+                    {
+                        "error": {
+                            "message": err_obj.get("message"),
+                            "type": err_obj.get("type", "unknown"),
+                        }
+                    }
+                )
             else:
                 response_body = json.dumps(data) if data is not None else ""
         except (ValueError, TypeError, AttributeError):
             try:
                 text = getattr(resp, "text", None) or (
-                    resp.content.decode("utf-8", errors="replace") if getattr(resp, "content", None) else ""
+                    resp.content.decode("utf-8", errors="replace")
+                    if getattr(resp, "content", None)
+                    else ""
                 )
                 response_body = (text or "")[:LOG_MAX_RESPONSE_BODY]
             except Exception:
-                response_body = repr(getattr(resp, "content", None))[:LOG_MAX_RESPONSE_BODY]
+                response_body = repr(getattr(resp, "content", None))[
+                    :LOG_MAX_RESPONSE_BODY
+                ]
         if len(response_body) > LOG_MAX_RESPONSE_BODY:
             response_body = response_body[:LOG_MAX_RESPONSE_BODY] + "..."
     if response_body:
         logger.error(
             "Proxy request failed [%s]. URL: %s. Body: %s. attempt=%s/2.%s",
-            getattr(resp, "status_code", "?"), proxy_url, response_body, attempt, hint,
+            getattr(resp, "status_code", "?"),
+            proxy_url,
+            response_body,
+            attempt,
+            hint,
         )
     else:
         logger.error(
             "Proxy request failed on attempt %s/2: %s: %s. url=%s.%s",
-            attempt, err_name, err_msg, proxy_url, hint,
+            attempt,
+            err_name,
+            err_msg,
+            proxy_url,
+            hint,
         )
 
 
 class GeminiProxyClient:
-    """HTTP client for Gemini proxy (OpenAI-compatible). POST with retry; no response parsing."""
+    """Gemini proxy client (OpenAI-compatible). POST with retry; caller parses."""
 
     def __init__(
         self,
@@ -80,7 +99,8 @@ class GeminiProxyClient:
 
     def post_messages(self, messages: list, timeout: int) -> requests.Response | None:
         """
-        POST messages to /v1/chat/completions with retry (second attempt: identity encoding, Connection: close).
+        POST messages to /v1/chat/completions with retry (second attempt: identity
+        encoding, Connection: close).
         Returns the response on success, None on failure. Caller parses response body.
         """
         url = f"{self._proxy_url}/v1/chat/completions"
@@ -102,13 +122,20 @@ class GeminiProxyClient:
                 headers["Accept-Encoding"] = "identity"
                 headers["Connection"] = "close"
             try:
-                resp = requests.post(url, json=payload, headers=headers, timeout=timeout)
+                resp = requests.post(
+                    url, json=payload, headers=headers, timeout=timeout
+                )
                 resp.raise_for_status()
                 return resp
-            except (requests.exceptions.ChunkedEncodingError, urllib3.exceptions.ProtocolError) as e:
+            except (
+                requests.exceptions.ChunkedEncodingError,
+                urllib3.exceptions.ProtocolError,
+            ) as e:
                 logger.warning(
-                    "Proxy attempt %s/2 failed with ChunkedEncodingError: %s. Retrying with 'Connection: close'...",
-                    attempt + 1, e,
+                    "Proxy attempt %s/2 failed with ChunkedEncodingError: %s. "
+                    "Retrying with 'Connection: close'...",
+                    attempt + 1,
+                    e,
                 )
                 continue
             except Exception as e:

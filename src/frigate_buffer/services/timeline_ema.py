@@ -1,14 +1,16 @@
 """
-Phase 1 timeline logic for multi-cam: dense grid, EMA smoothing, segment assignment with hysteresis, merge short segments.
+Phase 1 timeline logic for multi-cam: dense grid, EMA smoothing, segment
+assignment with hysteresis, merge short segments.
 
-Used by multi_clip_extractor for the Trust-the-EMA pipeline. No decode or file I/O here;
+Used by multi_clip_extractor for the Trust-the-EMA pipeline. No decode or file
+I/O here;
 caller provides area_at_t(camera, t_sec) and native sizes for normalization.
 """
 
 from __future__ import annotations
 
 import logging
-from typing import Callable
+from collections.abc import Callable
 
 logger = logging.getLogger("frigate-buffer")
 
@@ -46,7 +48,8 @@ def _normalize_area(
     native_size: tuple[int, int],
     normalize: bool,
 ) -> float:
-    """Return area as fraction of frame when normalize and native size valid; else raw area."""
+    """Return area as fraction of frame when normalize and native size valid;
+    else raw area."""
     if not normalize or not native_size or native_size[0] <= 0 or native_size[1] <= 0:
         return area
     frame_px = native_size[0] * native_size[1]
@@ -71,9 +74,12 @@ def build_phase1_assignments(
     - For each camera and t, area is taken from area_at_t(cam, t). When cameras have
       different native resolutions, area is normalized by (native_width * native_height)
       so cameras compete on fraction of frame, not raw pixels.
-    - EMA: smooth_cam(t) = ema_alpha * area_cam(t) + (1 - ema_alpha) * smooth_cam(t_prev).
-    - Best view at t: argmax over cameras of (smoothed area * primary_bias if cam == primary_camera).
-    - Hysteresis: switch from A to B only when B's smoothed value >= A's * hysteresis_margin.
+    - EMA: smooth_cam(t) = ema_alpha * area_cam(t) + (1 - ema_alpha) *
+      smooth_cam(t_prev).
+    - Best view at t: argmax over cameras of (smoothed area * primary_bias if
+      cam == primary_camera).
+    - Hysteresis: switch from A to B only when B's smoothed value >= A's *
+      hysteresis_margin.
     - Short segments (run length < min_segment_frames) are merged: normally into the
       preceding segment; the first segment (index 0) has no predecessor so it is merged
       forward into the next segment.
@@ -95,7 +101,7 @@ def build_phase1_assignments(
         return _normalize_area(raw, native_size_per_cam.get(cam) or (0, 0), normalize)
 
     # EMA per camera along time
-    smooth: dict[str, float] = {c: 0.0 for c in cameras}
+    smooth: dict[str, float] = dict.fromkeys(cameras, 0.0)
     smoothed_series: dict[str, list[float]] = {c: [] for c in cameras}
     for t in times:
         for cam in cameras:
@@ -106,7 +112,7 @@ def build_phase1_assignments(
     # Best view at each t with primary bias and hysteresis
     assignments: list[str] = []
     current: str | None = None
-    for i, t in enumerate(times):
+    for i, _t in enumerate(times):
         scores = {}
         for cam in cameras:
             s = smoothed_series[cam][i]
@@ -123,11 +129,12 @@ def build_phase1_assignments(
         assignments.append(current)
 
     # Merge short segments: run-length encode, then merge short runs
-    # Rule: short run -> merge into preceding; first run (no preceding) -> merge into next
+    # Rule: short run -> merge into preceding; first run (no preceding) ->
+    # merge into next
     min_len = max(1, min_segment_frames)
     n = len(assignments)
     if n == 0:
-        return list(zip(times, assignments))
+        return list(zip(times, assignments, strict=True))
 
     # Run-length: list of (camera, start_index, length)
     runs: list[tuple[str, int, int]] = []
@@ -139,11 +146,12 @@ def build_phase1_assignments(
             i += 1
         runs.append((cam, start, i - start))
     if not runs:
-        return list(zip(times, assignments))
+        return list(zip(times, assignments, strict=True))
 
-    # Merge short runs: first run short -> assign to next run's camera; other short -> assign to previous run's camera
+    # Merge short runs: first run short -> assign to next run's camera; other
+    # short -> assign to previous run's camera
     merged = list(assignments)
-    for run_idx, (cam, start, length) in enumerate(runs):
+    for run_idx, (_cam, start, length) in enumerate(runs):
         if length >= min_len:
             continue
         if run_idx == 0:
@@ -158,4 +166,4 @@ def build_phase1_assignments(
             for j in range(start, start + length):
                 merged[j] = prev_cam
 
-    return list(zip(times, merged))
+    return list(zip(times, merged, strict=True))

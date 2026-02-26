@@ -18,7 +18,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
-from frigate_buffer.constants import is_tensor, NVDEC_INIT_FAILURE_PREFIX
+from frigate_buffer.constants import NVDEC_INIT_FAILURE_PREFIX, is_tensor
 from frigate_buffer.services.gpu_decoder import create_decoder
 
 logger = logging.getLogger("frigate-buffer")
@@ -80,14 +80,18 @@ def log_gpu_status() -> None:
                 capture_output=True,
                 timeout=5,
             )
-            driver = (proc2.stdout or b"").decode("utf-8", errors="replace").strip().split("\n")[0] or "?"
+            driver = (proc2.stdout or b"").decode(
+                "utf-8", errors="replace"
+            ).strip().split("\n")[0] or "?"
             logger.info(
                 "GPU status: nvidia-smi OK, GPUs=%s, driver=%s (PyNvVideoCodec NVDEC used for decode)",
                 gpu_count,
                 driver,
             )
         except (subprocess.TimeoutExpired, OSError) as e:
-            logger.warning("nvidia-smi found but failed: %s; container may not have GPU access.", e)
+            logger.warning(
+                "nvidia-smi found but failed: %s; container may not have GPU access.", e
+            )
     else:
         logger.info("nvidia-smi not found; NVDEC decode requires GPU.")
 
@@ -111,22 +115,39 @@ def ensure_detection_model_ready(config: dict) -> bool:
     """
     model_name = (config.get("DETECTION_MODEL") or "").strip()
     if not model_name:
-        logger.info("Multi-cam detection model not configured (DETECTION_MODEL empty), skipping preload")
+        logger.info(
+            "Multi-cam detection model not configured (DETECTION_MODEL empty), skipping preload"
+        )
         return False
     model_path = get_detection_model_path(config)
     try:
         existed = os.path.isfile(model_path)
         from ultralytics import YOLO
+
         model = YOLO(model_path)
         ckpt = getattr(model, "ckpt_path", None)
-        path_str = f" at {ckpt}" if (ckpt and isinstance(ckpt, str) and os.path.isfile(ckpt)) else ""
+        path_str = (
+            f" at {ckpt}"
+            if (ckpt and isinstance(ckpt, str) and os.path.isfile(ckpt))
+            else ""
+        )
         if existed or (ckpt and os.path.isfile(ckpt)):
-            logger.info("Multi-cam detection model ready: %s (already downloaded)%s", model_name, path_str)
+            logger.info(
+                "Multi-cam detection model ready: %s (already downloaded)%s",
+                model_name,
+                path_str,
+            )
         else:
-            logger.info("Multi-cam detection model ready: %s (downloaded)%s", model_name, path_str)
+            logger.info(
+                "Multi-cam detection model ready: %s (downloaded)%s",
+                model_name,
+                path_str,
+            )
         return True
     except Exception as e:
-        logger.warning("Multi-cam detection model preload failed for %s: %s", model_name, e)
+        logger.warning(
+            "Multi-cam detection model preload failed for %s: %s", model_name, e
+        )
         return False
 
 
@@ -154,10 +175,17 @@ def _get_video_metadata(clip_path: str) -> tuple[int, int, float, float] | None:
     try:
         out = subprocess.run(
             [
-                "ffprobe", "-v", "error", "-select_streams", "v:0",
-                "-show_entries", "stream=width,height,r_frame_rate",
-                "-show_entries", "format=duration",
-                "-of", "json",
+                "ffprobe",
+                "-v",
+                "error",
+                "-select_streams",
+                "v:0",
+                "-show_entries",
+                "stream=width,height,r_frame_rate",
+                "-show_entries",
+                "format=duration",
+                "-of",
+                "json",
                 clip_path,
             ],
             capture_output=True,
@@ -167,7 +195,7 @@ def _get_video_metadata(clip_path: str) -> tuple[int, int, float, float] | None:
         if out.returncode != 0 or not out.stdout:
             return None
         data = json.loads(out.stdout.decode("utf-8", errors="replace"))
-        streams = (data.get("streams") or [])
+        streams = data.get("streams") or []
         fmt = data.get("format") or {}
         if not streams:
             return None
@@ -185,7 +213,13 @@ def _get_video_metadata(clip_path: str) -> tuple[int, int, float, float] | None:
         result = (w, h, fps, duration)
         _METADATA_CACHE[cache_key] = result
         return result
-    except (FileNotFoundError, subprocess.TimeoutExpired, ValueError, OSError, json.JSONDecodeError) as e:
+    except (
+        FileNotFoundError,
+        subprocess.TimeoutExpired,
+        ValueError,
+        OSError,
+        json.JSONDecodeError,
+    ) as e:
         logger.debug("ffprobe metadata failed for %s: %s", clip_path, e)
     _METADATA_CACHE[cache_key] = None
     return None
@@ -246,9 +280,17 @@ def _scale_detections_to_native(
         cp = d.get("centerpoint")
         area = d.get("area", 0)
         if isinstance(bbox, (list, tuple)) and len(bbox) >= 4:
-            x1, y1, x2, y2 = float(bbox[0]), float(bbox[1]), float(bbox[2]), float(bbox[3])
+            x1, y1, x2, y2 = (
+                float(bbox[0]),
+                float(bbox[1]),
+                float(bbox[2]),
+                float(bbox[3]),
+            )
             bbox = [
-                x1 * scale_x, y1 * scale_y, x2 * scale_x, y2 * scale_y,
+                x1 * scale_x,
+                y1 * scale_y,
+                x2 * scale_x,
+                y2 * scale_y,
             ]
         else:
             bbox = d.get("bbox", [])
@@ -256,12 +298,14 @@ def _scale_detections_to_native(
             cp = [float(cp[0]) * scale_x, float(cp[1]) * scale_y]
         else:
             cp = d.get("centerpoint", [])
-        out.append({
-            "label": d.get("label", "person"),
-            "bbox": bbox,
-            "centerpoint": cp,
-            "area": int(float(area) * area_scale) if area else 0,
-        })
+        out.append(
+            {
+                "label": d.get("label", "person"),
+                "bbox": bbox,
+                "centerpoint": cp,
+                "area": int(float(area) * area_scale) if area else 0,
+            }
+        )
     return out
 
 
@@ -291,6 +335,7 @@ def _run_detection_on_frame(
                 t = t.float()
         else:
             import numpy as np
+
             arr = np.asarray(frame, dtype=np.uint8)
             if arr.ndim == 2:
                 arr = np.expand_dims(arr, axis=-1)
@@ -325,16 +370,23 @@ def _run_detection_on_frame(
             for i in range(len(xyxy)):
                 if len(xyxy[i]) < 4:
                     continue
-                x1, y1, x2, y2 = float(xyxy[i][0]), float(xyxy[i][1]), float(xyxy[i][2]), float(xyxy[i][3])
+                x1, y1, x2, y2 = (
+                    float(xyxy[i][0]),
+                    float(xyxy[i][1]),
+                    float(xyxy[i][2]),
+                    float(xyxy[i][3]),
+                )
                 area = int((x2 - x1) * (y2 - y1))
                 cx = (x1 + x2) / 2.0
                 cy = (y1 + y2) / 2.0
-                detections.append({
-                    "label": "person",
-                    "bbox": [x1, y1, x2, y2],
-                    "centerpoint": [cx, cy],
-                    "area": area,
-                })
+                detections.append(
+                    {
+                        "label": "person",
+                        "bbox": [x1, y1, x2, y2],
+                        "centerpoint": [cx, cy],
+                        "area": area,
+                    }
+                )
     except Exception as e:
         logger.debug("Detection on frame failed: %s", e)
     return detections
@@ -372,10 +424,14 @@ def _run_detection_on_batch(
             batch, size=(target_h, target_w), mode="bilinear", align_corners=False
         )
         now = time.monotonic()
-        should_log = (now - _last_yolo_inference_log_time) >= _YOLO_INFERENCE_LOG_INTERVAL
+        should_log = (
+            now - _last_yolo_inference_log_time
+        ) >= _YOLO_INFERENCE_LOG_INTERVAL
         if should_log:
             _last_yolo_inference_log_time = now
-            logger.debug("_run_detection_on_batch: calling model.predict (YOLO inference)")
+            logger.debug(
+                "_run_detection_on_batch: calling model.predict (YOLO inference)"
+            )
             _flush_logger()
         results = model(
             batch_resized,
@@ -396,7 +452,9 @@ def _run_detection_on_batch(
             if r.boxes is not None and r.boxes.xyxy is not None:
                 xyxy = r.boxes.xyxy
                 try:
-                    logger.debug("_run_detection_on_batch: converting xyxy tensor to CPU/numpy")
+                    logger.debug(
+                        "_run_detection_on_batch: converting xyxy tensor to CPU/numpy"
+                    )
                     _flush_logger()
                     xyxy = xyxy.cpu().numpy() if hasattr(xyxy, "cpu") else xyxy
                     logger.debug("_run_detection_on_batch: xyxy converted to numpy")
@@ -413,12 +471,14 @@ def _run_detection_on_batch(
                     area = int((x2 - x1) * (y2 - y1))
                     cx = (x1 + x2) / 2.0
                     cy = (y1 + y2) / 2.0
-                    detections.append({
-                        "label": "person",
-                        "bbox": [x1, y1, x2, y2],
-                        "centerpoint": [cx, cy],
-                        "area": area,
-                    })
+                    detections.append(
+                        {
+                            "label": "person",
+                            "bbox": [x1, y1, x2, y2],
+                            "centerpoint": [cx, cy],
+                            "area": area,
+                        }
+                    )
             out.append(detections)
         while len(out) < batch_size:
             out.append([])
@@ -436,13 +496,18 @@ class VideoService:
     def __init__(self, ffmpeg_timeout: int = DEFAULT_FFMPEG_TIMEOUT):
         self.ffmpeg_timeout = ffmpeg_timeout
         self._sidecar_app_lock: threading.Lock | None = None
-        logger.debug("VideoService initialized with FFmpeg timeout=%ss (GIF only)", ffmpeg_timeout)
+        logger.debug(
+            "VideoService initialized with FFmpeg timeout=%ss (GIF only)",
+            ffmpeg_timeout,
+        )
 
     def set_sidecar_app_lock(self, lock: threading.Lock) -> None:
         """Set app-level lock so only one sidecar batch (TEST or lifecycle) runs at a time."""
         self._sidecar_app_lock = lock
 
-    def run_detection_on_image(self, image_bgr: Any, config: dict[str, Any]) -> list[dict[str, Any]]:
+    def run_detection_on_image(
+        self, image_bgr: Any, config: dict[str, Any]
+    ) -> list[dict[str, Any]]:
         """
         Run YOLO person detection on a single image (e.g. from latest.jpg).
 
@@ -460,6 +525,7 @@ class VideoService:
                 return []
             try:
                 from ultralytics import YOLO
+
                 model_path = get_detection_model_path(config)
                 model = YOLO(model_path)
             except Exception as e:
@@ -491,7 +557,9 @@ class VideoService:
 
         detection_model = (config.get("DETECTION_MODEL") or "").strip()
         detection_device = (config.get("DETECTION_DEVICE") or "").strip() or None
-        detection_frame_interval = max(1, int(config.get("DETECTION_FRAME_INTERVAL", 5)))
+        detection_frame_interval = max(
+            1, int(config.get("DETECTION_FRAME_INTERVAL", 5))
+        )
         detection_imgsz = max(320, int(config.get("DETECTION_IMGSZ", 640)))
         cuda_device_index = int(config.get("CUDA_DEVICE_INDEX", 0))
 
@@ -510,7 +578,9 @@ class VideoService:
                     if frame_count <= 0 and duration_sec > 0:
                         frame_count = max(1, int(duration_sec * fps))
                     if frame_count <= 0:
-                        logger.warning("Could not determine frame count for %s", clip_path)
+                        logger.warning(
+                            "Could not determine frame count for %s", clip_path
+                        )
                         return False
                     interval = detection_frame_interval
                     indices = list(range(0, frame_count, interval))
@@ -521,11 +591,16 @@ class VideoService:
                     if model_to_use is None and detection_model:
                         try:
                             from ultralytics import YOLO
+
                             model_path = get_detection_model_path(config)
                             model_to_use = YOLO(model_path)
-                            logger.debug("YOLO loaded for detection sidecar: %s", clip_path)
+                            logger.debug(
+                                "YOLO loaded for detection sidecar: %s", clip_path
+                            )
                         except Exception as e:
-                            logger.warning("Could not load YOLO for detection sidecar: %s", e)
+                            logger.warning(
+                                "Could not load YOLO for detection sidecar: %s", e
+                            )
 
                     sidecar_entries: list[dict[str, Any]] = []
                     read_h, read_w = 0, 0
@@ -550,7 +625,9 @@ class VideoService:
                             )
                             if torch.cuda.is_available():
                                 try:
-                                    logger.debug("VRAM summary: %s", torch.cuda.memory_summary())
+                                    logger.debug(
+                                        "VRAM summary: %s", torch.cuda.memory_summary()
+                                    )
                                 except Exception:
                                     pass
                             break
@@ -566,28 +643,45 @@ class VideoService:
                             if yolo_lock is not None:
                                 with yolo_lock:
                                     det_lists = _run_detection_on_batch(
-                                        model_to_use, batch, detection_device, imgsz=detection_imgsz
+                                        model_to_use,
+                                        batch,
+                                        detection_device,
+                                        imgsz=detection_imgsz,
                                     )
                             else:
                                 det_lists = _run_detection_on_batch(
-                                    model_to_use, batch, detection_device, imgsz=detection_imgsz
+                                    model_to_use,
+                                    batch,
+                                    detection_device,
+                                    imgsz=detection_imgsz,
                                 )
                             for i, idx in enumerate(chunk_indices):
                                 det = det_lists[i] if i < len(det_lists) else []
-                                if native_w > 0 and native_h > 0 and read_w > 0 and read_h > 0:
-                                    det = _scale_detections_to_native(det, read_w, read_h, native_w, native_h)
-                                sidecar_entries.append({
-                                    "frame_number": idx,
-                                    "timestamp_sec": idx / fps if fps > 0 else 0,
-                                    "detections": det,
-                                })
+                                if (
+                                    native_w > 0
+                                    and native_h > 0
+                                    and read_w > 0
+                                    and read_h > 0
+                                ):
+                                    det = _scale_detections_to_native(
+                                        det, read_w, read_h, native_w, native_h
+                                    )
+                                sidecar_entries.append(
+                                    {
+                                        "frame_number": idx,
+                                        "timestamp_sec": idx / fps if fps > 0 else 0,
+                                        "detections": det,
+                                    }
+                                )
                         else:
                             for idx in chunk_indices:
-                                sidecar_entries.append({
-                                    "frame_number": idx,
-                                    "timestamp_sec": idx / fps if fps > 0 else 0,
-                                    "detections": [],
-                                })
+                                sidecar_entries.append(
+                                    {
+                                        "frame_number": idx,
+                                        "timestamp_sec": idx / fps if fps > 0 else 0,
+                                        "detections": [],
+                                    }
+                                )
 
                         del batch
                         if torch.cuda.is_available():
@@ -603,7 +697,11 @@ class VideoService:
             # GPU_LOCK and decoder exited; disk write outside lock to avoid holding GPU idle.
             with open(sidecar_path, "w", encoding="utf-8") as f:
                 json.dump(payload, f, indent=None, separators=(",", ":"))
-            logger.debug("Wrote detection sidecar %s (%d frames)", sidecar_path, len(sidecar_entries))
+            logger.debug(
+                "Wrote detection sidecar %s (%d frames)",
+                sidecar_path,
+                len(sidecar_entries),
+            )
             return True
         except Exception as e:
             logger.error(
@@ -654,6 +752,7 @@ class VideoService:
             if detection_model:
                 try:
                     from ultralytics import YOLO
+
                     model_path = get_detection_model_path(config)
                     yolo_model = YOLO(model_path)
                 except Exception as e:
@@ -675,7 +774,7 @@ class VideoService:
                     camera_name = future_to_cam[future]
                     try:
                         ok = future.result()
-                    except Exception as e:
+                    except Exception:
                         logger.exception("Sidecar %s failed", camera_name)
                         ok = False
                     results.append((camera_name, ok))
@@ -686,8 +785,9 @@ class VideoService:
             if lock is not None:
                 lock.release()
 
-    def generate_gif_from_clip(self, clip_path: str, output_path: str,
-                               fps: int = 5, duration_sec: float = 5.0) -> bool:
+    def generate_gif_from_clip(
+        self, clip_path: str, output_path: str, fps: int = 5, duration_sec: float = 5.0
+    ) -> bool:
         """
         Generate animated GIF from video clip using FFmpeg subprocess.
 
@@ -697,10 +797,15 @@ class VideoService:
         try:
             scale = "320:-1"
             cmd = [
-                "ffmpeg", "-y", "-i", clip_path,
-                "-vf", f"fps={fps},scale={scale}",
-                "-t", str(duration_sec),
-                output_path
+                "ffmpeg",
+                "-y",
+                "-i",
+                clip_path,
+                "-vf",
+                f"fps={fps},scale={scale}",
+                "-t",
+                str(duration_sec),
+                output_path,
             ]
             proc = subprocess.run(cmd, capture_output=True, timeout=self.ffmpeg_timeout)
             if proc.returncode == 0 and os.path.exists(output_path):

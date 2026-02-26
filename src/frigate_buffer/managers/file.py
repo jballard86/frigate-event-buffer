@@ -1,35 +1,37 @@
 """File operations: folder creation, summaries, cleanup."""
 
+import json
+import logging
 import os
 import re
-import json
-import time
 import shutil
+import time
 import zipfile
-import logging
 from datetime import datetime
-from typing import Any, Union
+from typing import Any
 
 from frigate_buffer.constants import NON_CAMERA_DIRS, is_tensor
 from frigate_buffer.models import EventState
 
-logger = logging.getLogger('frigate-buffer')
+logger = logging.getLogger("frigate-buffer")
 
 # Optional imports for AI frame stitched write (color + B/W)
 try:
     import cv2
     import numpy as np
+
     _CV2_AVAILABLE = True
 except ImportError:
     _CV2_AVAILABLE = False
 
 
-def write_stitched_frame(frame_bgr: Union[Any, np.ndarray], filepath: str) -> bool:
+def write_stitched_frame(frame_bgr: Any | np.ndarray, filepath: str) -> bool:
     """
     Write a single color image to filepath.
 
-    Accepts numpy ndarray HWC BGR (from overlay or legacy path) or torch.Tensor BCHW/CHW RGB.
-    For tensor: uses torchvision.io.encode_jpeg and writes bytes. For numpy: uses cv2.imwrite.
+    Accepts numpy ndarray HWC BGR (from overlay or legacy path) or
+    torch.Tensor BCHW/CHW RGB. For tensor: uses torchvision.io.encode_jpeg
+    and writes bytes. For numpy: uses cv2.imwrite.
     """
     try:
         os.makedirs(os.path.dirname(filepath), exist_ok=True)
@@ -42,13 +44,18 @@ def write_stitched_frame(frame_bgr: Union[Any, np.ndarray], filepath: str) -> bo
             import torch
             from torchvision.io import encode_jpeg
         except ImportError as e:
-            logger.warning("torch/torchvision not available for tensor frame write: %s", e)
+            logger.warning(
+                "torch/torchvision not available for tensor frame write: %s", e
+            )
             return False
         t = frame_bgr
         if t.dim() == 4:
             t = t.squeeze(0)
         if t.dim() != 3 or t.shape[0] not in (1, 3):
-            logger.warning("write_stitched_frame tensor expected CHW with 1 or 3 channels, got shape %s", t.shape)
+            logger.warning(
+                "write_stitched_frame expected CHW 1 or 3 channels, got shape %s",
+                t.shape,
+            )
             return False
         if t.dtype == torch.float32 or t.dtype == torch.float64:
             t = (t.clamp(0.0, 1.0) * 255.0).round().to(torch.uint8)
@@ -104,9 +111,16 @@ def _write_ai_analysis_internal(
         # Extract fields from item (tuple/list or object with attributes)
         is_tuple = isinstance(item, (tuple, list))
         frame = getattr(item, "frame", item[0] if is_tuple and len(item) >= 1 else None)
-        frame_time_sec = getattr(item, "timestamp_sec", item[1] if is_tuple and len(item) >= 2 else 0.0)
-        camera = camera_override or getattr(item, "camera", item[2] if is_tuple and len(item) >= 3 else "")
-        meta = getattr(item, "metadata", item[3] if is_tuple and len(item) >= 4 else {}) or {}
+        frame_time_sec = getattr(
+            item, "timestamp_sec", item[1] if is_tuple and len(item) >= 2 else 0.0
+        )
+        camera = camera_override or getattr(
+            item, "camera", item[2] if is_tuple and len(item) >= 3 else ""
+        )
+        meta = (
+            getattr(item, "metadata", item[3] if is_tuple and len(item) >= 4 else {})
+            or {}
+        )
 
         if frame is None:
             continue
@@ -150,19 +164,20 @@ def write_ai_frame_analysis_multi_cam(
     save_frames: bool = True,
 ) -> None:
     """Write ai_frame_analysis/frames at CE root with multi-cam manifest.
-    Accepts list of ExtractedFrame (or objects with .frame, .timestamp_sec, .camera, .metadata)."""
+    Accepts list of ExtractedFrame (or objects with .frame, .timestamp_sec,
+    .camera, .metadata)."""
     _write_ai_analysis_internal(
         event_dir,
         frames_with_time_and_camera,
         write_manifest=write_manifest,
         create_zip_flag=create_zip_flag,
         save_frames=save_frames,
-        include_camera_in_filename=True
+        include_camera_in_filename=True,
     )
 
 
 def create_ai_analysis_zip(event_dir: str) -> None:
-    """Create event_dir/ai_analysis_debug.zip containing ai_frame_analysis/ and analysis_result.json."""
+    """Create ai_analysis_debug.zip (ai_frame_analysis + analysis_result.json)."""
     zip_path = os.path.join(event_dir, "ai_analysis_debug.zip")
     analysis_root = os.path.join(event_dir, "analysis_result.json")
     ai_dir = os.path.join(event_dir, "ai_frame_analysis")
@@ -198,9 +213,9 @@ class FileManager:
     def sanitize_camera_name(self, camera: str) -> str:
         """Sanitize camera name for filesystem use."""
         # Lowercase, replace spaces with underscores, remove special chars
-        sanitized = camera.lower().replace(' ', '_')
-        sanitized = re.sub(r'[^a-z0-9_]', '', sanitized)
-        result = sanitized or 'unknown'
+        sanitized = camera.lower().replace(" ", "_")
+        sanitized = re.sub(r"[^a-z0-9_]", "", sanitized)
+        result = sanitized or "unknown"
 
         # Verify path security
         final_path = os.path.realpath(os.path.join(self.storage_path, result))
@@ -220,7 +235,10 @@ class FileManager:
         # Verify path security
         real_storage_path = os.path.realpath(self.storage_path)
         real_folder_path = os.path.realpath(folder_path)
-        if os.path.commonpath([real_storage_path, real_folder_path]) != real_storage_path:
+        if (
+            os.path.commonpath([real_storage_path, real_folder_path])
+            != real_storage_path
+        ):
             raise ValueError(f"Invalid event path: {folder_path}")
 
         os.makedirs(folder_path, exist_ok=True)
@@ -235,14 +253,19 @@ class FileManager:
         # Verify path security
         real_storage_path = os.path.realpath(self.storage_path)
         real_folder_path = os.path.realpath(folder_path)
-        if os.path.commonpath([real_storage_path, real_folder_path]) != real_storage_path:
+        if (
+            os.path.commonpath([real_storage_path, real_folder_path])
+            != real_storage_path
+        ):
             raise ValueError(f"Invalid consolidated event path: {folder_path}")
 
         os.makedirs(folder_path, exist_ok=True)
         logger.info(f"Created consolidated folder: events/{folder_name}")
         return folder_path
 
-    def ensure_consolidated_camera_folder(self, ce_folder_path: str, camera: str) -> str:
+    def ensure_consolidated_camera_folder(
+        self, ce_folder_path: str, camera: str
+    ) -> str:
         """Ensure events/{ce_id}/{camera}/ exists. Returns the camera folder path."""
         sanitized = self.sanitize_camera_name(camera)
         camera_path = os.path.join(ce_folder_path, sanitized)
@@ -255,8 +278,7 @@ class FileManager:
             summary_path = os.path.join(folder_path, "summary.txt")
 
             timestamp_str = time.strftime(
-                '%Y-%m-%d %H:%M:%S',
-                time.localtime(event.created_at)
+                "%Y-%m-%d %H:%M:%S", time.localtime(event.created_at)
             )
 
             lines = [
@@ -284,14 +306,15 @@ class FileManager:
 
             if event.threat_level > 0:
                 level_names = {0: "Normal", 1: "Suspicious", 2: "Critical"}
-                lines.append(f"Threat Level: {event.threat_level} ({level_names.get(event.threat_level, 'Unknown')})")
+                name = level_names.get(event.threat_level, "Unknown")
+                lines.append(f"Threat Level: {event.threat_level} ({name})")
 
             if event.review_summary:
                 lines.append("")
                 lines.append("Review Summary: See review_summary.md")
 
-            with open(summary_path, 'w') as f:
-                f.write('\n'.join(lines))
+            with open(summary_path, "w") as f:
+                f.write("\n".join(lines))
 
             logger.debug(f"Written summary for {event.event_id}")
             return True
@@ -304,7 +327,7 @@ class FileManager:
         """Write review_summary.md with the Frigate review summary."""
         try:
             summary_path = os.path.join(folder_path, "review_summary.md")
-            with open(summary_path, 'w') as f:
+            with open(summary_path, "w") as f:
                 f.write(summary_markdown)
             logger.debug(f"Written review summary to {folder_path}")
             return True
@@ -313,23 +336,35 @@ class FileManager:
             return False
 
     def append_timeline_entry(self, folder_path: str, entry: dict) -> None:
-        """Append an entry to the event folder timeline (append-only JSONL for efficiency)."""
+        """Append an entry to the event folder timeline (append-only JSONL)."""
         entry = dict(entry)
         entry["ts"] = entry.get("ts") or datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
         append_path = os.path.join(folder_path, "notification_timeline_append.jsonl")
         try:
-            with open(append_path, 'a') as f:
-                f.write(json.dumps(entry) + '\n')
+            with open(append_path, "a") as f:
+                f.write(json.dumps(entry) + "\n")
         except Exception as e:
-            logger.debug(f"Failed to append timeline entry: {e}")
+            logger.debug("Failed to append timeline entry: %s", e)
 
-    def write_ce_summary(self, folder_path: str, ce_id: str, title: str, description: str,
-                         scene: str = "", threat_level: int = 0, label: str = "unknown",
-                         start_time: float = 0) -> bool:
+    def write_ce_summary(
+        self,
+        folder_path: str,
+        ce_id: str,
+        title: str,
+        description: str,
+        scene: str = "",
+        threat_level: int = 0,
+        label: str = "unknown",
+        start_time: float = 0,
+    ) -> bool:
         """Write summary.txt for a consolidated event at CE root."""
         try:
             summary_path = os.path.join(folder_path, "summary.txt")
-            timestamp_str = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(start_time)) if start_time else ""
+            timestamp_str = (
+                time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(start_time))
+                if start_time
+                else ""
+            )
             lines = [
                 f"Event ID: {ce_id}",
                 "Camera: events (consolidated)",
@@ -346,20 +381,31 @@ class FileManager:
                 lines.append(f"Scene: {scene}")
             if threat_level > 0:
                 level_names = {0: "Normal", 1: "Suspicious", 2: "Critical"}
-                lines.append(f"Threat Level: {threat_level} ({level_names.get(threat_level, 'Unknown')})")
+                name = level_names.get(threat_level, "Unknown")
+                lines.append(f"Threat Level: {threat_level} ({name})")
             lines.append("")
             lines.append("Review Summary: See review_summary.md")
-            with open(summary_path, 'w') as f:
-                f.write('\n'.join(lines))
+            with open(summary_path, "w") as f:
+                f.write("\n".join(lines))
             logger.debug("Written CE summary for %s", ce_id)
             return True
         except Exception as e:
             logger.exception("Failed to write CE summary: %s", e)
             return False
 
-    def write_ce_metadata_json(self, folder_path: str, ce_id: str, title: str, description: str,
-                               scene: str = "", threat_level: int = 0, label: str = "unknown",
-                               camera: str = "events", start_time: float = 0, end_time: float | None = None) -> bool:
+    def write_ce_metadata_json(
+        self,
+        folder_path: str,
+        ce_id: str,
+        title: str,
+        description: str,
+        scene: str = "",
+        threat_level: int = 0,
+        label: str = "unknown",
+        camera: str = "events",
+        start_time: float = 0,
+        end_time: float | None = None,
+    ) -> bool:
         """Write metadata.json for a consolidated event at CE root."""
         try:
             meta_path = os.path.join(folder_path, "metadata.json")
@@ -376,7 +422,7 @@ class FileManager:
                 "genai_scene": scene,
                 "phase": "finalized",
             }
-            with open(meta_path, 'w') as f:
+            with open(meta_path, "w") as f:
                 json.dump(metadata, f, indent=2)
             return True
         except Exception as e:
@@ -400,37 +446,42 @@ class FileManager:
                 "genai_scene": event.genai_scene,
                 "phase": event.phase.name,
             }
-            with open(meta_path, 'w') as f:
+            with open(meta_path, "w") as f:
                 json.dump(metadata, f, indent=2)
             return True
         except Exception as e:
-            logger.error(f"Failed to write metadata.json: {e}")
+            logger.error("Failed to write metadata.json: %s", e)
             return False
 
     def delete_event_folder(self, folder_path: str) -> bool:
-        """Delete one event folder (or one CE camera subfolder). Path must be under storage_path.
-        Returns True if the folder was deleted, False if path invalid or not found."""
+        """Delete one event folder (or one CE camera subfolder).
+        Path under storage_path. Returns True if deleted."""
         try:
             base = os.path.realpath(self.storage_path)
             target = os.path.realpath(folder_path)
             if not target.startswith(base) or target == base:
-                logger.warning(f"Refusing to delete path outside storage: {folder_path}")
+                logger.warning(
+                    "Refusing to delete path outside storage: %s", folder_path
+                )
                 return False
             if not os.path.isdir(target):
                 return False
             shutil.rmtree(target)
-            logger.info(f"Deleted event folder: {folder_path}")
+            logger.info("Deleted event folder: %s", folder_path)
             return True
         except OSError as e:
-            logger.warning(f"Failed to delete event folder {folder_path}: {e}")
+            logger.warning("Failed to delete event folder %s: %s", folder_path, e)
             return False
 
     def rename_event_folder(self, folder_path: str, suffix: str = "-canceled") -> str:
-        """Rename an event folder by appending suffix to its basename. Path must be under storage_path.
-        Returns the new path. Raises ValueError if path is outside storage."""
+        """Rename event folder by appending suffix. Path under storage_path.
+        Returns new path. Raises ValueError if outside storage."""
         real_storage = os.path.realpath(self.storage_path)
         real_folder = os.path.realpath(folder_path)
-        if os.path.commonpath([real_storage, real_folder]) != real_storage or real_folder == real_storage:
+        if (
+            os.path.commonpath([real_storage, real_folder]) != real_storage
+            or real_folder == real_storage
+        ):
             raise ValueError(f"Invalid event path for rename: {folder_path}")
         if not os.path.isdir(real_folder):
             raise ValueError(f"Not a directory: {folder_path}")
@@ -443,35 +494,47 @@ class FileManager:
         if os.path.exists(new_path):
             raise ValueError(f"Target already exists: {new_path}")
         os.rename(real_folder, new_path)
-        logger.info(f"Renamed event folder to {new_basename}")
+        logger.info("Renamed event folder to %s", new_basename)
         return new_path
 
-    def write_canceled_summary(self, folder_path: str, reason: str = "Event exceeded max_event_length_seconds; AI analysis skipped.") -> bool:
-        """Write summary.txt for a canceled event so the event view shows the cancel title and reason."""
+    def write_canceled_summary(
+        self,
+        folder_path: str,
+        reason: str = "Event exceeded max_event_length_seconds; AI analysis skipped.",
+    ) -> bool:
+        """Write summary.txt for canceled event (shows cancel title and reason)."""
         try:
             summary_path = os.path.join(folder_path, "summary.txt")
             lines = [
                 "Title: Canceled event: max event length exceeded",
                 f"Description: {reason}",
             ]
-            with open(summary_path, 'w') as f:
-                f.write('\n'.join(lines))
-            logger.debug(f"Written canceled summary to {folder_path}")
+            with open(summary_path, "w") as f:
+                f.write("\n".join(lines))
+            logger.debug("Written canceled summary to %s", folder_path)
             return True
         except Exception as e:
-            logger.exception(f"Failed to write canceled summary to {folder_path}: {e}")
+            logger.exception(
+                "Failed to write canceled summary to %s: %s", folder_path, e
+            )
             return False
 
-    def cleanup_old_events(self, active_event_ids: list[str],
-                          active_ce_folder_names: list[str] | None = None) -> int:
-        """Delete folders older than retention period. Returns count deleted.
-        active_ce_folder_names: folder names of active consolidated events (e.g. 1771003190_abc) to skip."""
+    def cleanup_old_events(
+        self,
+        active_event_ids: list[str],
+        active_ce_folder_names: list[str] | None = None,
+    ) -> int:
+        """Delete folders older than retention. Returns count deleted.
+        active_ce_folder_names: active CE folder names to skip."""
         now = time.time()
         cutoff = now - (self.retention_days * 86400)
         deleted_count = 0
         active_ce = set(active_ce_folder_names or [])
 
-        logger.debug(f"Running cleanup: cutoff={time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(cutoff))}")
+        logger.debug(
+            "Running cleanup: cutoff=%s",
+            time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(cutoff)),
+        )
 
         try:
             # Iterate through camera subdirectories and events/
@@ -485,20 +548,28 @@ class FileManager:
 
                     # Check if this is a camera folder (contains event folders)
                     # or a legacy flat event folder (for migration period)
-                    first_item = camera_dir.split('_', 1)
+                    first_item = camera_dir.split("_", 1)
                     if len(first_item) > 1 and first_item[0].isdigit():
                         # Legacy flat structure: {timestamp}_{event_id}
                         try:
                             ts = float(first_item[0])
                             event_id = first_item[1]
-                            base_id = (event_id[:-len('-canceled')] if (event_id and event_id.endswith('-canceled')) else event_id) if event_id else None
+                            base_id = (
+                                (
+                                    event_id[: -len("-canceled")]
+                                    if (event_id and event_id.endswith("-canceled"))
+                                    else event_id
+                                )
+                                if event_id
+                                else None
+                            )
 
                             if base_id and base_id in active_event_ids:
                                 continue
 
                             if ts < cutoff:
                                 shutil.rmtree(camera_path)
-                                logger.info(f"Cleaned up legacy event: {camera_dir}")
+                                logger.info("Cleaned up legacy event: %s", camera_dir)
                                 deleted_count += 1
                         except (ValueError, IndexError):
                             pass
@@ -517,55 +588,91 @@ class FileManager:
                             event_path = event_entry.path
 
                             # Test run folders (test1, test2, ...): age-only by mtime
-                            if camera_dir == "events" and re.match(r"^test\d+$", event_dir):
+                            if camera_dir == "events" and re.match(
+                                r"^test\d+$", event_dir
+                            ):
                                 try:
                                     if os.path.getmtime(event_path) < cutoff:
                                         shutil.rmtree(event_path)
-                                        logger.info(f"Cleaned up old test run: {camera_dir}/{event_dir}")
+                                        logger.info(
+                                            "Cleaned up old test run: %s/%s",
+                                            camera_dir,
+                                            event_dir,
+                                        )
                                         deleted_count += 1
                                 except OSError:
                                     pass
                                 continue
 
                             try:
-                                parts = event_dir.split('_', 1)
+                                parts = event_dir.split("_", 1)
                                 ts = float(parts[0])
                                 event_id = parts[1] if len(parts) > 1 else None
-                                # For -canceled folders, match by base id so we protect until event is removed; folder remains deletable when past retention
-                                base_id = (event_id[:-len('-canceled')] if (event_id and event_id.endswith('-canceled')) else event_id) if event_id else None
+                                # For -canceled: match by base id; protect until event
+                                # removed; folder deletable when past retention
+                                base_id = (
+                                    (
+                                        event_id[: -len("-canceled")]
+                                        if (event_id and event_id.endswith("-canceled"))
+                                        else event_id
+                                    )
+                                    if event_id
+                                    else None
+                                )
 
-                                # Skip if event is still active (legacy) or CE is active (events/ folder)
+                                # Skip if event still active (legacy) or CE active
                                 if base_id and base_id in active_event_ids:
-                                    logger.debug(f"Skipping active event: {camera_dir}/{event_dir}")
+                                    logger.debug(
+                                        "Skipping active event: %s/%s",
+                                        camera_dir,
+                                        event_dir,
+                                    )
                                     continue
                                 if camera_dir == "events" and event_dir in active_ce:
-                                    logger.debug(f"Skipping active consolidated event: {camera_dir}/{event_dir}")
+                                    logger.debug(
+                                        "Skipping active consolidated event: %s/%s",
+                                        camera_dir,
+                                        event_dir,
+                                    )
                                     continue
 
                                 # Delete if older than cutoff
                                 if ts < cutoff:
                                     shutil.rmtree(event_path)
-                                    logger.info(f"Cleaned up old event: {camera_dir}/{event_dir}")
+                                    logger.info(
+                                        "Cleaned up old event: %s/%s",
+                                        camera_dir,
+                                        event_dir,
+                                    )
                                     deleted_count += 1
 
                             except (ValueError, IndexError):
-                                logger.debug(f"Skipping malformed folder: {camera_dir}/{event_dir}")
+                                logger.debug(
+                                    "Skipping malformed folder: %s/%s",
+                                    camera_dir,
+                                    event_dir,
+                                )
                                 continue
 
         except Exception as e:
-            logger.error(f"Cleanup error: {e}")
+            logger.error("Cleanup error: %s", e)
 
         return deleted_count
 
     def _sum_event_folder(self, event_path: str) -> tuple:
-        """Sum clip, snapshot, and description sizes in an event folder. Returns (clips, snapshots, descriptions) in bytes."""
+        """Sum clip, snapshot, description sizes in event folder.
+        Returns (clips, snapshots, descriptions) in bytes."""
         from frigate_buffer.services.query import resolve_clip_in_folder
+
         clip_basename = resolve_clip_in_folder(event_path)
         clip_path = os.path.join(event_path, clip_basename) if clip_basename else None
-        snapshot_path = os.path.join(event_path, 'snapshot.jpg')
+        snapshot_path = os.path.join(event_path, "snapshot.jpg")
         desc_files = (
-            'summary.txt', 'review_summary.md', 'metadata.json',
-            'notification_timeline.json', 'analysis_result.json'
+            "summary.txt",
+            "review_summary.md",
+            "metadata.json",
+            "notification_timeline.json",
+            "analysis_result.json",
         )
         cam_clips = cam_snapshots = cam_descriptions = 0
         try:
@@ -588,7 +695,7 @@ class FileManager:
         return (cam_clips, cam_snapshots, cam_descriptions)
 
     def _dir_total_bytes(self, path: str) -> int:
-        """Return total size in bytes of all files under path. Returns 0 if path does not exist or is not a dir."""
+        """Return total size in bytes of all files under path. 0 if not a dir."""
         if not os.path.isdir(path):
             return 0
         total = 0
@@ -605,8 +712,8 @@ class FileManager:
 
     def compute_storage_stats(self) -> dict:
         """Compute storage usage by camera and type. Returns bytes.
-        Covers: legacy camera/event folders, consolidated events/ce_id/camera/ and CE-root,
-        and daily_reports/ and daily_reviews/ under storage_path.
+        Covers: legacy camera/event folders, consolidated events/ce_id/camera/
+        and CE-root, and daily_reports/ and daily_reviews/ under storage_path.
         """
         clips = 0
         snapshots = 0
@@ -628,7 +735,7 @@ class FileManager:
                 camera_dir = camera_entry.name
                 camera_path = camera_entry.path
 
-                if camera_dir.split('_')[0].isdigit():
+                if camera_dir.split("_")[0].isdigit():
                     continue
                 if camera_dir in NON_CAMERA_DIRS:
                     continue
@@ -636,15 +743,16 @@ class FileManager:
                 cam_clips = cam_snapshots = cam_descriptions = 0
 
                 if camera_dir == "events":
-                    # Consolidated layout: events/{ce_id}/ (CE root) and events/{ce_id}/{camera}/ (event files).
-                    # Aggregate by camera name so storage by_camera shows per-camera usage, not "events".
+                    # Consolidated: events/{ce_id}/ and events/{ce_id}/{camera}/.
+                    # Aggregate by camera name so by_camera shows per-camera usage.
                     try:
                         with os.scandir(camera_path) as it_ce:
                             for ce_entry in it_ce:
                                 if not ce_entry.is_dir():
                                     continue
                                 ce_path = ce_entry.path
-                                # CE-root files (notification.gif, review_summary.md) go to descriptions total only
+                                # CE-root files (notification.gif, review_summary.md)
+                                # -> descriptions
                                 for f in ("notification.gif", "review_summary.md"):
                                     p = os.path.join(ce_path, f)
                                     try:
@@ -655,10 +763,15 @@ class FileManager:
                                 try:
                                     with os.scandir(ce_path) as it_cam:
                                         for cam_entry in it_cam:
-                                            if not cam_entry.is_dir() or cam_entry.name.startswith("."):
+                                            if (
+                                                not cam_entry.is_dir()
+                                                or cam_entry.name.startswith(".")
+                                            ):
                                                 continue
                                             cam_name = cam_entry.name
-                                            c, s, d = self._sum_event_folder(cam_entry.path)
+                                            c, s, d = self._sum_event_folder(
+                                                cam_entry.path
+                                            )
                                             if cam_name not in by_camera:
                                                 by_camera[cam_name] = {
                                                     "clips": 0,
@@ -694,17 +807,17 @@ class FileManager:
                 cam_total = cam_clips + cam_snapshots + cam_descriptions
                 if cam_total > 0 and camera_dir != "events":
                     by_camera[camera_dir] = {
-                        'clips': cam_clips,
-                        'snapshots': cam_snapshots,
-                        'descriptions': cam_descriptions,
-                        'total': cam_total
+                        "clips": cam_clips,
+                        "snapshots": cam_snapshots,
+                        "descriptions": cam_descriptions,
+                        "total": cam_total,
                     }
                 clips += cam_clips
                 snapshots += cam_snapshots
                 descriptions += cam_descriptions
 
             # Include daily_reports and daily_reviews in total and descriptions
-            for subdir in ('daily_reports', 'daily_reviews'):
+            for subdir in ("daily_reports", "daily_reviews"):
                 path = os.path.join(self.storage_path, subdir)
                 size = self._dir_total_bytes(path)
                 if size > 0:
@@ -716,9 +829,9 @@ class FileManager:
             total = clips + snapshots + descriptions
 
         return {
-            'clips': clips,
-            'snapshots': snapshots,
-            'descriptions': descriptions,
-            'total': total,
-            'by_camera': by_camera
+            "clips": clips,
+            "snapshots": snapshots,
+            "descriptions": descriptions,
+            "total": total,
+            "by_camera": by_camera,
         }

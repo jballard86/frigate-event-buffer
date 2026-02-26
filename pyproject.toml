@@ -25,6 +25,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "pytest",
+    "ruff",
 ]
 
 [tool.setuptools.packages.find]
@@ -37,6 +38,63 @@ where = ["src"]
 pythonpath = ["src"]
 testpaths = ["tests"]
 addopts = "-v"
+
+[tool.ruff]
+line-length = 88
+target-version = "py312"
+src = ["src", "tests"]
+exclude = ["scripts"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "C4", "UP"]
+# E402 (import not at top): intentional in tests and some modules
+extend-ignore = ["E402"]
+
+# E501 (line-too-long): fix gradually; remove a file from this list when done
+[tool.ruff.lint.per-file-ignores]
+"src/frigate_buffer/event_test/event_test_orchestrator.py" = ["E501"]
+"src/frigate_buffer/managers/consolidation.py" = ["E501"]
+"src/frigate_buffer/orchestrator.py" = ["E501"]
+"src/frigate_buffer/services/ai_analyzer.py" = ["E501"]
+"src/frigate_buffer/services/daily_reporter.py" = ["E501"]
+"src/frigate_buffer/services/frigate_export_watchdog.py" = ["E501"]
+"src/frigate_buffer/services/ha_storage_stats.py" = ["E501"]
+"src/frigate_buffer/services/mqtt_handler.py" = ["E501"]
+"src/frigate_buffer/services/multi_clip_extractor.py" = ["E501"]
+"src/frigate_buffer/services/query.py" = ["E501"]
+"src/frigate_buffer/services/video.py" = ["E501"]
+"src/frigate_buffer/services/video_compilation.py" = ["E501"]
+"tests/test_ai_analyzer.py" = ["E501"]
+"tests/test_config_schema.py" = ["E501"]
+"tests/test_constants.py" = ["E501"]
+"tests/test_consolidation.py" = ["E501"]
+"tests/test_crop_utils.py" = ["E501"]
+"tests/test_daily_reporter.py" = ["E501"]
+"tests/test_download_service.py" = ["E501"]
+"tests/test_event_test.py" = ["E501"]
+"tests/test_file_manager.py" = ["E501"]
+"tests/test_frigate_proxy.py" = ["E501"]
+"tests/test_lifecycle_service.py" = ["E501"]
+"tests/test_logging_utils.py" = ["E501"]
+"tests/test_main_version.py" = ["E501"]
+"tests/test_mqtt_handler.py" = ["E501"]
+"tests/test_multi_clip_extractor.py" = ["E501"]
+"tests/test_notifications.py" = ["E501"]
+"tests/test_path_helpers.py" = ["E501"]
+"tests/test_pushover_provider.py" = ["E501"]
+"tests/test_query_service.py" = ["E501"]
+"tests/test_quick_title_service.py" = ["E501"]
+"tests/test_report_helpers.py" = ["E501"]
+"tests/test_state_manager.py" = ["E501"]
+"tests/test_timeline.py" = ["E501"]
+"tests/test_timeline_ema.py" = ["E501"]
+"tests/test_video_compilation.py" = ["E501"]
+"tests/test_video_service.py" = ["E501"]
+"tests/test_web_server_path_safety.py" = ["E501"]
+"tests/test_zone_filter.py" = ["E501"]
+
+[tool.ruff.format]
+quote-style = "double"
 
 [tool.pyright]
 include = ["src"]

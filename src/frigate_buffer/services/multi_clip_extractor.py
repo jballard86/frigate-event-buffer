@@ -17,8 +17,9 @@ import json
 import logging
 import os
 import time
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Any, Callable
+from typing import Any
 
 from frigate_buffer.constants import NVDEC_INIT_FAILURE_PREFIX
 from frigate_buffer.services.gpu_decoder import create_decoder
@@ -28,9 +29,11 @@ logger = logging.getLogger("frigate-buffer")
 
 try:
     from frigate_buffer.services import crop_utils as _crop_utils
+
     _CROP_AVAILABLE = True
 except ImportError:
     _CROP_AVAILABLE = False
+    _crop_utils = None  # type: ignore[assignment]
 
 try:
     from frigate_buffer.models import ExtractedFrame
@@ -56,7 +59,9 @@ def _person_area_from_detections(detections: list[dict[str, Any]]) -> float:
     return total
 
 
-def _load_sidecar_for_camera(camera_folder: str) -> tuple[list[dict[str, Any]], int, int] | None:
+def _load_sidecar_for_camera(
+    camera_folder: str,
+) -> tuple[list[dict[str, Any]], int, int] | None:
     """
     Load detection.json from camera folder.
     Returns (entries, native_width, native_height) or None. Supports both legacy list format
@@ -89,7 +94,9 @@ def _nearest_sidecar_entry(
     """Return the sidecar entry with timestamp_sec closest to t_sec, or None if empty."""
     if not sidecar_entries:
         return None
-    return min(sidecar_entries, key=lambda e: abs((e.get("timestamp_sec") or 0) - t_sec))
+    return min(
+        sidecar_entries, key=lambda e: abs((e.get("timestamp_sec") or 0) - t_sec)
+    )
 
 
 def _person_area_at_time(sidecar_entries: list[dict[str, Any]], t_sec: float) -> float:
@@ -111,7 +118,7 @@ def _detection_timestamps_with_person(
     """Build sorted list of timestamps (from all cameras) where person area > 0.
     Handles None or empty sidecar per camera safely."""
     timestamps: set[float] = set()
-    for cam, entries in sidecars.items():
+    for _cam, entries in sidecars.items():
         for entry in entries or []:
             area = _person_area_from_detections(entry.get("detections") or [])
             if area > 0:
@@ -121,7 +128,9 @@ def _detection_timestamps_with_person(
     return sorted(timestamps)
 
 
-def _subsample_with_min_gap(timestamps: list[float], step_sec: float, max_count: int) -> list[float]:
+def _subsample_with_min_gap(
+    timestamps: list[float], step_sec: float, max_count: int
+) -> list[float]:
     """Select timestamps with at least step_sec between them, up to max_count.
     Iterates in ascending order; selects when t >= last_selected + step_sec."""
     if not timestamps or step_sec <= 0 or max_count <= 0:
@@ -142,6 +151,7 @@ def _get_fps_duration_from_path(path: str) -> tuple[float, float] | None:
     """
     try:
         from frigate_buffer.services.video import _get_video_metadata
+
         meta = _get_video_metadata(path)
         if meta is not None:
             _, _, fps, duration = meta
@@ -194,6 +204,7 @@ def extract_target_centric_frames(
 
     # Single scan: discover camera clips ce_folder/CameraName/*.mp4 (dynamic clip names)
     from frigate_buffer.services.query import resolve_clip_in_folder
+
     clip_paths: list[tuple[str, str]] = []  # (camera_name, path)
     try:
         with os.scandir(ce_folder_path) as it:
@@ -220,8 +231,10 @@ def extract_target_centric_frames(
 
     step_sec = float(max_frames_sec) if max_frames_sec > 0 else 1.0
     collected: list[Any] = []
-    path_per_cam = {cam: path for cam, path in clip_paths}
-    target_crop_area = (crop_width * crop_height) if (crop_width > 0 and crop_height > 0) else 0
+    path_per_cam = dict(clip_paths)
+    target_crop_area = (
+        (crop_width * crop_height) if (crop_width > 0 and crop_height > 0) else 0
+    )
 
     # Load sidecars in parallel (one JSON read per camera).
     camera_folders = {cam: os.path.dirname(path) for cam, path in clip_paths}
@@ -251,7 +264,9 @@ def extract_target_centric_frames(
     if log_callback:
         log_callback(f"Loaded sidecars for {len(sidecars)} camera(s).")
 
-    _log_phase_timing = bool(config.get("LOG_EXTRACTION_PHASE_TIMING", False)) if config else False
+    _log_phase_timing = (
+        bool(config.get("LOG_EXTRACTION_PHASE_TIMING", False)) if config else False
+    )
     if not _log_phase_timing and logger.isEnabledFor(logging.DEBUG):
         _log_phase_timing = True
 
@@ -265,13 +280,15 @@ def extract_target_centric_frames(
         log_callback("Opening clips (PyNvVideoCodec NVDEC).")
     # ffprobe outside GPU_LOCK so the GPU is not held during subprocess I/O (Finding 4.2).
     clip_metadata: dict[str, tuple[float, float] | None] = {}
-    for (_cam, path) in clip_paths:
+    for _cam, path in clip_paths:
         clip_metadata[path] = _get_fps_duration_from_path(path)
     with contextlib.ExitStack() as stack:
         with GPU_LOCK:
-            for (cam, path) in clip_paths:
+            for cam, path in clip_paths:
                 try:
-                    ctx = stack.enter_context(create_decoder(path, gpu_id=cuda_device_index))
+                    ctx = stack.enter_context(
+                        create_decoder(path, gpu_id=cuda_device_index)
+                    )
                 except Exception as e:
                     logger.error(
                         "%s (decoder open failed). cam=%s path=%s error=%s Check GPU, drivers; container may restart.",
@@ -288,7 +305,10 @@ def extract_target_centric_frames(
                     )
                     if torch.cuda.is_available():
                         try:
-                            logger.debug("CUDA memory: %s", torch.cuda.memory_summary(abbreviated=True))
+                            logger.debug(
+                                "CUDA memory: %s",
+                                torch.cuda.memory_summary(abbreviated=True),
+                            )
                         except Exception:
                             pass
                     return []
@@ -360,7 +380,9 @@ def extract_target_centric_frames(
         sample_times_list = [t for t, _ in assignments]
         assignment_list = [c for _, c in assignments]
         if log_callback:
-            log_callback(f"Phase 1 EMA: {len(sample_times_list)} sample times, segment merge (min {camera_switch_min_segment_frames} frames).")
+            log_callback(
+                f"Phase 1 EMA: {len(sample_times_list)} sample times, segment merge (min {camera_switch_min_segment_frames} frames)."
+            )
 
         current_camera: str | None = None
         frames_on_current = 0
@@ -416,35 +438,56 @@ def extract_target_centric_frames(
                 continue
             if batch is None or batch.shape[0] < 1:
                 continue
+            batch_to_free: Any = batch
             try:
                 frame_t = batch[0:1].clone()
                 del batch
+                batch_to_free = None
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
                 best_tensor = frame_t
                 meta: dict[str, Any] = {}
                 if crop_width > 0 and crop_height > 0 and _CROP_AVAILABLE:
+                    assert _crop_utils is not None  # bound when _CROP_AVAILABLE
                     entry = _nearest_sidecar_entry(sidecars.get(best_camera) or [], T)
                     detections = (entry.get("detections") or []) if entry else []
-                    frame_h, frame_w = int(best_tensor.shape[2]), int(best_tensor.shape[3])
+                    frame_h, frame_w = (
+                        int(best_tensor.shape[2]),
+                        int(best_tensor.shape[3]),
+                    )
                     frame_area = frame_w * frame_h
                     native_w, native_h = native_size_per_cam.get(best_camera, (0, 0))
                     if native_w > 0 and native_h > 0:
                         frame_area = native_w * native_h
-                    reference_area = min(target_crop_area, frame_area) if target_crop_area > 0 else frame_area
+                    reference_area = (
+                        min(target_crop_area, frame_area)
+                        if target_crop_area > 0
+                        else frame_area
+                    )
                     if not detections:
-                        best_tensor = _crop_utils.center_crop(best_tensor, crop_width, crop_height)
+                        best_tensor = _crop_utils.center_crop(
+                            best_tensor, crop_width, crop_height
+                        )
                     else:
-                        person_dets = [d for d in detections if (d.get("label") or "").lower() in PREFERRED_LABELS]
+                        person_dets = [
+                            d
+                            for d in detections
+                            if (d.get("label") or "").lower() in PREFERRED_LABELS
+                        ]
                         if not person_dets:
-                            best_tensor = _crop_utils.center_crop(best_tensor, crop_width, crop_height)
+                            best_tensor = _crop_utils.center_crop(
+                                best_tensor, crop_width, crop_height
+                            )
                         else:
-                            largest = max(person_dets, key=lambda d: float(d.get("area") or 0))
+                            largest = max(
+                                person_dets, key=lambda d: float(d.get("area") or 0)
+                            )
                             person_area_val = float(largest.get("area") or 0)
                             if (
                                 reference_area > 0
                                 and tracking_target_frame_percent > 0
-                                and (person_area_val / reference_area) >= (tracking_target_frame_percent / 100.0)
+                                and (person_area_val / reference_area)
+                                >= (tracking_target_frame_percent / 100.0)
                             ):
                                 best_tensor = _crop_utils.full_frame_resize_to_target(
                                     best_tensor, crop_width, crop_height
@@ -454,28 +497,43 @@ def extract_target_centric_frames(
                                 cp = largest.get("centerpoint")
                                 if cp and len(cp) >= 2:
                                     best_tensor = _crop_utils.crop_around_center(
-                                        best_tensor, cp[0], cp[1], crop_width, crop_height
+                                        best_tensor,
+                                        cp[0],
+                                        cp[1],
+                                        crop_width,
+                                        crop_height,
                                     )
                                 else:
-                                    best_tensor = _crop_utils.center_crop(best_tensor, crop_width, crop_height)
+                                    best_tensor = _crop_utils.center_crop(
+                                        best_tensor, crop_width, crop_height
+                                    )
                                 meta["is_full_frame_resize"] = False
-                raw_person_area = _person_area_at_time(sidecars.get(best_camera) or [], T)
+                raw_person_area = _person_area_at_time(
+                    sidecars.get(best_camera) or [], T
+                )
                 meta["person_area"] = int(raw_person_area)
                 skip_append = (
-                    (raw_person_area <= 0) if camera_timeline_final_yolo_drop_no_person else False
+                    (raw_person_area <= 0)
+                    if camera_timeline_final_yolo_drop_no_person
+                    else False
                 )
                 if not skip_append:
-                    collected.append(ExtractedFrame(frame=best_tensor, timestamp_sec=T, camera=best_camera, metadata=meta))
+                    collected.append(
+                        ExtractedFrame(
+                            frame=best_tensor,
+                            timestamp_sec=T,
+                            camera=best_camera,
+                            metadata=meta,
+                        )
+                    )
                 if best_camera == current_camera:
                     frames_on_current += 1
                 else:
                     current_camera = best_camera
                     frames_on_current = 1
             finally:
-                try:
-                    del batch
-                except NameError:
-                    pass
+                if batch_to_free is not None:
+                    del batch_to_free
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
 

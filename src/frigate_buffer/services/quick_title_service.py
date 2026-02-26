@@ -1,5 +1,6 @@
 """
-Quick-title pipeline: fetch latest.jpg, run YOLO, crop around detections, get AI title, update state and notify.
+Quick-title pipeline: fetch latest.jpg, run YOLO, crop around detections,
+get AI title, update state and notify.
 
 Used by the orchestrator as the on_quick_title_trigger callback. Keeps numpy/tensor
 bridge and image fetch logic out of the orchestrator.
@@ -25,6 +26,7 @@ LATEST_JPG_TIMEOUT = 10
 def _numpy_bgr_to_tensor_bchw_rgb(arr: np.ndarray) -> Any:
     """Convert numpy HWC BGR to torch.Tensor BCHW RGB for crop_utils (GPU pipeline)."""
     import torch
+
     rgb = arr[:, :, [2, 1, 0]].copy()
     t = torch.from_numpy(rgb).permute(2, 0, 1).unsqueeze(0)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -32,14 +34,14 @@ def _numpy_bgr_to_tensor_bchw_rgb(arr: np.ndarray) -> Any:
 
 
 def _tensor_bchw_rgb_to_numpy_bgr(t: Any) -> np.ndarray:
-    """Convert torch.Tensor BCHW RGB to numpy HWC BGR (e.g. for encoding at boundary)."""
+    """Convert torch.Tensor BCHW RGB to numpy HWC BGR (e.g. for encoding)."""
     if t.dim() == 4:
         t = t.squeeze(0)
     return t.permute(1, 2, 0).cpu().numpy()[:, :, [2, 1, 0]]
 
 
 class QuickTitleService:
-    """Runs the quick-title pipeline: fetch latest frame, YOLO, crop, AI title, state update, notify."""
+    """Quick-title: fetch latest frame, YOLO, crop, AI title, state update, notify."""
 
     def __init__(
         self,
@@ -68,7 +70,8 @@ class QuickTitleService:
         camera_folder_path: str,
         tag_override: str | None = None,
     ) -> None:
-        """Fetch live frame, run YOLO, crop around detections with 10% padding, get AI title, update state and notify."""
+        """Fetch live frame, run YOLO, crop around detections with 10% padding,
+        get AI title, update state and notify."""
         if not self._ai_analyzer:
             return
         frigate_url = (self._config.get("FRIGATE_URL") or "").rstrip("/")
@@ -82,10 +85,14 @@ class QuickTitleService:
             arr = np.frombuffer(resp.content, dtype=np.uint8)
             image_bgr = cv2.imdecode(arr, cv2.IMREAD_COLOR)
             if image_bgr is None:
-                logger.warning("Quick title: failed to decode latest.jpg for %s", camera)
+                logger.warning(
+                    "Quick title: failed to decode latest.jpg for %s", camera
+                )
                 return
         except requests.RequestException as e:
-            logger.warning("Quick title: failed to fetch latest.jpg for %s: %s", camera, e)
+            logger.warning(
+                "Quick title: failed to fetch latest.jpg for %s: %s", camera, e
+            )
             return
         detections = self._video_service.run_detection_on_image(image_bgr, self._config)
         if detections:
@@ -97,7 +104,11 @@ class QuickTitleService:
         else:
             image_to_send = image_bgr
         title = self._ai_analyzer.generate_quick_title(image_to_send, camera, label)
-        if not title or not isinstance(title, dict) or not (title.get("title") or "").strip():
+        if (
+            not title
+            or not isinstance(title, dict)
+            or not (title.get("title") or "").strip()
+        ):
             logger.debug("Quick title: no title returned for %s", event_id)
             return
         title_str = (title.get("title") or "").strip()
@@ -134,7 +145,10 @@ class QuickTitleService:
         )
         if not ce:
             media_folder = camera_folder_path
-            logger.warning("Quick title: event %s not in a CE (invariant: all events are CEs)", event_id)
+            logger.warning(
+                "Quick title: event %s not in a CE (invariant: all events are CEs)",
+                event_id,
+            )
         notify_target = type(
             "NotifyTarget",
             (),
@@ -152,9 +166,15 @@ class QuickTitleService:
                 "review_summary": None,
                 "threat_level": ce.final_threat_level if ce else event.threat_level,
                 "severity": ce.severity if ce else (event.severity or "detection"),
-                "snapshot_downloaded": getattr(primary, "snapshot_downloaded", False) if primary else False,
-                "clip_downloaded": getattr(primary, "clip_downloaded", False) if primary else False,
-                "image_url_override": getattr(primary, "image_url_override", None) if primary else None,
+                "snapshot_downloaded": getattr(primary, "snapshot_downloaded", False)
+                if primary
+                else False,
+                "clip_downloaded": getattr(primary, "clip_downloaded", False)
+                if primary
+                else False,
+                "image_url_override": getattr(primary, "image_url_override", None)
+                if primary
+                else None,
             },
         )()
         self._notifier.publish_notification(

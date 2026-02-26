@@ -1,7 +1,9 @@
-"""Base interface for notification providers and standard result type.
+"""
+Base interface for notification providers and standard result type.
 
 Providers return NotificationResult (not transport-specific payloads) so the
-timeline can show who was notified (HA, Pushover, etc.) without coupling to one transport.
+timeline can show who was notified (HA, Pushover, etc.) without coupling to
+one transport.
 """
 
 from abc import ABC, abstractmethod
@@ -41,7 +43,8 @@ class BaseNotificationProvider(ABC):
             event: Event-like object conforming to NotificationEvent protocol.
             status: Lifecycle status (e.g. "new", "finalized", "summarized").
             message: Optional override message; provider may build its own from event.
-            tag_override: Optional tag (e.g. frigate_ce_{id}) instead of frigate_{event_id}.
+            tag_override: Optional tag (e.g. frigate_ce_{id}) instead of
+                frigate_{event_id}.
 
         Returns:
             NotificationResult for timeline logging, or None if provider skipped send.

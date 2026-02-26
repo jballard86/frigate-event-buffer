@@ -46,7 +46,9 @@ class MqttMessageHandler:
 
     def on_message(self, client: Any, userdata: Any, msg: Any) -> None:
         """Route incoming MQTT messages by topic. Called by MqttClientWrapper."""
-        logger.debug("MQTT message received: %s (%s bytes)", msg.topic, len(msg.payload))
+        logger.debug(
+            "MQTT message received: %s (%s bytes)", msg.topic, len(msg.payload)
+        )
         try:
             payload = json.loads(msg.payload.decode("utf-8"))
             topic = msg.topic
@@ -80,7 +82,9 @@ class MqttMessageHandler:
         camera_label_map = self._config.get("CAMERA_LABEL_MAP", {})
         if camera_label_map:
             if camera not in camera_label_map:
-                logger.debug("Filtered out event from camera '%s' (not configured)", camera)
+                logger.debug(
+                    "Filtered out event from camera '%s' (not configured)", camera
+                )
                 return
             allowed_labels_for_camera = camera_label_map[camera]
             if allowed_labels_for_camera and label not in allowed_labels_for_camera:
@@ -114,7 +118,10 @@ class MqttMessageHandler:
             if folder:
                 mqtt_type = payload.get("type", "update")
                 self._timeline_logger.log_mqtt(
-                    folder, "frigate/events", payload, f"Event {mqtt_type} (from Frigate)"
+                    folder,
+                    "frigate/events",
+                    payload,
+                    f"Event {mqtt_type} (from Frigate)",
                 )
             return
 
@@ -161,7 +168,9 @@ class MqttMessageHandler:
         """Handle event end: mark ended, log, then process in background thread."""
         event = self._state_manager.get_event(event_id)
         if event and event.end_time is not None:
-            logger.debug("Duplicate event end for %s (already ended), skipping", event_id)
+            logger.debug(
+                "Duplicate event end for %s (already ended), skipping", event_id
+            )
             return
         logger.info("Event ended: %s", event_id)
         event = self._state_manager.mark_event_ended(
@@ -189,8 +198,6 @@ class MqttMessageHandler:
 
     def _handle_tracked_update(self, payload: dict, topic: str) -> None:
         """Handle tracked_object_update: frame metadata and/or AI description."""
-        parts = topic.split("/")
-        camera = parts[1] if len(parts) >= 2 else "unknown"
         event_id = payload.get("id")
         if event_id:
             after = payload.get("after") or payload.get("before") or {}
@@ -320,9 +327,7 @@ class MqttMessageHandler:
                         event.summary_written = self._file_manager.write_summary(
                             event.folder_path, event
                         )
-                        self._file_manager.write_metadata_json(
-                            event.folder_path, event
-                        )
+                        self._file_manager.write_metadata_json(event.folder_path, event)
                     ce = self._consolidated_manager.get_by_frigate_event(event_id)
                     if ce and ce.finalized_sent:
                         logger.debug(
@@ -333,9 +338,7 @@ class MqttMessageHandler:
                     else:
                         if ce:
                             ce.finalized_sent = True
-                            primary = self._state_manager.get_event(
-                                ce.primary_event_id
-                            )
+                            primary = self._state_manager.get_event(ce.primary_event_id)
                             media_folder = (
                                 os.path.join(
                                     ce.folder_path,
@@ -395,14 +398,19 @@ class MqttMessageHandler:
                                     "ai_description": None,
                                     "review_summary": None,
                                     "threat_level": threat_level,
-                                    "severity": getattr(event, "severity", None) or "detection",
+                                    "severity": getattr(event, "severity", None)
+                                    or "detection",
                                     "snapshot_downloaded": event.snapshot_downloaded,
                                     "clip_downloaded": event.clip_downloaded,
-                                    "image_url_override": getattr(event, "image_url_override", None),
+                                    "image_url_override": getattr(
+                                        event, "image_url_override", None
+                                    ),
                                 },
                             )()
                         self._notifier.publish_notification(
                             notify_target,
                             "finalized",
-                            tag_override=f"frigate_{ce.consolidated_id}" if ce else f"frigate_{event.event_id}",
+                            tag_override=f"frigate_{ce.consolidated_id}"
+                            if ce
+                            else f"frigate_{event.event_id}",
                         )
