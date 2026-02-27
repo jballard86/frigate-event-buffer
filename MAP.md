@@ -79,6 +79,7 @@ frigate-event-buffer/
 ├── requirements.txt
 ├── RULE.md
 ├── map.md
+├── MOBILE_API_CONTRACT.md
 ├── README.md
 ├── INSTALL.md
 ├── USER_GUIDE.md
@@ -229,6 +230,7 @@ frigate-event-buffer/
 | `Dockerfile` | Single-stage: base `nvidia/cuda:12.6.0-runtime-ubuntu24.04`; installs Python 3.12, FFmpeg from distro (GIF, ffprobe, h264_nvenc encode). **PyNvVideoCodec** from requirements.txt for NVDEC decode; no NeLux or vendored libs. Uses BuildKit (`# syntax=docker/dockerfile:1`); final `pip install .` uses `--mount=type=cache,target=/root/.cache/pip` for faster code-only rebuilds. Build arg `USE_GUI_OPENCV` (default `false`): when `false`, uninstalls opencv-python and reinstalls opencv-python-headless (no X11); when `true`, keeps GUI opencv for faster full rebuilds. Runs `python3 -m frigate_buffer.main`. | Build from repo root. |
 | `docker-compose.yaml` / `docker-compose.example.yaml` | Compose for local run; GPU, env, mounts. No `YOLO_CONFIG_DIR` needed—app uses storage for Ultralytics config and model cache. | Deployment. |
 | `MAP.md` | This file—architecture and context for AI. | Must be updated when structure or flows change. |
+| `MOBILE_API_CONTRACT.md` | Source of truth for the native Android (Jetpack Compose + Retrofit) mobile client: all REST endpoints, request/response shapes, query/path params, and media URL construction (clips, snapshots, proxy). | Reference for building the mobile app; do not change without updating the contract. |
 | `RULE.md` | Project rules index: points to map.md as source of truth and to .cursor/rules/ for Cursor-specific rules. | Reference only; no code dependencies. |
 | `DIAGNOSTIC_SIDECAR_TIMELINE_COMPILATION.md` | Diagnostic: sidecar writing (video.py), timeline_ema usage, and compilation fallback conditions. | Reference for debugging frame extraction and static compilation output. |
 | `gpu_pipeline_audit_report.md` | GPU performance audit (no code changes): CPU/GPU boundary, memory, redundant I/O, GPU_LOCK contention. | Reference for optimization and lock refactors. |
