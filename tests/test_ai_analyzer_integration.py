@@ -87,25 +87,21 @@ class TestIntegrationStep5Persistence(unittest.TestCase):
         service = GeminiAnalysisService(config)
         result = service.analyze_multi_clip_ce("ce_123", ce_dir, ce_start_time=0.0)
 
-        self.assertIsNotNone(result)
-        self.assertEqual(result.get("title"), "Person at door")
-        self.assertEqual(
-            result.get("shortSummary"), "A person approached the front door."
-        )
-        self.assertEqual(result.get("potential_threat_level"), 1)
+        assert result is not None
+        assert result.get("title") == "Person at door"
+        assert result.get("shortSummary") == "A person approached the front door."
+        assert result.get("potential_threat_level") == 1
 
         out_path = os.path.join(ce_dir, "analysis_result.json")
-        self.assertTrue(os.path.isfile(out_path), f"Expected {out_path} to exist")
+        assert os.path.isfile(out_path), f"Expected {out_path} to exist"
         with open(out_path, encoding="utf-8") as f:
             saved = json.load(f)
-        self.assertIn("shortSummary", saved)
-        self.assertIn("title", saved)
-        self.assertIn("potential_threat_level", saved)
-        self.assertEqual(saved["title"], payload["title"])
-        self.assertEqual(saved["shortSummary"], payload["shortSummary"])
-        self.assertEqual(
-            saved["potential_threat_level"], payload["potential_threat_level"]
-        )
+        assert "shortSummary" in saved
+        assert "title" in saved
+        assert "potential_threat_level" in saved
+        assert saved["title"] == payload["title"]
+        assert saved["shortSummary"] == payload["shortSummary"]
+        assert saved["potential_threat_level"] == payload["potential_threat_level"]
 
     @patch("frigate_buffer.services.gemini_proxy_client.requests.post")
     @patch("frigate_buffer.services.ai_analyzer.extract_target_centric_frames")
@@ -137,16 +133,15 @@ class TestIntegrationStep5Persistence(unittest.TestCase):
         service = GeminiAnalysisService(config)
         result = service.analyze_multi_clip_ce("ce_partial", ce_dir, ce_start_time=0.0)
 
-        self.assertIsNotNone(result)
+        assert result is not None
         out_path = os.path.join(ce_dir, "analysis_result.json")
-        self.assertTrue(
-            os.path.isfile(out_path),
-            "Should save analysis_result.json even when fields missing",
+        assert os.path.isfile(out_path), (
+            "Should save analysis_result.json even when fields missing"
         )
         with open(out_path, encoding="utf-8") as f:
             saved = json.load(f)
-        self.assertEqual(saved["title"], "Partial")
-        self.assertEqual(saved["shortSummary"], "No threat level in response.")
+        assert saved["title"] == "Partial"
+        assert saved["shortSummary"] == "No threat level in response."
 
     @patch("frigate_buffer.services.gemini_proxy_client.requests.post")
     @patch("frigate_buffer.services.ai_analyzer.extract_target_centric_frames")
@@ -184,13 +179,13 @@ class TestIntegrationStep5Persistence(unittest.TestCase):
         service = GeminiAnalysisService(config)
         result = service.analyze_multi_clip_ce("ce_tensor", ce_dir, ce_start_time=0.0)
 
-        self.assertIsNotNone(result)
-        self.assertEqual(result.get("title"), "Tensor frame test")
+        assert result is not None
+        assert result.get("title") == "Tensor frame test"
         out_path = os.path.join(ce_dir, "analysis_result.json")
-        self.assertTrue(os.path.isfile(out_path), f"Expected {out_path} to exist")
+        assert os.path.isfile(out_path), f"Expected {out_path} to exist"
         with open(out_path, encoding="utf-8") as f:
             saved = json.load(f)
-        self.assertEqual(saved["title"], payload["title"])
+        assert saved["title"] == payload["title"]
 
 
 # --- Test Case 2: Orchestrator hand-off ---
@@ -250,12 +245,12 @@ class TestIntegrationStep6OrchestratorHandoff(unittest.TestCase):
 
         orch.download_service.post_event_description.assert_called_once()
         call_args = orch.download_service.post_event_description.call_args[0]
-        self.assertEqual(call_args[0], event_id)
-        self.assertIn("Test summary", call_args[1])
+        assert call_args[0] == event_id
+        assert "Test summary" in call_args[1]
 
         orch.notifier.publish_notification.assert_called_once()
         notify_args = orch.notifier.publish_notification.call_args[0]
-        self.assertEqual(notify_args[1], "finalized")
+        assert notify_args[1] == "finalized"
 
 
 # --- Test Case 3: Error handling ---
@@ -283,11 +278,10 @@ class TestIntegrationStep5ErrorHandling(unittest.TestCase):
         service = GeminiAnalysisService(config)
         result = service.analyze_multi_clip_ce("ce_err", ce_dir, ce_start_time=0.0)
 
-        self.assertIsNone(result)
+        assert result is None
         out_path = os.path.join(ce_dir, "analysis_result.json")
-        self.assertFalse(
-            os.path.isfile(out_path),
-            "Should not create analysis_result.json on invalid JSON",
+        assert not os.path.isfile(out_path), (
+            "Should not create analysis_result.json on invalid JSON"
         )
 
     @patch("frigate_buffer.services.gemini_proxy_client.requests.post")
@@ -303,7 +297,7 @@ class TestIntegrationStep5ErrorHandling(unittest.TestCase):
         service = GeminiAnalysisService(config)
         frame = np.zeros((50, 50, 3), dtype=np.uint8)
         result = service.send_to_proxy("Prompt", [frame])
-        self.assertIsNone(result)
+        assert result is None
 
     @patch("frigate_buffer.services.gemini_proxy_client.requests.post")
     @patch("frigate_buffer.services.ai_analyzer.extract_target_centric_frames")
@@ -324,9 +318,8 @@ class TestIntegrationStep5ErrorHandling(unittest.TestCase):
         config = {"GEMINI": {"enabled": True, "proxy_url": "http://p", "api_key": "k"}}
         service = GeminiAnalysisService(config)
         result = service.analyze_multi_clip_ce("ce_500", ce_dir, ce_start_time=0.0)
-        self.assertIsNone(result)
+        assert result is None
         out_path = os.path.join(ce_dir, "analysis_result.json")
-        self.assertFalse(
-            os.path.isfile(out_path),
-            "Should not create analysis_result.json on proxy 500",
+        assert not os.path.isfile(out_path), (
+            "Should not create analysis_result.json on proxy 500"
         )

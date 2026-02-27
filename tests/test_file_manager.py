@@ -13,6 +13,8 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
+import pytest
+
 from frigate_buffer.managers.file import FileManager
 
 
@@ -25,55 +27,55 @@ class TestFileManagerPathValidation(unittest.TestCase):
         self.fm = FileManager(self.tmp, 3)
 
     def test_sanitize_camera_name_valid(self):
-        self.assertEqual(self.fm.sanitize_camera_name("Front Door"), "front_door")
-        self.assertEqual(self.fm.sanitize_camera_name("cam1"), "cam1")
+        assert self.fm.sanitize_camera_name("Front Door") == "front_door"
+        assert self.fm.sanitize_camera_name("cam1") == "cam1"
 
     def test_sanitize_camera_name_strips_special_chars(self):
         out = self.fm.sanitize_camera_name("Cam/with\\path")
-        self.assertNotIn("/", out)
-        self.assertNotIn("\\", out)
+        assert "/" not in out
+        assert "\\" not in out
 
     def test_sanitize_camera_name_empty_or_all_special_returns_unknown(self):
-        self.assertEqual(self.fm.sanitize_camera_name(""), "unknown")
-        self.assertEqual(self.fm.sanitize_camera_name("!!!@@@###"), "unknown")
+        assert self.fm.sanitize_camera_name("") == "unknown"
+        assert self.fm.sanitize_camera_name("!!!@@@###") == "unknown"
 
     def test_create_event_folder_path_traversal_raises(self):
-        with self.assertRaises(ValueError) as ctx:
+        with pytest.raises(ValueError, match=r"Invalid event path") as ctx:
             self.fm.create_event_folder(
                 event_id="../../../../evil", camera="cam1", timestamp=1000.0
             )
-        self.assertIn("Invalid event path", str(ctx.exception))
+        assert "Invalid event path" in str(ctx.value)
 
     def test_create_consolidated_event_folder_path_traversal_raises(self):
-        with self.assertRaises(ValueError) as ctx:
+        with pytest.raises(ValueError, match=r"Invalid consolidated event path") as ctx:
             self.fm.create_consolidated_event_folder("../../../evil")
-        self.assertIn("Invalid consolidated event path", str(ctx.exception))
+        assert "Invalid consolidated event path" in str(ctx.value)
 
     def test_create_consolidated_event_folder_dotdot_escape_raises(self):
-        with self.assertRaises(ValueError) as ctx:
+        with pytest.raises(ValueError, match=r"Invalid consolidated event path") as ctx:
             self.fm.create_consolidated_event_folder("../../outside")
-        self.assertIn("Invalid consolidated event path", str(ctx.exception))
+        assert "Invalid consolidated event path" in str(ctx.value)
 
     def test_create_event_folder_valid_succeeds(self):
         path = self.fm.create_event_folder("evt123", "cam1", 1000.0)
-        self.assertTrue(path.startswith(os.path.realpath(self.tmp)))
-        self.assertTrue(os.path.isdir(path))
+        assert path.startswith(os.path.realpath(self.tmp))
+        assert os.path.isdir(path)
 
     def test_delete_event_folder_under_storage_succeeds(self):
         sub = os.path.join(self.tmp, "cam1", "1000_evt1")
         os.makedirs(sub, exist_ok=True)
-        self.assertTrue(os.path.isdir(sub))
+        assert os.path.isdir(sub)
         result = self.fm.delete_event_folder(sub)
-        self.assertTrue(result)
-        self.assertFalse(os.path.exists(sub))
+        assert result
+        assert not os.path.exists(sub)
 
     def test_delete_event_folder_outside_storage_returns_false(self):
         result = self.fm.delete_event_folder("/tmp/outside")
-        self.assertFalse(result)
+        assert not result
 
     def test_delete_event_folder_nonexistent_returns_false(self):
         result = self.fm.delete_event_folder(os.path.join(self.tmp, "nonexistent"))
-        self.assertFalse(result)
+        assert not result
 
 
 class TestFileManagerCleanup(unittest.TestCase):
@@ -93,8 +95,8 @@ class TestFileManagerCleanup(unittest.TestCase):
         old = time.time() - (2 * 86400)
         os.utime(test1, (old, old))
         deleted = fm.cleanup_old_events(active_event_ids=[], active_ce_folder_names=[])
-        self.assertEqual(deleted, 1)
-        self.assertFalse(os.path.isdir(test1))
+        assert deleted == 1
+        assert not os.path.isdir(test1)
 
     def test_cleanup_keeps_recent_test_folder(self):
         fm = FileManager(storage_path=self.tmp, retention_days=1)
@@ -103,8 +105,8 @@ class TestFileManagerCleanup(unittest.TestCase):
         test1 = os.path.join(events_dir, "test1")
         os.makedirs(test1, exist_ok=True)
         deleted = fm.cleanup_old_events(active_event_ids=[], active_ce_folder_names=[])
-        self.assertEqual(deleted, 0)
-        self.assertTrue(os.path.isdir(test1))
+        assert deleted == 0
+        assert os.path.isdir(test1)
 
     def test_cleanup_ignores_non_test_events_folders(self):
         fm = FileManager(storage_path=self.tmp, retention_days=1)
@@ -114,8 +116,8 @@ class TestFileManagerCleanup(unittest.TestCase):
         os.makedirs(old_ce, exist_ok=True)
         os.utime(old_ce, (0, 0))
         deleted = fm.cleanup_old_events(active_event_ids=[], active_ce_folder_names=[])
-        self.assertEqual(deleted, 1)
-        self.assertFalse(os.path.isdir(old_ce))
+        assert deleted == 1
+        assert not os.path.isdir(old_ce)
 
     def test_cleanup_keeps_canceled_folder_when_base_id_active(self):
         fm = FileManager(storage_path=self.tmp, retention_days=1)
@@ -126,8 +128,8 @@ class TestFileManagerCleanup(unittest.TestCase):
         deleted = fm.cleanup_old_events(
             active_event_ids=["ev123"], active_ce_folder_names=[]
         )
-        self.assertEqual(deleted, 0)
-        self.assertTrue(os.path.isdir(canceled))
+        assert deleted == 0
+        assert os.path.isdir(canceled)
 
     def test_cleanup_deletes_canceled_folder_when_past_retention(self):
         fm = FileManager(storage_path=self.tmp, retention_days=1)
@@ -136,8 +138,8 @@ class TestFileManagerCleanup(unittest.TestCase):
         canceled = os.path.join(events_dir, "1700000000_ev123-canceled")
         os.makedirs(canceled, exist_ok=True)
         deleted = fm.cleanup_old_events(active_event_ids=[], active_ce_folder_names=[])
-        self.assertEqual(deleted, 1)
-        self.assertFalse(os.path.isdir(canceled))
+        assert deleted == 1
+        assert not os.path.isdir(canceled)
 
 
 class TestFileManagerMaxEventLength(unittest.TestCase):
@@ -152,30 +154,30 @@ class TestFileManagerMaxEventLength(unittest.TestCase):
         folder = os.path.join(self.tmp, "cam1", "1700000000_ev123")
         os.makedirs(folder, exist_ok=True)
         new_path = fm.rename_event_folder(folder)
-        self.assertEqual(os.path.basename(new_path), "1700000000_ev123-canceled")
-        self.assertFalse(os.path.isdir(folder))
-        self.assertTrue(os.path.isdir(new_path))
+        assert os.path.basename(new_path) == "1700000000_ev123-canceled"
+        assert not os.path.isdir(folder)
+        assert os.path.isdir(new_path)
 
     def test_rename_event_folder_idempotent_if_already_suffixed(self):
         fm = FileManager(storage_path=self.tmp, retention_days=1)
         folder = os.path.join(self.tmp, "events", "1700000000_ev123-canceled")
         os.makedirs(folder, exist_ok=True)
         new_path = fm.rename_event_folder(folder)
-        self.assertEqual(new_path, folder)
-        self.assertTrue(os.path.isdir(folder))
+        assert new_path == folder
+        assert os.path.isdir(folder)
 
     def test_write_canceled_summary_writes_title_and_description(self):
         fm = FileManager(storage_path=self.tmp, retention_days=1)
         folder = os.path.join(self.tmp, "events", "1700000000_ce1")
         os.makedirs(folder, exist_ok=True)
         result = fm.write_canceled_summary(folder)
-        self.assertTrue(result)
+        assert result
         summary_path = os.path.join(folder, "summary.txt")
-        self.assertTrue(os.path.isfile(summary_path))
+        assert os.path.isfile(summary_path)
         with open(summary_path) as f:
             content = f.read()
-        self.assertIn("Title: Canceled event: max event length exceeded", content)
-        self.assertIn("Event exceeded max_event_length_seconds", content)
+        assert "Title: Canceled event: max event length exceeded" in content
+        assert "Event exceeded max_event_length_seconds" in content
 
 
 class TestFileManagerTimeline(unittest.TestCase):
@@ -193,9 +195,9 @@ class TestFileManagerTimeline(unittest.TestCase):
         fm.append_timeline_entry(folder, {"label": "HA", "data": {}})
         append_path = os.path.join(folder, "notification_timeline_append.jsonl")
         base_path = os.path.join(folder, "notification_timeline.json")
-        self.assertTrue(os.path.isfile(append_path), "append should create .jsonl file")
-        self.assertFalse(
-            os.path.isfile(base_path), "append should NOT create/overwrite full .json"
+        assert os.path.isfile(append_path), "append should create .jsonl file"
+        assert not os.path.isfile(base_path), (
+            "append should NOT create/overwrite full .json"
         )
 
 
@@ -210,11 +212,11 @@ class TestFileManagerStorageStats(unittest.TestCase):
 
     def test_empty_storage_returns_zero_totals(self):
         stats = self.fm.compute_storage_stats()
-        self.assertEqual(stats["total"], 0)
-        self.assertEqual(stats["clips"], 0)
-        self.assertEqual(stats["snapshots"], 0)
-        self.assertEqual(stats["descriptions"], 0)
-        self.assertEqual(stats["by_camera"], {})
+        assert stats["total"] == 0
+        assert stats["clips"] == 0
+        assert stats["snapshots"] == 0
+        assert stats["descriptions"] == 0
+        assert stats["by_camera"] == {}
 
     def test_legacy_camera_event_folder_counted(self):
         cam = os.path.join(self.tmp, "carport")
@@ -227,14 +229,15 @@ class TestFileManagerStorageStats(unittest.TestCase):
         with open(os.path.join(ev, "summary.txt"), "w") as f:
             f.write("Event")
         stats = self.fm.compute_storage_stats()
-        self.assertEqual(stats["clips"], 1000)
-        self.assertEqual(stats["snapshots"], 200)
-        self.assertGreaterEqual(stats["descriptions"], 5)
-        self.assertIn("carport", stats["by_camera"])
-        self.assertEqual(stats["by_camera"]["carport"]["clips"], 1000)
-        self.assertEqual(stats["by_camera"]["carport"]["snapshots"], 200)
-        self.assertEqual(
-            stats["total"], stats["clips"] + stats["snapshots"] + stats["descriptions"]
+        assert stats["clips"] == 1000
+        assert stats["snapshots"] == 200
+        assert stats["descriptions"] >= 5
+        assert "carport" in stats["by_camera"]
+        assert stats["by_camera"]["carport"]["clips"] == 1000
+        assert stats["by_camera"]["carport"]["snapshots"] == 200
+        assert (
+            stats["total"]
+            == stats["clips"] + stats["snapshots"] + stats["descriptions"]
         )
 
     def test_consolidated_events_counted(self):
@@ -251,12 +254,12 @@ class TestFileManagerStorageStats(unittest.TestCase):
         with open(os.path.join(ce_dir, "review_summary.md"), "w") as f:
             f.write("# Summary")
         stats = self.fm.compute_storage_stats()
-        self.assertIn("carport", stats["by_camera"])
-        self.assertGreaterEqual(stats["clips"], 5000)
-        self.assertGreaterEqual(stats["snapshots"], 500)
-        self.assertGreater(stats["descriptions"], 0)
-        self.assertEqual(stats["by_camera"]["carport"]["clips"], 5000)
-        self.assertEqual(stats["by_camera"]["carport"]["snapshots"], 500)
+        assert "carport" in stats["by_camera"]
+        assert stats["clips"] >= 5000
+        assert stats["snapshots"] >= 500
+        assert stats["descriptions"] > 0
+        assert stats["by_camera"]["carport"]["clips"] == 5000
+        assert stats["by_camera"]["carport"]["snapshots"] == 500
 
     def test_daily_reports_and_daily_reviews_included_in_total(self):
         for sub in ("daily_reports", "daily_reviews"):
@@ -265,8 +268,8 @@ class TestFileManagerStorageStats(unittest.TestCase):
             with open(os.path.join(path, "report.md"), "w") as f:
                 f.write("x" * 300)
         stats = self.fm.compute_storage_stats()
-        self.assertGreaterEqual(stats["descriptions"], 600)
-        self.assertGreaterEqual(stats["total"], 600)
+        assert stats["descriptions"] >= 600
+        assert stats["total"] >= 600
 
     def test_legacy_and_consolidated_both_counted(self):
         cam = os.path.join(self.tmp, "doorbell")
@@ -281,9 +284,9 @@ class TestFileManagerStorageStats(unittest.TestCase):
         with open(os.path.join(cam_dir, "clip.mp4"), "wb") as f:
             f.write(b"2" * 200)
         stats = self.fm.compute_storage_stats()
-        self.assertEqual(stats["clips"], 100 + 200)
-        self.assertIn("doorbell", stats["by_camera"])
-        self.assertEqual(stats["by_camera"]["doorbell"]["clips"], 100 + 200)
+        assert stats["clips"] == 100 + 200
+        assert "doorbell" in stats["by_camera"]
+        assert stats["by_camera"]["doorbell"]["clips"] == 100 + 200
 
     def test_stats_api_returns_storage_with_value_unit_format(self):
         storage = tempfile.mkdtemp()
@@ -330,22 +333,22 @@ class TestFileManagerStorageStats(unittest.TestCase):
             self.skipTest("create_app was mocked")
         client = app.test_client()
         r = client.get("/stats")
-        self.assertEqual(r.status_code, 200, r.get_data(as_text=True))
+        assert r.status_code == 200, r.get_data(as_text=True)
         data = r.get_json()
-        self.assertIn("storage", data)
+        assert "storage" in data
         s = data["storage"]
-        self.assertIn("total_display", s)
-        self.assertIsNotNone(s["total_display"].get("value"))
-        self.assertIn(s["total_display"].get("unit"), ("KB", "MB", "GB"))
-        self.assertIn("breakdown", s)
+        assert "total_display" in s
+        assert s["total_display"].get("value") is not None
+        assert s["total_display"].get("unit") in ("KB", "MB", "GB")
+        assert "breakdown" in s
         for key in ("clips", "snapshots", "descriptions"):
-            self.assertIn(key, s["breakdown"])
-            self.assertIsNotNone(s["breakdown"][key].get("value"))
-            self.assertIn(s["breakdown"][key].get("unit"), ("KB", "MB", "GB"))
-        self.assertIn("by_camera", s)
+            assert key in s["breakdown"]
+            assert s["breakdown"][key].get("value") is not None
+            assert s["breakdown"][key].get("unit") in ("KB", "MB", "GB")
+        assert "by_camera" in s
         for _cam, val in s["by_camera"].items():
-            self.assertIn("value", val)
-            self.assertIn("unit", val)
+            assert "value" in val
+            assert "unit" in val
 
 
 if __name__ == "__main__":

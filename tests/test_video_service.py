@@ -31,7 +31,7 @@ class TestVideoService(unittest.TestCase):
         mock_run.return_value = mock_proc
 
         result = self.video_service.generate_gif_from_clip("clip.mp4", "out.gif")
-        self.assertTrue(result)
+        assert result
 
     @patch("frigate_buffer.services.video.subprocess.run")
     def test_generate_gif_failure(self, mock_run):
@@ -40,7 +40,7 @@ class TestVideoService(unittest.TestCase):
         mock_run.return_value = mock_proc
 
         result = self.video_service.generate_gif_from_clip("clip.mp4", "out.gif")
-        self.assertFalse(result)
+        assert not result
 
     @patch("frigate_buffer.services.video._run_detection_on_batch")
     @patch("frigate_buffer.services.video._get_video_metadata")
@@ -98,21 +98,21 @@ class TestVideoService(unittest.TestCase):
                         result = self.video_service.generate_detection_sidecar(
                             clip_path, sidecar_path, config
                         )
-            self.assertTrue(result, "generate_detection_sidecar should return True")
-            self.assertTrue(os.path.isfile(sidecar_path))
+            assert result, "generate_detection_sidecar should return True"
+            assert os.path.isfile(sidecar_path)
             with open(sidecar_path, encoding="utf-8") as f:
                 data = json.load(f)
-            self.assertIsInstance(data, dict)
-            self.assertIn("entries", data)
-            self.assertIn("native_width", data)
-            self.assertIn("native_height", data)
+            assert isinstance(data, dict)
+            assert "entries" in data
+            assert "native_width" in data
+            assert "native_height" in data
             entries = data["entries"]
-            self.assertIsInstance(entries, list)
+            assert isinstance(entries, list)
             for entry in entries:
-                self.assertIn("frame_number", entry)
-                self.assertIn("timestamp_sec", entry)
-                self.assertIn("detections", entry)
-                self.assertIsInstance(entry["detections"], list)
+                assert "frame_number" in entry
+                assert "timestamp_sec" in entry
+                assert "detections" in entry
+                assert isinstance(entry["detections"], list)
         finally:
             for f in (sidecar_path, clip_path):
                 if os.path.exists(f):
@@ -141,12 +141,10 @@ class TestVideoService(unittest.TestCase):
         _METADATA_CACHE.clear()
         first = _get_video_metadata(path)
         second = _get_video_metadata(path)
-        self.assertEqual(first, (1920, 1080, 30.0, 5.5))
-        self.assertEqual(second, first)
-        self.assertEqual(
-            mock_run.call_count,
-            1,
-            "ffprobe should be invoked only once; second call uses cache",
+        assert first == (1920, 1080, 30.0, 5.5)
+        assert second == first
+        assert mock_run.call_count == 1, (
+            "ffprobe should be invoked only once; second call uses cache"
         )
 
     @patch("frigate_buffer.services.video.subprocess.run")
@@ -164,16 +162,14 @@ class TestVideoService(unittest.TestCase):
         # Fill cache over the limit so next _get_video_metadata triggers clear
         for i in range(_METADATA_CACHE_MAX_SIZE + 1):
             _METADATA_CACHE[f"/fake/path_{i}"] = (1920, 1080, 30.0, 1.0)
-        self.assertGreater(len(_METADATA_CACHE), _METADATA_CACHE_MAX_SIZE)
+        assert len(_METADATA_CACHE) > _METADATA_CACHE_MAX_SIZE
         new_path = "/new/unique/clip.mp4"
         result = _get_video_metadata(new_path)
-        self.assertEqual(result, (640, 480, 30.0, 2.0))
-        self.assertEqual(
-            len(_METADATA_CACHE),
-            1,
-            "cache should have been cleared and only new entry remains",
+        assert result == (640, 480, 30.0, 2.0)
+        assert len(_METADATA_CACHE) == 1, (
+            "cache should have been cleared and only new entry remains"
         )
-        self.assertIn(new_path, _METADATA_CACHE)
+        assert new_path in _METADATA_CACHE
         _METADATA_CACHE.clear()
 
     def test_decoder_reader_ready(self):
@@ -181,13 +177,13 @@ class TestVideoService(unittest.TestCase):
         reader with _decoder."""
         reader_no_decoder = MagicMock(spec=["fps", "get_frames"])
         reader_no_decoder.fps = 30.0
-        self.assertFalse(_decoder_reader_ready(reader_no_decoder))
+        assert not _decoder_reader_ready(reader_no_decoder)
         reader_with_decoder = MagicMock()
         reader_with_decoder._decoder = MagicMock()
-        self.assertTrue(_decoder_reader_ready(reader_with_decoder))
+        assert _decoder_reader_ready(reader_with_decoder)
         ctx_with_frame_count = MagicMock(spec=["frame_count"])
         ctx_with_frame_count.frame_count = 100
-        self.assertTrue(_decoder_reader_ready(ctx_with_frame_count))
+        assert _decoder_reader_ready(ctx_with_frame_count)
 
     @patch("frigate_buffer.services.video._run_detection_on_batch")
     @patch("frigate_buffer.services.video._get_video_metadata")
@@ -226,8 +222,8 @@ class TestVideoService(unittest.TestCase):
                 result = self.video_service.generate_detection_sidecar(
                     clip_path, sidecar_path, {"DETECTION_FRAME_INTERVAL": 5}
                 )
-            self.assertTrue(result)
-            self.assertTrue(mock_ctx.get_frames.called)
+            assert result
+            assert mock_ctx.get_frames.called
         finally:
             for f in (sidecar_path, clip_path):
                 if os.path.exists(f):
@@ -261,8 +257,8 @@ class TestVideoService(unittest.TestCase):
                 result = self.video_service.generate_detection_sidecar(
                     "/nonexistent/clip.mp4", sidecar_path, {}
                 )
-                self.assertFalse(result)
-                self.assertFalse(os.path.isfile(sidecar_path))
+                assert not result
+                assert not os.path.isfile(sidecar_path)
             finally:
                 if os.path.isdir(tmp):
                     try:
@@ -326,16 +322,15 @@ class TestVideoService(unittest.TestCase):
                         result = self.video_service.generate_detection_sidecar(
                             clip_path, sidecar_path, config
                         )
-            self.assertTrue(
-                result,
-                "generate_detection_sidecar should succeed using metadata fallback",
+            assert result, (
+                "generate_detection_sidecar should succeed using metadata fallback"
             )
-            self.assertTrue(os.path.isfile(sidecar_path))
+            assert os.path.isfile(sidecar_path)
             with open(sidecar_path, encoding="utf-8") as f:
                 data = json.load(f)
-            self.assertIn("entries", data)
+            assert "entries" in data
             entries = data["entries"]
-            self.assertGreater(len(entries), 0)
+            assert len(entries) > 0
         finally:
             for f in (sidecar_path, clip_path):
                 if os.path.exists(f):
@@ -362,20 +357,20 @@ class TestVideoService(unittest.TestCase):
             result = self.video_service.generate_detection_sidecars_for_cameras(
                 [("cam1", "/fake/clip.mp4", "/fake/detection.json")], {}
             )
-        self.assertEqual(result, [("cam1", True)])
+        assert result == [("cam1", True)]
         mock_lock.acquire.assert_called_once()
         mock_lock.release.assert_called_once()
 
     def test_generate_detection_sidecars_for_cameras_no_lock_when_not_set(self):
-        self.assertIsNone(self.video_service._sidecar_app_lock)
+        assert self.video_service._sidecar_app_lock is None
         result = self.video_service.generate_detection_sidecars_for_cameras([], {})
-        self.assertEqual(result, [])
+        assert result == []
 
 
 class TestEnsureDetectionModelReady(unittest.TestCase):
     def test_ensure_detection_model_ready_skips_when_not_configured(self):
-        self.assertFalse(ensure_detection_model_ready({}))
-        self.assertFalse(ensure_detection_model_ready({"DETECTION_MODEL": ""}))
+        assert not ensure_detection_model_ready({})
+        assert not ensure_detection_model_ready({"DETECTION_MODEL": ""})
 
     @patch("ultralytics.YOLO", create=True)
     def test_ensure_detection_model_ready_loads_and_reports(self, mock_yolo_cls):
@@ -390,20 +385,18 @@ class TestEnsureDetectionModelReady(unittest.TestCase):
             side_effect=lambda p: p == model_path,
         ):
             result = ensure_detection_model_ready(config)
-        self.assertTrue(result)
+        assert result
         mock_yolo_cls.assert_called_once_with(model_path)
 
     def test_get_detection_model_path_under_storage(self):
         config = {"STORAGE_PATH": "/app/storage", "DETECTION_MODEL": "yolo26m.pt"}
         path = get_detection_model_path(config)
-        self.assertEqual(
-            path, os.path.join("/app/storage", "yolo_models", "yolo26m.pt")
-        )
+        assert path == os.path.join("/app/storage", "yolo_models", "yolo26m.pt")
 
     def test_get_detection_model_path_default_model_when_empty(self):
         config = {"STORAGE_PATH": "/data"}
         path = get_detection_model_path(config)
-        self.assertEqual(path, os.path.join("/data", "yolo_models", "yolov8n.pt"))
+        assert path == os.path.join("/data", "yolo_models", "yolov8n.pt")
 
 
 class TestDecoderFrameCount(unittest.TestCase):
@@ -415,7 +408,7 @@ class TestDecoderFrameCount(unittest.TestCase):
         reader = MagicMock(spec=["frame_count"])
         reader.frame_count = 42
         result = _decoder_frame_count(reader, 30.0, 10.0)
-        self.assertEqual(result, 42)
+        assert result == 42
 
     def test_decoder_frame_count_uses_len_when_available(self):
         """When len(reader) works and no frame_count, _decoder_frame_count
@@ -426,7 +419,7 @@ class TestDecoderFrameCount(unittest.TestCase):
                 return 42
 
         result = _decoder_frame_count(ReaderWithLen(), 30.0, 10.0)
-        self.assertEqual(result, 42)
+        assert result == 42
 
     def test_decoder_frame_count_fallback_when_len_raises(self):
         """When len(reader) raises (e.g. missing _decoder), _decoder_frame_count
@@ -436,7 +429,7 @@ class TestDecoderFrameCount(unittest.TestCase):
             pass
 
         result = _decoder_frame_count(ReaderNoLen(), 30.0, 10.0)
-        self.assertEqual(result, 300)
+        assert result == 300
 
     def test_decoder_frame_count_uses_shape_when_len_raises(self):
         """When len(reader) raises but reader.shape is (N, ...),
@@ -446,7 +439,7 @@ class TestDecoderFrameCount(unittest.TestCase):
             shape = (100, 3, 480, 640)
 
         result = _decoder_frame_count(ReaderShapeOnly(), 30.0, 10.0)
-        self.assertEqual(result, 100)
+        assert result == 100
 
     def test_decoder_frame_count_fallback_zero_duration_returns_zero(self):
         """When both len and shape fail and duration is 0, _decoder_frame_count
@@ -456,7 +449,7 @@ class TestDecoderFrameCount(unittest.TestCase):
             shape = ()
 
         result = _decoder_frame_count(ReaderNoLen(), 30.0, 0.0)
-        self.assertEqual(result, 0)
+        assert result == 0
 
 
 class TestRunDetectionOnBatch(unittest.TestCase):
@@ -477,14 +470,14 @@ class TestRunDetectionOnBatch(unittest.TestCase):
         mock_result.boxes.xyxy = torch.tensor([[100.0, 200.0, 300.0, 400.0]])
         mock_model = MagicMock(return_value=[mock_result])
         out = _run_detection_on_batch(mock_model, batch, None, imgsz=1280)
-        self.assertEqual(len(out), 1)
-        self.assertEqual(len(out[0]), 1)
+        assert len(out) == 1
+        assert len(out[0]) == 1
         det = out[0][0]
-        self.assertEqual(det["label"], "person")
+        assert det["label"] == "person"
         # Scaled to read space: x*2, y*2 -> [200, 400, 600, 800]
-        self.assertEqual(det["bbox"], [200.0, 400.0, 600.0, 800.0])
-        self.assertEqual(det["centerpoint"], [400.0, 600.0])
-        self.assertEqual(det["area"], 160000)
+        assert det["bbox"] == [200.0, 400.0, 600.0, 800.0]
+        assert det["centerpoint"] == [400.0, 600.0]
+        assert det["area"] == 160000
 
     def test_run_detection_on_batch_small_batch_no_crash(self):
         """Batch already 640x480 with imgsz=640 returns detections in read space
@@ -501,9 +494,9 @@ class TestRunDetectionOnBatch(unittest.TestCase):
             ]
         )
         out = _run_detection_on_batch(mock_model, batch, None, imgsz=640)
-        self.assertEqual(len(out), 2)
-        self.assertEqual(out[0], [])
-        self.assertEqual(out[1], [])
+        assert len(out) == 2
+        assert out[0] == []
+        assert out[1] == []
 
 
 if __name__ == "__main__":

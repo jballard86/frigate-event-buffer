@@ -51,11 +51,11 @@ exclude = ["scripts"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "C4", "UP", "PT"]
-# E402 (import not at top): intentional in tests and some modules
-extend-ignore = ["E402"]
 
 # E501 (line-too-long): fix gradually; remove a file from this list when done
+# E402 (import not at top): ignore in tests only; src is checked
 [tool.ruff.lint.per-file-ignores]
+"tests/**" = ["E402"]
 
 [tool.ruff.format]
 quote-style = "double"

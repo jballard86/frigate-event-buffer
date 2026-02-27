@@ -87,7 +87,7 @@ class TestEventLifecycleService(unittest.TestCase):
         # Check if notification thread started
         mock_thread.assert_called()
         args, kwargs = mock_thread.call_args
-        self.assertEqual(kwargs["target"], self.service._send_initial_notification)
+        assert kwargs["target"] == self.service._send_initial_notification
 
     def test_process_event_end(self):
         # Setup: event in CE, duration 10s; expect CE path (no discard)
@@ -113,7 +113,7 @@ class TestEventLifecycleService(unittest.TestCase):
             "ce1", delay_seconds=None
         )
         self.file_manager.cleanup_old_events.assert_called()
-        self.assertIsNotNone(self.service.last_cleanup_time)
+        assert self.service.last_cleanup_time is not None
 
     def test_process_event_end_discards_when_under_minimum_duration(self):
         # Setup: duration 2s, minimum 10s -> discard
@@ -133,7 +133,7 @@ class TestEventLifecycleService(unittest.TestCase):
         self.state_manager.remove_event.assert_called_with("evt1")
         self.notifier.publish_notification.assert_called_once()
         call_args = self.notifier.publish_notification.call_args
-        self.assertEqual(call_args[0][1], "discarded")
+        assert call_args[0][1] == "discarded"
         self.notifier.mark_last_event_ended.assert_called_once()
         self.download_service.download_snapshot.assert_not_called()
         self.consolidated_manager.update_activity.assert_not_called()
@@ -214,9 +214,9 @@ class TestEventLifecycleService(unittest.TestCase):
         )
         self.notifier.publish_notification.assert_called_once()
         call_args = self.notifier.publish_notification.call_args
-        self.assertEqual(call_args[0][1], "canceled")
-        self.assertEqual(
-            call_args[1].get("message"), "Event canceled see event viewer for details"
+        assert call_args[0][1] == "canceled"
+        assert (
+            call_args[1].get("message") == "Event canceled see event viewer for details"
         )
         self.file_manager.rename_event_folder.assert_called_once()
         self.download_service.export_and_download_clip.assert_not_called()
@@ -239,7 +239,7 @@ class TestEventLifecycleService(unittest.TestCase):
 
         self.file_manager.write_canceled_summary.assert_called_once()
         self.notifier.publish_notification.assert_called_once()
-        self.assertEqual(self.notifier.publish_notification.call_args[0][1], "canceled")
+        assert self.notifier.publish_notification.call_args[0][1] == "canceled"
 
     def test_finalize_consolidated_event_max_length_does_not_call_analysis(self):
         """When any event in CE has duration >= max, no export and no
@@ -279,7 +279,7 @@ class TestEventLifecycleService(unittest.TestCase):
             "/tmp/storage/events/100_ce1"
         )
         self.notifier.publish_notification.assert_called_once()
-        self.assertEqual(self.notifier.publish_notification.call_args[0][1], "canceled")
+        assert self.notifier.publish_notification.call_args[0][1] == "canceled"
         self.download_service.export_and_download_clip.assert_not_called()
         on_ce_ready_mock.assert_not_called()
         self.consolidated_manager.remove.assert_called_with(ce_id)
@@ -316,9 +316,7 @@ class TestEventLifecycleService(unittest.TestCase):
 
         self.download_service.fetch_review_summary.assert_not_called()
         self.notifier.publish_notification.assert_called_once()
-        self.assertEqual(
-            self.notifier.publish_notification.call_args[0][1], "clip_ready"
-        )
+        assert self.notifier.publish_notification.call_args[0][1] == "clip_ready"
         self.notifier.mark_last_event_ended.assert_called_once()
 
     def test_finalize_consolidated_event_multi_cam_uses_download_then_sidecar(self):
@@ -360,10 +358,10 @@ class TestEventLifecycleService(unittest.TestCase):
         self.service.finalize_consolidated_event(ce_id)
 
         self.download_service.export_and_download_clip.assert_called()
-        self.assertEqual(self.download_service.export_and_download_clip.call_count, 2)
+        assert self.download_service.export_and_download_clip.call_count == 2
         self.video_service.generate_detection_sidecars_for_cameras.assert_called_once()
         call_args = self.video_service.generate_detection_sidecars_for_cameras.call_args
-        self.assertEqual(len(call_args[0][0]), 2, "Should pass 2 tasks (cam1, cam2)")
+        assert len(call_args[0][0]) == 2, "Should pass 2 tasks (cam1, cam2)"
         self.consolidated_manager.remove.assert_called_with(ce_id)
 
 

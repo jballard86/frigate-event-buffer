@@ -61,7 +61,7 @@ class TestTimelineLogger(unittest.TestCase):
 
     def test_folder_for_event_none(self):
         """Test folder_for_event with None event."""
-        self.assertIsNone(self.logger.folder_for_event(None))
+        assert self.logger.folder_for_event(None) is None
 
     def test_folder_for_event_consolidated(self):
         """Test folder_for_event with an event that is part of a consolidated event."""
@@ -76,7 +76,7 @@ class TestTimelineLogger(unittest.TestCase):
 
         folder = self.logger.folder_for_event(mock_event)
 
-        self.assertEqual(folder, "/path/to/ce")
+        assert folder == "/path/to/ce"
         self.mock_consolidated_manager.get_by_frigate_event.assert_called_once_with(
             "test_event"
         )
@@ -92,7 +92,7 @@ class TestTimelineLogger(unittest.TestCase):
 
         folder = self.logger.folder_for_event(mock_event)
 
-        self.assertEqual(folder, "/path/to/event")
+        assert folder == "/path/to/event"
         self.mock_consolidated_manager.get_by_frigate_event.assert_called_once_with(
             "test_event"
         )

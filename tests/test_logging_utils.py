@@ -19,16 +19,16 @@ class TestSuppressReviewDebugLogs(unittest.TestCase):
 
     def test_default_is_false(self) -> None:
         set_suppress_review_debug_logs(False)
-        self.assertFalse(should_suppress_review_debug_logs())
+        assert not should_suppress_review_debug_logs()
 
     def test_set_true_then_read(self) -> None:
         set_suppress_review_debug_logs(True)
-        self.assertTrue(should_suppress_review_debug_logs())
+        assert should_suppress_review_debug_logs()
 
     def test_set_false_after_true(self) -> None:
         set_suppress_review_debug_logs(True)
         set_suppress_review_debug_logs(False)
-        self.assertFalse(should_suppress_review_debug_logs())
+        assert not should_suppress_review_debug_logs()
 
 
 class TestStreamCaptureHandlerFilter(unittest.TestCase):
@@ -43,9 +43,9 @@ class TestStreamCaptureHandlerFilter(unittest.TestCase):
         try:
             logger.setLevel(logging.DEBUG)
             logger.info("Hello from video")
-            self.assertEqual(len(captured), 1)
-            self.assertIn("Hello from video", captured[0])
-            self.assertIn("INFO", captured[0])
+            assert len(captured) == 1
+            assert "Hello from video" in captured[0]
+            assert "INFO" in captured[0]
         finally:
             logger.removeHandler(handler)
             logger.setLevel(prev_level)
@@ -64,7 +64,7 @@ class TestStreamCaptureHandlerFilter(unittest.TestCase):
         )
         record.module = "mqtt_handler"
         handler.emit(record)
-        self.assertEqual(len(captured), 0)
+        assert len(captured) == 0
 
     def test_skips_mqtt_client_records(self) -> None:
         captured: list[str] = []
@@ -80,7 +80,7 @@ class TestStreamCaptureHandlerFilter(unittest.TestCase):
         )
         record.module = "mqtt_client"
         handler.emit(record)
-        self.assertEqual(len(captured), 0)
+        assert len(captured) == 0
 
     def test_captures_when_pathname_has_no_mqtt(self) -> None:
         captured: list[str] = []
@@ -96,5 +96,5 @@ class TestStreamCaptureHandlerFilter(unittest.TestCase):
         )
         record.module = "video_compilation"
         handler.emit(record)
-        self.assertEqual(len(captured), 1)
-        self.assertIn("Compilation step", captured[0])
+        assert len(captured) == 1
+        assert "Compilation step" in captured[0]

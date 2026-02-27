@@ -54,8 +54,8 @@ class TestMultiClipExtractorHelpers(unittest.TestCase):
 
     def test_person_area_from_detections_empty(self):
         """Empty or no detections returns 0."""
-        self.assertEqual(_person_area_from_detections([]), 0.0)
-        self.assertEqual(_person_area_from_detections(None), 0.0)
+        assert _person_area_from_detections([]) == 0.0
+        assert _person_area_from_detections(None) == 0.0
 
     def test_person_area_from_detections_sum_preferred_labels(self):
         """Sums area only for person/people/pedestrian (case-insensitive)."""
@@ -64,7 +64,7 @@ class TestMultiClipExtractorHelpers(unittest.TestCase):
             {"label": "Person", "area": 500},
             {"label": "car", "area": 8000},
         ]
-        self.assertEqual(_person_area_from_detections(dets), 1500.0)
+        assert _person_area_from_detections(dets) == 1500.0
 
     def test_person_area_from_detections_new_sidecar_format(self):
         """New sidecar format (label, bbox, centerpoint, area) is summed correctly."""
@@ -82,11 +82,11 @@ class TestMultiClipExtractorHelpers(unittest.TestCase):
                 "area": 300,
             },
         ]
-        self.assertEqual(_person_area_from_detections(dets), 500.0)
+        assert _person_area_from_detections(dets) == 500.0
 
     def test_nearest_sidecar_entry_returns_none_for_empty(self):
         """Empty sidecar entries returns None."""
-        self.assertIsNone(_nearest_sidecar_entry([], 0.5))
+        assert _nearest_sidecar_entry([], 0.5) is None
 
     def test_nearest_sidecar_entry_returns_entry_closest_to_t(self):
         """Returns entry with timestamp_sec closest to t_sec."""
@@ -95,13 +95,13 @@ class TestMultiClipExtractorHelpers(unittest.TestCase):
             {"timestamp_sec": 1.0, "frame_number": 30, "detections": []},
             {"timestamp_sec": 2.0, "frame_number": 60, "detections": []},
         ]
-        self.assertEqual(_nearest_sidecar_entry(entries, 0.6)["timestamp_sec"], 1.0)
-        self.assertEqual(_nearest_sidecar_entry(entries, 0.0)["timestamp_sec"], 0.0)
+        assert _nearest_sidecar_entry(entries, 0.6)["timestamp_sec"] == 1.0
+        assert _nearest_sidecar_entry(entries, 0.0)["timestamp_sec"] == 0.0
 
     def test_person_area_at_time_empty_returns_zero(self):
         """Empty sidecar or missing detections defaults to 0."""
-        self.assertEqual(_person_area_at_time([], 0.5), 0.0)
-        self.assertEqual(_person_area_at_time([{"timestamp_sec": 0.0}], 0.0), 0.0)
+        assert _person_area_at_time([], 0.5) == 0.0
+        assert _person_area_at_time([{"timestamp_sec": 0.0}], 0.0) == 0.0
 
     def test_person_area_at_time_nearest(self):
         """Returns person area from nearest entry by timestamp_sec."""
@@ -111,8 +111,8 @@ class TestMultiClipExtractorHelpers(unittest.TestCase):
             {"timestamp_sec": 2.0, "detections": [{"label": "person", "area": 50}]},
         ]
         # t=0.6: nearest is 1.0 (distance 0.4), not 0.0 (0.6)
-        self.assertEqual(_person_area_at_time(entries, 0.6), 200.0)
-        self.assertEqual(_person_area_at_time(entries, 0.0), 100.0)
+        assert _person_area_at_time(entries, 0.6) == 200.0
+        assert _person_area_at_time(entries, 0.0) == 100.0
 
     def test_load_sidecar_missing_returns_none(self):
         """Missing file returns None."""
@@ -120,7 +120,7 @@ class TestMultiClipExtractorHelpers(unittest.TestCase):
         d = os.path.join(test_dir, "_sidecar_fixture", "missing_" + str(id(self)))
         os.makedirs(d, exist_ok=True)
         try:
-            self.assertIsNone(_load_sidecar_for_camera(d))
+            assert _load_sidecar_for_camera(d) is None
         finally:
             shutil.rmtree(d, ignore_errors=True)
 
@@ -141,13 +141,13 @@ class TestMultiClipExtractorHelpers(unittest.TestCase):
             with open(path, "w", encoding="utf-8") as f:
                 json.dump(data, f)
             result = _load_sidecar_for_camera(d)
-            self.assertIsNotNone(result)
+            assert result is not None
             entries, nw, nh = result
-            self.assertIsInstance(entries, list)
-            self.assertEqual(len(entries), 1)
-            self.assertEqual(entries[0]["timestamp_sec"], 0.0)
-            self.assertEqual(nw, 0)
-            self.assertEqual(nh, 0)
+            assert isinstance(entries, list)
+            assert len(entries) == 1
+            assert entries[0]["timestamp_sec"] == 0.0
+            assert nw == 0
+            assert nh == 0
         finally:
             shutil.rmtree(d, ignore_errors=True)
 
@@ -164,10 +164,10 @@ class TestMultiClipExtractorHelpers(unittest.TestCase):
             "cam2": None,
         }
         result = _detection_timestamps_with_person(sidecars, global_end=10.0)
-        self.assertEqual(result, [0.0])
+        assert result == [0.0]
         sidecars["cam2"] = []
         result = _detection_timestamps_with_person(sidecars, global_end=10.0)
-        self.assertEqual(result, [0.0])
+        assert result == [0.0]
 
     def test_detection_timestamps_with_person_filters_zero_area(self):
         """Only entries with person area > 0 are included."""
@@ -179,22 +179,22 @@ class TestMultiClipExtractorHelpers(unittest.TestCase):
             ],
         }
         result = _detection_timestamps_with_person(sidecars, global_end=10.0)
-        self.assertEqual(result, [0.0])
+        assert result == [0.0]
 
     def test_subsample_with_min_gap_enforces_step(self):
         """Selected timestamps have at least step_sec between them;
         not all from start."""
         timestamps = [0.0, 0.1, 0.2, 1.0, 1.05, 2.0, 2.1, 3.0]
         result = _subsample_with_min_gap(timestamps, step_sec=1.0, max_count=5)
-        self.assertEqual(result, [0.0, 1.0, 2.0, 3.0])
-        self.assertLessEqual(len(result), 5)
+        assert result == [0.0, 1.0, 2.0, 3.0]
+        assert len(result) <= 5
 
     def test_subsample_with_min_gap_respects_max_count(self):
         """Subsample stops at max_count."""
         timestamps = [float(i) for i in range(20)]
         result = _subsample_with_min_gap(timestamps, step_sec=1.0, max_count=3)
-        self.assertEqual(len(result), 3)
-        self.assertEqual(result, [0.0, 1.0, 2.0])
+        assert len(result) == 3
+        assert result == [0.0, 1.0, 2.0]
 
 
 class TestMultiClipExtractor(unittest.TestCase):
@@ -217,7 +217,7 @@ class TestMultiClipExtractor(unittest.TestCase):
         result = extract_target_centric_frames(
             self.tmp, max_frames_sec=1, max_frames_min=60
         )
-        self.assertEqual(result, [])
+        assert result == []
 
     def test_no_clips_in_subdirs_returns_empty(self):
         """When subdirs exist but no clip.mp4, returns empty list."""
@@ -226,7 +226,7 @@ class TestMultiClipExtractor(unittest.TestCase):
         result = extract_target_centric_frames(
             self.tmp, max_frames_sec=1, max_frames_min=60
         )
-        self.assertEqual(result, [])
+        assert result == []
 
     def _make_decoder_context_mock(self, frame_count=10, height=480, width=640):
         """Create a mock DecoderContext: __len__,
@@ -277,22 +277,21 @@ class TestMultiClipExtractor(unittest.TestCase):
             self.tmp, max_frames_sec=1.0, max_frames_min=5
         )
 
-        self.assertGreaterEqual(len(result), 1)
-        self.assertLessEqual(len(result), 5)
+        assert len(result) >= 1
+        assert len(result) <= 5
         for item in result:
-            self.assertIsInstance(item, ExtractedFrame)
-            self.assertIsNotNone(item.frame)
-            self.assertTrue(
-                hasattr(item.frame, "shape") or type(item.frame).__name__ == "Tensor",
-                "ExtractedFrame.frame should be tensor (BCHW)",
-            )
-            self.assertIn(item.camera, ("cam1", "cam2"))
-            self.assertIn("person_area", item.metadata)
-            self.assertIsInstance(item.metadata["person_area"], int)
-            self.assertEqual(item.metadata["person_area"], 100)
+            assert isinstance(item, ExtractedFrame)
+            assert item.frame is not None
+            assert (
+                hasattr(item.frame, "shape") or type(item.frame).__name__ == "Tensor"
+            ), "ExtractedFrame.frame should be tensor (BCHW)"
+            assert item.camera in ("cam1", "cam2")
+            assert "person_area" in item.metadata
+            assert isinstance(item.metadata["person_area"], int)
+            assert item.metadata["person_area"] == 100
         mock_create_decoder.assert_called()
         # One get_frames per sample time that yields a frame
-        self.assertGreaterEqual(mock_create_decoder.call_count, 1)
+        assert mock_create_decoder.call_count >= 1
 
     @patch(
         "frigate_buffer.services.multi_clip_extractor.create_decoder",
@@ -322,7 +321,7 @@ class TestMultiClipExtractor(unittest.TestCase):
         result = extract_target_centric_frames(
             self.tmp, max_frames_sec=1.0, max_frames_min=5
         )
-        self.assertGreaterEqual(len(result), 1)
+        assert len(result) >= 1
         mock_create_decoder.assert_called()
 
     @patch("frigate_buffer.services.multi_clip_extractor.create_decoder")
@@ -379,14 +378,12 @@ class TestMultiClipExtractor(unittest.TestCase):
             self.tmp, max_frames_sec=1.0, max_frames_min=5
         )
 
-        self.assertIsInstance(result, list)
+        assert isinstance(result, list)
         for item in result:
-            self.assertIsInstance(item, ExtractedFrame)
-            self.assertIsNotNone(item.frame)
-            self.assertEqual(
-                item.camera,
-                "cam1",
-                "Failed camera should be dropped; only cam1 should appear",
+            assert isinstance(item, ExtractedFrame)
+            assert item.frame is not None
+            assert item.camera == "cam1", (
+                "Failed camera should be dropped; only cam1 should appear"
             )
 
     @patch("frigate_buffer.services.multi_clip_extractor._get_fps_duration_from_path")
@@ -424,10 +421,10 @@ class TestMultiClipExtractor(unittest.TestCase):
         result = extract_target_centric_frames(
             self.tmp, max_frames_sec=1.0, max_frames_min=5
         )
-        self.assertGreaterEqual(len(result), 1)
+        assert len(result) >= 1
         for item in result:
-            self.assertIsInstance(item, ExtractedFrame)
-            self.assertIsNotNone(item.frame)
+            assert isinstance(item, ExtractedFrame)
+            assert item.frame is not None
 
     @patch(
         "frigate_buffer.services.multi_clip_extractor.create_decoder",
@@ -458,12 +455,11 @@ class TestMultiClipExtractor(unittest.TestCase):
         result = extract_target_centric_frames(
             self.tmp, max_frames_sec=1.0, max_frames_min=5, log_callback=logs.append
         )
-        self.assertGreaterEqual(len(result), 1)
+        assert len(result) >= 1
         decode_logs = [m for m in logs if "Decoding clips" in m]
-        self.assertGreaterEqual(len(decode_logs), 1)
-        self.assertTrue(
-            any("PyNvVideoCodec" in m or "NVDEC" in m for m in decode_logs),
-            f"Expected PyNvVideoCodec/NVDEC in decode message: {decode_logs}",
+        assert len(decode_logs) >= 1
+        assert any("PyNvVideoCodec" in m or "NVDEC" in m for m in decode_logs), (
+            f"Expected PyNvVideoCodec/NVDEC in decode message: {decode_logs}"
         )
 
     @patch(
@@ -498,10 +494,10 @@ class TestMultiClipExtractor(unittest.TestCase):
         result = extract_target_centric_frames(
             self.tmp, max_frames_sec=1.0, max_frames_min=5, primary_camera="cam1"
         )
-        self.assertGreaterEqual(len(result), 1)
+        assert len(result) >= 1
         for item in result:
-            self.assertIsInstance(item, ExtractedFrame)
-            self.assertIn(item.camera, ("cam1", "cam2"))
+            assert isinstance(item, ExtractedFrame)
+            assert item.camera in ("cam1", "cam2")
 
     @patch(
         "frigate_buffer.services.multi_clip_extractor.create_decoder",
@@ -537,10 +533,8 @@ class TestMultiClipExtractor(unittest.TestCase):
             camera_timeline_final_yolo_drop_no_person=True,
         )
         for ef in result:
-            self.assertIsInstance(ef, ExtractedFrame)
-            self.assertGreater(
-                ef.metadata.get("person_area", 0),
-                0,
+            assert isinstance(ef, ExtractedFrame)
+            assert ef.metadata.get("person_area", 0) > 0, (
                 "With camera_timeline_final_yolo_drop_no_person=True, "
-                "no frame should have person_area=0",
+                "no frame should have person_area=0"
             )

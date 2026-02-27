@@ -6,6 +6,8 @@ from unittest.mock import mock_open, patch
 # Ensure project root is in path
 sys.path.append(os.getcwd())
 
+import pytest
+
 from frigate_buffer.config import load_config
 
 
@@ -28,8 +30,8 @@ class TestConfigSchema(unittest.TestCase):
         mock_yaml_load.return_value = valid_yaml
 
         config = load_config()
-        self.assertEqual(config["ALLOWED_CAMERAS"], ["cam1"])
-        self.assertEqual(config["MQTT_BROKER"], "localhost")
+        assert config["ALLOWED_CAMERAS"] == ["cam1"]
+        assert config["MQTT_BROKER"] == "localhost"
 
     @patch("builtins.open", new_callable=mock_open)
     @patch("os.path.exists")
@@ -52,7 +54,7 @@ class TestConfigSchema(unittest.TestCase):
         mock_yaml_load.return_value = valid_yaml
 
         config = load_config()
-        self.assertTrue(config["NOTIFICATIONS_HOME_ASSISTANT_ENABLED"])
+        assert config["NOTIFICATIONS_HOME_ASSISTANT_ENABLED"]
 
     @patch("builtins.open", new_callable=mock_open)
     @patch("os.path.exists")
@@ -78,7 +80,7 @@ class TestConfigSchema(unittest.TestCase):
         mock_yaml_load.return_value = valid_yaml
 
         config = load_config()
-        self.assertFalse(config["NOTIFICATIONS_HOME_ASSISTANT_ENABLED"])
+        assert not config["NOTIFICATIONS_HOME_ASSISTANT_ENABLED"]
 
     @patch("builtins.open", new_callable=mock_open)
     @patch("os.path.exists")
@@ -104,7 +106,7 @@ class TestConfigSchema(unittest.TestCase):
         mock_yaml_load.return_value = valid_yaml
 
         config = load_config()
-        self.assertTrue(config["NOTIFICATIONS_HOME_ASSISTANT_ENABLED"])
+        assert config["NOTIFICATIONS_HOME_ASSISTANT_ENABLED"]
 
     @patch("builtins.open", new_callable=mock_open)
     @patch("os.path.exists")
@@ -128,7 +130,7 @@ class TestConfigSchema(unittest.TestCase):
         mock_yaml_load.return_value = valid_yaml
 
         config = load_config()
-        self.assertEqual(config["MINIMUM_EVENT_SECONDS"], 10)
+        assert config["MINIMUM_EVENT_SECONDS"] == 10
 
     @patch("builtins.open", new_callable=mock_open)
     @patch("os.path.exists")
@@ -154,7 +156,7 @@ class TestConfigSchema(unittest.TestCase):
         mock_yaml_load.return_value = valid_yaml
 
         config = load_config()
-        self.assertEqual(config["MAX_EVENT_LENGTH_SECONDS"], 300)
+        assert config["MAX_EVENT_LENGTH_SECONDS"] == 300
 
     @patch("builtins.open", new_callable=mock_open)
     @patch("os.path.exists")
@@ -177,7 +179,7 @@ class TestConfigSchema(unittest.TestCase):
         mock_yaml_load.return_value = valid_yaml
 
         config = load_config()
-        self.assertEqual(config["MAX_EVENT_LENGTH_SECONDS"], 120)
+        assert config["MAX_EVENT_LENGTH_SECONDS"] == 120
 
     @patch("builtins.open", new_callable=mock_open)
     @patch("os.path.exists")
@@ -203,7 +205,7 @@ class TestConfigSchema(unittest.TestCase):
         mock_yaml_load.return_value = valid_yaml
 
         config = load_config()
-        self.assertEqual(config["GEMINI_FRAMES_PER_HOUR_CAP"], 100)
+        assert config["GEMINI_FRAMES_PER_HOUR_CAP"] == 100
 
     @patch("builtins.open", new_callable=mock_open)
     @patch("os.path.exists")
@@ -225,7 +227,7 @@ class TestConfigSchema(unittest.TestCase):
         mock_yaml_load.return_value = valid_yaml
 
         config = load_config()
-        self.assertEqual(config["GEMINI_FRAMES_PER_HOUR_CAP"], 200)
+        assert config["GEMINI_FRAMES_PER_HOUR_CAP"] == 200
 
     @patch("builtins.open", new_callable=mock_open)
     @patch("os.path.exists")
@@ -252,8 +254,8 @@ class TestConfigSchema(unittest.TestCase):
         mock_yaml_load.return_value = valid_yaml
 
         config = load_config()
-        self.assertEqual(config["QUICK_TITLE_DELAY_SECONDS"], 5)
-        self.assertFalse(config["QUICK_TITLE_ENABLED"])
+        assert config["QUICK_TITLE_DELAY_SECONDS"] == 5
+        assert not config["QUICK_TITLE_ENABLED"]
 
     @patch("builtins.open", new_callable=mock_open)
     @patch("os.path.exists")
@@ -274,8 +276,8 @@ class TestConfigSchema(unittest.TestCase):
         mock_yaml_load.return_value = auth_yaml
 
         config = load_config()
-        self.assertEqual(config["MQTT_USER"], "testuser")
-        self.assertEqual(config["MQTT_PASSWORD"], "testpassword")
+        assert config["MQTT_USER"] == "testuser"
+        assert config["MQTT_PASSWORD"] == "testpassword"
 
     @patch("builtins.open", new_callable=mock_open)
     @patch("os.path.exists")
@@ -287,9 +289,9 @@ class TestConfigSchema(unittest.TestCase):
         mock_yaml_load.return_value = invalid_yaml
 
         # Expect SystemExit(1) due to schema validation failure
-        with self.assertRaises(SystemExit) as cm:
+        with pytest.raises(SystemExit) as cm:
             load_config()
-        self.assertEqual(cm.exception.code, 1)
+        assert cm.value.code == 1
 
     @patch("builtins.open", new_callable=mock_open)
     @patch("os.path.exists")
@@ -300,9 +302,9 @@ class TestConfigSchema(unittest.TestCase):
         mock_exists.return_value = True
         mock_yaml_load.return_value = invalid_yaml
 
-        with self.assertRaises(SystemExit) as cm:
+        with pytest.raises(SystemExit) as cm:
             load_config()
-        self.assertEqual(cm.exception.code, 1)
+        assert cm.value.code == 1
 
     @patch("builtins.open", new_callable=mock_open)
     @patch("os.path.exists")
@@ -318,9 +320,9 @@ class TestConfigSchema(unittest.TestCase):
         mock_exists.return_value = True
         mock_yaml_load.return_value = invalid_yaml
 
-        with self.assertRaises(SystemExit) as cm:
+        with pytest.raises(SystemExit) as cm:
             load_config()
-        self.assertEqual(cm.exception.code, 1)
+        assert cm.value.code == 1
 
     @patch("builtins.open", new_callable=mock_open)
     @patch("os.path.exists")
@@ -345,7 +347,7 @@ class TestConfigSchema(unittest.TestCase):
         except SystemExit:
             self.fail("load_config raised SystemExit unexpectedly with extra fields")
 
-        self.assertEqual(config["ALLOWED_CAMERAS"], ["cam1"])
+        assert config["ALLOWED_CAMERAS"] == ["cam1"]
 
     @patch("builtins.open", new_callable=mock_open)
     @patch("os.path.exists")
@@ -385,19 +387,19 @@ class TestConfigSchema(unittest.TestCase):
         mock_yaml_load.return_value = yaml_with_new
 
         config = load_config()
-        self.assertEqual(config["MAX_MULTI_CAM_FRAMES_MIN"], 60)
-        self.assertEqual(config["MAX_MULTI_CAM_FRAMES_SEC"], 3)
-        self.assertEqual(config["CROP_WIDTH"], 1920)
-        self.assertEqual(config["CROP_HEIGHT"], 1080)
-        self.assertEqual(config["MULTI_CAM_SYSTEM_PROMPT_FILE"], "/path/to/prompt.txt")
-        self.assertEqual(config["DETECTION_IMGSZ"], 1280)
-        self.assertTrue(config["PERSON_AREA_DEBUG"])
-        self.assertEqual(config["GEMINI_PROXY_URL"], "http://proxy:5050")
-        self.assertEqual(config["GEMINI_PROXY_MODEL"], "gemini-2.0-flash")
-        self.assertEqual(config["GEMINI_PROXY_TEMPERATURE"], 0.5)
-        self.assertEqual(config["GEMINI_PROXY_TOP_P"], 0.9)
-        self.assertEqual(config["GEMINI_PROXY_FREQUENCY_PENALTY"], 0.1)
-        self.assertEqual(config["GEMINI_PROXY_PRESENCE_PENALTY"], 0.1)
+        assert config["MAX_MULTI_CAM_FRAMES_MIN"] == 60
+        assert config["MAX_MULTI_CAM_FRAMES_SEC"] == 3
+        assert config["CROP_WIDTH"] == 1920
+        assert config["CROP_HEIGHT"] == 1080
+        assert config["MULTI_CAM_SYSTEM_PROMPT_FILE"] == "/path/to/prompt.txt"
+        assert config["DETECTION_IMGSZ"] == 1280
+        assert config["PERSON_AREA_DEBUG"]
+        assert config["GEMINI_PROXY_URL"] == "http://proxy:5050"
+        assert config["GEMINI_PROXY_MODEL"] == "gemini-2.0-flash"
+        assert config["GEMINI_PROXY_TEMPERATURE"] == 0.5
+        assert config["GEMINI_PROXY_TOP_P"] == 0.9
+        assert config["GEMINI_PROXY_FREQUENCY_PENALTY"] == 0.1
+        assert config["GEMINI_PROXY_PRESENCE_PENALTY"] == 0.1
 
     @patch("builtins.open", new_callable=mock_open)
     @patch("os.path.exists")
@@ -423,8 +425,8 @@ class TestConfigSchema(unittest.TestCase):
         mock_exists.return_value = True
         mock_yaml_load.return_value = yaml_with_decimal
         config = load_config()
-        self.assertEqual(config["MAX_MULTI_CAM_FRAMES_SEC"], 1.5)
-        self.assertIsInstance(config["MAX_MULTI_CAM_FRAMES_SEC"], float)
+        assert config["MAX_MULTI_CAM_FRAMES_SEC"] == 1.5
+        assert isinstance(config["MAX_MULTI_CAM_FRAMES_SEC"], float)
 
     @patch("builtins.open", new_callable=mock_open)
     @patch("os.path.exists")
@@ -447,19 +449,19 @@ class TestConfigSchema(unittest.TestCase):
         mock_yaml_load.return_value = yaml_minimal
 
         config = load_config()
-        self.assertEqual(config["MAX_MULTI_CAM_FRAMES_MIN"], 45)
-        self.assertEqual(config["MAX_MULTI_CAM_FRAMES_SEC"], 2)
-        self.assertEqual(config["CROP_WIDTH"], 1280)
-        self.assertEqual(config["CROP_HEIGHT"], 720)
-        self.assertEqual(config["MULTI_CAM_SYSTEM_PROMPT_FILE"], "")
-        self.assertFalse(config["PERSON_AREA_DEBUG"])
-        self.assertEqual(config["DECODE_SECOND_CAMERA_CPU_ONLY"], False)
-        self.assertEqual(config["GEMINI_PROXY_URL"], "")
-        self.assertEqual(config["GEMINI_PROXY_MODEL"], "gemini-2.5-flash-lite")
-        self.assertEqual(config["GEMINI_PROXY_TEMPERATURE"], 0.3)
-        self.assertEqual(config["GEMINI_PROXY_TOP_P"], 1)
-        self.assertEqual(config["GEMINI_PROXY_FREQUENCY_PENALTY"], 0)
-        self.assertEqual(config["GEMINI_PROXY_PRESENCE_PENALTY"], 0)
+        assert config["MAX_MULTI_CAM_FRAMES_MIN"] == 45
+        assert config["MAX_MULTI_CAM_FRAMES_SEC"] == 2
+        assert config["CROP_WIDTH"] == 1280
+        assert config["CROP_HEIGHT"] == 720
+        assert config["MULTI_CAM_SYSTEM_PROMPT_FILE"] == ""
+        assert not config["PERSON_AREA_DEBUG"]
+        assert not config["DECODE_SECOND_CAMERA_CPU_ONLY"]
+        assert config["GEMINI_PROXY_URL"] == ""
+        assert config["GEMINI_PROXY_MODEL"] == "gemini-2.5-flash-lite"
+        assert config["GEMINI_PROXY_TEMPERATURE"] == 0.3
+        assert config["GEMINI_PROXY_TOP_P"] == 1
+        assert config["GEMINI_PROXY_FREQUENCY_PENALTY"] == 0
+        assert config["GEMINI_PROXY_PRESENCE_PENALTY"] == 0
 
     @patch("builtins.open", new_callable=mock_open)
     @patch("os.path.exists")
@@ -488,10 +490,10 @@ class TestConfigSchema(unittest.TestCase):
         mock_yaml_load.return_value = yaml_gemini_only
 
         config = load_config()
-        self.assertEqual(config["GEMINI_PROXY_URL"], "http://gemini-only:5050")
-        self.assertEqual(config["GEMINI_PROXY_MODEL"], "gemini-special")
-        self.assertEqual(config["GEMINI_PROXY_TEMPERATURE"], 0.3)
-        self.assertEqual(config["GEMINI_PROXY_TOP_P"], 1)
+        assert config["GEMINI_PROXY_URL"] == "http://gemini-only:5050"
+        assert config["GEMINI_PROXY_MODEL"] == "gemini-special"
+        assert config["GEMINI_PROXY_TEMPERATURE"] == 0.3
+        assert config["GEMINI_PROXY_TOP_P"] == 1
 
     @patch("builtins.open", new_callable=mock_open)
     @patch("os.path.exists")
@@ -523,7 +525,7 @@ class TestConfigSchema(unittest.TestCase):
         }
 
         config = load_config()
-        self.assertEqual(config["GEMINI_PROXY_URL"], "http://env-proxy:6060")
+        assert config["GEMINI_PROXY_URL"] == "http://env-proxy:6060"
 
     @patch("builtins.open", new_callable=mock_open)
     @patch("os.path.exists")
@@ -549,7 +551,7 @@ class TestConfigSchema(unittest.TestCase):
         mock_yaml_load.return_value = yaml_default
 
         config = load_config()
-        self.assertEqual(config["DECODE_SECOND_CAMERA_CPU_ONLY"], False)
+        assert not config["DECODE_SECOND_CAMERA_CPU_ONLY"]
 
         yaml_override = {
             "cameras": [{"name": "cam1"}],
@@ -567,7 +569,7 @@ class TestConfigSchema(unittest.TestCase):
         mock_yaml_load.return_value = yaml_override
 
         config = load_config()
-        self.assertEqual(config["DECODE_SECOND_CAMERA_CPU_ONLY"], True)
+        assert config["DECODE_SECOND_CAMERA_CPU_ONLY"]
 
     @patch("builtins.open", new_callable=mock_open)
     @patch("os.path.exists")
@@ -589,9 +591,9 @@ class TestConfigSchema(unittest.TestCase):
         mock_exists.return_value = True
         mock_yaml_load.return_value = invalid_yaml
 
-        with self.assertRaises(SystemExit) as cm:
+        with pytest.raises(SystemExit) as cm:
             load_config()
-        self.assertEqual(cm.exception.code, 1)
+        assert cm.value.code == 1
 
     @patch("builtins.open", new_callable=mock_open)
     @patch("os.path.exists")
@@ -622,15 +624,15 @@ class TestConfigSchema(unittest.TestCase):
         mock_yaml_load.return_value = valid_yaml
 
         config = load_config()
-        self.assertIn("pushover", config)
+        assert "pushover" in config
         po = config["pushover"]
-        self.assertIsInstance(po, dict)
-        self.assertTrue(po.get("enabled"))
-        self.assertEqual(po.get("pushover_user_key"), "uk")
-        self.assertEqual(po.get("pushover_api_token"), "tok")
-        self.assertEqual(po.get("device"), "phone")
-        self.assertEqual(po.get("default_sound"), "pushover")
-        self.assertEqual(po.get("html"), 1)
+        assert isinstance(po, dict)
+        assert po.get("enabled")
+        assert po.get("pushover_user_key") == "uk"
+        assert po.get("pushover_api_token") == "tok"
+        assert po.get("device") == "phone"
+        assert po.get("default_sound") == "pushover"
+        assert po.get("html") == 1
 
     @patch("builtins.open", new_callable=mock_open)
     @patch("os.path.exists")
@@ -656,9 +658,9 @@ class TestConfigSchema(unittest.TestCase):
         mock_yaml_load.return_value = valid_yaml
 
         config = load_config()
-        self.assertIn("pushover", config)
+        assert "pushover" in config
         po = config["pushover"]
-        self.assertIsInstance(po, dict)
+        assert isinstance(po, dict)
         # Must not raise AttributeError (env overrides may add
         # pushover_user_key/pushover_api_token).
         _ = po.get("enabled")

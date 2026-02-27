@@ -64,9 +64,9 @@ class TestMqttHandlerRouting(unittest.TestCase):
         zone_filter.should_start_event.assert_called_once()
         lifecycle_service.handle_event_new.assert_called_once()
         args = lifecycle_service.handle_event_new.call_args[0]
-        self.assertEqual(args[0], "ev1")
-        self.assertEqual(args[1], "cam1")
-        self.assertEqual(args[2], "person")
+        assert args[0] == "ev1"
+        assert args[1] == "cam1"
+        assert args[2] == "person"
 
     def test_on_message_frigate_events_filtered_camera_does_not_create(self):
         """When camera not in CAMERA_LABEL_MAP, handle_event_new is not called."""
@@ -221,7 +221,7 @@ class TestMqttHandlerRouting(unittest.TestCase):
         handler.on_message(None, None, msg)
         state_manager.set_genai_metadata.assert_called_once()
         notifier.publish_notification.assert_called_once()
-        self.assertEqual(notifier.publish_notification.call_args[0][1], "finalized")
+        assert notifier.publish_notification.call_args[0][1] == "finalized"
 
     def test_review_external_api_returns_early(self):
         """When AI_MODE is external_api, _handle_review does nothing
@@ -304,10 +304,8 @@ class TestMqttHandlerRouting(unittest.TestCase):
                 continue
             fmt = args[0]
             for pattern in suppress_patterns:
-                self.assertNotIn(
-                    pattern,
-                    fmt,
-                    f"Suppressed log should not be emitted: {fmt!r}",
+                assert pattern not in fmt, (
+                    f"Suppressed log should not be emitted: {fmt!r}"
                 )
 
     def test_on_message_invalid_json_does_not_crash(self):

@@ -4,6 +4,8 @@ import json
 import unittest
 from unittest.mock import MagicMock, mock_open, patch
 
+import pytest
+
 from frigate_buffer.services.video_compilation import (
     _encode_frames_via_ffmpeg,
     _run_pynv_compilation,
@@ -45,7 +47,7 @@ class TestConvertTimelineToSegments(unittest.TestCase):
     def test_empty_timeline_returns_empty_list(self):
         """Empty timeline should return empty segments list."""
         result = convert_timeline_to_segments([], 60.0)
-        self.assertEqual(result, [])
+        assert result == []
 
     def test_single_camera_continuous_timeline(self):
         """Single camera throughout creates one segment."""
@@ -55,10 +57,10 @@ class TestConvertTimelineToSegments(unittest.TestCase):
             (2.0, "doorbell"),
         ]
         result = convert_timeline_to_segments(timeline, 10.0)
-        self.assertEqual(len(result), 1)
-        self.assertEqual(result[0]["camera"], "doorbell")
-        self.assertEqual(result[0]["start_sec"], 0.0)
-        self.assertEqual(result[0]["end_sec"], 10.0)
+        assert len(result) == 1
+        assert result[0]["camera"] == "doorbell"
+        assert result[0]["start_sec"] == 0.0
+        assert result[0]["end_sec"] == 10.0
 
     def test_camera_switch_creates_multiple_segments(self):
         """Camera switches create multiple segments."""
@@ -69,13 +71,13 @@ class TestConvertTimelineToSegments(unittest.TestCase):
             (15.0, "carport"),
         ]
         result = convert_timeline_to_segments(timeline, 20.0)
-        self.assertEqual(len(result), 2)
-        self.assertEqual(result[0]["camera"], "doorbell")
-        self.assertEqual(result[0]["start_sec"], 0.0)
-        self.assertEqual(result[0]["end_sec"], 10.0)
-        self.assertEqual(result[1]["camera"], "carport")
-        self.assertEqual(result[1]["start_sec"], 10.0)
-        self.assertEqual(result[1]["end_sec"], 20.0)
+        assert len(result) == 2
+        assert result[0]["camera"] == "doorbell"
+        assert result[0]["start_sec"] == 0.0
+        assert result[0]["end_sec"] == 10.0
+        assert result[1]["camera"] == "carport"
+        assert result[1]["start_sec"] == 10.0
+        assert result[1]["end_sec"] == 20.0
 
     def test_multiple_switches_create_correct_segments(self):
         """Multiple camera switches create correct segment boundaries."""
@@ -86,10 +88,10 @@ class TestConvertTimelineToSegments(unittest.TestCase):
             (15.0, "carport"),
         ]
         result = convert_timeline_to_segments(timeline, 20.0)
-        self.assertEqual(len(result), 4)
-        self.assertEqual(result[0]["end_sec"], 5.0)
-        self.assertEqual(result[1]["start_sec"], 5.0)
-        self.assertEqual(result[1]["end_sec"], 10.0)
+        assert len(result) == 4
+        assert result[0]["end_sec"] == 5.0
+        assert result[1]["start_sec"] == 5.0
+        assert result[1]["end_sec"] == 10.0
 
     def test_global_end_fallback_when_zero(self):
         """When global_end is 0, fallback to last point + step."""
@@ -99,8 +101,8 @@ class TestConvertTimelineToSegments(unittest.TestCase):
             (2.0, "doorbell"),
         ]
         result = convert_timeline_to_segments(timeline, 0.0)
-        self.assertEqual(len(result), 1)
-        self.assertEqual(result[0]["end_sec"], 3.0)  # 2.0 + 1.0 step
+        assert len(result) == 1
+        assert result[0]["end_sec"] == 3.0  # 2.0 + 1.0 step
 
 
 class TestAssignmentsToSlices(unittest.TestCase):
@@ -108,26 +110,26 @@ class TestAssignmentsToSlices(unittest.TestCase):
 
     def test_empty_assignments_returns_empty_list(self):
         result = assignments_to_slices([], 60.0)
-        self.assertEqual(result, [])
+        assert result == []
 
     def test_one_assignment_creates_one_slice_with_global_end(self):
         assignments = [(0.0, "cam1")]
         result = assignments_to_slices(assignments, 10.0)
-        self.assertEqual(len(result), 1)
-        self.assertEqual(result[0]["camera"], "cam1")
-        self.assertEqual(result[0]["start_sec"], 0.0)
-        self.assertEqual(result[0]["end_sec"], 10.0)
+        assert len(result) == 1
+        assert result[0]["camera"] == "cam1"
+        assert result[0]["start_sec"] == 0.0
+        assert result[0]["end_sec"] == 10.0
 
     def test_multiple_assignments_creates_slices_with_correct_boundaries(self):
         assignments = [(0.0, "cam1"), (2.0, "cam1"), (4.0, "cam2")]
         result = assignments_to_slices(assignments, 6.0)
-        self.assertEqual(len(result), 3)
-        self.assertEqual(result[0]["start_sec"], 0.0)
-        self.assertEqual(result[0]["end_sec"], 2.0)
-        self.assertEqual(result[1]["start_sec"], 2.0)
-        self.assertEqual(result[1]["end_sec"], 4.0)
-        self.assertEqual(result[2]["start_sec"], 4.0)
-        self.assertEqual(result[2]["end_sec"], 6.0)
+        assert len(result) == 3
+        assert result[0]["start_sec"] == 0.0
+        assert result[0]["end_sec"] == 2.0
+        assert result[1]["start_sec"] == 2.0
+        assert result[1]["end_sec"] == 4.0
+        assert result[2]["start_sec"] == 4.0
+        assert result[2]["end_sec"] == 6.0
 
 
 class TestTrimSlicesToActionWindow(unittest.TestCase):
@@ -154,12 +156,12 @@ class TestTrimSlicesToActionWindow(unittest.TestCase):
         ]
         result = _trim_slices_to_action_window(slices, sidecars, global_end=20.0)
         # action_start = max(0, 2-3)=0, action_end = min(20, 10+3)=13
-        self.assertEqual(len(result), 2)
-        self.assertEqual(result[0]["camera"], "cam1")
-        self.assertEqual(result[0]["start_sec"], 0.0)
-        self.assertEqual(result[0]["end_sec"], 5.0)
-        self.assertEqual(result[1]["start_sec"], 5.0)
-        self.assertEqual(result[1]["end_sec"], 13.0)
+        assert len(result) == 2
+        assert result[0]["camera"] == "cam1"
+        assert result[0]["start_sec"] == 0.0
+        assert result[0]["end_sec"] == 5.0
+        assert result[1]["start_sec"] == 5.0
+        assert result[1]["end_sec"] == 13.0
         # Slice [15, 20] is entirely outside [0, 13] so dropped
 
     def test_no_detections_keeps_full_range(self):
@@ -172,18 +174,16 @@ class TestTrimSlicesToActionWindow(unittest.TestCase):
         }
         slices = [{"camera": "cam1", "start_sec": 0.0, "end_sec": 10.0}]
         result = _trim_slices_to_action_window(slices, sidecars, global_end=10.0)
-        self.assertEqual(len(result), 1)
-        self.assertEqual(result[0]["start_sec"], 0.0)
-        self.assertEqual(result[0]["end_sec"], 10.0)
+        assert len(result) == 1
+        assert result[0]["start_sec"] == 0.0
+        assert result[0]["end_sec"] == 10.0
 
     def test_discards_slice_entirely_after_action_end(self):
         """Slice entirely after action_end is discarded."""
-        sidecars = {
-            "cam1": [{"timestamp_sec": 1.0, "detections": [{"area": 1.0}]}]
-        }
+        sidecars = {"cam1": [{"timestamp_sec": 1.0, "detections": [{"area": 1.0}]}]}
         slices = [{"camera": "cam1", "start_sec": 20.0, "end_sec": 30.0}]
         result = _trim_slices_to_action_window(slices, sidecars, global_end=30.0)
-        self.assertEqual(len(result), 0)
+        assert len(result) == 0
 
     def test_discards_slice_entirely_before_action_start(self):
         """Slice entirely before action_start discarded when first detection is late."""
@@ -195,9 +195,9 @@ class TestTrimSlicesToActionWindow(unittest.TestCase):
         result = _trim_slices_to_action_window(slices, sidecars, global_end=20.0)
         # action_start = 10-3 = 7, action_end = 13.
         # First slice [0,5] entirely before 7 → dropped.
-        self.assertEqual(len(result), 1)
-        self.assertEqual(result[0]["start_sec"], 7.0)
-        self.assertEqual(result[0]["end_sec"], 13.0)
+        assert len(result) == 1
+        assert result[0]["start_sec"] == 7.0
+        assert result[0]["end_sec"] == 13.0
 
 
 class TestCalculateCropAtTime(unittest.TestCase):
@@ -206,10 +206,10 @@ class TestCalculateCropAtTime(unittest.TestCase):
     def test_no_entries_uses_center_crop(self):
         sidecar = {"entries": []}
         x, y, w, h = calculate_crop_at_time(sidecar, 5.0, 1920, 1080, 1440, 1080)
-        self.assertEqual(w, 1440)
-        self.assertEqual(h, 1080)
-        self.assertEqual(x, 240)
-        self.assertEqual(y, 0)
+        assert w == 1440
+        assert h == 1080
+        assert x == 240
+        assert y == 0
 
     def test_single_entry_detection_uses_weighted_center(self):
         sidecar = {
@@ -223,8 +223,8 @@ class TestCalculateCropAtTime(unittest.TestCase):
         x, y, w, h = calculate_crop_at_time(sidecar, 5.0, 1920, 1080, 1440, 1080)
         expected_x = max(0, min(1920 - 1440, int(1000 - 1440 / 2.0)))
         expected_y = max(0, min(1080 - 1080, int(500 - 1080 / 2.0)))
-        self.assertEqual(x, expected_x)
-        self.assertEqual(y, expected_y)
+        assert x == expected_x
+        assert y == expected_y
 
     def test_with_timestamps_sorted_uses_bisect(self):
         sidecar = {
@@ -243,8 +243,8 @@ class TestCalculateCropAtTime(unittest.TestCase):
         x, y, w, h = calculate_crop_at_time(
             sidecar, 2.0, 1920, 1080, 1440, 1080, timestamps_sorted=ts_sorted
         )
-        self.assertEqual(w, 1440)
-        self.assertEqual(h, 1080)
+        assert w == 1440
+        assert h == 1080
 
     def test_hold_last_known_crop_when_nearest_has_no_detections(self):
         """When person leaves at t=4, query at t=6: nearest (t=6) has no detections;
@@ -263,10 +263,10 @@ class TestCalculateCropAtTime(unittest.TestCase):
         # Should use t=4 entry: center (800, 400), not frame center (960, 540)
         expected_x = max(0, min(1920 - 1440, int(800 - 1440 / 2.0)))
         expected_y = max(0, min(1080 - 1080, int(400 - 1080 / 2.0)))
-        self.assertEqual(x, expected_x)
-        self.assertEqual(y, expected_y)
-        self.assertEqual(w, 1440)
-        self.assertEqual(h, 1080)
+        assert x == expected_x
+        assert y == expected_y
+        assert w == 1440
+        assert h == 1080
 
     def test_hold_crop_fallback_to_center_when_no_detections_within_threshold(self):
         """When no entry with detections exists within 5s, crop remains center."""
@@ -281,10 +281,10 @@ class TestCalculateCropAtTime(unittest.TestCase):
         }
         x, y, w, h = calculate_crop_at_time(sidecar, 10.0, 1920, 1080, 1440, 1080)
         # t=0 is > 5s away from t=10, so fallback to center
-        self.assertEqual(x, 240)
-        self.assertEqual(y, 0)
-        self.assertEqual(w, 1440)
-        self.assertEqual(h, 1080)
+        assert x == 240
+        assert y == 0
+        assert w == 1440
+        assert h == 1080
 
     def test_nearest_entry_has_detections_unchanged(self):
         """Nearest entry has detections → behavior unchanged (no regression)."""
@@ -304,8 +304,8 @@ class TestCalculateCropAtTime(unittest.TestCase):
         # Nearest is t=6 (distance 0.5) with detections at (1000, 500)
         expected_x = max(0, min(1920 - 1440, int(1000 - 1440 / 2.0)))
         expected_y = max(0, min(1080 - 1080, int(500 - 1080 / 2.0)))
-        self.assertEqual(x, expected_x)
-        self.assertEqual(y, expected_y)
+        assert x == expected_x
+        assert y == expected_y
 
     def test_zoom_uses_content_area_when_tracking_target_frame_percent_set(self):
         """tracking_target_frame_percent>0 + detections → crop from content, target%."""
@@ -328,18 +328,18 @@ class TestCalculateCropAtTime(unittest.TestCase):
         )
         # Content = bbox + 10% padding; crop area = content/0.4; aspect 1440/1080.
         # Crop (w,h) clamped to [0.4*1920,1920] and [0.4*1080,1080].
-        self.assertGreater(w, 0)
-        self.assertLessEqual(w, 1920)
-        self.assertGreater(h, 0)
-        self.assertLessEqual(h, 1080)
-        self.assertEqual(w % 2, 0)
-        self.assertEqual(h % 2, 0)
-        self.assertGreaterEqual(w, int(1920 * 0.4))
-        self.assertGreaterEqual(h, int(1080 * 0.4))
-        self.assertGreaterEqual(x, 0)
-        self.assertLessEqual(x + w, 1920)
-        self.assertGreaterEqual(y, 0)
-        self.assertLessEqual(y + h, 1080)
+        assert w > 0
+        assert w <= 1920
+        assert h > 0
+        assert h <= 1080
+        assert w % 2 == 0
+        assert h % 2 == 0
+        assert w >= int(1920 * 0.4)
+        assert h >= int(1080 * 0.4)
+        assert x >= 0
+        assert x + w <= 1920
+        assert y >= 0
+        assert y + h <= 1080
 
     def test_no_zoom_when_tracking_target_frame_percent_zero(self):
         """When tracking_target_frame_percent=0, crop is fixed target_w x target_h."""
@@ -360,8 +360,8 @@ class TestCalculateCropAtTime(unittest.TestCase):
             1080,
             tracking_target_frame_percent=0,
         )
-        self.assertEqual(w, 1440)
-        self.assertEqual(h, 1080)
+        assert w == 1440
+        assert h == 1080
 
 
 class TestSmoothCropCentersEma(unittest.TestCase):
@@ -373,9 +373,9 @@ class TestSmoothCropCentersEma(unittest.TestCase):
         ]
         orig = [dict(s) for s in slices]
         smooth_crop_centers_ema(slices, 0.0)
-        self.assertEqual(slices[0]["crop_start"], orig[0]["crop_start"])
+        assert slices[0]["crop_start"] == orig[0]["crop_start"]
         smooth_crop_centers_ema(slices, 1.0)
-        self.assertEqual(slices[0]["crop_start"], orig[0]["crop_start"])
+        assert slices[0]["crop_start"] == orig[0]["crop_start"]
 
     def test_ema_smooths_center_trajectory(self):
         slices = [
@@ -383,11 +383,11 @@ class TestSmoothCropCentersEma(unittest.TestCase):
             {"crop_start": (100, 100, 100, 100), "crop_end": (110, 110, 100, 100)},
         ]
         smooth_crop_centers_ema(slices, 0.5)
-        self.assertIn("crop_start", slices[0])
-        self.assertIn("crop_end", slices[0])
+        assert "crop_start" in slices[0]
+        assert "crop_end" in slices[0]
         xs0, ys0, _, _ = slices[0]["crop_start"]
         xs1, ys1, _, _ = slices[1]["crop_start"]
-        self.assertLess(xs1, 100)
+        assert xs1 < 100
 
 
 class TestSmoothZoomEma(unittest.TestCase):
@@ -405,11 +405,11 @@ class TestSmoothZoomEma(unittest.TestCase):
         ]
         orig_w, orig_h = slices[0]["crop_start"][2], slices[0]["crop_start"][3]
         smooth_zoom_ema(slices, 0.0, 1440, 1080)
-        self.assertEqual(slices[0]["crop_start"][2], orig_w)
-        self.assertEqual(slices[0]["crop_start"][3], orig_h)
+        assert slices[0]["crop_start"][2] == orig_w
+        assert slices[0]["crop_start"][3] == orig_h
         smooth_zoom_ema(slices, 1.0, 1440, 1080)
-        self.assertEqual(slices[0]["crop_start"][2], orig_w)
-        self.assertEqual(slices[0]["crop_start"][3], orig_h)
+        assert slices[0]["crop_start"][2] == orig_w
+        assert slices[0]["crop_start"][3] == orig_h
 
     def test_smooth_zoom_ema_updates_crop_size_in_place(self):
         """smooth_zoom_ema updates (w,h) per slice; dimensions even and in bounds."""
@@ -430,16 +430,16 @@ class TestSmoothZoomEma(unittest.TestCase):
         smooth_zoom_ema(slices, 0.3, 1440, 1080)
         for sl in slices:
             xs, ys, w, h = sl["crop_start"]
-            self.assertGreater(w, 0)
-            self.assertLessEqual(w, 1920)
-            self.assertGreater(h, 0)
-            self.assertLessEqual(h, 1080)
-            self.assertEqual(w % 2, 0)
-            self.assertEqual(h % 2, 0)
-            self.assertGreaterEqual(xs, 0)
-            self.assertLessEqual(xs + w, 1920)
-            self.assertGreaterEqual(ys, 0)
-            self.assertLessEqual(ys + h, 1080)
+            assert w > 0
+            assert w <= 1920
+            assert h > 0
+            assert h <= 1080
+            assert w % 2 == 0
+            assert h % 2 == 0
+            assert xs >= 0
+            assert xs + w <= 1920
+            assert ys >= 0
+            assert ys + h <= 1080
 
 
 class TestCalculateSegmentCrop(unittest.TestCase):
@@ -450,11 +450,11 @@ class TestCalculateSegmentCrop(unittest.TestCase):
         segment = {"start_sec": 0.0, "end_sec": 10.0}
         sidecar = {"entries": []}
         x, y, w, h = calculate_segment_crop(segment, sidecar, 1920, 1080, 1440, 1080)
-        self.assertEqual(w, 1440)
-        self.assertEqual(h, 1080)
+        assert w == 1440
+        assert h == 1080
         # Should be centered
-        self.assertEqual(x, 240)  # (1920 - 1440) / 2
-        self.assertEqual(y, 0)  # (1080 - 1080) / 2
+        assert x == 240  # (1920 - 1440) / 2
+        assert y == 0  # (1080 - 1080) / 2
 
     def test_detections_use_weighted_center(self):
         """Detections are used for area-weighted center calculation."""
@@ -468,13 +468,13 @@ class TestCalculateSegmentCrop(unittest.TestCase):
             ]
         }
         x, y, w, h = calculate_segment_crop(segment, sidecar, 1920, 1080, 1440, 1080)
-        self.assertEqual(w, 1440)
-        self.assertEqual(h, 1080)
+        assert w == 1440
+        assert h == 1080
         # Center should be near the detection centerpoint
         expected_x = int(1000 - 1440 / 2.0)
         expected_y = int(500 - 1080 / 2.0)
-        self.assertEqual(x, max(0, min(1920 - 1440, expected_x)))
-        self.assertEqual(y, max(0, min(1080 - 1080, expected_y)))
+        assert x == max(0, min(1920 - 1440, expected_x))
+        assert y == max(0, min(1080 - 1080, expected_y))
 
     def test_bbox_fallback_when_no_centerpoint(self):
         """Uses bbox when centerpoint is not available."""
@@ -491,8 +491,8 @@ class TestCalculateSegmentCrop(unittest.TestCase):
         # Center from bbox: (800 + 1200) / 2 = 1000, (400 + 600) / 2 = 500
         expected_x = int(1000 - 1440 / 2.0)
         expected_y = int(500 - 1080 / 2.0)
-        self.assertEqual(x, max(0, min(1920 - 1440, expected_x)))
-        self.assertEqual(y, max(0, min(1080 - 1080, expected_y)))
+        assert x == max(0, min(1920 - 1440, expected_x))
+        assert y == max(0, min(1080 - 1080, expected_y))
 
     def test_crop_clamped_to_source_bounds(self):
         """Crop box is clamped to not exceed source video boundaries."""
@@ -508,10 +508,10 @@ class TestCalculateSegmentCrop(unittest.TestCase):
             ]
         }
         x, y, w, h = calculate_segment_crop(segment, sidecar, 1920, 1080, 1440, 1080)
-        self.assertGreaterEqual(x, 0)
-        self.assertLessEqual(x + w, 1920)
-        self.assertGreaterEqual(y, 0)
-        self.assertLessEqual(y + h, 1080)
+        assert x >= 0
+        assert x + w <= 1920
+        assert y >= 0
+        assert y + h <= 1080
 
     def test_source_smaller_than_target_scales_down(self):
         """When source is smaller than target, target is scaled down."""
@@ -519,8 +519,8 @@ class TestCalculateSegmentCrop(unittest.TestCase):
         sidecar = {"entries": []}
         x, y, w, h = calculate_segment_crop(segment, sidecar, 640, 480, 1440, 1080)
         # Target should be scaled to fit within source
-        self.assertLessEqual(w, 640)
-        self.assertLessEqual(h, 480)
+        assert w <= 640
+        assert h <= 480
 
 
 class TestGenerateCompilationVideo(unittest.TestCase):
@@ -563,9 +563,9 @@ class TestGenerateCompilationVideo(unittest.TestCase):
         mock_run_pynv.assert_called_once()
         call_kw = mock_run_pynv.call_args[1]
         temp_path = output_path.replace(".mp4", "_temp.mp4")
-        self.assertEqual(call_kw["tmp_output_path"], temp_path)
-        self.assertEqual(call_kw["target_w"], 1440)
-        self.assertEqual(call_kw["target_h"], 1080)
+        assert call_kw["tmp_output_path"] == temp_path
+        assert call_kw["target_w"] == 1440
+        assert call_kw["target_h"] == 1080
         mock_rename.assert_called_once_with(temp_path, output_path)
 
     @patch("frigate_buffer.services.video_compilation._run_pynv_compilation")
@@ -598,11 +598,11 @@ class TestGenerateCompilationVideo(unittest.TestCase):
         )
 
         call_kw = mock_run_pynv.call_args[1]
-        self.assertEqual(call_kw["target_w"], 1280)
-        self.assertEqual(call_kw["target_h"], 720)
-        self.assertEqual(len(call_kw["slices"]), 1)
-        self.assertIn("crop_start", call_kw["slices"][0])
-        self.assertIn("crop_end", call_kw["slices"][0])
+        assert call_kw["target_w"] == 1280
+        assert call_kw["target_h"] == 720
+        assert len(call_kw["slices"]) == 1
+        assert "crop_start" in call_kw["slices"][0]
+        assert "crop_end" in call_kw["slices"][0]
 
     @patch("frigate_buffer.services.video_compilation._run_pynv_compilation")
     @patch("frigate_buffer.services.video_compilation.os.path.isfile")
@@ -652,7 +652,7 @@ class TestGenerateCompilationVideo(unittest.TestCase):
 
         mock_run_pynv.side_effect = RuntimeError("PyNv encode failed")
 
-        with self.assertRaises(RuntimeError):
+        with pytest.raises(RuntimeError):
             generate_compilation_video(segments, ce_dir, output_path)
 
     @patch("frigate_buffer.services.video_compilation._run_pynv_compilation")
@@ -690,16 +690,16 @@ class TestGenerateCompilationVideo(unittest.TestCase):
         generate_compilation_video(slices, ce_dir, output_path)
 
         call_kw = mock_run_pynv.call_args[1]
-        self.assertEqual(len(call_kw["slices"]), 2)
-        self.assertEqual(call_kw["slices"][0]["camera"], "doorbell")
-        self.assertEqual(call_kw["slices"][0]["start_sec"], 0.0)
-        self.assertEqual(call_kw["slices"][0]["end_sec"], 5.0)
-        self.assertEqual(call_kw["slices"][1]["start_sec"], 5.0)
-        self.assertEqual(call_kw["slices"][1]["end_sec"], 10.0)
-        self.assertIn("native_width", call_kw["slices"][0])
-        self.assertIn("native_height", call_kw["slices"][0])
-        self.assertEqual(call_kw["slices"][0]["native_width"], 1920)
-        self.assertEqual(call_kw["slices"][0]["native_height"], 1080)
+        assert len(call_kw["slices"]) == 2
+        assert call_kw["slices"][0]["camera"] == "doorbell"
+        assert call_kw["slices"][0]["start_sec"] == 0.0
+        assert call_kw["slices"][0]["end_sec"] == 5.0
+        assert call_kw["slices"][1]["start_sec"] == 5.0
+        assert call_kw["slices"][1]["end_sec"] == 10.0
+        assert "native_width" in call_kw["slices"][0]
+        assert "native_height" in call_kw["slices"][0]
+        assert call_kw["slices"][0]["native_width"] == 1920
+        assert call_kw["slices"][0]["native_height"] == 1080
 
     @patch("frigate_buffer.services.video_compilation._run_pynv_compilation")
     @patch("frigate_buffer.services.video_compilation.os.path.isfile")
@@ -733,7 +733,7 @@ class TestGenerateCompilationVideo(unittest.TestCase):
         ce_dir = "/app/storage/events/test"
         output_path = "/app/storage/events/test/test_summary.mp4"
         generate_compilation_video(slices, ce_dir, output_path)
-        self.assertEqual(slices[0]["crop_start"], slices[0]["crop_end"])
+        assert slices[0]["crop_start"] == slices[0]["crop_end"]
 
     @patch("frigate_buffer.services.video_compilation.logger")
     @patch("frigate_buffer.services.video_compilation._run_pynv_compilation")
@@ -782,16 +782,14 @@ class TestGenerateCompilationVideo(unittest.TestCase):
             for c in mock_logger.error.call_args_list
             if c[0] and "no detections at slice start/end" in str(c[0][0])
         ]
-        self.assertEqual(
-            len(no_detection_calls),
-            1,
-            "Expected exactly one ERROR per camera for no detections",
+        assert len(no_detection_calls) == 1, (
+            "Expected exactly one ERROR per camera for no detections"
         )
         msg = no_detection_calls[0][0]
-        self.assertIn("doorbell", str(msg))
-        self.assertIn("in %s slices", msg[0])
-        self.assertEqual(msg[2], 3, "Expected slice count 3")
-        self.assertIn("fallback crop (center or nearby detection within 5s)", msg[0])
+        assert "doorbell" in str(msg)
+        assert "in %s slices" in msg[0]
+        assert msg[2] == 3, "Expected slice count 3"
+        assert "fallback crop (center or nearby detection within 5s)" in msg[0]
 
     @patch("frigate_buffer.services.video_compilation.logger")
     @patch("frigate_buffer.services.video_compilation._run_pynv_compilation")
@@ -834,16 +832,14 @@ class TestGenerateCompilationVideo(unittest.TestCase):
             for c in mock_logger.error.call_args_list
             if c[0] and "no sidecar entries" in str(c[0][0])
         ]
-        self.assertEqual(
-            len(no_entries_calls),
-            1,
-            "Expected exactly one ERROR per camera for no sidecar entries",
+        assert len(no_entries_calls) == 1, (
+            "Expected exactly one ERROR per camera for no sidecar entries"
         )
         msg = no_entries_calls[0][0]
-        self.assertIn("doorbell", str(msg))
-        self.assertIn("in %s slices", msg[0])
-        self.assertEqual(msg[2], 3, "Expected slice count 3")
-        self.assertIn("using fallback crop", msg[0])
+        assert "doorbell" in str(msg)
+        assert "in %s slices" in msg[0]
+        assert msg[2] == 3, "Expected slice count 3"
+        assert "using fallback crop" in msg[0]
 
     @patch("frigate_buffer.services.video_compilation.GPU_LOCK", MagicMock())
     @patch("frigate_buffer.services.video_compilation.create_decoder")
@@ -906,11 +902,11 @@ class TestGenerateCompilationVideo(unittest.TestCase):
         mock_get_metadata.assert_called()
         mock_popen.assert_called_once()
         call_args = mock_popen.call_args[0][0]
-        self.assertIn("h264_nvenc", call_args)
-        self.assertEqual(call_args[call_args.index("-s") + 1], "1440x1080")
-        self.assertEqual(call_args[-1], "/out.mp4.tmp")
+        assert "h264_nvenc" in call_args
+        assert call_args[call_args.index("-s") + 1] == "1440x1080"
+        assert call_args[-1] == "/out.mp4.tmp"
         # 2 s at 20 fps = 40 frames
-        self.assertEqual(proc.stdin.write.call_count, 40)
+        assert proc.stdin.write.call_count == 40
         proc.stdin.flush.assert_called()
         proc.stdin.close.assert_called_once()
         proc.wait.assert_called()
@@ -971,15 +967,15 @@ class TestGenerateCompilationVideo(unittest.TestCase):
 
         mock_popen.assert_called_once()
         call_args = mock_popen.call_args[0][0]
-        self.assertIn("h264_nvenc", call_args)
-        self.assertIn("-thread_queue_size", call_args)
-        self.assertIn("512", call_args)
-        self.assertIn("p1", call_args)
-        self.assertIn("hq", call_args)
-        self.assertEqual(call_args[call_args.index("-s") + 1], "1440x1080")
-        self.assertEqual(call_args[-1], "/out.mp4.tmp")
+        assert "h264_nvenc" in call_args
+        assert "-thread_queue_size" in call_args
+        assert "512" in call_args
+        assert "p1" in call_args
+        assert "hq" in call_args
+        assert call_args[call_args.index("-s") + 1] == "1440x1080"
+        assert call_args[-1] == "/out.mp4.tmp"
         # 2 s at 20 fps = 40 frames
-        self.assertEqual(proc.stdin.write.call_count, 40)
+        assert proc.stdin.write.call_count == 40
         proc.stdin.flush.assert_called()
         proc.stdin.close.assert_called_once()
         proc.wait.assert_called()
@@ -1029,7 +1025,7 @@ class TestGenerateCompilationVideo(unittest.TestCase):
         )
 
         mock_popen.assert_called_once()
-        self.assertEqual(proc.stdin.write.call_count, 0)
+        assert proc.stdin.write.call_count == 0
         proc.stdin.close.assert_called_once()
         proc.wait.assert_called()
 
@@ -1092,12 +1088,12 @@ class TestGenerateCompilationVideo(unittest.TestCase):
             cuda_device_index=0,
         )
 
-        self.assertEqual(proc.stdin.write.call_count, 0)
+        assert proc.stdin.write.call_count == 0
         error_calls = [c for c in mock_logger.error.call_args_list if c[0]]
-        self.assertGreater(len(error_calls), 0)
+        assert len(error_calls) > 0
         msg = str(error_calls[0][0][0])
-        self.assertIn("0 frames", msg)
-        self.assertIn("Skipping chunk", msg)
+        assert "0 frames" in msg
+        assert "Skipping chunk" in msg
 
     @patch("frigate_buffer.services.video_compilation.GPU_LOCK", MagicMock())
     @patch("frigate_buffer.services.video_compilation.create_decoder")
@@ -1166,22 +1162,18 @@ class TestGenerateCompilationVideo(unittest.TestCase):
             )
 
         # 20 frames in chunks of BATCH_SIZE (4) → 5 chunk calls
-        self.assertGreater(
-            len(get_frames_calls),
-            1,
-            "get_frames should be called multiple times per slice",
+        assert len(get_frames_calls) > 1, (
+            "get_frames should be called multiple times per slice"
         )
-        self.assertEqual(
-            len(get_frames_calls), 5, "20 frames / BATCH_SIZE=4 → 5 chunks"
-        )
-        self.assertEqual(get_frames_calls[0], [0, 1, 2, 3])
-        self.assertEqual(get_frames_calls[1], [4, 5, 6, 7])
-        self.assertEqual(get_frames_calls[2], [8, 9, 10, 11])
-        self.assertEqual(get_frames_calls[3], [12, 13, 14, 15])
-        self.assertEqual(get_frames_calls[4], [16, 17, 18, 19])
+        assert len(get_frames_calls) == 5, "20 frames / BATCH_SIZE=4 → 5 chunks"
+        assert get_frames_calls[0] == [0, 1, 2, 3]
+        assert get_frames_calls[1] == [4, 5, 6, 7]
+        assert get_frames_calls[2] == [8, 9, 10, 11]
+        assert get_frames_calls[3] == [12, 13, 14, 15]
+        assert get_frames_calls[4] == [16, 17, 18, 19]
         # empty_cache: once after each of 5 chunks + once in slice finally = 6
-        self.assertEqual(mock_empty_cache.call_count, 6)
-        self.assertEqual(proc.stdin.write.call_count, 20)
+        assert mock_empty_cache.call_count == 6
+        assert proc.stdin.write.call_count == 20
 
     @patch("frigate_buffer.services.video_compilation.GPU_LOCK", MagicMock())
     @patch("frigate_buffer.services.video_compilation.create_decoder")
@@ -1250,7 +1242,7 @@ class TestGenerateCompilationVideo(unittest.TestCase):
         )
 
         n_frames_expected = 40
-        self.assertEqual(proc.stdin.write.call_count, n_frames_expected)
+        assert proc.stdin.write.call_count == n_frames_expected
 
     @patch("frigate_buffer.services.video_compilation.GPU_LOCK", MagicMock())
     @patch("frigate_buffer.services.video_compilation.create_decoder")
@@ -1325,11 +1317,9 @@ class TestGenerateCompilationVideo(unittest.TestCase):
             if c[0]
             and "Possible stutter or missing frames" in (str(c[0][0]) if c[0] else "")
         ]
-        self.assertEqual(
-            len(info_calls), 1, "Expected exactly one INFO per camera per event"
-        )
-        self.assertIn("doorbell", str(info_calls[0]))
-        self.assertIn("/path/doorbell-1.mp4", str(info_calls[0]))
+        assert len(info_calls) == 1, "Expected exactly one INFO per camera per event"
+        assert "doorbell" in str(info_calls[0])
+        assert "/path/doorbell-1.mp4" in str(info_calls[0])
 
     @patch("frigate_buffer.services.video_compilation.GPU_LOCK", MagicMock())
     @patch("frigate_buffer.services.video_compilation.create_decoder")
@@ -1402,14 +1392,14 @@ class TestGenerateCompilationVideo(unittest.TestCase):
 
         mock_crop_to_size.assert_called()
         args = mock_crop_to_size.call_args[0]
-        self.assertEqual(args[5], target_w, "output_w should be target_w")
-        self.assertEqual(args[6], target_h, "output_h should be target_h")
+        assert args[5] == target_w, "output_w should be target_w"
+        assert args[6] == target_h, "output_h should be target_h"
         mock_popen.assert_called_once()
         # 2s at 20fps = 40 frames; each write one frame (target_h*target_w*3 bytes)
-        self.assertEqual(proc.stdin.write.call_count, 40)
+        assert proc.stdin.write.call_count == 40
         expected_frame_bytes = target_h * target_w * 3
         for call in proc.stdin.write.call_args_list:
-            self.assertEqual(len(call[0][0]), expected_frame_bytes)
+            assert len(call[0][0]) == expected_frame_bytes
         proc.stdin.flush.assert_called()
         proc.stdin.close.assert_called_once()
         proc.wait.assert_called()
@@ -1473,10 +1463,8 @@ class TestGenerateCompilationVideo(unittest.TestCase):
             for c in mock_logger.debug.call_args_list
             if c[0] and "static frame" in (str(c[0][0]) if c[0] else "")
         ]
-        self.assertGreater(
-            len(debug_calls),
-            0,
-            "Expected at least one DEBUG for static frame (same index for all)",
+        assert len(debug_calls) > 0, (
+            "Expected at least one DEBUG for static frame (same index for all)"
         )
         info_calls = [
             c
@@ -1484,13 +1472,11 @@ class TestGenerateCompilationVideo(unittest.TestCase):
             if c[0]
             and "Possible stutter or missing frames" in (str(c[0][0]) if c[0] else "")
         ]
-        self.assertGreater(
-            len(info_calls),
-            0,
-            "Expected one INFO for stutter/missing (once per camera per event)",
+        assert len(info_calls) > 0, (
+            "Expected one INFO for stutter/missing (once per camera per event)"
         )
-        self.assertIn("doorbell", str(info_calls[0]))
-        self.assertIn("doorbell-1.mp4", str(info_calls[0]))
+        assert "doorbell" in str(info_calls[0])
+        assert "doorbell-1.mp4" in str(info_calls[0])
 
     @patch("frigate_buffer.services.video_compilation.GPU_LOCK", MagicMock())
     @patch("frigate_buffer.services.video_compilation.create_decoder")
@@ -1577,11 +1563,9 @@ class TestGenerateCompilationVideo(unittest.TestCase):
             for c in mock_logger.debug.call_args_list
             if c[0] and "Compilation camera=" in (str(c[0][0]) if c[0] else "")
         ]
-        self.assertEqual(
-            len(compilation_debug_calls),
-            2,
+        assert len(compilation_debug_calls) == 2, (
             "Expected 2 DEBUG (one per camera), not per slice. "
-            f"Got {len(compilation_debug_calls)} calls.",
+            f"Got {len(compilation_debug_calls)} calls."
         )
 
 
@@ -1603,9 +1587,9 @@ class TestEncodeFramesViaFfmpeg(unittest.TestCase):
                 mock_popen.return_value = proc
                 _encode_frames_via_ffmpeg(frames, 1440, 1080, "/tmp/out.mp4")
         call_args = mock_popen.call_args[0][0]
-        self.assertIn("h264_nvenc", call_args)
-        self.assertNotIn("libx264", call_args)
-        self.assertIn("yuv420p", call_args)
+        assert "h264_nvenc" in call_args
+        assert "libx264" not in call_args
+        assert "yuv420p" in call_args
 
     def test_encode_uses_thread_queue_size_and_nvenc_tune(self):
         """FFmpeg: -thread_queue_size 512, h264_nvenc preset/tune/rc/cq."""
@@ -1623,12 +1607,12 @@ class TestEncodeFramesViaFfmpeg(unittest.TestCase):
                 _encode_frames_via_ffmpeg(frames, 1440, 1080, "/tmp/out.mp4")
         call_args = mock_popen.call_args[0][0]
         cmd_str = " ".join(call_args) if isinstance(call_args, list) else str(call_args)
-        self.assertIn("thread_queue_size", cmd_str)
-        self.assertIn("512", cmd_str)
-        self.assertIn("p1", cmd_str)
-        self.assertIn("hq", cmd_str)
-        self.assertIn("vbr", cmd_str)
-        self.assertIn("24", cmd_str)
+        assert "thread_queue_size" in cmd_str
+        assert "512" in cmd_str
+        assert "p1" in cmd_str
+        assert "hq" in cmd_str
+        assert "vbr" in cmd_str
+        assert "24" in cmd_str
 
     def test_encode_failure_raises_with_descriptive_message(self):
         """On non-zero exit, RuntimeError advises checking ffmpeg_compile.log."""
@@ -1643,10 +1627,10 @@ class TestEncodeFramesViaFfmpeg(unittest.TestCase):
                 proc.stdin = MagicMock()
                 proc.returncode = 1
                 mock_popen.return_value = proc
-                with self.assertRaises(RuntimeError) as ctx:
+                with pytest.raises(RuntimeError) as ctx:
                     _encode_frames_via_ffmpeg(frames, 1440, 1080, "/tmp/out.mp4")
-        self.assertIn("h264_nvenc", str(ctx.exception))
-        self.assertIn("ffmpeg_compile.log", str(ctx.exception))
+        assert "h264_nvenc" in str(ctx.value)
+        assert "ffmpeg_compile.log" in str(ctx.value)
 
     def test_broken_pipe_logs_and_raises_with_log_path(self):
         """FFmpeg closes stdin → BrokenPipeError; RuntimeError re ffmpeg_compile.log."""
@@ -1661,10 +1645,10 @@ class TestEncodeFramesViaFfmpeg(unittest.TestCase):
                 proc.stdin = MagicMock()
                 proc.stdin.write.side_effect = BrokenPipeError
                 mock_popen.return_value = proc
-                with self.assertRaises(RuntimeError) as ctx:
+                with pytest.raises(RuntimeError) as ctx:
                     _encode_frames_via_ffmpeg(frames, 1440, 1080, "/tmp/out.mp4")
-        self.assertIn("broke pipe", str(ctx.exception))
-        self.assertIn("ffmpeg_compile.log", str(ctx.exception))
+        assert "broke pipe" in str(ctx.value)
+        assert "ffmpeg_compile.log" in str(ctx.value)
         proc.wait.assert_called_once()
 
 
@@ -1723,8 +1707,8 @@ class TestCompileCeVideoConfig(unittest.TestCase):
                     mock_scandir.return_value.__enter__.return_value = [mock_ent]
                     compile_ce_video("/ce", 3.0, config, None)
         call_args = mock_build_dense.call_args[0]
-        self.assertEqual(call_args[0], 2.5)
-        self.assertEqual(call_args[1], 50)
+        assert call_args[0] == 2.5
+        assert call_args[1] == 50
 
     @patch("frigate_buffer.services.video_compilation.generate_compilation_video")
     @patch("frigate_buffer.services.video_compilation._trim_slices_to_action_window")
@@ -1784,7 +1768,7 @@ class TestCompileCeVideoConfig(unittest.TestCase):
                     mock_ent.path = "/ce/cam1"
                     mock_scandir.return_value.__enter__.return_value = [mock_ent]
                     result = compile_ce_video("/ce", 3.0, config, None)
-        self.assertIsNone(result)
+        assert result is None
         mock_gen.assert_not_called()
 
     @patch("frigate_buffer.services.video_compilation.generate_compilation_video")
@@ -1847,8 +1831,8 @@ class TestCompileCeVideoConfig(unittest.TestCase):
                     compile_ce_video("/ce", 50.0, config, None)
         # build_dense_times(step_sec, max_frames_min, mult, global_end) -> global_end=87
         call_args = mock_build_dense.call_args[0]
-        self.assertEqual(
-            call_args[3], 87.0, "global_end should extend to sidecar last timestamp"
+        assert call_args[3] == 87.0, (
+            "global_end should extend to sidecar last timestamp"
         )
 
     @patch("frigate_buffer.services.video_compilation.generate_compilation_video")
@@ -1911,10 +1895,8 @@ class TestCompileCeVideoConfig(unittest.TestCase):
                     compile_ce_video("/ce", 50.0, config, None)
         # global_end should remain 50 (max(50, 20) = 50)
         call_args = mock_build_dense.call_args[0]
-        self.assertEqual(
-            call_args[3],
-            50.0,
-            "global_end should remain caller value when sidecar is shorter",
+        assert call_args[3] == 50.0, (
+            "global_end should remain caller value when sidecar is shorter"
         )
 
 
@@ -1925,13 +1907,12 @@ class TestCompilationDecoderImport(unittest.TestCase):
         """video_compilation module uses create_decoder from gpu_decoder for decode."""
         from frigate_buffer.services import video_compilation
 
-        self.assertTrue(
-            hasattr(video_compilation, "create_decoder")
-            or "create_decoder" in dir(video_compilation)
+        assert hasattr(video_compilation, "create_decoder") or "create_decoder" in dir(
+            video_compilation
         )
         from frigate_buffer.services.gpu_decoder import create_decoder
 
-        self.assertIs(video_compilation.create_decoder, create_decoder)
+        assert video_compilation.create_decoder is create_decoder
 
 
 if __name__ == "__main__":

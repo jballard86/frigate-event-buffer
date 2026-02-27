@@ -55,41 +55,41 @@ class TestHomeAssistantMqttProvider(unittest.TestCase):
 
     def test_send_returns_notification_result_success(self):
         result = self.provider.send(_make_event("evt1"), "new")
-        self.assertIsInstance(result, dict)
-        self.assertEqual(result.get("provider"), "HA_MQTT")
-        self.assertEqual(result.get("status"), "success")
-        self.assertIn("payload", result)
-        self.assertEqual(result["payload"]["event_id"], "evt1")
-        self.assertEqual(result["payload"]["tag"], "frigate_evt1")
+        assert isinstance(result, dict)
+        assert result.get("provider") == "HA_MQTT"
+        assert result.get("status") == "success"
+        assert "payload" in result
+        assert result["payload"]["event_id"] == "evt1"
+        assert result["payload"]["tag"] == "frigate_evt1"
 
     def test_send_payload_has_tag_phase_event_id(self):
         self.provider.send(_make_event("evt1"), "new")
         payload = self._last_payload()
-        self.assertEqual(payload["event_id"], "evt1")
-        self.assertEqual(payload["tag"], "frigate_evt1")
-        self.assertIn("phase", payload)
-        self.assertNotIn("clear_tag", payload)
+        assert payload["event_id"] == "evt1"
+        assert payload["tag"] == "frigate_evt1"
+        assert "phase" in payload
+        assert "clear_tag" not in payload
 
     def test_second_send_same_tag_includes_clear_tag(self):
         self.provider.send(_make_event("evt1"), "new")
         self.provider.send(_make_event("evt1"), "snapshot_ready")
         payload = self._last_payload()
-        self.assertIn("clear_tag", payload)
-        self.assertEqual(payload["clear_tag"], "frigate_evt1")
-        self.assertEqual(payload["tag"], "frigate_evt1")
+        assert "clear_tag" in payload
+        assert payload["clear_tag"] == "frigate_evt1"
+        assert payload["tag"] == "frigate_evt1"
 
     def test_mark_last_event_ended_next_send_no_clear_tag(self):
         self.provider.send(_make_event("evt1"), "new")
         self.provider.mark_last_event_ended()
         self.provider.send(_make_event("evt2"), "new")
         payload = self._last_payload()
-        self.assertNotIn("clear_tag", payload)
-        self.assertEqual(payload["tag"], "frigate_evt2")
+        assert "clear_tag" not in payload
+        assert payload["tag"] == "frigate_evt2"
 
     def test_tag_override_used(self):
         self.provider.send(_make_event("evt1"), "new", tag_override="frigate_ce_abc")
         payload = self._last_payload()
-        self.assertEqual(payload["tag"], "frigate_ce_abc")
+        assert payload["tag"] == "frigate_ce_abc"
 
     def test_send_accepts_phase_as_string(self):
         """CE path can pass event-like object with phase as string."""
@@ -120,24 +120,24 @@ class TestHomeAssistantMqttProvider(unittest.TestCase):
             result = self.provider.send(
                 event_like, "finalized", tag_override="frigate_ce_123"
             )
-        self.assertEqual(result.get("provider"), "HA_MQTT")
-        self.assertEqual(result.get("status"), "success")
+        assert result.get("provider") == "HA_MQTT"
+        assert result.get("status") == "success"
         payload = self._last_payload()
-        self.assertEqual(payload["phase"], "finalized")
-        self.assertEqual(payload["event_id"], "ce_123")
-        self.assertEqual(payload["tag"], "frigate_ce_123")
+        assert payload["phase"] == "finalized"
+        assert payload["event_id"] == "ce_123"
+        assert payload["tag"] == "frigate_ce_123"
 
     def test_send_overflow_returns_notification_result(self):
         result = self.provider.send_overflow()
-        self.assertIsInstance(result, dict)
-        self.assertEqual(result.get("provider"), "HA_MQTT")
-        self.assertEqual(result.get("status"), "success")
+        assert isinstance(result, dict)
+        assert result.get("provider") == "HA_MQTT"
+        assert result.get("status") == "success"
         self.mqtt.publish.assert_called_once()
         args = self.mqtt.publish.call_args[0]
-        self.assertEqual(args[0], HomeAssistantMqttProvider.TOPIC)
+        assert args[0] == HomeAssistantMqttProvider.TOPIC
         payload = json.loads(args[1])
-        self.assertEqual(payload.get("event_id"), "overflow_summary")
-        self.assertEqual(payload.get("tag"), "frigate_overflow")
+        assert payload.get("event_id") == "overflow_summary"
+        assert payload.get("tag") == "frigate_overflow"
 
 
 class TestNotificationDispatcher(unittest.TestCase):
@@ -163,22 +163,22 @@ class TestNotificationDispatcher(unittest.TestCase):
         self.dispatcher.publish_notification(event, "new")
         self.timeline_logger.log_dispatch_results.assert_called_once()
         call_args = self.timeline_logger.log_dispatch_results.call_args[0]
-        self.assertIs(call_args[0], event)
-        self.assertEqual(call_args[1], "new")
+        assert call_args[0] is event
+        assert call_args[1] == "new"
         results = call_args[2]
-        self.assertIsInstance(results, list)
-        self.assertGreater(len(results), 0)
+        assert isinstance(results, list)
+        assert len(results) > 0
         r = results[0]
-        self.assertEqual(r.get("provider"), "HA_MQTT")
-        self.assertEqual(r.get("status"), "success")
+        assert r.get("provider") == "HA_MQTT"
+        assert r.get("status") == "success"
 
     def test_dispatcher_clear_tag_semantics_via_ha_provider(self):
         event = _make_event("evt1")
         self.dispatcher.publish_notification(event, "new")
         self.dispatcher.publish_notification(event, "snapshot_ready")
         payload = json.loads(self.mqtt.publish.call_args[0][1])
-        self.assertIn("clear_tag", payload)
-        self.assertEqual(payload["clear_tag"], "frigate_evt1")
+        assert "clear_tag" in payload
+        assert payload["clear_tag"] == "frigate_evt1"
 
     def test_mark_last_event_ended_forwarded_to_ha_provider(self):
         event1 = _make_event("evt1")
@@ -187,8 +187,8 @@ class TestNotificationDispatcher(unittest.TestCase):
         self.dispatcher.mark_last_event_ended()
         self.dispatcher.publish_notification(event2, "new")
         payload = json.loads(self.mqtt.publish.call_args[0][1])
-        self.assertNotIn("clear_tag", payload)
-        self.assertEqual(payload["tag"], "frigate_evt2")
+        assert "clear_tag" not in payload
+        assert payload["tag"] == "frigate_evt2"
 
     def test_dispatcher_empty_providers_calls_log_dispatch_results_no_raise(self):
         """When HA is disabled (empty providers), publish_notification
@@ -201,10 +201,10 @@ class TestNotificationDispatcher(unittest.TestCase):
         result = empty_dispatcher.publish_notification(event, "new")
         self.timeline_logger.log_dispatch_results.assert_called_once()
         call_args = self.timeline_logger.log_dispatch_results.call_args[0]
-        self.assertIs(call_args[0], event)
-        self.assertEqual(call_args[1], "new")
-        self.assertEqual(call_args[2], [])
-        self.assertFalse(result)  # No provider sent
+        assert call_args[0] is event
+        assert call_args[1] == "new"
+        assert call_args[2] == []
+        assert not result  # No provider sent
 
     def test_mock_provider_result_passed_to_log_dispatch_results(self):
         """Dispatcher collects NotificationResult from each provider and
@@ -228,10 +228,10 @@ class TestNotificationDispatcher(unittest.TestCase):
         mock_provider.send.assert_called_once()
         timeline.log_dispatch_results.assert_called_once()
         call_args = timeline.log_dispatch_results.call_args[0]
-        self.assertEqual(call_args[2], [mock_result])
+        assert call_args[2] == [mock_result]
 
     def test_queue_size(self):
-        self.assertEqual(self.dispatcher.queue_size, 0)
+        assert self.dispatcher.queue_size == 0
 
 
 class TestNotificationEventCompliance(unittest.TestCase):
@@ -249,16 +249,16 @@ class TestNotificationEventCompliance(unittest.TestCase):
             label="person",
             created_at=1234567890.0,
         )
-        self.assertIsInstance(event, NotificationEvent)
-        self.assertTrue(hasattr(event, "image_url_override"))
-        self.assertTrue(hasattr(event, "ai_description"))
-        self.assertTrue(hasattr(event, "genai_title"))
-        self.assertTrue(hasattr(event, "genai_description"))
-        self.assertTrue(hasattr(event, "review_summary"))
-        self.assertTrue(hasattr(event, "folder_path"))
-        self.assertTrue(hasattr(event, "clip_downloaded"))
-        self.assertTrue(hasattr(event, "snapshot_downloaded"))
-        self.assertTrue(hasattr(event, "threat_level"))
+        assert isinstance(event, NotificationEvent)
+        assert hasattr(event, "image_url_override")
+        assert hasattr(event, "ai_description")
+        assert hasattr(event, "genai_title")
+        assert hasattr(event, "genai_description")
+        assert hasattr(event, "review_summary")
+        assert hasattr(event, "folder_path")
+        assert hasattr(event, "clip_downloaded")
+        assert hasattr(event, "snapshot_downloaded")
+        assert hasattr(event, "threat_level")
 
     def test_consolidated_event_implements_protocol(self):
         ce = ConsolidatedEvent(
@@ -268,23 +268,23 @@ class TestNotificationEventCompliance(unittest.TestCase):
             start_time=1234567890.0,
             last_activity_time=1234567900.0,
         )
-        self.assertIsInstance(ce, NotificationEvent)
-        self.assertTrue(hasattr(ce, "image_url_override"))
-        self.assertTrue(hasattr(ce, "ai_description"))
-        self.assertTrue(hasattr(ce, "genai_title"))
-        self.assertTrue(hasattr(ce, "genai_description"))
-        self.assertTrue(hasattr(ce, "review_summary"))
-        self.assertIsNone(ce.image_url_override)
-        self.assertIsNone(ce.ai_description)
-        self.assertIsNone(ce.review_summary)
+        assert isinstance(ce, NotificationEvent)
+        assert hasattr(ce, "image_url_override")
+        assert hasattr(ce, "ai_description")
+        assert hasattr(ce, "genai_title")
+        assert hasattr(ce, "genai_description")
+        assert hasattr(ce, "review_summary")
+        assert ce.image_url_override is None
+        assert ce.ai_description is None
+        assert ce.review_summary is None
 
     def test_event_state_has_slots(self):
         if hasattr(EventState, "__slots__"):
-            self.assertIsInstance(EventState.__slots__, (tuple, list))
+            assert isinstance(EventState.__slots__, (tuple, list))
 
     def test_consolidated_event_has_slots(self):
         if hasattr(ConsolidatedEvent, "__slots__"):
-            self.assertIsInstance(ConsolidatedEvent.__slots__, (tuple, list))
+            assert isinstance(ConsolidatedEvent.__slots__, (tuple, list))
 
 
 if __name__ == "__main__":

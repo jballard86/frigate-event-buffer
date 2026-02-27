@@ -16,9 +16,6 @@ from collections.abc import Callable
 from datetime import datetime
 from typing import Any
 
-# Relative path under CE folder for detection sidecar (must match multi_clip_extractor)
-_DETECTION_SIDECAR_FILENAME = "detection.json"
-
 import cv2
 import requests
 
@@ -32,6 +29,9 @@ from frigate_buffer.managers.file import write_ai_frame_analysis_multi_cam
 from frigate_buffer.services import crop_utils
 from frigate_buffer.services.gemini_proxy_client import GeminiProxyClient
 from frigate_buffer.services.multi_clip_extractor import extract_target_centric_frames
+
+# Relative path under CE folder for detection sidecar (must match multi_clip_extractor)
+_DETECTION_SIDECAR_FILENAME = "detection.json"
 
 logger = logging.getLogger("frigate-buffer")
 

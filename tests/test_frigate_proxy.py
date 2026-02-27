@@ -18,18 +18,18 @@ class TestProxySnapshot(unittest.TestCase):
     def test_empty_frigate_url_returns_503(self):
         """When frigate_url is empty, returns 503 and message."""
         body, status = proxy_snapshot("", "evt123")
-        self.assertEqual(status, 503)
-        self.assertIn("not configured", body)
+        assert status == 503
+        assert "not configured" in body
 
     def test_request_exception_returns_502(self):
         """When requests.get raises RequestException, returns 502 and message."""
         with patch("frigate_buffer.web.frigate_proxy.requests.get") as mock_get:
             mock_get.side_effect = requests.RequestException("connection refused")
             result = proxy_snapshot("http://frigate:5000", "evt1")
-        self.assertIsInstance(result, tuple)
+        assert isinstance(result, tuple)
         body, status = result
-        self.assertEqual(status, 502)
-        self.assertIn("unavailable", body)
+        assert status == 502
+        assert "unavailable" in body
 
 
 class TestProxyCameraLatest(unittest.TestCase):
@@ -39,41 +39,41 @@ class TestProxyCameraLatest(unittest.TestCase):
     def test_invalid_camera_name_returns_400(self):
         """Camera name with invalid characters returns 400."""
         result = proxy_camera_latest("http://frigate:5000", "cam/../x", [])
-        self.assertIsInstance(result, tuple)
+        assert isinstance(result, tuple)
         body, status = result
-        self.assertEqual(status, 400)
-        self.assertIn("Invalid", body)
+        assert status == 400
+        assert "Invalid" in body
 
     def test_empty_camera_name_returns_400(self):
         """Empty camera name returns 400."""
         result = proxy_camera_latest("http://frigate:5000", "", [])
-        self.assertIsInstance(result, tuple)
+        assert isinstance(result, tuple)
         body, status = result
-        self.assertEqual(status, 400)
+        assert status == 400
 
     def test_camera_not_in_allowed_returns_404(self):
         """When allowed_cameras is non-empty and camera not in list, returns 404."""
         result = proxy_camera_latest("http://frigate:5000", "front_door", ["back_door"])
-        self.assertIsInstance(result, tuple)
+        assert isinstance(result, tuple)
         body, status = result
-        self.assertEqual(status, 404)
-        self.assertIn("not configured", body)
+        assert status == 404
+        assert "not configured" in body
 
     def test_empty_frigate_url_returns_503(self):
         """When frigate_url is empty, returns 503."""
         result = proxy_camera_latest("", "front_door", [])
-        self.assertIsInstance(result, tuple)
+        assert isinstance(result, tuple)
         body, status = result
-        self.assertEqual(status, 503)
+        assert status == 503
 
     def test_request_exception_returns_502(self):
         """When requests.get raises RequestException, returns 502."""
         with patch("frigate_buffer.web.frigate_proxy.requests.get") as mock_get:
             mock_get.side_effect = requests.RequestException("timeout")
             result = proxy_camera_latest("http://frigate:5000", "front_door", [])
-        self.assertIsInstance(result, tuple)
+        assert isinstance(result, tuple)
         body, status = result
-        self.assertEqual(status, 502)
+        assert status == 502
 
     def test_success_returns_response(self):
         """When Frigate returns 200, returns a Flask Response (streaming)."""
@@ -88,8 +88,8 @@ class TestProxyCameraLatest(unittest.TestCase):
             "frigate_buffer.web.frigate_proxy.requests.get", return_value=mock_resp
         ):
             result = proxy_camera_latest("http://frigate:5000", "front_door", [])
-        self.assertIsInstance(result, Response)
-        self.assertEqual(result.status_code, 200)
-        self.assertEqual(result.content_type, "image/jpeg")
+        assert isinstance(result, Response)
+        assert result.status_code == 200
+        assert result.content_type == "image/jpeg"
         list(result.response)
         mock_resp.iter_content.assert_called_once()

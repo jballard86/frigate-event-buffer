@@ -55,9 +55,9 @@ class TestDailyReporterServiceScan(unittest.TestCase):
         events_list, total_seen, total_matched = service._collect_events_for_date(
             target
         )
-        self.assertEqual(len(events_list), 1)
-        self.assertEqual(total_matched, 1)
-        self.assertEqual(events_list[0][1].get("title"), "Person at door")
+        assert len(events_list) == 1
+        assert total_matched == 1
+        assert events_list[0][1].get("title") == "Person at door"
 
     def test_consolidated_event_folder_date_parsed(self):
         # events/{ts}_{uuid}/camera/analysis_result.json -> folder name ts_uuid;
@@ -86,9 +86,9 @@ class TestDailyReporterServiceScan(unittest.TestCase):
         events_list, total_seen, total_matched = service._collect_events_for_date(
             target
         )
-        self.assertEqual(len(events_list), 1)
-        self.assertEqual(total_matched, 1)
-        self.assertEqual(events_list[0][1].get("title"), "CE event")
+        assert len(events_list) == 1
+        assert total_matched == 1
+        assert events_list[0][1].get("title") == "CE event"
 
     def test_collect_events_for_date_returns_tuple_of_list_and_counts(self):
         """_collect_events_for_date returns (events_list, total_seen, total_matched)."""
@@ -98,13 +98,13 @@ class TestDailyReporterServiceScan(unittest.TestCase):
         mock_analyzer = MagicMock()
         service = DailyReporterService(config, tempfile.gettempdir(), mock_analyzer)
         result = service._collect_events_for_date(datetime.date.today())
-        self.assertIsInstance(result, tuple)
-        self.assertEqual(len(result), 3)
+        assert isinstance(result, tuple)
+        assert len(result) == 3
         events_list, total_seen, total_matched = result
-        self.assertIsInstance(events_list, list)
-        self.assertIsInstance(total_seen, int)
-        self.assertIsInstance(total_matched, int)
-        self.assertEqual(total_matched, len(events_list))
+        assert isinstance(events_list, list)
+        assert isinstance(total_seen, int)
+        assert isinstance(total_matched, int)
+        assert total_matched == len(events_list)
 
 
 class TestDailyReporterServiceAggregate(unittest.TestCase):
@@ -126,9 +126,9 @@ class TestDailyReporterServiceAggregate(unittest.TestCase):
             ),
         ]
         lines = service._aggregate_event_lines(events)
-        self.assertEqual(len(lines), 1)
-        self.assertIn("[", lines[0])
-        self.assertIn("] Delivery: Package left. (Threat: 0)", lines[0])
+        assert len(lines) == 1
+        assert "[" in lines[0]
+        assert "] Delivery: Package left. (Threat: 0)" in lines[0]
 
 
 class TestDailyReporterServicePrompt(unittest.TestCase):
@@ -153,7 +153,7 @@ class TestDailyReporterServicePrompt(unittest.TestCase):
         service.generate_report(date(2025, 1, 15))
         call_args = mock_analyzer.send_text_prompt.call_args
         system_prompt = call_args[0][0]
-        self.assertIn("Known person: Joe.", system_prompt)
+        assert "Known person: Joe." in system_prompt
 
     def test_known_person_name_defaults_to_unspecified_when_empty(self):
         storage = tempfile.mkdtemp()
@@ -170,7 +170,7 @@ class TestDailyReporterServicePrompt(unittest.TestCase):
         service = DailyReporterService(config, storage, mock_analyzer)
         service.generate_report(date(2025, 1, 15))
         system_prompt = mock_analyzer.send_text_prompt.call_args[0][0]
-        self.assertIn("Known: Unspecified", system_prompt)
+        assert "Known: Unspecified" in system_prompt
 
     def test_load_prompt_replaces_date_and_event_list(self):
         """With no events, {date} and {event_list} are replaced;
@@ -188,13 +188,13 @@ class TestDailyReporterServicePrompt(unittest.TestCase):
         mock_analyzer.send_text_prompt.return_value = "# Done"
         service = DailyReporterService(config, storage, mock_analyzer)
         result = service.generate_report(date(2025, 1, 15))
-        self.assertTrue(result)
+        assert result
         call_args = mock_analyzer.send_text_prompt.call_args
-        self.assertIsNotNone(call_args)
+        assert call_args is not None
         system_prompt = call_args[0][0]
-        self.assertIn("2025-01-15", system_prompt)
-        self.assertIn("[]", system_prompt)
-        self.assertNotIn("{event_list}", system_prompt)
+        assert "2025-01-15" in system_prompt
+        assert "[]" in system_prompt
+        assert "{event_list}" not in system_prompt
 
     def test_new_placeholders_replaced_in_system_prompt(self):
         """report_date_string, report_start_time, report_end_time,
@@ -216,14 +216,14 @@ class TestDailyReporterServicePrompt(unittest.TestCase):
         service = DailyReporterService(config, storage, mock_analyzer)
         service.generate_report(date(2025, 1, 15))
         system_prompt = mock_analyzer.send_text_prompt.call_args[0][0]
-        self.assertIn("2025-01-15 00:00:00", system_prompt)
-        self.assertIn("2025-01-15 23:59:59", system_prompt)
-        self.assertIn("Title: 2025-01-15.", system_prompt)
-        self.assertIn("Events: [].", system_prompt)
-        self.assertNotIn("{report_start_time}", system_prompt)
-        self.assertNotIn("{report_end_time}", system_prompt)
-        self.assertNotIn("{report_date_string}", system_prompt)
-        self.assertNotIn("{list_of_event_json_objects}", system_prompt)
+        assert "2025-01-15 00:00:00" in system_prompt
+        assert "2025-01-15 23:59:59" in system_prompt
+        assert "Title: 2025-01-15." in system_prompt
+        assert "Events: []." in system_prompt
+        assert "{report_start_time}" not in system_prompt
+        assert "{report_end_time}" not in system_prompt
+        assert "{report_date_string}" not in system_prompt
+        assert "{list_of_event_json_objects}" not in system_prompt
 
     def test_missing_prompt_file_returns_false_and_does_not_call_proxy(self):
         """When report prompt file is missing, generate_report returns False and
@@ -231,12 +231,12 @@ class TestDailyReporterServicePrompt(unittest.TestCase):
         storage = tempfile.mkdtemp()
         self.addCleanup(lambda: shutil.rmtree(storage, ignore_errors=True))
         nonexistent = os.path.join(storage, "nonexistent_report_prompt.txt")
-        self.assertFalse(os.path.isfile(nonexistent))
+        assert not os.path.isfile(nonexistent)
         config = {"REPORT_PROMPT_FILE": nonexistent}
         mock_analyzer = MagicMock()
         service = DailyReporterService(config, storage, mock_analyzer)
         result = service.generate_report(date(2025, 1, 15))
-        self.assertFalse(result)
+        assert not result
         mock_analyzer.send_text_prompt.assert_not_called()
 
     def test_multiple_events_appear_in_list_of_event_json_objects(self):
@@ -271,13 +271,13 @@ class TestDailyReporterServicePrompt(unittest.TestCase):
         service = DailyReporterService(config, storage, mock_analyzer)
         service.generate_report(date(2025, 2, 15))
         system_prompt = mock_analyzer.send_text_prompt.call_args[0][0]
-        self.assertIn("Event 1", system_prompt)
-        self.assertIn("Event 2", system_prompt)
+        assert "Event 1" in system_prompt
+        assert "Event 2" in system_prompt
         start = system_prompt.index("Events: ") + len("Events: ")
         parsed = json.loads(system_prompt[start:].strip())
-        self.assertEqual(len(parsed), 2)
+        assert len(parsed) == 2
         titles = {o.get("title") for o in parsed}
-        self.assertEqual(titles, {"Event 1", "Event 2"})
+        assert titles == {"Event 1", "Event 2"}
 
 
 class TestDailyReporterServiceAggregateFile(unittest.TestCase):
@@ -317,7 +317,7 @@ class TestDailyReporterServiceAggregateFile(unittest.TestCase):
         service = DailyReporterService(config, storage, mock_analyzer)
         service.generate_report(date(2025, 2, 15))
         system_prompt = mock_analyzer.send_text_prompt.call_args[0][0]
-        self.assertIn("From aggregate", system_prompt)
+        assert "From aggregate" in system_prompt
 
     def test_report_falls_back_to_scan_when_aggregate_missing(self):
         storage = tempfile.mkdtemp()
@@ -340,7 +340,7 @@ class TestDailyReporterServiceAggregateFile(unittest.TestCase):
         service = DailyReporterService(config, storage, mock_analyzer)
         service.generate_report(date(2025, 2, 15))
         system_prompt = mock_analyzer.send_text_prompt.call_args[0][0]
-        self.assertIn("From scan", system_prompt)
+        assert "From scan" in system_prompt
 
     def test_successful_report_deletes_aggregate_file(self):
         storage = tempfile.mkdtemp()
@@ -364,7 +364,7 @@ class TestDailyReporterServiceAggregateFile(unittest.TestCase):
                 )
                 + "\n"
             )
-        self.assertTrue(os.path.isfile(aggregate_path))
+        assert os.path.isfile(aggregate_path)
         with tempfile.NamedTemporaryFile(
             mode="w", suffix=".txt", delete=False, encoding="utf-8"
         ) as f:
@@ -376,8 +376,8 @@ class TestDailyReporterServiceAggregateFile(unittest.TestCase):
         mock_analyzer.send_text_prompt.return_value = "# Report"
         service = DailyReporterService(config, storage, mock_analyzer)
         result = service.generate_report(date(2025, 2, 15))
-        self.assertTrue(result)
-        self.assertFalse(os.path.isfile(aggregate_path))
+        assert result
+        assert not os.path.isfile(aggregate_path)
 
 
 class TestDailyReporterServiceSave(unittest.TestCase):
@@ -406,12 +406,12 @@ class TestDailyReporterServiceSave(unittest.TestCase):
         service = DailyReporterService(config, storage, mock_analyzer)
         target = date(2025, 2, 15)
         result = service.generate_report(target)
-        self.assertTrue(result)
+        assert result
         out_path = os.path.join(storage, "daily_reports", "2025-02-15_report.md")
-        self.assertTrue(os.path.isfile(out_path))
+        assert os.path.isfile(out_path)
         with open(out_path, encoding="utf-8") as f:
             content = f.read()
-        self.assertEqual(content, "# Report\nDone.")
+        assert content == "# Report\nDone."
 
 
 class TestDailyReporterServiceEdgeCases(unittest.TestCase):
@@ -425,7 +425,7 @@ class TestDailyReporterServiceEdgeCases(unittest.TestCase):
         mock_analyzer.send_text_prompt.return_value = "# No activity\nNo events."
         service = DailyReporterService(config, storage, mock_analyzer)
         result = service.generate_report(date(2020, 6, 1))
-        self.assertTrue(result)
+        assert result
         mock_analyzer.send_text_prompt.assert_called_once()
 
     def test_proxy_returns_none_returns_false(self):
@@ -445,9 +445,9 @@ class TestDailyReporterServiceEdgeCases(unittest.TestCase):
         mock_analyzer.send_text_prompt.return_value = None
         service = DailyReporterService(config, storage, mock_analyzer)
         result = service.generate_report(date(2025, 2, 15))
-        self.assertFalse(result)
+        assert not result
         out_path = os.path.join(storage, "daily_reports", "2025-02-15_report.md")
-        self.assertFalse(os.path.isfile(out_path))
+        assert not os.path.isfile(out_path)
 
 
 class TestDailyReporterServiceFolderNameAndTimestamp(unittest.TestCase):
@@ -461,8 +461,8 @@ class TestDailyReporterServiceFolderNameAndTimestamp(unittest.TestCase):
         # int("single") raises ValueError -> returns (None, None)
         json_path = os.path.join("/tmp", "camera", "single", "analysis_result.json")
         folder_name, unix_ts = service._folder_name_and_timestamp(json_path)
-        self.assertIsNone(unix_ts)
-        self.assertIsNone(folder_name)
+        assert unix_ts is None
+        assert folder_name is None
 
     def test_folder_name_non_numeric_prefix_returns_none_ts(self):
         config = {}
@@ -470,7 +470,7 @@ class TestDailyReporterServiceFolderNameAndTimestamp(unittest.TestCase):
         service = DailyReporterService(config, "/tmp", mock_analyzer)
         json_path = os.path.join("/tmp", "camera", "abc_evt1", "analysis_result.json")
         folder_name, unix_ts = service._folder_name_and_timestamp(json_path)
-        self.assertIsNone(unix_ts)
+        assert unix_ts is None
 
     def test_folder_name_events_layout_uses_parent_basename(self):
         config = {}
@@ -480,8 +480,8 @@ class TestDailyReporterServiceFolderNameAndTimestamp(unittest.TestCase):
             "/tmp", "events", "1739617200_abc12", "doorbell", "analysis_result.json"
         )
         folder_name, unix_ts = service._folder_name_and_timestamp(json_path)
-        self.assertEqual(folder_name, "1739617200_abc12")
-        self.assertEqual(unix_ts, 1739617200)
+        assert folder_name == "1739617200_abc12"
+        assert unix_ts == 1739617200
 
 
 class TestDailyReporterServiceAggregateEdgeCases(unittest.TestCase):
@@ -497,8 +497,8 @@ class TestDailyReporterServiceAggregateEdgeCases(unittest.TestCase):
         ]
         # potential_threat_level missing -> default 0
         lines = service._aggregate_event_lines(events)
-        self.assertEqual(len(lines), 1)
-        self.assertIn("(Threat: 0)", lines[0])
+        assert len(lines) == 1
+        assert "(Threat: 0)" in lines[0]
 
     def test_aggregate_handles_invalid_threat_level_gracefully(self):
         config = {}
@@ -514,7 +514,7 @@ class TestDailyReporterServiceAggregateEdgeCases(unittest.TestCase):
         # int("high") would raise ValueError; we need the code to tolerate that
         try:
             lines = service._aggregate_event_lines(events)
-            self.assertEqual(len(lines), 1)
+            assert len(lines) == 1
         except ValueError:
             self.fail(
                 "_aggregate_event_lines should not raise for non-int "
@@ -546,6 +546,6 @@ class TestDailyReporterServiceCleanupOldReports(unittest.TestCase):
         mock_analyzer = MagicMock()
         service = DailyReporterService(config, storage, mock_analyzer)
         deleted = service.cleanup_old_reports(retention_days=10)
-        self.assertEqual(deleted, 1)
-        self.assertFalse(os.path.isfile(old_path))
-        self.assertTrue(os.path.isfile(recent_path))
+        assert deleted == 1
+        assert not os.path.isfile(old_path)
+        assert os.path.isfile(recent_path)

@@ -61,19 +61,19 @@ class TestGeminiAnalysisServiceConfig(unittest.TestCase):
         config = {"GEMINI": None}
         service = GeminiAnalysisService(config)
         result = service.analyze_multi_clip_ce("ce1", "/nonexistent/ce_folder", 0.0)
-        self.assertIsNone(result)
+        assert result is None
 
     def test_config_validation_disabled_no_crash(self):
         config = {"GEMINI": {"enabled": False, "proxy_url": "http://x", "api_key": "k"}}
         service = GeminiAnalysisService(config)
         result = service.analyze_multi_clip_ce("ce1", "/nonexistent/ce_folder", 0.0)
-        self.assertIsNone(result)
+        assert result is None
 
     def test_config_validation_missing_proxy_url_no_crash(self):
         config = {"GEMINI": {"enabled": True, "proxy_url": "", "api_key": "k"}}
         service = GeminiAnalysisService(config)
         result = service.analyze_multi_clip_ce("ce1", "/nonexistent/ce_folder", 0.0)
-        self.assertIsNone(result)
+        assert result is None
 
 
 class TestGeminiAnalysisServicePayload(unittest.TestCase):
@@ -112,28 +112,27 @@ class TestGeminiAnalysisServicePayload(unittest.TestCase):
         frame = np.zeros((100, 100, 3), dtype=np.uint8)
         service.send_to_proxy("System prompt here", [frame])
 
-        self.assertEqual(mock_post.call_count, 1)
+        assert mock_post.call_count == 1
         args, kwargs = mock_post.call_args
         body = kwargs.get("json")
-        self.assertIsNotNone(body)
-        self.assertIn("messages", body)
+        assert body is not None
+        assert "messages" in body
         messages = body["messages"]
-        self.assertGreaterEqual(len(messages), 2)
+        assert len(messages) >= 2
         system_msg = next((m for m in messages if m.get("role") == "system"), None)
         user_msg = next((m for m in messages if m.get("role") == "user"), None)
-        self.assertIsNotNone(system_msg)
-        self.assertIsNotNone(user_msg)
-        self.assertEqual(system_msg.get("content"), "System prompt here")
+        assert system_msg is not None
+        assert user_msg is not None
+        assert system_msg.get("content") == "System prompt here"
         user_content = user_msg.get("content")
-        self.assertIsInstance(user_content, list)
+        assert isinstance(user_content, list)
         # First part text, then image parts with image_url
         image_parts = [p for p in user_content if p.get("type") == "image_url"]
-        self.assertGreater(len(image_parts), 0)
-        self.assertIn("image_url", image_parts[0])
+        assert len(image_parts) > 0
+        assert "image_url" in image_parts[0]
         url = image_parts[0]["image_url"].get("url", "")
-        self.assertTrue(
-            url.startswith("data:image/jpeg;base64,"),
-            f"Expected data URL, got: {url[:80]}",
+        assert url.startswith("data:image/jpeg;base64,"), (
+            f"Expected data URL, got: {url[:80]}"
         )
 
 
@@ -145,8 +144,8 @@ class TestFrameToBase64Url(unittest.TestCase):
         service = GeminiAnalysisService(config)
         frame = np.zeros((60, 80, 3), dtype=np.uint8)
         url = service._frame_to_base64_url(frame)
-        self.assertTrue(url.startswith("data:image/jpeg;base64,"))
-        self.assertGreater(len(url), 50)
+        assert url.startswith("data:image/jpeg;base64,")
+        assert len(url) > 50
 
     def test_frame_to_base64_url_tensor_returns_data_url(self):
         try:
@@ -158,8 +157,8 @@ class TestFrameToBase64Url(unittest.TestCase):
         # BCHW RGB uint8
         t = torch.zeros((1, 3, 60, 80), dtype=torch.uint8)
         url = service._frame_to_base64_url(t)
-        self.assertTrue(url.startswith("data:image/jpeg;base64,"))
-        self.assertGreater(len(url), 50)
+        assert url.startswith("data:image/jpeg;base64,")
+        assert len(url) > 50
 
     def test_frame_to_base64_url_tensor_delegates_to_tensor_path(self):
         """Tensor input must use _frame_tensor_to_base64_url (GPU path),
@@ -178,7 +177,7 @@ class TestFrameToBase64Url(unittest.TestCase):
         ) as mock_tensor_encode:
             url = service._frame_to_base64_url(t)
         mock_tensor_encode.assert_called_once_with(t)
-        self.assertEqual(url, "data:image/jpeg;base64,MOCK")
+        assert url == "data:image/jpeg;base64,MOCK"
 
 
 class TestGeminiFrameCapAndLogging(unittest.TestCase):
@@ -219,12 +218,11 @@ class TestGeminiFrameCapAndLogging(unittest.TestCase):
         frame = np.zeros((50, 50, 3), dtype=np.uint8)
         with patch("frigate_buffer.services.ai_analyzer.logger") as mock_log:
             result = service.send_to_proxy("Prompt", [frame])
-        self.assertIsNotNone(result)
-        self.assertEqual(mock_post.call_count, 1)
+        assert result is not None
+        assert mock_post.call_count == 1
         log_calls = [str(c) for c in mock_log.info.call_args_list]
-        self.assertTrue(
-            any("cap=disabled" in c for c in log_calls),
-            f"Expected log to contain 'cap=disabled', got: {log_calls}",
+        assert any("cap=disabled" in c for c in log_calls), (
+            f"Expected log to contain 'cap=disabled', got: {log_calls}"
         )
 
     @patch("frigate_buffer.services.gemini_proxy_client.requests.post")
@@ -261,13 +259,11 @@ class TestGeminiFrameCapAndLogging(unittest.TestCase):
         service = GeminiAnalysisService(config)
         frame = np.zeros((50, 50, 3), dtype=np.uint8)
         result1 = service.send_to_proxy("P", [frame, frame])
-        self.assertIsNotNone(result1)
-        self.assertEqual(mock_post.call_count, 1)
+        assert result1 is not None
+        assert mock_post.call_count == 1
         result2 = service.send_to_proxy("P", [frame])
-        self.assertIsNone(result2, "Second request should be blocked by cap")
-        self.assertEqual(
-            mock_post.call_count, 1, "POST should not be called again when blocked"
-        )
+        assert result2 is None, "Second request should be blocked by cap"
+        assert mock_post.call_count == 1, "POST should not be called again when blocked"
 
     @patch("frigate_buffer.services.gemini_proxy_client.requests.post")
     def test_cap_logs_current_rate_status_blocked(self, mock_post):
@@ -304,10 +300,10 @@ class TestGeminiFrameCapAndLogging(unittest.TestCase):
         with patch("frigate_buffer.services.ai_analyzer.logger") as mock_log:
             service.send_to_proxy("P", [frame])
         log_msg = mock_log.info.call_args[0][0]
-        self.assertIn("current_frames", log_msg)
-        self.assertIn("cap=", log_msg)
-        self.assertIn("status=", log_msg)
-        self.assertIn("blocked=", log_msg)
+        assert "current_frames" in log_msg
+        assert "cap=" in log_msg
+        assert "status=" in log_msg
+        assert "blocked=" in log_msg
 
 
 class TestGeminiAnalysisServiceSendTextPrompt(unittest.TestCase):
@@ -330,18 +326,18 @@ class TestGeminiAnalysisServiceSendTextPrompt(unittest.TestCase):
         }
         service = GeminiAnalysisService(config)
         result = service.send_text_prompt("System", "User text")
-        self.assertEqual(result, "# Report\nDone.")
-        self.assertEqual(mock_post.call_count, 1)
+        assert result == "# Report\nDone."
+        assert mock_post.call_count == 1
         args, kwargs = mock_post.call_args
-        self.assertIn("json", kwargs)
+        assert "json" in kwargs
         body = kwargs["json"]
         messages = body["messages"]
-        self.assertEqual(len(messages), 2)
-        self.assertEqual(messages[0]["role"], "system")
-        self.assertEqual(messages[0]["content"], "System")
-        self.assertEqual(messages[1]["role"], "user")
-        self.assertEqual(messages[1]["content"], "User text")
-        self.assertNotIn("image_url", str(messages))
+        assert len(messages) == 2
+        assert messages[0]["role"] == "system"
+        assert messages[0]["content"] == "System"
+        assert messages[1]["role"] == "user"
+        assert messages[1]["content"] == "User text"
+        assert "image_url" not in str(messages)
 
     @patch("frigate_buffer.services.gemini_proxy_client.requests.post")
     def test_send_text_prompt_returns_none_when_empty_content(self, mock_post):
@@ -354,7 +350,7 @@ class TestGeminiAnalysisServiceSendTextPrompt(unittest.TestCase):
         }
         service = GeminiAnalysisService(config)
         result = service.send_text_prompt("Sys", "User")
-        self.assertIsNone(result)
+        assert result is None
 
     @patch("frigate_buffer.services.gemini_proxy_client.requests.post")
     def test_send_text_prompt_returns_none_on_5xx(self, mock_post):
@@ -367,17 +363,17 @@ class TestGeminiAnalysisServiceSendTextPrompt(unittest.TestCase):
         }
         service = GeminiAnalysisService(config)
         result = service.send_text_prompt("Sys", "User")
-        self.assertIsNone(result)
+        assert result is None
 
     def test_send_text_prompt_returns_none_when_proxy_not_configured(self):
         config = {"GEMINI": {"enabled": True, "proxy_url": "", "api_key": "key"}}
         service = GeminiAnalysisService(config)
         result = service.send_text_prompt("Sys", "User")
-        self.assertIsNone(result)
+        assert result is None
         config2 = {"GEMINI": {"enabled": True, "proxy_url": "http://p", "api_key": ""}}
         service2 = GeminiAnalysisService(config2)
         result2 = service2.send_text_prompt("Sys", "User")
-        self.assertIsNone(result2)
+        assert result2 is None
 
 
 class TestGeminiAnalysisServiceProxyFailure(unittest.TestCase):
@@ -402,7 +398,7 @@ class TestGeminiAnalysisServiceProxyFailure(unittest.TestCase):
         service = GeminiAnalysisService(config)
         frame = np.zeros((50, 50, 3), dtype=np.uint8)
         result = service.send_to_proxy("Prompt", [frame])
-        self.assertIsNone(result)
+        assert result is None
 
     @patch("frigate_buffer.services.gemini_proxy_client.requests.post")
     def test_proxy_failure_handling_timeout(self, mock_post):
@@ -420,7 +416,7 @@ class TestGeminiAnalysisServiceProxyFailure(unittest.TestCase):
         service = GeminiAnalysisService(config)
         frame = np.zeros((50, 50, 3), dtype=np.uint8)
         result = service.send_to_proxy("Prompt", [frame])
-        self.assertIsNone(result)
+        assert result is None
 
     @patch("frigate_buffer.services.gemini_proxy_client.requests.post")
     def test_proxy_failure_handling_invalid_json(self, mock_post):
@@ -439,7 +435,7 @@ class TestGeminiAnalysisServiceProxyFailure(unittest.TestCase):
         service = GeminiAnalysisService(config)
         frame = np.zeros((50, 50, 3), dtype=np.uint8)
         result = service.send_to_proxy("Prompt", [frame])
-        self.assertIsNone(result)
+        assert result is None
 
 
 class TestGeminiAnalysisServiceFlatConfig(unittest.TestCase):
@@ -457,8 +453,8 @@ class TestGeminiAnalysisServiceFlatConfig(unittest.TestCase):
             "GEMINI_PROXY_MODEL": "flat-model",
         }
         service = GeminiAnalysisService(config)
-        self.assertEqual(service._proxy_url, "http://flat-url")
-        self.assertEqual(service._model, "flat-model")
+        assert service._proxy_url == "http://flat-url"
+        assert service._model == "flat-model"
 
     def test_flat_tuning_params_stored(self):
         config = {
@@ -469,10 +465,10 @@ class TestGeminiAnalysisServiceFlatConfig(unittest.TestCase):
             "GEMINI_PROXY_PRESENCE_PENALTY": 0.1,
         }
         service = GeminiAnalysisService(config)
-        self.assertEqual(service._temperature, 0.7)
-        self.assertEqual(service._top_p, 0.9)
-        self.assertEqual(service._frequency_penalty, 0.2)
-        self.assertEqual(service._presence_penalty, 0.1)
+        assert service._temperature == 0.7
+        assert service._top_p == 0.9
+        assert service._frequency_penalty == 0.2
+        assert service._presence_penalty == 0.1
 
     def test_multi_cam_crop_and_motion_from_flat_config(self):
         config = {
@@ -482,9 +478,9 @@ class TestGeminiAnalysisServiceFlatConfig(unittest.TestCase):
             "MOTION_THRESHOLD_PX": 100,
         }
         service = GeminiAnalysisService(config)
-        self.assertEqual(service.crop_width, 640)
-        self.assertEqual(service.crop_height, 360)
-        self.assertEqual(service.motion_threshold_px, 100)
+        assert service.crop_width == 640
+        assert service.crop_height == 360
+        assert service.motion_threshold_px == 100
 
 
 class TestGeminiAnalysisServiceProxyTuningPayload(unittest.TestCase):
@@ -522,14 +518,14 @@ class TestGeminiAnalysisServiceProxyTuningPayload(unittest.TestCase):
         frame = np.zeros((50, 50, 3), dtype=np.uint8)
         service.send_to_proxy("Prompt", [frame])
         body = mock_post.call_args[1].get("json")
-        self.assertIn("temperature", body)
-        self.assertEqual(body["temperature"], 0.5)
-        self.assertIn("top_p", body)
-        self.assertEqual(body["top_p"], 0.95)
-        self.assertIn("frequency_penalty", body)
-        self.assertEqual(body["frequency_penalty"], 0.1)
-        self.assertIn("presence_penalty", body)
-        self.assertEqual(body["presence_penalty"], 0.05)
+        assert "temperature" in body
+        assert body["temperature"] == 0.5
+        assert "top_p" in body
+        assert body["top_p"] == 0.95
+        assert "frequency_penalty" in body
+        assert body["frequency_penalty"] == 0.1
+        assert "presence_penalty" in body
+        assert body["presence_penalty"] == 0.05
 
 
 class TestGeminiAnalysisServicePromptFile(unittest.TestCase):
@@ -551,8 +547,8 @@ class TestGeminiAnalysisServicePromptFile(unittest.TestCase):
         }
         service = GeminiAnalysisService(config)
         template = service._load_system_prompt_template()
-        self.assertIn("Custom system prompt", template)
-        self.assertIn("{image_count}", template)
+        assert "Custom system prompt" in template
+        assert "{image_count}" in template
         filled = service._build_system_prompt(
             image_count=3,
             camera_list="Doorbell",
@@ -563,8 +559,8 @@ class TestGeminiAnalysisServicePromptFile(unittest.TestCase):
             zones_str="porch",
             labels_str="person",
         )
-        self.assertIn("3", filled)
-        self.assertIn("Doorbell", filled)
+        assert "3" in filled
+        assert "Doorbell" in filled
 
     def test_prompt_falls_back_when_config_path_empty(self):
         config = {
@@ -573,8 +569,8 @@ class TestGeminiAnalysisServicePromptFile(unittest.TestCase):
         }
         service = GeminiAnalysisService(config)
         template = service._load_system_prompt_template()
-        self.assertIsNotNone(template)
-        self.assertGreater(len(template), 0)
+        assert template is not None
+        assert len(template) > 0
 
 
 class TestGeminiAnalysisServiceConfigMisc(unittest.TestCase):
@@ -586,7 +582,7 @@ class TestGeminiAnalysisServiceConfigMisc(unittest.TestCase):
             "SMART_CROP_PADDING": 0.25,
         }
         service = GeminiAnalysisService(config)
-        self.assertEqual(service.smart_crop_padding, 0.25)
+        assert service.smart_crop_padding == 0.25
 
 
 class TestGeminiAnalysisServiceAnalyzeMultiClipCe(unittest.TestCase):
@@ -610,7 +606,7 @@ class TestGeminiAnalysisServiceAnalyzeMultiClipCe(unittest.TestCase):
             side_effect=ValueError("read of closed file"),
         ):
             result = service.analyze_multi_clip_ce("ce_123", ce_dir, ce_start_time=0.0)
-        self.assertIsNone(result)
+        assert result is None
 
 
 class TestBuildMultiCamPayloadForPreview(unittest.TestCase):
@@ -626,9 +622,9 @@ class TestBuildMultiCamPayloadForPreview(unittest.TestCase):
         result, err = service.build_multi_cam_payload_for_preview(
             "/nonexistent/ce_folder", 0.0, log_messages=log_messages
         )
-        self.assertIsNone(result)
-        self.assertEqual(err, "CE folder not found")
-        self.assertEqual(log_messages, [])
+        assert result is None
+        assert err == "CE folder not found"
+        assert log_messages == []
 
     def test_no_frames_extracted_returns_error_and_appends_logs(self):
         """When extraction returns no frames, returns (None, error) and
@@ -650,12 +646,11 @@ class TestBuildMultiCamPayloadForPreview(unittest.TestCase):
             result, err = service.build_multi_cam_payload_for_preview(
                 ce_dir, 0.0, log_messages=log_messages
             )
-        self.assertIsNone(result)
-        self.assertIn("No frames extracted", err)
-        self.assertGreater(len(log_messages), 0)
-        self.assertTrue(
-            any("Frame selection:" in m for m in log_messages),
-            f"Expected a 'Frame selection:' message in {log_messages}",
+        assert result is None
+        assert "No frames extracted" in err
+        assert len(log_messages) > 0
+        assert any("Frame selection:" in m for m in log_messages), (
+            f"Expected a 'Frame selection:' message in {log_messages}"
         )
 
 
@@ -675,19 +670,15 @@ class TestProxyRetryOnChunkedEncodingError(unittest.TestCase):
 
         result = service.send_to_proxy("System prompt", [frame])
 
-        self.assertEqual(
-            mock_post.call_count, 2, "requests.post should be called twice (retry)"
-        )
-        self.assertIsNotNone(result)
-        self.assertEqual(result.get("title"), "Test")
+        assert mock_post.call_count == 2, "requests.post should be called twice (retry)"
+        assert result is not None
+        assert result.get("title") == "Test"
 
         first_kw = mock_post.call_args_list[0][1]
         second_kw = mock_post.call_args_list[1][1]
-        self.assertNotIn("Accept-Encoding", first_kw.get("headers", {}))
-        self.assertEqual(
-            second_kw.get("headers", {}).get("Accept-Encoding"), "identity"
-        )
-        self.assertEqual(second_kw.get("headers", {}).get("Connection"), "close")
+        assert "Accept-Encoding" not in first_kw.get("headers", {})
+        assert second_kw.get("headers", {}).get("Accept-Encoding") == "identity"
+        assert second_kw.get("headers", {}).get("Connection") == "close"
 
     @patch("frigate_buffer.services.gemini_proxy_client.requests.post")
     def test_send_text_prompt_retries_and_succeeds(self, mock_post):
@@ -708,8 +699,8 @@ class TestProxyRetryOnChunkedEncodingError(unittest.TestCase):
 
         result = service.send_text_prompt("System", "User")
 
-        self.assertEqual(mock_post.call_count, 2)
-        self.assertEqual(result, "OK")
+        assert mock_post.call_count == 2
+        assert result == "OK"
 
 
 class TestProxyFailureAfterTwoAttempts(unittest.TestCase):
@@ -727,9 +718,9 @@ class TestProxyFailureAfterTwoAttempts(unittest.TestCase):
 
         result = service.send_to_proxy("System", [frame])
 
-        self.assertEqual(mock_post.call_count, 2)
-        self.assertIsNone(result)
-        self.assertGreaterEqual(mock_logger.warning.call_count, 1)
+        assert mock_post.call_count == 2
+        assert result is None
+        assert mock_logger.warning.call_count >= 1
 
     @patch("frigate_buffer.services.gemini_proxy_client.requests.post")
     @patch("frigate_buffer.services.gemini_proxy_client.logger")
@@ -742,9 +733,9 @@ class TestProxyFailureAfterTwoAttempts(unittest.TestCase):
 
         result = service.send_text_prompt("System", "User")
 
-        self.assertEqual(mock_post.call_count, 2)
-        self.assertIsNone(result)
-        self.assertGreaterEqual(mock_logger.warning.call_count, 1)
+        assert mock_post.call_count == 2
+        assert result is None
+        assert mock_logger.warning.call_count >= 1
 
 
 class TestSendToProxyNativeGeminiFormat(unittest.TestCase):
@@ -776,12 +767,12 @@ class TestSendToProxyNativeGeminiFormat(unittest.TestCase):
 
         result = service.send_to_proxy("System prompt", [frame])
 
-        self.assertIsNotNone(result)
-        self.assertEqual(result.get("title"), "G")
-        self.assertEqual(result.get("scene"), "Sc")
-        self.assertEqual(result.get("shortSummary"), "S")
-        self.assertEqual(result.get("confidence"), 0.9)
-        self.assertEqual(result.get("potential_threat_level"), 0)
+        assert result is not None
+        assert result.get("title") == "G"
+        assert result.get("scene") == "Sc"
+        assert result.get("shortSummary") == "S"
+        assert result.get("confidence") == 0.9
+        assert result.get("potential_threat_level") == 0
 
 
 def _mock_imwrite(path, img):
@@ -833,27 +824,23 @@ class TestAiFrameAnalysisWriting(unittest.TestCase):
             )
 
             frames_dir = os.path.join(event_dir, "ai_frame_analysis", "frames")
-            self.assertTrue(
-                os.path.exists(os.path.join(frames_dir, "frame_001_cam1.jpg"))
-            )
-            self.assertTrue(
-                os.path.exists(os.path.join(frames_dir, "frame_002_cam_2.jpg"))
-            )
+            assert os.path.exists(os.path.join(frames_dir, "frame_001_cam1.jpg"))
+            assert os.path.exists(os.path.join(frames_dir, "frame_002_cam_2.jpg"))
 
             manifest_path = os.path.join(
                 event_dir, "ai_frame_analysis", "manifest.json"
             )
-            self.assertTrue(os.path.exists(manifest_path))
+            assert os.path.exists(manifest_path)
             with open(manifest_path) as f:
                 manifest = json.load(f)
 
-            self.assertEqual(len(manifest), 2)
-            self.assertEqual(manifest[0]["filename"], "frame_001_cam1.jpg")
-            self.assertEqual(manifest[0]["camera"], "cam1")
-            self.assertEqual(manifest[0]["is_full_frame_resize"], True)
-            self.assertEqual(manifest[1]["filename"], "frame_002_cam_2.jpg")
-            self.assertEqual(manifest[1]["camera"], "cam 2")
-            self.assertNotIn("is_full_frame_resize", manifest[1])
+            assert len(manifest) == 2
+            assert manifest[0]["filename"] == "frame_001_cam1.jpg"
+            assert manifest[0]["camera"] == "cam1"
+            assert manifest[0]["is_full_frame_resize"]
+            assert manifest[1]["filename"] == "frame_002_cam_2.jpg"
+            assert manifest[1]["camera"] == "cam 2"
+            assert "is_full_frame_resize" not in manifest[1]
 
     @patch("frigate_buffer.managers.file.cv2")
     def test_multi_cam_writing_tensor_frames(self, mock_cv2):
@@ -893,18 +880,14 @@ class TestAiFrameAnalysisWriting(unittest.TestCase):
             )
 
             frames_dir = os.path.join(event_dir, "ai_frame_analysis", "frames")
-            self.assertTrue(
-                os.path.exists(os.path.join(frames_dir, "frame_001_cam1.jpg"))
-            )
-            self.assertTrue(
-                os.path.exists(os.path.join(frames_dir, "frame_002_cam2.jpg"))
-            )
+            assert os.path.exists(os.path.join(frames_dir, "frame_001_cam1.jpg"))
+            assert os.path.exists(os.path.join(frames_dir, "frame_002_cam2.jpg"))
             manifest_path = os.path.join(
                 event_dir, "ai_frame_analysis", "manifest.json"
             )
-            self.assertTrue(os.path.exists(manifest_path))
+            assert os.path.exists(manifest_path)
             with open(manifest_path, encoding="utf-8") as f:
                 manifest = json.load(f)
-            self.assertEqual(len(manifest), 2)
-            self.assertEqual(manifest[0]["camera"], "cam1")
-            self.assertEqual(manifest[0]["is_full_frame_resize"], True)
+            assert len(manifest) == 2
+            assert manifest[0]["camera"] == "cam1"
+            assert manifest[0]["is_full_frame_resize"]

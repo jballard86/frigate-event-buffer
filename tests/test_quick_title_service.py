@@ -198,15 +198,13 @@ class TestQuickTitleService(unittest.TestCase):
             # external_api)
             notifier.publish_notification.assert_called_once()
             call_args = notifier.publish_notification.call_args
-            self.assertEqual(call_args[0][1], "snapshot_ready")
-            self.assertEqual(call_args[1]["tag_override"], "frigate_ce1")
+            assert call_args[0][1] == "snapshot_ready"
+            assert call_args[1]["tag_override"] == "frigate_ce1"
             notify_target = call_args[0][0]
-            self.assertEqual(
-                getattr(notify_target, "genai_title", None), "Person at door"
-            )
-            self.assertEqual(
-                getattr(notify_target, "genai_description", None),
-                "A person is standing at the front door.",
+            assert getattr(notify_target, "genai_title", None) == "Person at door"
+            assert (
+                getattr(notify_target, "genai_description", None)
+                == "A person is standing at the front door."
             )
 
     @patch("frigate_buffer.services.quick_title_service.requests.get")

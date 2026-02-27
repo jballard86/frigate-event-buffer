@@ -22,6 +22,7 @@ from frigate_buffer.services import crop_utils, timeline_ema
 from frigate_buffer.services.compilation_math import (
     _nearest_entry_at_t,
     calculate_crop_at_time,
+    calculate_segment_crop,  # noqa: F401 re-export for tests
     smooth_crop_centers_ema,
     smooth_zoom_ema,
 )  # type: ignore[reportMissingModuleSource]

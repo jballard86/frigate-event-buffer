@@ -32,8 +32,8 @@ class TestFrigateExportWatchdog(unittest.TestCase):
 
     def test_watchdog_constants_capped(self):
         """HEAD requests for link verification are capped (20 folders, 120 requests)."""
-        self.assertEqual(MAX_LINK_CHECK_FOLDERS, 20)
-        self.assertEqual(MAX_HEAD_REQUESTS, 120)
+        assert MAX_LINK_CHECK_FOLDERS == 20
+        assert MAX_HEAD_REQUESTS == 120
 
     def _make_timeline_with_export_response(
         self,
@@ -90,12 +90,10 @@ class TestFrigateExportWatchdog(unittest.TestCase):
                 "FLASK_PORT": "5055",
             }
             run_once(config)
-            self.assertEqual(mock_delete.call_count, 1)
-            self.assertIn("/api/export/exp-1", mock_delete.call_args[0][0])
-            self.assertEqual(
-                mock_delete.call_args[1].get("timeout"),
-                DELETE_EXPORT_TIMEOUT,
-                "DELETE should be called with timeout",
+            assert mock_delete.call_count == 1
+            assert "/api/export/exp-1" in mock_delete.call_args[0][0]
+            assert mock_delete.call_args[1].get("timeout") == DELETE_EXPORT_TIMEOUT, (
+                "DELETE should be called with timeout"
             )
             found_success = any(
                 record.levelno == logging.INFO
@@ -104,7 +102,7 @@ class TestFrigateExportWatchdog(unittest.TestCase):
                 and "success" in record.getMessage()
                 for record in self.log_capture
             )
-            self.assertTrue(found_success, "Should log success for DELETE")
+            assert found_success, "Should log success for DELETE"
 
     @patch("frigate_buffer.services.frigate_export_watchdog.requests.delete")
     def test_delete_not_called_when_clip_missing(self, mock_delete):
@@ -118,7 +116,7 @@ class TestFrigateExportWatchdog(unittest.TestCase):
             # no clip.mp4
             config = {"STORAGE_PATH": storage, "FRIGATE_URL": "http://frigate:5000"}
             run_once(config)
-            self.assertEqual(mock_delete.call_count, 0)
+            assert mock_delete.call_count == 0
 
     @patch("frigate_buffer.services.frigate_export_watchdog.requests.delete")
     @patch("frigate_buffer.services.frigate_export_watchdog.requests.head")
@@ -153,8 +151,8 @@ class TestFrigateExportWatchdog(unittest.TestCase):
             with open(os.path.join(event_dir, "clip.mp4"), "wb") as f:
                 f.write(b"x")
             run_once({"STORAGE_PATH": storage, "FRIGATE_URL": "http://f:5000"})
-            self.assertEqual(mock_delete.call_count, 1)
-            self.assertIn("exp-append-only", mock_delete.call_args[0][0])
+            assert mock_delete.call_count == 1
+            assert "exp-append-only" in mock_delete.call_args[0][0]
 
     @patch("frigate_buffer.services.frigate_export_watchdog.requests.delete")
     @patch("frigate_buffer.services.frigate_export_watchdog.requests.head")
@@ -187,7 +185,7 @@ class TestFrigateExportWatchdog(unittest.TestCase):
                 "FLASK_PORT": "5055",
             }
             run_once(config)
-            self.assertEqual(mock_delete.call_count, 1)
+            assert mock_delete.call_count == 1
             found_warning = any(
                 record.levelno == logging.WARNING
                 and "Frigate export delete error" in record.getMessage()
@@ -195,16 +193,14 @@ class TestFrigateExportWatchdog(unittest.TestCase):
                 and "500" in record.getMessage()
                 for record in self.log_capture
             )
-            self.assertTrue(
-                found_warning, "Should log WARNING with status for DELETE error"
-            )
+            assert found_warning, "Should log WARNING with status for DELETE error"
             found_reason = any(
                 "reason=" in record.getMessage()
                 or "Internal server error" in record.getMessage()
                 for record in self.log_capture
                 if "Frigate export delete error" in record.getMessage()
             )
-            self.assertTrue(found_reason, "Should include error reason in log")
+            assert found_reason, "Should include error reason in log"
 
     @patch("frigate_buffer.services.frigate_export_watchdog.requests.delete")
     def test_consolidated_event_camera_subdir_clip(self, mock_delete):
@@ -242,8 +238,8 @@ class TestFrigateExportWatchdog(unittest.TestCase):
                 f.write(b"fake")
             config = {"STORAGE_PATH": storage, "FRIGATE_URL": "http://frigate:5000"}
             run_once(config)
-            self.assertEqual(mock_delete.call_count, 1)
-            self.assertIn("exp-doorbell", mock_delete.call_args[0][0])
+            assert mock_delete.call_count == 1
+            assert "exp-doorbell" in mock_delete.call_args[0][0]
 
     @patch("frigate_buffer.services.frigate_export_watchdog.requests.delete")
     @patch("frigate_buffer.services.frigate_export_watchdog.requests.head")
@@ -277,21 +273,21 @@ class TestFrigateExportWatchdog(unittest.TestCase):
                     "FLASK_PORT": "5055",
                 }
             )
-        self.assertEqual(mock_delete.call_count, 1)
+        assert mock_delete.call_count == 1
         found_info = any(
             record.levelno == logging.INFO
             and "Frigate export removed" in record.getMessage()
             and "exp-body" in record.getMessage()
             for record in self.log_capture
         )
-        self.assertTrue(found_info, "Should log success at INFO")
+        assert found_info, "Should log success at INFO"
         found_debug_body = any(
             record.levelno == logging.DEBUG
             and "delete response" in record.getMessage()
             and "200" in record.getMessage()
             for record in self.log_capture
         )
-        self.assertTrue(found_debug_body, "Should log response body at DEBUG")
+        assert found_debug_body, "Should log response body at DEBUG"
 
     @patch("frigate_buffer.services.frigate_export_watchdog.requests.delete")
     @patch("frigate_buffer.services.frigate_export_watchdog.requests.head")
@@ -325,14 +321,14 @@ class TestFrigateExportWatchdog(unittest.TestCase):
                     "FLASK_PORT": "5055",
                 }
             )
-        self.assertEqual(mock_delete.call_count, 1)
+        assert mock_delete.call_count == 1
         found_debug = any(
             record.levelno == logging.DEBUG
             and "already removed" in record.getMessage()
             and "exp-404" in record.getMessage()
             for record in self.log_capture
         )
-        self.assertTrue(found_debug, "Should log already removed at DEBUG for 404")
+        assert found_debug, "Should log already removed at DEBUG for 404"
         summary_logs = [
             r
             for r in self.log_capture
@@ -340,14 +336,14 @@ class TestFrigateExportWatchdog(unittest.TestCase):
             and "Export watchdog complete" in r.getMessage()
             and "already removed" in r.getMessage()
         ]
-        self.assertEqual(
-            len(summary_logs), 1, "Run summary at INFO should mention already removed"
+        assert len(summary_logs) == 1, (
+            "Run summary at INFO should mention already removed"
         )
         found_no_warning = not any(
             record.levelno == logging.WARNING and "exp-404" in record.getMessage()
             for record in self.log_capture
         )
-        self.assertTrue(found_no_warning, "404 should not be logged as WARNING")
+        assert found_no_warning, "404 should not be logged as WARNING"
 
     @patch("frigate_buffer.services.frigate_export_watchdog.requests.delete")
     @patch("frigate_buffer.services.frigate_export_watchdog.requests.head")
@@ -382,13 +378,11 @@ class TestFrigateExportWatchdog(unittest.TestCase):
             if r.levelno == logging.INFO
             and "Export watchdog complete" in r.getMessage()
         ]
-        self.assertEqual(
-            len(summary_logs), 1, "Should log exactly one run summary at INFO"
-        )
+        assert len(summary_logs) == 1, "Should log exactly one run summary at INFO"
         msg = summary_logs[0].getMessage()
-        self.assertIn("succeeded", msg)
-        self.assertIn("failed", msg)
-        self.assertIn("already removed", msg)
+        assert "succeeded" in msg
+        assert "failed" in msg
+        assert "already removed" in msg
 
 
 if __name__ == "__main__":

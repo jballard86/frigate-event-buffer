@@ -20,9 +20,7 @@ class TestDailyReportsDir(unittest.TestCase):
 
     def test_returns_joined_path(self):
         storage = "/var/storage"
-        self.assertEqual(
-            daily_reports_dir(storage), os.path.join(storage, "daily_reports")
-        )
+        assert daily_reports_dir(storage) == os.path.join(storage, "daily_reports")
 
 
 class TestListReportDates(unittest.TestCase):
@@ -35,7 +33,7 @@ class TestListReportDates(unittest.TestCase):
 
     def test_missing_dir_returns_empty(self):
         """When daily_reports does not exist, returns []."""
-        self.assertEqual(list_report_dates(self.tmp), [])
+        assert list_report_dates(self.tmp) == []
 
     def test_returns_dates_newest_first(self):
         """Valid *_report.md files yield sorted dates, newest first."""
@@ -43,10 +41,7 @@ class TestListReportDates(unittest.TestCase):
         os.makedirs(reports_dir, exist_ok=True)
         for d in ("2025-01-01", "2025-03-15", "2025-02-10"):
             open(os.path.join(reports_dir, f"{d}_report.md"), "w").close()
-        self.assertEqual(
-            list_report_dates(self.tmp),
-            ["2025-03-15", "2025-02-10", "2025-01-01"],
-        )
+        assert list_report_dates(self.tmp) == ["2025-03-15", "2025-02-10", "2025-01-01"]
 
     def test_skips_non_report_files(self):
         """Files not ending in _report.md are ignored."""
@@ -55,7 +50,7 @@ class TestListReportDates(unittest.TestCase):
         open(os.path.join(reports_dir, "2025-01-01_report.md"), "w").close()
         open(os.path.join(reports_dir, "other.md"), "w").close()
         open(os.path.join(reports_dir, "2025-01-02_report.txt"), "w").close()
-        self.assertEqual(list_report_dates(self.tmp), ["2025-01-01"])
+        assert list_report_dates(self.tmp) == ["2025-01-01"]
 
     def test_skips_invalid_date_format(self):
         """Filenames with invalid date part are skipped."""
@@ -63,7 +58,7 @@ class TestListReportDates(unittest.TestCase):
         os.makedirs(reports_dir, exist_ok=True)
         open(os.path.join(reports_dir, "2025-13-01_report.md"), "w").close()
         open(os.path.join(reports_dir, "not-a-date_report.md"), "w").close()
-        self.assertEqual(list_report_dates(self.tmp), [])
+        assert list_report_dates(self.tmp) == []
 
 
 class TestGetReportForDate(unittest.TestCase):
@@ -75,7 +70,7 @@ class TestGetReportForDate(unittest.TestCase):
 
     def test_missing_file_returns_none(self):
         """When report file does not exist, returns None."""
-        self.assertIsNone(get_report_for_date(self.tmp, date(2025, 6, 15)))
+        assert get_report_for_date(self.tmp, date(2025, 6, 15)) is None
 
     def test_returns_summary_when_file_exists(self):
         """When YYYY-MM-DD_report.md exists, returns {'summary': content}."""
@@ -85,8 +80,8 @@ class TestGetReportForDate(unittest.TestCase):
         with open(path, "w", encoding="utf-8") as f:
             f.write("# Daily report\n\nNothing to report.")
         data = get_report_for_date(self.tmp, date(2025, 6, 15))
-        self.assertIsNotNone(data)
-        self.assertEqual(data["summary"], "# Daily report\n\nNothing to report.")
+        assert data is not None
+        assert data["summary"] == "# Daily report\n\nNothing to report."
 
     def test_path_traversal_returns_none(self):
         """Path escape (e.g. ..) does not read outside storage;
@@ -96,4 +91,4 @@ class TestGetReportForDate(unittest.TestCase):
         # base -> None. We don't have a literal file there;
         # get_report_for_date uses d.isoformat() so we can't inject .. via date.
         # So just ensure missing date file returns None.
-        self.assertIsNone(get_report_for_date(self.tmp, date(1999, 1, 1)))
+        assert get_report_for_date(self.tmp, date(1999, 1, 1)) is None

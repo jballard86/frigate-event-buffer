@@ -13,12 +13,10 @@ class TestLoadVersion(unittest.TestCase):
     def test_load_version_returns_string_from_version_txt(self) -> None:
         """When version.txt exists (root or package), return its stripped contents."""
         result = _load_version()
-        self.assertIsInstance(result, str)
-        self.assertGreater(len(result), 0)
-        self.assertNotEqual(
-            result,
-            "unknown",
-            "version.txt should be found from project root or package",
+        assert isinstance(result, str)
+        assert len(result) > 0
+        assert result != "unknown", (
+            "version.txt should be found from project root or package"
         )
 
     def test_load_version_returns_unknown_when_file_missing(self) -> None:
@@ -33,4 +31,4 @@ class TestLoadVersion(unittest.TestCase):
         with patch.object(Path, "exists", mock_exists):
             result = _load_version()
 
-        self.assertEqual(result, "unknown")
+        assert result == "unknown"

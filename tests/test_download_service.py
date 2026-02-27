@@ -39,19 +39,16 @@ class TestDownloadService(unittest.TestCase):
         import re
 
         name = _dynamic_clip_basename("Doorbell")
-        self.assertTrue(name.endswith(".mp4"))
-        self.assertIn("doorbell", name.lower())
-        self.assertTrue(
-            re.match(r"^[a-z0-9_\-]+\-\d{5}\.mp4$", name.lower()),
-            f"Expected pattern camera-12345.mp4, got {name}",
+        assert name.endswith(".mp4")
+        assert "doorbell" in name.lower()
+        assert re.match(r"^[a-z0-9_\-]+\-\d{5}\.mp4$", name.lower()), (
+            f"Expected pattern camera-12345.mp4, got {name}"
         )
 
     def test_dynamic_clip_basename_different_calls_can_differ(self):
         """Two calls can produce different filenames (random suffix)."""
         names = {_dynamic_clip_basename("cam1") for _ in range(20)}
-        self.assertGreater(
-            len(names), 1, "Random 5-digit suffix should vary across calls"
-        )
+        assert len(names) > 1, "Random 5-digit suffix should vary across calls"
 
     @patch("frigate_buffer.services.download.requests.get")
     def test_download_snapshot_uses_stream_true(self, mock_get):
@@ -72,7 +69,7 @@ class TestDownloadService(unittest.TestCase):
         self.download_service.download_snapshot("ev1", folder)
         mock_get.assert_called_once()
         kwargs = mock_get.call_args[1]
-        self.assertTrue(kwargs.get("stream"), "download_snapshot must use stream=True")
+        assert kwargs.get("stream"), "download_snapshot must use stream=True"
 
     @patch("frigate_buffer.services.download.requests.post")
     @patch("frigate_buffer.services.download.requests.get")
@@ -127,9 +124,7 @@ class TestDownloadService(unittest.TestCase):
                 found_warning = True
                 break
 
-        self.assertTrue(
-            found_warning, "Should log WARNING with raw response when success: false"
-        )
+        assert found_warning, "Should log WARNING with raw response when success: false"
 
     @patch("frigate_buffer.services.download.requests.get")
     def test_download_404_no_retry(self, mock_get):
@@ -153,7 +148,7 @@ class TestDownloadService(unittest.TestCase):
             "evt_missing", "/tmp", "cam1"
         )
 
-        self.assertFalse(result)
+        assert not result
 
         # Check logs
         found_warning = False
@@ -166,10 +161,10 @@ class TestDownloadService(unittest.TestCase):
                 found_warning = True
                 break
 
-        self.assertTrue(found_warning, "Should log specific warning for 404")
+        assert found_warning, "Should log specific warning for 404"
 
         # Verify retries
-        self.assertEqual(mock_get.call_count, 1, "Should not retry on 404")
+        assert mock_get.call_count == 1, "Should not retry on 404"
 
     @patch("frigate_buffer.services.download.requests.get")
     @patch("time.sleep")
@@ -195,8 +190,8 @@ class TestDownloadService(unittest.TestCase):
             "evt_notready", "/tmp", "cam1"
         )
 
-        self.assertFalse(result)
-        self.assertEqual(mock_get.call_count, 3, "Should retry 3 times on 400")
+        assert not result
+        assert mock_get.call_count == 3, "Should retry 3 times on 400"
 
     # ---- Export API (Frigate 0.17+): POST with JSON body,
     # log non-200 response.text ----
@@ -230,10 +225,10 @@ class TestDownloadService(unittest.TestCase):
             export_buffer_before=0,
             export_buffer_after=0,
         )
-        self.assertGreaterEqual(mock_post.call_count, 1)
+        assert mock_post.call_count >= 1
         call_kw = mock_post.call_args[1]
-        self.assertIn("json", call_kw, "POST must be called with json= keyword")
-        self.assertIsInstance(call_kw["json"], dict, "json= must be a dict")
+        assert "json" in call_kw, "POST must be called with json= keyword"
+        assert isinstance(call_kw["json"], dict), "json= must be a dict"
 
     @patch("frigate_buffer.services.download.requests.post")
     @patch(
@@ -275,7 +270,7 @@ class TestDownloadService(unittest.TestCase):
             )
             for record in self.log_capture
         )
-        self.assertTrue(found, "Should log 422 and response.text or detail")
+        assert found, "Should log 422 and response.text or detail"
 
     @patch("frigate_buffer.services.download.requests.post")
     @patch(
@@ -307,7 +302,7 @@ class TestDownloadService(unittest.TestCase):
             "Method Not Allowed" in record.getMessage() or "405" in record.getMessage()
             for record in self.log_capture
         )
-        self.assertTrue(found, "Should log 405 or Method Not Allowed")
+        assert found, "Should log 405 or Method Not Allowed"
         mock_fallback.assert_called_once()
 
     @patch("frigate_buffer.services.download.requests.post")
@@ -339,7 +334,7 @@ class TestDownloadService(unittest.TestCase):
             or "Internal Server Error" in record.getMessage()
             for record in self.log_capture
         )
-        self.assertTrue(found, "Should log 500 or error body")
+        assert found, "Should log 500 or error body"
 
     @patch("frigate_buffer.services.download.requests.post")
     @patch(
@@ -369,7 +364,7 @@ class TestDownloadService(unittest.TestCase):
             "503" in record.getMessage() or "non-200" in record.getMessage()
             for record in self.log_capture
         )
-        self.assertTrue(found, "Should log status when body is empty")
+        assert found, "Should log status when body is empty"
 
     @patch("frigate_buffer.services.download.requests.post")
     @patch(
@@ -396,7 +391,7 @@ class TestDownloadService(unittest.TestCase):
         mock_fallback.assert_called_once()
         # No AttributeError from e.response.text
         found = any("evt1" in record.getMessage() for record in self.log_capture)
-        self.assertTrue(found, "Should have logged something for event")
+        assert found, "Should have logged something for event"
 
     @patch("frigate_buffer.services.download.requests.post")
     @patch(
@@ -428,8 +423,8 @@ class TestDownloadService(unittest.TestCase):
                 export_buffer_after=0,
             )
         call_url = mock_post.call_args[0][0]
-        self.assertIn("/start/1000/", call_url, "start_ts must be integer in URL")
-        self.assertIn("/end/1010", call_url, "end_ts must be integer in URL")
+        assert "/start/1000/" in call_url, "start_ts must be integer in URL"
+        assert "/end/1010" in call_url, "end_ts must be integer in URL"
 
     @patch("frigate_buffer.services.download.requests.post")
     @patch(
@@ -463,7 +458,7 @@ class TestDownloadService(unittest.TestCase):
             )
         call_kw = mock_post.call_args[1]
         name = call_kw.get("json", {}).get("name", "")
-        self.assertLessEqual(len(name), 256, "name must be truncated to 256 chars")
+        assert len(name) <= 256, "name must be truncated to 256 chars"
 
     @patch("frigate_buffer.services.download.requests.get")
     @patch("frigate_buffer.services.download.requests.post")
@@ -508,10 +503,8 @@ class TestDownloadService(unittest.TestCase):
         # get was only used for polling /api/exports, not for downloading /exports/
         for call in mock_get.call_args_list:
             url = call[0][0]
-            self.assertIn(
-                "api/exports",
-                url,
-                "Should only poll exports list, not download from /exports/",
+            assert "api/exports" in url, (
+                "Should only poll exports list, not download from /exports/"
             )
 
     @patch("frigate_buffer.services.download.requests.get")
@@ -553,15 +546,11 @@ class TestDownloadService(unittest.TestCase):
             export_buffer_before=0,
             export_buffer_after=0,
         )
-        self.assertEqual(
-            mock_get.call_count,
-            3,
-            "First two GETs exports list (poll + sync), third download",
+        assert mock_get.call_count == 3, (
+            "First two GETs exports list (poll + sync), third download"
         )
-        self.assertIn(
-            "/exports/",
-            mock_get.call_args_list[2][0][0],
-            "Third get should be download URL",
+        assert "/exports/" in mock_get.call_args_list[2][0][0], (
+            "Third get should be download URL"
         )
 
     @patch("frigate_buffer.services.download.requests.get")
@@ -596,7 +585,7 @@ class TestDownloadService(unittest.TestCase):
             export_buffer_before=0,
             export_buffer_after=0,
         )
-        self.assertEqual(mock_get.call_count, 3)
+        assert mock_get.call_count == 3
 
     @patch("frigate_buffer.services.download.requests.get")
     def test_download_clip_to_temp_404_returns_failure(self, mock_get):
@@ -612,8 +601,8 @@ class TestDownloadService(unittest.TestCase):
         result = self.download_service.download_clip_to_temp(
             "evt_missing", "/tmp", "cam1"
         )
-        self.assertFalse(result.get("success"))
-        self.assertIsNone(result.get("clip_path"))
+        assert not result.get("success")
+        assert result.get("clip_path") is None
 
     @patch("frigate_buffer.services.download.requests.get")
     @patch("frigate_buffer.services.download.requests.post")
@@ -659,11 +648,11 @@ class TestDownloadService(unittest.TestCase):
                 export_buffer_before=0,
                 export_buffer_after=0,
             )
-            self.assertTrue(result.get("success"))
+            assert result.get("success")
             clip_path = result.get("clip_path")
-            self.assertIsNotNone(clip_path)
-            self.assertTrue(clip_path.endswith(".mp4"))
-            self.assertIn("cam1", clip_path)
+            assert clip_path is not None
+            assert clip_path.endswith(".mp4")
+            assert "cam1" in clip_path
         finally:
             try:
                 for f in os.listdir(folder):

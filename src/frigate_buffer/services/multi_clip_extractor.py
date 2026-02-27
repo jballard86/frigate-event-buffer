@@ -23,6 +23,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
 from frigate_buffer.constants import NVDEC_INIT_FAILURE_PREFIX
+from frigate_buffer.services import timeline_ema as _timeline_ema
 from frigate_buffer.services.gpu_decoder import create_decoder
 from frigate_buffer.services.video import GPU_LOCK
 
@@ -40,8 +41,6 @@ try:
     from frigate_buffer.models import ExtractedFrame
 except ImportError:
     ExtractedFrame = None  # type: ignore[misc, assignment]
-
-from frigate_buffer.services import timeline_ema as _timeline_ema
 
 # Preferred label for target-centric selection (person has highest priority)
 PREFERRED_LABELS = ("person", "people", "pedestrian")

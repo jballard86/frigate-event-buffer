@@ -62,24 +62,24 @@ class TestPushoverPhaseFilter(unittest.TestCase):
     @patch("frigate_buffer.services.notifications.providers.pushover.requests.post")
     def test_new_status_skipped(self, mock_post):
         result = self.provider.send(_make_event(), "new")
-        self.assertIsNotNone(result)
-        self.assertEqual(result["provider"], "PUSHOVER")
-        self.assertEqual(result["status"], "skipped")
-        self.assertEqual(result.get("message"), "Filtered intermediate phase")
+        assert result is not None
+        assert result["provider"] == "PUSHOVER"
+        assert result["status"] == "skipped"
+        assert result.get("message") == "Filtered intermediate phase"
         mock_post.assert_not_called()
 
     @patch("frigate_buffer.services.notifications.providers.pushover.requests.post")
     def test_described_status_skipped(self, mock_post):
         result = self.provider.send(_make_event(), "described")
-        self.assertIsNotNone(result)
-        self.assertEqual(result["status"], "skipped")
-        self.assertEqual(result.get("message"), "Filtered intermediate phase")
+        assert result is not None
+        assert result["status"] == "skipped"
+        assert result.get("message") == "Filtered intermediate phase"
         mock_post.assert_not_called()
 
     @patch("frigate_buffer.services.notifications.providers.pushover.requests.post")
     def test_summarized_status_skipped(self, mock_post):
         result = self.provider.send(_make_event(), "summarized")
-        self.assertEqual(result["status"], "skipped")
+        assert result["status"] == "skipped"
         mock_post.assert_not_called()
 
 
@@ -96,19 +96,19 @@ class TestPushoverSnapshotReady(unittest.TestCase):
         mock_post.return_value = MagicMock(status_code=200, json=lambda: {"status": 1})
         event = _make_event(threat_level=0)
         result = self.provider.send(event, "snapshot_ready")
-        self.assertEqual(result["provider"], "PUSHOVER")
-        self.assertEqual(result["status"], "success")
+        assert result["provider"] == "PUSHOVER"
+        assert result["status"] == "success"
         call_kw = mock_post.call_args[1]
-        self.assertEqual(call_kw["data"]["priority"], 0)
+        assert call_kw["data"]["priority"] == 0
 
     @patch("frigate_buffer.services.notifications.providers.pushover.requests.post")
     def test_snapshot_ready_priority_high_when_threat_critical(self, mock_post):
         mock_post.return_value = MagicMock(status_code=200, json=lambda: {"status": 1})
         event = _make_event(threat_level=2)
         result = self.provider.send(event, "snapshot_ready")
-        self.assertEqual(result["status"], "success")
+        assert result["status"] == "success"
         call_kw = mock_post.call_args[1]
-        self.assertEqual(call_kw["data"]["priority"], 1)
+        assert call_kw["data"]["priority"] == 1
 
     @patch("frigate_buffer.services.notifications.providers.pushover.requests.post")
     def test_snapshot_ready_attaches_latest_jpg_when_present(self, mock_post):
@@ -119,10 +119,10 @@ class TestPushoverSnapshotReady(unittest.TestCase):
                 f.write(b"\xff\xd8\xff")
             event = _make_event(folder_path=tmp)
             result = self.provider.send(event, "snapshot_ready")
-        self.assertEqual(result["status"], "success")
+        assert result["status"] == "success"
         call_kw = mock_post.call_args[1]
-        self.assertIn("files", call_kw)
-        self.assertIn("attachment", call_kw["files"])
+        assert "files" in call_kw
+        assert "attachment" in call_kw["files"]
 
 
 class TestPushoverClipReadyFinalized(unittest.TestCase):
@@ -136,17 +136,17 @@ class TestPushoverClipReadyFinalized(unittest.TestCase):
     def test_clip_ready_priority_low(self, mock_post):
         mock_post.return_value = MagicMock(status_code=200, json=lambda: {"status": 1})
         result = self.provider.send(_make_event(), "clip_ready")
-        self.assertEqual(result["status"], "success")
+        assert result["status"] == "success"
         call_kw = mock_post.call_args[1]
-        self.assertEqual(call_kw["data"]["priority"], -1)
+        assert call_kw["data"]["priority"] == -1
 
     @patch("frigate_buffer.services.notifications.providers.pushover.requests.post")
     def test_finalized_priority_low(self, mock_post):
         mock_post.return_value = MagicMock(status_code=200, json=lambda: {"status": 1})
         result = self.provider.send(_make_event(), "finalized")
-        self.assertEqual(result["status"], "success")
+        assert result["status"] == "success"
         call_kw = mock_post.call_args[1]
-        self.assertEqual(call_kw["data"]["priority"], -1)
+        assert call_kw["data"]["priority"] == -1
 
     @patch("frigate_buffer.services.notifications.providers.pushover.requests.post")
     def test_finalized_attaches_notification_gif_when_present(self, mock_post):
@@ -157,10 +157,10 @@ class TestPushoverClipReadyFinalized(unittest.TestCase):
                 f.write(b"GIF89a\x00\x00")
             event = _make_event(folder_path=tmp)
             result = self.provider.send(event, "finalized")
-        self.assertEqual(result["status"], "success")
+        assert result["status"] == "success"
         call_kw = mock_post.call_args[1]
-        self.assertIn("files", call_kw)
-        self.assertIn("attachment", call_kw["files"])
+        assert "files" in call_kw
+        assert "attachment" in call_kw["files"]
 
 
 class TestPushoverEmergencyParams(unittest.TestCase):
@@ -171,8 +171,8 @@ class TestPushoverEmergencyParams(unittest.TestCase):
             pushover as po_module,
         )
 
-        self.assertEqual(po_module.EMERGENCY_RETRY, 30)
-        self.assertEqual(po_module.EMERGENCY_EXPIRE, 3600)
+        assert po_module.EMERGENCY_RETRY == 30
+        assert po_module.EMERGENCY_EXPIRE == 3600
 
 
 class TestPushoverSendOverflow(unittest.TestCase):
@@ -186,14 +186,14 @@ class TestPushoverSendOverflow(unittest.TestCase):
     def test_send_overflow_sends_priority_zero(self, mock_post):
         mock_post.return_value = MagicMock(status_code=200, json=lambda: {"status": 1})
         result = self.provider.send_overflow()
-        self.assertIsNotNone(result)
-        self.assertEqual(result["provider"], "PUSHOVER")
-        self.assertEqual(result["status"], "success")
+        assert result is not None
+        assert result["provider"] == "PUSHOVER"
+        assert result["status"] == "success"
         call_kw = mock_post.call_args[1]
-        self.assertEqual(call_kw["data"]["priority"], 0)
-        self.assertEqual(call_kw["data"]["message"], OVERFLOW_MESSAGE)
-        self.assertEqual(call_kw["data"]["title"], OVERFLOW_TITLE)
-        self.assertEqual(mock_post.call_args[0][0], PUSHOVER_API_URL)
+        assert call_kw["data"]["priority"] == 0
+        assert call_kw["data"]["message"] == OVERFLOW_MESSAGE
+        assert call_kw["data"]["title"] == OVERFLOW_TITLE
+        assert mock_post.call_args[0][0] == PUSHOVER_API_URL
 
 
 class TestPushoverPlayerUrl(unittest.TestCase):
@@ -210,8 +210,8 @@ class TestPushoverPlayerUrl(unittest.TestCase):
         self.provider.send(event, "finalized")
         call_kw = mock_post.call_args[1]
         url = call_kw["data"]["url"]
-        self.assertIn("camera=events", url)
-        self.assertIn("subdir=100_abc", url)
+        assert "camera=events" in url
+        assert "subdir=100_abc" in url
 
     @patch("frigate_buffer.services.notifications.providers.pushover.requests.post")
     def test_player_url_uses_camera_and_event_id_when_no_folder_name(self, mock_post):
@@ -220,8 +220,8 @@ class TestPushoverPlayerUrl(unittest.TestCase):
         self.provider.send(event, "snapshot_ready")
         call_kw = mock_post.call_args[1]
         url = call_kw["data"]["url"]
-        self.assertIn("camera=front_door", url)
-        self.assertIn("subdir=evt1", url)
+        assert "camera=front_door" in url
+        assert "subdir=evt1" in url
 
 
 class TestPushoverApiFailure(unittest.TestCase):
@@ -240,9 +240,9 @@ class TestPushoverApiFailure(unittest.TestCase):
             headers={"content-type": "application/json"},
         )
         result = self.provider.send(_make_event(), "snapshot_ready")
-        self.assertEqual(result["provider"], "PUSHOVER")
-        self.assertEqual(result["status"], "failure")
-        self.assertIn("message", result)
+        assert result["provider"] == "PUSHOVER"
+        assert result["status"] == "failure"
+        assert "message" in result
 
 
 if __name__ == "__main__":

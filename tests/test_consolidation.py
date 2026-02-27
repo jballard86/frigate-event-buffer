@@ -48,30 +48,28 @@ class TestConsolidationClosingState(unittest.TestCase):
     def test_mark_closing_returns_true_then_false(self):
         now = 1000.0
         ce, is_new, _ = self.mgr.get_or_create("e1", "cam1", "person", now)
-        self.assertTrue(is_new)
+        assert is_new
         ce_id = ce.consolidated_id
 
-        self.assertTrue(self.mgr.mark_closing(ce_id))
-        self.assertTrue(ce.closing)
-        self.assertFalse(ce.closed)
+        assert self.mgr.mark_closing(ce_id)
+        assert ce.closing
+        assert not ce.closed
 
-        self.assertFalse(self.mgr.mark_closing(ce_id))
+        assert not self.mgr.mark_closing(ce_id)
 
     def test_mark_closing_unknown_ce_returns_false(self):
-        self.assertFalse(self.mgr.mark_closing("nonexistent"))
+        assert not self.mgr.mark_closing("nonexistent")
 
     def test_get_active_ce_folders_returns_tuple_of_folder_names(self):
         """get_active_ce_folders() returns tuple of folder names (no full CE list)."""
         ce1, _, _ = self.mgr.get_or_create("e1", "cam1", "person", 1000.0)
         folders = self.mgr.get_active_ce_folders()
-        self.assertIsInstance(
-            folders, tuple, "get_active_ce_folders must return a tuple"
-        )
-        self.assertGreaterEqual(len(folders), 1)
-        self.assertIn(ce1.folder_name, folders)
+        assert isinstance(folders, tuple), "get_active_ce_folders must return a tuple"
+        assert len(folders) >= 1
+        assert ce1.folder_name in folders
         for f in folders:
-            self.assertIsInstance(
-                f, str, "each folder must be a string (folder_name), not a CE object"
+            assert isinstance(f, str), (
+                "each folder must be a string (folder_name), not a CE object"
             )
 
     def test_schedule_close_timer_noop_when_closing(self):
@@ -81,7 +79,7 @@ class TestConsolidationClosingState(unittest.TestCase):
         self.mgr.mark_closing(ce_id)
 
         self.mgr.schedule_close_timer(ce_id)
-        self.assertEqual(len(self.mgr._close_timers), 0)
+        assert len(self.mgr._close_timers) == 0
 
     def test_schedule_close_timer_noop_when_closed(self):
         now = 1000.0
@@ -90,30 +88,30 @@ class TestConsolidationClosingState(unittest.TestCase):
         ce.closed = True
 
         self.mgr.schedule_close_timer(ce_id)
-        self.assertEqual(len(self.mgr._close_timers), 0)
+        assert len(self.mgr._close_timers) == 0
 
     def test_get_or_create_does_not_add_to_closing_ce(self):
         now = 1000.0
         ce1, is_new, _ = self.mgr.get_or_create("e1", "cam1", "person", now)
-        self.assertTrue(is_new)
+        assert is_new
         ce_id = ce1.consolidated_id
         self.mgr.mark_closing(ce_id)
 
         ce2, is_new2, _ = self.mgr.get_or_create("e2", "cam2", "car", now + 10)
-        self.assertTrue(is_new2)
-        self.assertIsNot(ce2.consolidated_id, ce_id)
-        self.assertEqual(len(ce1.frigate_event_ids), 1)
-        self.assertNotIn("e2", ce1.frigate_event_ids)
+        assert is_new2
+        assert ce2.consolidated_id is not ce_id
+        assert len(ce1.frigate_event_ids) == 1
+        assert "e2" not in ce1.frigate_event_ids
 
     def test_remove_event_from_ce_returns_none_when_ce_has_other_events(self):
         now = 1000.0
         ce1, _, _ = self.mgr.get_or_create("e1", "cam1", "person", now)
         self.mgr.get_or_create("e2", "cam2", "car", now + 5)
-        self.assertEqual(len(ce1.frigate_event_ids), 2)
+        assert len(ce1.frigate_event_ids) == 2
         result = self.mgr.remove_event_from_ce("e1")
-        self.assertIsNone(result)
-        self.assertEqual(len(ce1.frigate_event_ids), 1)
-        self.assertIn("e2", ce1.frigate_event_ids)
+        assert result is None
+        assert len(ce1.frigate_event_ids) == 1
+        assert "e2" in ce1.frigate_event_ids
 
     def test_remove_event_from_ce_returns_folder_path_when_ce_becomes_empty(self):
         now = 1000.0
@@ -121,26 +119,26 @@ class TestConsolidationClosingState(unittest.TestCase):
         ce_id = ce1.consolidated_id
         ce_folder = ce1.folder_path
         result = self.mgr.remove_event_from_ce("e1")
-        self.assertEqual(result, ce_folder)
-        self.assertNotIn(ce_id, self.mgr._events)
+        assert result == ce_folder
+        assert ce_id not in self.mgr._events
 
     def test_remove_event_from_ce_unknown_event_returns_none(self):
         result = self.mgr.remove_event_from_ce("nonexistent")
-        self.assertIsNone(result)
+        assert result is None
 
     def test_set_final_from_frigate_sets_ce_final_fields(self):
         """set_final_from_frigate sets final_title, description, threat_level on CE."""
         now = 1000.0
         ce, _, _ = self.mgr.get_or_create("e1", "cam1", "person", now)
-        self.assertIsNone(ce.final_title)
-        self.assertIsNone(ce.final_description)
-        self.assertEqual(ce.final_threat_level, 0)
+        assert ce.final_title is None
+        assert ce.final_description is None
+        assert ce.final_threat_level == 0
         self.mgr.set_final_from_frigate(
             "e1", title="Test Title", description="Test desc", threat_level=2
         )
-        self.assertEqual(ce.final_title, "Test Title")
-        self.assertEqual(ce.final_description, "Test desc")
-        self.assertEqual(ce.final_threat_level, 2)
+        assert ce.final_title == "Test Title"
+        assert ce.final_description == "Test desc"
+        assert ce.final_threat_level == 2
 
     def test_set_final_from_ce_analysis_sets_ce_final_fields(self):
         """set_final_from_ce_analysis sets final_* on the CE by ce_id."""
@@ -150,9 +148,9 @@ class TestConsolidationClosingState(unittest.TestCase):
         self.mgr.set_final_from_ce_analysis(
             ce_id, title="CE Title", description="CE desc", threat_level=1
         )
-        self.assertEqual(ce.final_title, "CE Title")
-        self.assertEqual(ce.final_description, "CE desc")
-        self.assertEqual(ce.final_threat_level, 1)
+        assert ce.final_title == "CE Title"
+        assert ce.final_description == "CE desc"
+        assert ce.final_threat_level == 1
 
     def test_get_or_create_does_not_add_to_closed_ce(self):
         now = 1000.0
@@ -161,8 +159,8 @@ class TestConsolidationClosingState(unittest.TestCase):
         ce_id = ce1.consolidated_id
 
         ce2, is_new2, _ = self.mgr.get_or_create("e2", "cam2", "car", now + 10)
-        self.assertTrue(is_new2)
-        self.assertIsNot(ce2.consolidated_id, ce_id)
+        assert is_new2
+        assert ce2.consolidated_id is not ce_id
 
 
 if __name__ == "__main__":

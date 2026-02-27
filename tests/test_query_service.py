@@ -66,34 +66,34 @@ class TestEventQueryService(unittest.TestCase):
 
     def test_get_cameras(self):
         cameras = self.service.get_cameras()
-        self.assertIn("front_door", cameras)
-        self.assertIn("events", cameras)
+        assert "front_door" in cameras
+        assert "events" in cameras
 
     def test_get_camera_events(self):
         events = self.service.get_events("front_door")
-        self.assertEqual(len(events), 1)
+        assert len(events) == 1
         ev = events[0]
-        self.assertEqual(ev["event_id"], self.ev1_id)
-        self.assertEqual(ev["title"], "Person detected")
-        self.assertTrue(ev["has_clip"])
-        self.assertEqual(ev["threat_level"], 5)
+        assert ev["event_id"] == self.ev1_id
+        assert ev["title"] == "Person detected"
+        assert ev["has_clip"]
+        assert ev["threat_level"] == 5
         # No timeline or metadata end_time => end_timestamp absent (event ongoing)
-        self.assertNotIn("end_timestamp", ev)
+        assert "end_timestamp" not in ev
 
     def test_get_consolidated_events(self):
         events = self.service.get_events("events")
-        self.assertEqual(len(events), 1)
+        assert len(events) == 1
         ev = events[0]
-        self.assertEqual(ev["event_id"], self.ce_id)
-        self.assertEqual(ev["title"], "Consolidated Event")
-        self.assertTrue(ev["consolidated"])
-        self.assertTrue(ev["has_clip"])
-        self.assertIn("hosted_clips", ev)
-        self.assertEqual(len(ev["hosted_clips"]), 2)  # front_door and back_door
+        assert ev["event_id"] == self.ce_id
+        assert ev["title"] == "Consolidated Event"
+        assert ev["consolidated"]
+        assert ev["has_clip"]
+        assert "hosted_clips" in ev
+        assert len(ev["hosted_clips"]) == 2  # front_door and back_door
         cameras = [c["camera"] for c in ev["hosted_clips"]]
-        self.assertIn("front_door", cameras)
-        self.assertIn("back_door", cameras)
-        self.assertIn("clip.mp4", ev["hosted_clips"][0]["url"])
+        assert "front_door" in cameras
+        assert "back_door" in cameras
+        assert "clip.mp4" in ev["hosted_clips"][0]["url"]
 
     def test_consolidated_event_includes_summary_video_when_file_exists(self):
         """When {ce_id}_summary.mp4 exists in the CE root, event has
@@ -104,41 +104,37 @@ class TestEventQueryService(unittest.TestCase):
         self.service._cache.clear()
         self.service._event_cache.clear()
         events = self.service.get_events("events")
-        self.assertEqual(len(events), 1)
+        assert len(events) == 1
         ev = events[0]
-        self.assertIn("hosted_clips", ev)
+        assert "hosted_clips" in ev
         summary_entries = [
             c for c in ev["hosted_clips"] if c.get("camera") == "Summary video"
         ]
-        self.assertEqual(
-            len(summary_entries), 1, "hosted_clips should include Summary video entry"
+        assert len(summary_entries) == 1, (
+            "hosted_clips should include Summary video entry"
         )
         summary_url = summary_entries[0]["url"]
-        self.assertIn(f"/files/events/{self.ce_id}/{summary_basename}", summary_url)
-        self.assertEqual(
-            ev["hosted_clip"],
-            summary_url,
-            "hosted_clip should be the summary URL when summary exists",
+        assert f"/files/events/{self.ce_id}/{summary_basename}" in summary_url
+        assert ev["hosted_clip"] == summary_url, (
+            "hosted_clip should be the summary URL when summary exists"
         )
 
     def test_get_all_events(self):
         events, cameras = self.service.get_all_events()
-        self.assertIn("front_door", cameras)
-        self.assertIn("events", cameras)
+        assert "front_door" in cameras
+        assert "events" in cameras
 
         # Check if we have both events
         ids = [e["event_id"] for e in events]
-        self.assertIn(self.ev1_id, ids)
-        self.assertIn(self.ce_id, ids)
+        assert self.ev1_id in ids
+        assert self.ce_id in ids
 
         # Check consolidated event properties
         ce = next(e for e in events if e["event_id"] == self.ce_id)
-        self.assertTrue(
-            ce.get("consolidated"), "Consolidated event should have consolidated=True"
+        assert ce.get("consolidated"), (
+            "Consolidated event should have consolidated=True"
         )
-        self.assertTrue(
-            ce.get("has_clip"), "Consolidated event should have has_clip=True"
-        )
+        assert ce.get("has_clip"), "Consolidated event should have has_clip=True"
 
     def test_camera_event_includes_end_timestamp_when_in_timeline(self):
         """When timeline has an entry with payload.after.end_time, event
@@ -159,10 +155,10 @@ class TestEventQueryService(unittest.TestCase):
         with open(os.path.join(self.ev1_dir, "notification_timeline.json"), "w") as f:
             json.dump(timeline, f)
         events = self.service.get_events("front_door")
-        self.assertEqual(len(events), 1)
+        assert len(events) == 1
         ev = events[0]
-        self.assertIn("end_timestamp", ev)
-        self.assertEqual(ev["end_timestamp"], 1234567890.5)
+        assert "end_timestamp" in ev
+        assert ev["end_timestamp"] == 1234567890.5
 
     def test_camera_event_end_timestamp_fallback_from_metadata(self):
         """When metadata.json has end_time but timeline has none, event
@@ -172,10 +168,10 @@ class TestEventQueryService(unittest.TestCase):
                 {"label": "person", "threat_level": 0, "end_time": 1234567895.25}, f
             )
         events = self.service.get_events("front_door")
-        self.assertEqual(len(events), 1)
+        assert len(events) == 1
         ev = events[0]
-        self.assertIn("end_timestamp", ev)
-        self.assertEqual(ev["end_timestamp"], 1234567895.25)
+        assert "end_timestamp" in ev
+        assert ev["end_timestamp"] == 1234567895.25
 
     def test_ultralytics_folder_excluded_from_events(self):
         """The ultralytics config folder should not appear as an event."""
@@ -193,12 +189,12 @@ class TestEventQueryService(unittest.TestCase):
 
         # Get consolidated events - should still only return 1 event (the real CE)
         events = self.service.get_events("events")
-        self.assertEqual(len(events), 1)
-        self.assertEqual(events[0]["event_id"], self.ce_id)
+        assert len(events) == 1
+        assert events[0]["event_id"] == self.ce_id
 
         # Verify ultralytics is not in the event list
         for ev in events:
-            self.assertNotEqual(ev.get("event_id"), "ultralytics")
+            assert ev.get("event_id") != "ultralytics"
 
     def test_ultralytics_capital_u_excluded_from_events(self):
         """The Ultralytics folder with capital U should not appear as an
@@ -216,12 +212,12 @@ class TestEventQueryService(unittest.TestCase):
 
         # Get consolidated events - should still only return 1 event (the real CE)
         events = self.service.get_events("events")
-        self.assertEqual(len(events), 1)
-        self.assertEqual(events[0]["event_id"], self.ce_id)
+        assert len(events) == 1
+        assert events[0]["event_id"] == self.ce_id
 
         # Verify Ultralytics (capital U) is not in the event list
         for ev in events:
-            self.assertNotEqual(ev.get("event_id"), "Ultralytics")
+            assert ev.get("event_id") != "Ultralytics"
 
     def test_ultralytics_excluded_from_cameras(self):
         """The ultralytics folder should not appear as a camera."""
@@ -234,11 +230,11 @@ class TestEventQueryService(unittest.TestCase):
 
         # Get cameras - should not include ultralytics
         cameras = self.service.get_cameras()
-        self.assertNotIn("ultralytics", cameras)
-        self.assertNotIn("Ultralytics", cameras)
+        assert "ultralytics" not in cameras
+        assert "Ultralytics" not in cameras
         # Should still have front_door and events
-        self.assertIn("front_door", cameras)
-        self.assertIn("events", cameras)
+        assert "front_door" in cameras
+        assert "events" in cameras
 
     def test_yolo_models_excluded_from_cameras(self):
         """The yolo_models folder should not appear as a camera."""
@@ -251,10 +247,10 @@ class TestEventQueryService(unittest.TestCase):
 
         # Get cameras - should not include yolo_models
         cameras = self.service.get_cameras()
-        self.assertNotIn("yolo_models", cameras)
+        assert "yolo_models" not in cameras
         # Should still have front_door and events
-        self.assertIn("front_door", cameras)
-        self.assertIn("events", cameras)
+        assert "front_door" in cameras
+        assert "events" in cameras
 
     def test_get_all_events_excludes_ultralytics_folder(self):
         """get_all_events() must not include any events from the
@@ -271,16 +267,14 @@ class TestEventQueryService(unittest.TestCase):
         all_events, cameras_found = self.service.get_all_events()
 
         # ultralytics must not be in cameras_found
-        self.assertNotIn("ultralytics", cameras_found)
+        assert "ultralytics" not in cameras_found
         # No event may have camera == "ultralytics"
         for ev in all_events:
-            self.assertNotEqual(
-                ev.get("camera"),
-                "ultralytics",
-                f"Ghost event from ultralytics: {ev.get('event_id')}",
+            assert ev.get("camera") != "ultralytics", (
+                f"Ghost event from ultralytics: {ev.get('event_id')}"
             )
         # We should still have our real events (1 camera event + 1 consolidated)
-        self.assertGreaterEqual(len(all_events), 2)
+        assert len(all_events) >= 2
 
 
 class TestQueryCaching(unittest.TestCase):
@@ -308,7 +302,7 @@ class TestQueryCaching(unittest.TestCase):
 
     def test_caching_behavior(self):
         events = self.service.get_events(self.cam)
-        self.assertEqual(events[0]["title"], "Initial Title")
+        assert events[0]["title"] == "Initial Title"
 
         with open(self.summary_path, "w") as f:
             f.write("Title: Modified Title")
@@ -317,19 +311,15 @@ class TestQueryCaching(unittest.TestCase):
         os.utime(self.event_dir, (st.st_atime, st.st_mtime + 1.0))
 
         events_cached = self.service.get_events(self.cam)
-        self.assertEqual(
-            events_cached[0]["title"],
-            "Initial Title",
-            "Should return cached data immediately",
+        assert events_cached[0]["title"] == "Initial Title", (
+            "Should return cached data immediately"
         )
 
         time.sleep(self.ttl + 0.1)
 
         events_fresh = self.service.get_events(self.cam)
-        self.assertEqual(
-            events_fresh[0]["title"],
-            "Modified Title",
-            "Should return fresh data after TTL",
+        assert events_fresh[0]["title"] == "Modified Title", (
+            "Should return fresh data after TTL"
         )
 
     def test_event_cache_evicts_when_over_max(self):
@@ -343,13 +333,11 @@ class TestQueryCaching(unittest.TestCase):
             with open(os.path.join(d, "summary.txt"), "w") as f:
                 f.write("Event")
         svc = EventQueryService(storage, cache_ttl=5, event_cache_max=3)
-        self.assertIsInstance(svc._event_cache, OrderedDict)
-        self.assertEqual(svc._event_cache_max, 3)
+        assert isinstance(svc._event_cache, OrderedDict)
+        assert svc._event_cache_max == 3
         for _ in range(5):
             svc.get_events("cam1")
-        self.assertLessEqual(
-            len(svc._event_cache), 3, "event cache must not exceed max size"
-        )
+        assert len(svc._event_cache) <= 3, "event cache must not exceed max size"
 
 
 class TestExtractEndTimestampFromTimeline(unittest.TestCase):
@@ -362,8 +350,8 @@ class TestExtractEndTimestampFromTimeline(unittest.TestCase):
         self.service = EventQueryService(self.tmp)
 
     def test_returns_none_for_empty_timeline(self):
-        self.assertIsNone(
-            self.service._extract_end_timestamp_from_timeline({"entries": []})
+        assert (
+            self.service._extract_end_timestamp_from_timeline({"entries": []}) is None
         )
 
     def test_returns_none_when_no_entries_have_end_time(self):
@@ -377,7 +365,7 @@ class TestExtractEndTimestampFromTimeline(unittest.TestCase):
                 {"source": "frigate_mqtt", "data": {"payload": {"after": {}}}},
             ]
         }
-        self.assertIsNone(self.service._extract_end_timestamp_from_timeline(timeline))
+        assert self.service._extract_end_timestamp_from_timeline(timeline) is None
 
     def test_returns_end_time_from_frigate_payload_after(self):
         """Regular events: end_time from payload.after (unchanged behavior)."""
@@ -389,8 +377,8 @@ class TestExtractEndTimestampFromTimeline(unittest.TestCase):
                 },
             ]
         }
-        self.assertEqual(
-            self.service._extract_end_timestamp_from_timeline(timeline), 1700000000.5
+        assert (
+            self.service._extract_end_timestamp_from_timeline(timeline) == 1700000000.5
         )
 
     def test_returns_end_time_from_test_ai_prompt_entry(self):
@@ -403,8 +391,8 @@ class TestExtractEndTimestampFromTimeline(unittest.TestCase):
                 },
             ]
         }
-        self.assertEqual(
-            self.service._extract_end_timestamp_from_timeline(timeline), 1700000100.0
+        assert (
+            self.service._extract_end_timestamp_from_timeline(timeline) == 1700000100.0
         )
 
     def test_returns_max_when_multiple_frigate_entries_have_different_end_times(self):
@@ -425,8 +413,8 @@ class TestExtractEndTimestampFromTimeline(unittest.TestCase):
                 },
             ]
         }
-        self.assertEqual(
-            self.service._extract_end_timestamp_from_timeline(timeline), 1700000050.0
+        assert (
+            self.service._extract_end_timestamp_from_timeline(timeline) == 1700000050.0
         )
 
     def test_returns_max_when_frigate_and_test_ai_prompt_both_have_end_time(self):
@@ -441,8 +429,8 @@ class TestExtractEndTimestampFromTimeline(unittest.TestCase):
                 {"source": "test_ai_prompt", "data": {"end_time": 1700000100.0}},
             ]
         }
-        self.assertEqual(
-            self.service._extract_end_timestamp_from_timeline(timeline), 1700000100.0
+        assert (
+            self.service._extract_end_timestamp_from_timeline(timeline) == 1700000100.0
         )
 
 
@@ -455,9 +443,9 @@ class TestEvictCache(unittest.TestCase):
         self.addCleanup(lambda: shutil.rmtree(storage, ignore_errors=True))
         svc = EventQueryService(storage, cache_ttl=60)
         svc._set_cache("test_events", [{"id": "old"}])
-        self.assertIsNotNone(svc._get_cached("test_events"))
+        assert svc._get_cached("test_events") is not None
         svc.evict_cache("test_events")
-        self.assertIsNone(svc._get_cached("test_events"))
+        assert svc._get_cached("test_events") is None
 
 
 class TestGetTestEventsSortAndTimestamp(unittest.TestCase):
@@ -490,14 +478,14 @@ class TestGetTestEventsSortAndTimestamp(unittest.TestCase):
         os.utime(os.path.join(test2, "cam1"), (t_old, t_old))
         os.utime(os.path.join(test2, "cam1", "clip.mp4"), (t_old, t_old))
         events = self.service.get_test_events()
-        self.assertEqual(len(events), 2)
+        assert len(events) == 2
         # First event should be the one with newer mtime (test1)
-        self.assertEqual(events[0]["event_id"], "test1")
-        self.assertEqual(events[1]["event_id"], "test2")
+        assert events[0]["event_id"] == "test1"
+        assert events[1]["event_id"] == "test2"
         # Timestamp should be content_mtime (not "0")
-        self.assertNotEqual(events[0]["timestamp"], "0")
-        self.assertNotEqual(events[1]["timestamp"], "0")
-        self.assertEqual(int(events[1]["timestamp"]), int(t_old))
+        assert events[0]["timestamp"] != "0"
+        assert events[1]["timestamp"] != "0"
+        assert int(events[1]["timestamp"]) == int(t_old)
 
 
 class TestReadTimelineMerged(unittest.TestCase):
@@ -519,9 +507,9 @@ class TestReadTimelineMerged(unittest.TestCase):
         with open(append_path, "a") as f:
             f.write(json.dumps({"ts": "T2", "label": "append"}) + "\n")
         data = read_timeline_merged(folder)
-        self.assertEqual(len(data["entries"]), 2)
-        self.assertEqual(data["entries"][0]["label"], "base")
-        self.assertEqual(data["entries"][1]["label"], "append")
+        assert len(data["entries"]) == 2
+        assert data["entries"][0]["label"] == "base"
+        assert data["entries"][1]["label"] == "append"
 
 
 if __name__ == "__main__":
