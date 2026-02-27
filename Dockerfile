@@ -39,6 +39,7 @@ RUN if [ "$USE_GUI_OPENCV" = "true" ]; then \
 COPY pyproject.toml ./
 COPY src/frigate_buffer/ ./src/frigate_buffer/
 COPY config.example.yaml ./
+COPY run_server.py ./
 RUN mkdir -p /app/storage
 
 # Cache pip wheels so code-only rebuilds reuse deps (BuildKit cache mount).
@@ -50,4 +51,4 @@ EXPOSE 5055
 HEALTHCHECK --interval=60s --timeout=10s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:5055/status || exit 1
 
-CMD ["python3", "-m", "frigate_buffer.main"]
+CMD ["python3", "run_server.py"]

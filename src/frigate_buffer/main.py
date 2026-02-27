@@ -1,16 +1,15 @@
 #!/usr/bin/env python3
 """
-Frigate Event Buffer - Entry Point
+Frigate Event Buffer - Bootstrap and entry point.
 
-Listens to Frigate MQTT topics, tracks events through their lifecycle,
-sends Ring-style notifications to Home Assistant, and manages rolling retention.
+Provides bootstrap() for the WSGI worker (frigate_buffer.wsgi). The server is
+started via run_server.py (Gunicorn); do not run Flask's built-in server.
 
-Run with: python -m frigate_buffer.main
+Run the app with: python run_server.py
 """
 
 import logging
 import os
-import signal
 import sys
 from pathlib import Path
 
@@ -30,8 +29,6 @@ logging.basicConfig(
 )
 
 logger = logging.getLogger("frigate-buffer")
-
-orchestrator = None
 
 
 def _load_version() -> str:
@@ -56,48 +53,37 @@ def _load_version() -> str:
     return "unknown"
 
 
-def signal_handler(sig, frame):
-    """Handle shutdown signals."""
-    global orchestrator
-    logger.info(f"Received signal {sig}, shutting down...")
-    if orchestrator:
-        orchestrator.stop()
-    sys.exit(0)
+def bootstrap() -> tuple[dict, StateAwareOrchestrator]:
+    """Load config, setup logging/GPU/YOLO, create and return (config, orchestrator).
 
-
-def main():
-    """Main entry point."""
-    # Load configuration
+    Used by the WSGI entry point (wsgi.py). Does not start the web server.
+    """
     config = load_config()
-
-    # Setup logging with configured level
     setup_logging(config.get("LOG_LEVEL", "INFO"))
 
-    # Ultralytics config and model cache under storage so they persist and are writable
-    # (no warning, no re-download each boot).
     storage_path = config.get("STORAGE_PATH", "/app/storage")
     yolo_config_dir = os.path.join(storage_path, "ultralytics")
     os.makedirs(yolo_config_dir, exist_ok=True)
     os.environ.setdefault("YOLO_CONFIG_DIR", yolo_config_dir)
     os.makedirs(os.path.join(storage_path, "yolo_models"), exist_ok=True)
 
-    VERSION = _load_version()
-    logger.info("VERSION = %s", VERSION)
+    version = _load_version()
+    logger.info("VERSION = %s", version)
 
-    # GPU diagnostics (NVDEC used for decode)
     log_gpu_status()
-
-    # Ensure multi-cam detection model is available (download if not cached)
     ensure_detection_model_ready(config)
 
-    # Setup signal handlers
-    signal.signal(signal.SIGTERM, signal_handler)
-    signal.signal(signal.SIGINT, signal_handler)
-
-    # Create and start orchestrator
-    global orchestrator
     orchestrator = StateAwareOrchestrator(config)
-    orchestrator.start()
+    return config, orchestrator
+
+
+def main():
+    """Entry point: direct user to run_server.py (Gunicorn is the only server)."""
+    logger.error(
+        "Frigate Event Buffer must be started with run_server.py (Gunicorn). "
+        "Do not use python -m frigate_buffer.main to run the server."
+    )
+    sys.exit(1)
 
 
 if __name__ == "__main__":

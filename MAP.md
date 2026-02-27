@@ -29,7 +29,7 @@
 |-------|------------|
 | **Language** | Python 3.12+ |
 | **Package** | setuptools, src layout (`src/frigate_buffer/`) |
-| **Frameworks** | Flask (web), paho-mqtt (MQTT), schedule (cron-like jobs) |
+| **Frameworks** | Flask (web), **Gunicorn** (WSGI; single worker only), paho-mqtt (MQTT), schedule (cron-like jobs) |
 | **Config** | YAML + env, validated with Voluptuous |
 | **Data / state** | In-memory (EventStateManager, ConsolidatedEventManager); filesystem for events, clips, timelines, daily reports |
 | **Video / AI** | **PyNvVideoCodec** (gpu_decoder: NVDEC decode for sidecars, multi-clip extraction, and compilation); compilation **encode** via **FFmpeg h264_nvenc only** (GPU; no CPU fallback). Ultralytics YOLO (detection sidecars), subprocess FFmpeg for GIF and compilation encode; OpenAI-compatible Gemini proxy (HTTP) |
@@ -56,9 +56,9 @@ The project uses a **zero-copy GPU pipeline** for all video decode and frame pro
 
 - **Design:** **Orchestrator-centric service layer.** One central coordinator (`StateAwareOrchestrator`) owns MQTT routing, event/CE handling, and scheduling; it delegates to managers (state, file, consolidation, zone filter), services (lifecycle, download, notifications, timeline, AI analyzer, daily reporter, export watchdog), and the Flask app.
 - **Separation of concerns:**
-  - **Logic in `src/`:** Core package is `src/frigate_buffer/` (orchestrator, managers, services, config, models). Only `main.py` is the library entry point; run with `python -m frigate_buffer.main`.
+  - **Logic in `src/`:** Core package is `src/frigate_buffer/` (orchestrator, managers, services, config, models). **Entry:** `run_server.py` at repo root starts Gunicorn (single worker, multi-thread); `main.py` provides `bootstrap()` for the WSGI worker; no Flask built-in server.
   - **Web:** Flask app, templates, and static assets live under `src/frigate_buffer/web/`. The server is created by `create_app(orchestrator)` and closes over the orchestrator; it does not own business logic.
-  - **Entrypoints:** Main process via `python -m frigate_buffer.main`.
+  - **Entrypoints:** Production: `python run_server.py` (loads config for FLASK_HOST/FLASK_PORT, execs Gunicorn with `-w 1 --threads 4`). WSGI app: `frigate_buffer.wsgi:application` (bootstrap, `start_services()`, graceful shutdown on SIGTERM/SIGINT).
   - **API vs UI:** EventQueryService reads from disk; Flask routes call it for event lists, stats, timeline. No API-fetch logic inside templates.
 - **Architecture & Performance:** GPU pipeline audit and final verification: see `gpu_pipeline_audit_report.md` (findings and recommendations) and `performance_final_verification.md` (verification status, health grade).
 
@@ -77,6 +77,7 @@ frigate-event-buffer/
 ├── Dockerfile
 ├── pyproject.toml
 ├── requirements.txt
+├── run_server.py              # Gunicorn launcher: reads config, execvp gunicorn (-w 1, --threads 4)
 ├── RULE.md
 ├── map.md
 ├── MOBILE_API_CONTRACT.md
@@ -99,7 +100,8 @@ frigate-event-buffer/
 ├── src/
 │   └── frigate_buffer/
 │       ├── __init__.py
-│       ├── main.py
+│       ├── main.py            # bootstrap() for wsgi; main() directs to run_server.py
+│       ├── wsgi.py             # WSGI entry: bootstrap, start_services(), shutdown hooks, application
 │       ├── config.py
 │       ├── models.py
 │       ├── logging_utils.py
@@ -227,7 +229,8 @@ frigate-event-buffer/
 | `config.example.yaml` | Example config with all keys and comments. | Reference only. |
 | `pyproject.toml` | Package metadata, deps, `where = ["src"]`, pytest `pythonpath = ["src"]`, `requires-python = ">=3.12"`. Optional dev deps: pytest, ruff. Tool config: Ruff (lint + format) for `src` and `tests`. E501 (line-too-long) is re-enabled; per-file-ignores list files to fix gradually—remove a file from the list once under 88 chars. | Used by `pip install -e .` and pytest; run `ruff check src tests` and `ruff format src tests` after `pip install -e ".[dev]"`. |
 | `requirements.txt` | Pip install list; **no ffmpegcv** (forbidden). **PyNvVideoCodec** from PyPI for zero-copy GPU decode; no vendored wheels. | Referenced by Dockerfile. |
-| `Dockerfile` | Single-stage: base `nvidia/cuda:12.6.0-runtime-ubuntu24.04`; installs Python 3.12, FFmpeg from distro (GIF, ffprobe, h264_nvenc encode). **PyNvVideoCodec** from requirements.txt for NVDEC decode; no NeLux or vendored libs. Uses BuildKit (`# syntax=docker/dockerfile:1`); final `pip install .` uses `--mount=type=cache,target=/root/.cache/pip` for faster code-only rebuilds. Build arg `USE_GUI_OPENCV` (default `false`): when `false`, uninstalls opencv-python and reinstalls opencv-python-headless (no X11); when `true`, keeps GUI opencv for faster full rebuilds. Runs `python3 -m frigate_buffer.main`. | Build from repo root. |
+| `Dockerfile` | Single-stage: base `nvidia/cuda:12.6.0-runtime-ubuntu24.04`; installs Python 3.12, FFmpeg from distro (GIF, ffprobe, h264_nvenc encode). **PyNvVideoCodec** from requirements.txt for NVDEC decode; no NeLux or vendored libs. Uses BuildKit (`# syntax=docker/dockerfile:1`); final `pip install .` uses `--mount=type=cache,target=/root/.cache/pip` for faster code-only rebuilds. Build arg `USE_GUI_OPENCV` (default `false`): when `false`, uninstalls opencv-python and reinstalls opencv-python-headless (no X11); when `true`, keeps GUI opencv for faster full rebuilds. **CMD runs `python3 run_server.py`** (Gunicorn launcher; no Flask built-in server). | Build from repo root. |
+| `run_server.py` | **Gunicorn launcher** at repo root: loads config via `load_config()`, reads `FLASK_HOST` (default `0.0.0.0`) and `FLASK_PORT`, sets `FRIGATE_BUFFER_SINGLE_WORKER=1`, then `os.execvp` Gunicorn with `-w 1 --threads 4 --capture-output --enable-stdio-inheritance`. Ensures Docker signals go to Gunicorn (PID 1). | Docker CMD; optional local run. |
 | `docker-compose.yaml` / `docker-compose.example.yaml` | Compose for local run; GPU, env, mounts. No `YOLO_CONFIG_DIR` needed—app uses storage for Ultralytics config and model cache. | Deployment. |
 | `MAP.md` | This file—architecture and context for AI. | Must be updated when structure or flows change. |
 | `MOBILE_API_CONTRACT.md` | Source of truth for the native Android (Jetpack Compose + Retrofit) mobile client: all REST endpoints, request/response shapes, query/path params, and media URL construction (clips, snapshots, proxy). | Reference for building the mobile app; do not change without updating the contract. |
@@ -240,7 +243,8 @@ frigate-event-buffer/
 
 | Path/Name | Purpose | Dependencies/Interactions |
 |-----------|---------|---------------------------|
-| `src/frigate_buffer/main.py` | Entry point: load config, setup logging/signals, set `YOLO_CONFIG_DIR` to `STORAGE_PATH/ultralytics` and create `yolo_models` dir (before any Ultralytics import), GPU check, ensure detection model, create and start `StateAwareOrchestrator`. | Calls `config.load_config()`, `orchestrator.start()`. |
+| `src/frigate_buffer/main.py` | **Bootstrap entry:** Provides `bootstrap() -> (config, StateAwareOrchestrator)` used by `wsgi.py` (load config, setup logging, YOLO dir, GPU check, detection model, create orchestrator). `main()` exits with message to use `run_server.py`; no Flask server run here. | Called by wsgi.py; run_server.py loads config only. |
+| `src/frigate_buffer/wsgi.py` | **WSGI entry for Gunicorn:** Requires `FRIGATE_BUFFER_SINGLE_WORKER=1` (set by run_server.py); calls `bootstrap()`, `orchestrator.start_services()`, registers SIGTERM/SIGINT to call `orchestrator.stop()`, exposes `application = orchestrator.flask_app`. Single-worker guardrail raises if env not set. | Loaded by Gunicorn worker; run_server.py execs Gunicorn. | |
 | `src/frigate_buffer/config.py` | Load/validate YAML + env via Voluptuous `CONFIG_SCHEMA`; flat keys (e.g. `MQTT_BROKER`, `GEMINI_PROXY_URL`, `MAX_EVENT_LENGTH_SECONDS`). Frame limits for AI: `multi_cam.max_multi_cam_frames_*` only. Invalid config exits 1. | Used by `main.py`. |
 | `src/frigate_buffer/version.txt` | Version string read at startup; logged in main. | Package data; included by `COPY src/` in Dockerfile. |
 | `src/frigate_buffer/logging_utils.py` | `setup_logging()`, `ErrorBuffer` for stats dashboard. **`set_suppress_review_debug_logs`** / **`should_suppress_review_debug_logs`**: thread-safe flag so TEST button stream suppresses three MQTT review DEBUG logs (Processing review, Review for … N/A, Skipping finalization). **`StreamCaptureHandler`**: captures log records into a list for the test-run SSE stream; skips records from mqtt_handler/mqtt_client so the test page shows all non-MQTT logs. | Called from main; ErrorBuffer used by web/server and orchestrator; suppress flag set by test_routes, read by mqtt_handler; StreamCaptureHandler used by event_test_orchestrator during run_test_pipeline. |
@@ -323,7 +327,7 @@ frigate-event-buffer/
 
 ### Main application (orchestrator-centric)
 
-1. **Startup:** `main.py` → `load_config()` → `StateAwareOrchestrator(config)` → `orchestrator.start()` (MQTT connect, Flask, schedule jobs).
+1. **Startup:** `run_server.py` loads config (FLASK_HOST, FLASK_PORT), sets `FRIGATE_BUFFER_SINGLE_WORKER=1`, then **execvp** Gunicorn with `-w 1 --threads 4`. Gunicorn worker loads `frigate_buffer.wsgi:application` → **bootstrap()** (config, logging, YOLO, GPU, orchestrator) → **orchestrator.start_services()** (MQTT, notifier, scheduler) → **application** = orchestrator.flask_app. SIGTERM/SIGINT in worker call **orchestrator.stop()** for graceful shutdown.
 2. **MQTT → Event creation/updates:** MQTT → `MqttClientWrapper` → **MqttMessageHandler.on_message** → SmartZoneFilter (should_start) → EventStateManager / ConsolidatedEventManager → **EventLifecycleService** (event creation, event end).
 3. **Quick-title (new event, external_api only):** When **ai_mode** is **external_api** and a new event starts with quick_title enabled, lifecycle sets canned title, writes metadata, sends initial notification with **latest.jpg** proxy. A delay thread then calls **QuickTitleService.run_quick_title**: fetch `latest.jpg`, YOLO, crop, **generate_quick_title** (returns JSON with title + description) → update state/CE, **write_summary** and **write_metadata_json** (Event Viewer), notify **snapshot_ready** with same tag. When **ai_mode** is **frigate**, on_quick_title_trigger is not wired so quick-title does not run.
 4. **Event end (short):** Lifecycle checks duration &lt; `minimum_event_seconds` → discard: delete folder, remove from state/CE, publish MQTT `status: "discarded"` with same tag for HA clear.

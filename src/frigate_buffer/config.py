@@ -51,6 +51,9 @@ CONFIG_SCHEMA = Schema(
                 "flask_port"
             ): int,  # Port for the Flask web server (player, stats, API).
             Optional(
+                "flask_host"
+            ): str,  # Bind address for the web server (default 0.0.0.0 for Docker).
+            Optional(
                 "storage_path"
             ): str,  # Root path for event clips, snapshots, exported files.
             Optional(
@@ -290,6 +293,7 @@ def load_config() -> dict:
         "FRIGATE_URL": None,
         "BUFFER_IP": None,
         "FLASK_PORT": 5055,
+        "FLASK_HOST": "0.0.0.0",
         "STORAGE_PATH": "/app/storage",
         # Settings defaults
         "RETENTION_DAYS": 3,
@@ -532,6 +536,9 @@ def load_config() -> dict:
                     config["FLASK_PORT"] = network.get(
                         "flask_port", config["FLASK_PORT"]
                     )
+                    config["FLASK_HOST"] = network.get(
+                        "flask_host", config["FLASK_HOST"]
+                    )
                     config["STORAGE_PATH"] = network.get(
                         "storage_path", config["STORAGE_PATH"]
                     )
@@ -739,6 +746,7 @@ def load_config() -> dict:
         os.getenv("BUFFER_IP") or os.getenv("HA_IP") or config["BUFFER_IP"]
     )
     config["FLASK_PORT"] = int(os.getenv("FLASK_PORT", str(config["FLASK_PORT"])))
+    config["FLASK_HOST"] = os.getenv("FLASK_HOST", config["FLASK_HOST"])
     config["STORAGE_PATH"] = os.getenv("STORAGE_PATH", config["STORAGE_PATH"])
     config["RETENTION_DAYS"] = int(
         os.getenv("RETENTION_DAYS", str(config["RETENTION_DAYS"]))

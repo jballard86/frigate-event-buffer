@@ -1,4 +1,5 @@
 flask
+gunicorn
 paho-mqtt>=2.0.0
 requests
 schedule

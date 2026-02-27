@@ -10,6 +10,7 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "flask",
+    "gunicorn",
     "paho-mqtt>=2.0.0",
     "requests",
     "schedule",
