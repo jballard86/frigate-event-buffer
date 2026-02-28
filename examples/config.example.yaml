@@ -1,0 +1,156 @@
+# Frigate Event Buffer — Configuration reference
+#
+# Copy to config.yaml and edit:  cp examples/config.example.yaml config.yaml
+# Environment variables override these values. See examples/.env.example for
+# options you can set in .env instead (e.g. MQTT_BROKER, FRIGATE_URL, HA_TOKEN).
+
+# -----------------------------------------------------------------------------
+# Cameras — which cameras to process and how to filter events
+# -----------------------------------------------------------------------------
+# Only events from listed cameras are processed. Match "name" to your Frigate
+# camera IDs. Use "labels" to only process certain object types (person, car, etc.);
+# leave empty or omit to allow all. Use "event_filters" so an event only starts
+# when the object enters a zone (e.g. driveway); "exceptions" start an event
+# from anywhere (e.g. person, delivery truck).
+cameras:
+  - name: "YOUR_CAMERA_1"
+    labels:
+      - "person"
+      - "package"
+
+  - name: "YOUR_CAMERA_2"
+    labels:
+      - "car"
+      - "truck"
+    event_filters:
+      tracked_zones:   # Only start an event when object enters one of these zones
+        - driveway
+      exceptions:     # These labels start an event even outside the zones
+        - person
+        - UPS
+        - FedEx
+
+  # - name: "YOUR_CAMERA_3"
+  #   labels: []   # Empty = allow all labels; omit event_filters = no zone filter
+
+# -----------------------------------------------------------------------------
+# Settings — retention, cleanup, logging, reports, and AI behavior
+# -----------------------------------------------------------------------------
+settings:
+  retention_days: 3                    # Days to keep event data before cleanup
+  cleanup_interval_hours: 1            # How often to run retention cleanup
+  export_watchdog_interval_minutes: 2  # How often to remove completed exports from Frigate
+  ffmpeg_timeout_seconds: 60           # Kill FFmpeg (e.g. GIF) if it hangs this long
+  notification_delay_seconds: 1        # Delay before snapshot so Frigate can pick a better frame
+  log_level: "INFO"                    # DEBUG, INFO, WARNING, or ERROR
+  summary_padding_before: 15           # Seconds before event start for Frigate review summary
+  summary_padding_after: 15            # Seconds after event end for Frigate review summary
+  stats_refresh_seconds: 60            # How often the Stats page auto-refreshes
+  daily_report_retention_days: 90      # How long to keep saved daily reports
+  daily_report_schedule_hour: 1        # Hour (0-23) to generate the previous day's report
+  report_prompt_file: ""               # Path to custom report prompt; empty = default
+  report_known_person_name: ""         # Placeholder in report prompt; default "Unspecified"
+  event_gap_seconds: 120              # Seconds of no activity before next event starts a new group
+  minimum_event_seconds: 5             # Shorter events are discarded (data deleted)
+  max_event_length_seconds: 120        # Longer events are canceled (no AI, folder renamed -canceled)
+  export_buffer_before: 5             # Extra seconds before event start in exported clip
+  export_buffer_after: 30              # Extra seconds after event end in exported clip
+  gemini_max_concurrent_analyses: 3    # Max clip analyses at once (throttling)
+  save_ai_frames: true                 # Save extracted AI frames to disk for debugging
+  create_ai_analysis_zip: true         # Create zip of AI assets (e.g. multi-cam)
+  gemini_frames_per_hour_cap: 200      # Max frames sent to Gemini per hour; 0 = no cap
+  quick_title_delay_seconds: 4         # Delay before generating short AI title from live frame
+  quick_title_enabled: true            # When true, run quick-title after delay (needs Gemini)
+  ai_mode: "external_api"              # "frigate" = Frigate GenAI only; "external_api" = buffer Gemini/Quick Title
+
+# -----------------------------------------------------------------------------
+# Network — MQTT, Frigate, web server, storage
+# -----------------------------------------------------------------------------
+# Can also be set via .env (see examples/.env.example).
+network:
+  mqtt_broker: "YOUR_MQTT_BROKER_IP"
+  mqtt_port: 1883
+  # mqtt_user: ""
+  # mqtt_password: ""
+  frigate_url: "http://YOUR_FRIGATE_IP:5000"
+  buffer_ip: "YOUR_BUFFER_IP"
+  flask_port: 5055
+  flask_host: "0.0.0.0"
+  storage_path: "/app/storage"
+  # ha_ip: ""   # Legacy; same as buffer_ip if set
+
+# -----------------------------------------------------------------------------
+# Home Assistant — stats page cost/token display
+# -----------------------------------------------------------------------------
+# For showing Gemini cost and token usage on the stats page. Can also set
+# HA_URL and HA_TOKEN in .env.
+# ha:
+#   base_url: "http://YOUR_HA_IP:8123/api"
+#   token: "YOUR_LONG_LIVED_ACCESS_TOKEN"
+#   gemini_cost_entity: "input_number.gemini_daily_cost"
+#   gemini_tokens_entity: "input_number.gemini_total_tokens"
+
+# -----------------------------------------------------------------------------
+# Notifications — Home Assistant MQTT and Pushover
+# -----------------------------------------------------------------------------
+notifications:
+  home_assistant:
+    enabled: true
+  # Pushover: for phone/push alerts. Keys can also be set via .env.
+  # pushover:
+  #   enabled: true
+  #   pushover_user_key: ""
+  #   pushover_api_token: ""
+  #   device: ""
+  #   default_sound: ""
+  #   html: 1
+
+# -----------------------------------------------------------------------------
+# Gemini — AI analysis for clips and quick titles
+# -----------------------------------------------------------------------------
+# API key and proxy URL can also be set via GEMINI_API_KEY and GEMINI_PROXY_URL
+# in .env.
+# gemini:
+#   proxy_url: ""
+#   api_key: ""
+#   model: "gemini-2.5-flash-lite"
+#   enabled: true
+
+# -----------------------------------------------------------------------------
+# Multi-cam — frame extraction, detection, and timeline for summary videos
+# -----------------------------------------------------------------------------
+# multi_cam:
+#   max_multi_cam_frames_min: 45       # Max frames to extract per clip (cap)
+#   max_multi_cam_frames_sec: 2        # Target seconds between frames (e.g. 2 = one every 2 sec)
+#   crop_width: 1280                    # Output width for stitched/multi-cam frames
+#   crop_height: 720                    # Output height for stitched/multi-cam frames
+#   multi_cam_system_prompt_file: ""   # Custom prompt file; empty = use built-in
+#   smart_crop_padding: 0.15            # Padding around motion crop (0.15 = 15%); increase if crop feels tight
+#   detection_model: "yolov8n.pt"      # YOLO model for person/object detection
+#   detection_device: ""                # e.g. cuda:0 or cpu; empty = auto
+#   detection_frame_interval: 5        # Run detection every N frames; increase for speed, decrease for accuracy
+#   detection_imgsz: 640               # Detection resolution; higher = better small objects, slower
+#   camera_timeline_analysis_multiplier: 2   # Denser analysis for smoother camera switching (2 or 3)
+#   camera_timeline_ema_alpha: 0.4      # Smoothing for focus (0-1); lower = hold focus longer during gaps
+#   camera_timeline_primary_bias_multiplier: 1.2   # Prefer primary camera when switching
+#   camera_switch_min_segment_frames: 5 # Min frames per camera before switch; short blips merged
+#   camera_switch_hysteresis_margin: 1.15   # New camera must exceed current by this (e.g. 15%) to switch
+#   camera_timeline_final_yolo_drop_no_person: false   # true = drop frames with no person in final output
+#   decode_second_camera_cpu_only: false    # true = use CPU decode for 2nd+ cams (if GPU contention)
+#   log_extraction_phase_timing: false  # true = log timing per phase (for debugging)
+#   merge_frame_timeout_sec: 10        # Timeout when waiting for a camera frame during merge
+#   tracking_target_frame_percent: 40   # When person fills this % of frame, use full-frame resize
+#   person_area_debug: false           # true = draw person area on frame (for tuning)
+#   compilation_zoom_smooth_ema_alpha: 0.25   # Smoothing for zoom in summary video (0-1)
+
+# -----------------------------------------------------------------------------
+# Gemini proxy (extended) — model parameters for API calls
+# -----------------------------------------------------------------------------
+# URL can also be set via GEMINI_PROXY_URL in .env.
+# gemini_proxy:
+#   url: ""                       # Proxy URL; no Google fallback
+#   model: "gemini-2.5-flash-lite"
+#   temperature: 0.3              # Sampling randomness (0-2)
+#   top_p: 1                      # Nucleus sampling
+#   frequency_penalty: 0          # Penalty for repeated tokens
+#   presence_penalty: 0           # Penalty for token presence

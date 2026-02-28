@@ -31,7 +31,7 @@ This project is a state-aware, GPU-accelerated companion app for **Frigate NVR**
 
 ### 1. Environment (`.env` or `docker run -e`)
 
-Copy from `.env.example` and set at least:
+Copy from `examples/.env.example` and set at least:
 
 
 |                  |                                                      |
@@ -43,10 +43,10 @@ Copy from `.env.example` and set at least:
 | `GEMINI_API_KEY` | From if using AI                                     |
 | `HA_TOKEN`       | Home Assistant long-lived access token               |
 | `HA_URL`         | Home Assistant URL, e.g. `http://192.168.1.100:8123` |
-| `STORAGE_ROOT`   | Where clips/analysis are stored (e.g. `./storage`)   |
+| `STORAGE_PATH`   | Where clips/analysis are stored (e.g. `./storage`)   |
 
 
-Optional: `MQTT_USER`, `MQTT_PASSWORD`, `GEMINI_PROXY_URL` (custom proxy). See `.env.example` for the full list.
+Optional: `MQTT_USER`, `MQTT_PASSWORD`, `GEMINI_PROXY_URL` (custom proxy). The full list of supported variables is in `examples/.env.example`.
 
 ### 2. App config (`config.yaml`)
 
@@ -55,11 +55,11 @@ Optional: `MQTT_USER`, `MQTT_PASSWORD`, `GEMINI_PROXY_URL` (custom proxy). See `
 - **network**: `mqtt_broker`, `mqtt_port`, `frigate_url`, `buffer_ip`, `flask_port`, `storage_path`. Env vars override these.
 - **Optional**: `gemini` / `gemini_proxy`, `multi_cam`, `ha` (for stats-page API usage).
 
-Paths in `docker run` must match where you put `config.yaml` and storage (see INSTALL.md).
+Paths in `docker run` must match where you put `config.yaml` and storage (see docs/INSTALL.md).
 
 ### 3. Docker Compose (optional)
 
-If you use Compose, copy from `docker-compose.example.yaml` (if present) to `docker-compose.yaml`, then set the same env vars and volume mounts as in INSTALL.md’s `docker run` example. The app does not require Compose; plain `docker run` is supported.
+If you use Compose, copy from `docker-compose.example.yaml` (if present) to `docker-compose.yaml`, then set the same env vars and volume mounts as in docs/INSTALL.md's `docker run` example. The app does not require Compose; plain `docker run` is supported.
 
 ---
 
@@ -78,8 +78,9 @@ If you use Compose, copy from `docker-compose.example.yaml` (if present) to `doc
 
 ## Docs
 
-- **INSTALL.md** — Full install: clone, config, build, run, update, troubleshooting.
-- **MAP.md** — Project layout and architecture (for contributors/agents).
+- **docs/INSTALL.md** — Full install: clone, config, build, run, update, troubleshooting.
+- **MAP.md** — Primary entry point; project layout and architecture (for
+  contributors/agents). Branch docs under docs/maps/ give focused context.
 - **examples/home-assistant/** — Sample HA notification automation and dashboard YAML.
 
 **Development:** Lint and format with Ruff: `pip install -e ".[dev]"` then `ruff check src tests` and `ruff format src tests`. If `ruff` is not on your PATH, use `python -m ruff check src tests` and `python -m ruff format src tests`.

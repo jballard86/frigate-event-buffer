@@ -3,7 +3,7 @@
 *.env
 .env.*
 
-# Config file with real values (use config.example.yaml as template)
+# Config file with real values (use examples/config.example.yaml as template)
 config.yaml
 docker-compose.yaml
 
@@ -26,6 +26,9 @@ env/
 
 # Cursor IDE (local plans, rules, state)
 .cursor/
+
+# Rolling session memory (3-hour window)
+docs/SESSION.md
 
 # IDE
 .vscode/

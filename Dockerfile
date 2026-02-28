@@ -38,7 +38,7 @@ RUN if [ "$USE_GUI_OPENCV" = "true" ]; then \
 
 COPY pyproject.toml ./
 COPY src/frigate_buffer/ ./src/frigate_buffer/
-COPY config.example.yaml ./
+COPY examples/config.example.yaml ./
 COPY run_server.py ./
 RUN mkdir -p /app/storage
 
