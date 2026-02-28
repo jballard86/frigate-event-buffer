@@ -169,6 +169,60 @@ def create_bp(orchestrator):
             }
         )
 
+    @bp.route("/api/events/unread_count")
+    def unread_count():
+        """Return count of event folders without .viewed (cached 5s TTL)."""
+        count = query_service.get_unread_count()
+        return jsonify({"unread_count": count})
+
+    @bp.route("/api/snooze/<camera>", methods=["POST"])
+    def set_snooze(camera):
+        """Set snooze for a camera. JSON: duration_minutes (required); optional
+        snooze_notifications, snooze_ai (default true)."""
+        body = request.get_json(silent=True)
+        if not body or not isinstance(body, dict):
+            return jsonify({"error": "Missing or invalid JSON body"}), 400
+        duration_minutes = body.get("duration_minutes")
+        try:
+            duration_minutes = int(duration_minutes)
+        except (TypeError, ValueError):
+            return (
+                jsonify({"error": "duration_minutes must be a positive integer"}),
+                400,
+            )
+        if duration_minutes <= 0:
+            return jsonify({"error": "duration_minutes must be positive"}), 400
+        snooze_notifications = body.get("snooze_notifications", True)
+        snooze_ai = body.get("snooze_ai", True)
+        if not isinstance(snooze_notifications, bool):
+            snooze_notifications = True
+        if not isinstance(snooze_ai, bool):
+            snooze_ai = True
+        sanitized = file_manager.sanitize_camera_name(camera)
+        expiration_time = orchestrator.snooze_manager.set_snooze(
+            sanitized, duration_minutes, snooze_notifications, snooze_ai
+        )
+        return jsonify(
+            {
+                "expiration_time": expiration_time,
+                "camera": sanitized,
+                "snooze_notifications": snooze_notifications,
+                "snooze_ai": snooze_ai,
+            }
+        )
+
+    @bp.route("/api/snooze")
+    def list_snoozes():
+        """Return all active snoozes: camera -> {expiration_time, snooze_*}."""
+        return jsonify(orchestrator.snooze_manager.get_active_snoozes())
+
+    @bp.route("/api/snooze/<camera>", methods=["DELETE"])
+    def clear_snooze(camera):
+        """Clear snooze for the given camera. Idempotent."""
+        sanitized = file_manager.sanitize_camera_name(camera)
+        orchestrator.snooze_manager.clear_snooze(sanitized)
+        return jsonify({"status": "success"})
+
     @bp.route("/keep/<path:event_path>", methods=["POST"])
     def keep_event(event_path):
         """Move event folder to saved/ (excluded from retention). Source must

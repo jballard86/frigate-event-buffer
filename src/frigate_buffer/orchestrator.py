@@ -17,6 +17,7 @@ import schedule
 from frigate_buffer.managers.consolidation import ConsolidatedEventManager
 from frigate_buffer.managers.file import FileManager
 from frigate_buffer.managers.preferences import PreferencesManager
+from frigate_buffer.managers.snooze import SnoozeManager
 from frigate_buffer.managers.state import EventStateManager
 from frigate_buffer.managers.zone_filter import SmartZoneFilter
 from frigate_buffer.models import EventPhase
@@ -78,6 +79,8 @@ class StateAwareOrchestrator:
         )
 
         self.preferences_manager = PreferencesManager(config["STORAGE_PATH"])
+
+        self.snooze_manager = SnoozeManager()
 
         # ConsolidatedEventManager: None callback first to break circular dependency
         self.consolidated_manager = ConsolidatedEventManager(

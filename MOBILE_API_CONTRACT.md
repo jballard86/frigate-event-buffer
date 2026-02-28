@@ -758,4 +758,121 @@ Fields may vary by proxy; common: `title`, `shortSummary`, `description`, `scene
 
 ---
 
+## 7. Unread count
+
+### 7.1 Get unread event count
+
+**Endpoint path:** `/api/events/unread_count`  
+**HTTP method:** `GET`  
+**Query parameters:** None  
+**Path variables:** None  
+**Request body:** None  
+
+**Response (200):**
+
+```json
+{
+  "unread_count": 12
+}
+```
+
+| Field          | Type   | Description |
+|----------------|--------|-------------|
+| `unread_count` | number | Count of event folders that do not have a `.viewed` file. Result is cached for 5 seconds to reduce disk I/O when the app polls frequently. |
+
+---
+
+## 8. Snooze
+
+Per-camera snooze to mute notifications or AI processing until an expiration time. State is in-memory; expired snoozes are removed on read.
+
+### 8.1 Set snooze
+
+**Endpoint path:** `/api/snooze/<camera>`  
+**HTTP method:** `POST`  
+**Query parameters:** None  
+**Path variables:**
+
+| Name     | Description |
+|----------|-------------|
+| `camera` | Camera name to snooze (e.g. `front_door`). |
+
+**Request body (JSON):**
+
+```json
+{
+  "duration_minutes": 60,
+  "snooze_notifications": true,
+  "snooze_ai": true
+}
+```
+
+| Field                 | Type    | Required | Description |
+|-----------------------|---------|----------|-------------|
+| `duration_minutes`    | integer | Yes      | Minutes until snooze expires; must be positive. |
+| `snooze_notifications`| boolean | No       | If true, mute notifications for this camera; default true. |
+| `snooze_ai`           | boolean | No       | If true, skip AI processing for this camera; default true. |
+
+**Response (200):**
+
+```json
+{
+  "expiration_time": 1739123456.0,
+  "camera": "front_door",
+  "snooze_notifications": true,
+  "snooze_ai": true
+}
+```
+
+| Field                 | Type   | Description |
+|-----------------------|--------|-------------|
+| `expiration_time`     | number | Unix timestamp when the snooze expires. |
+| `camera`              | string | Sanitized camera name. |
+| `snooze_notifications`| boolean| Whether notifications are snoozed. |
+| `snooze_ai`           | boolean| Whether AI is snoozed. |
+
+**Errors:**
+
+- 400: Missing or invalid JSON body; or `duration_minutes` missing, not an integer, or not positive. Response body: `{ "error": "string" }`.
+
+---
+
+### 8.2 List active snoozes
+
+**Endpoint path:** `/api/snooze`  
+**HTTP method:** `GET`  
+**Query parameters:** None  
+**Path variables:** None  
+**Request body:** None  
+
+**Response (200):**
+
+```json
+{
+  "front_door": {
+    "expiration_time": 1739123456.0,
+    "snooze_notifications": true,
+    "snooze_ai": true
+  }
+}
+```
+
+Object maps camera name to `{ expiration_time, snooze_notifications, snooze_ai }`. Expired snoozes are omitted.
+
+---
+
+### 8.3 Clear snooze
+
+**Endpoint path:** `/api/snooze/<camera>`  
+**HTTP method:** `DELETE`  
+**Query parameters:** None  
+**Path variables:** `camera` — camera name to clear.  
+**Request body:** None  
+
+**Response (200):** `{ "status": "success" }`  
+
+Idempotent: returns success even if the camera was not snoozed.
+
+---
+
 *End of contract.*
