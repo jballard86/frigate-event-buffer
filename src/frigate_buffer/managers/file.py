@@ -10,7 +10,11 @@ import zipfile
 from datetime import datetime
 from typing import Any
 
-from frigate_buffer.constants import NON_CAMERA_DIRS, is_tensor
+from frigate_buffer.constants import (
+    DISPLAY_DATETIME_FORMAT,
+    NON_CAMERA_DIRS,
+    is_tensor,
+)
 from frigate_buffer.models import EventState
 
 logger = logging.getLogger("frigate-buffer")
@@ -278,7 +282,7 @@ class FileManager:
             summary_path = os.path.join(folder_path, "summary.txt")
 
             timestamp_str = time.strftime(
-                "%Y-%m-%d %H:%M:%S", time.localtime(event.created_at)
+                DISPLAY_DATETIME_FORMAT, time.localtime(event.created_at)
             )
 
             lines = [
@@ -361,7 +365,7 @@ class FileManager:
         try:
             summary_path = os.path.join(folder_path, "summary.txt")
             timestamp_str = (
-                time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(start_time))
+                time.strftime(DISPLAY_DATETIME_FORMAT, time.localtime(start_time))
                 if start_time
                 else ""
             )
@@ -533,7 +537,7 @@ class FileManager:
 
         logger.debug(
             "Running cleanup: cutoff=%s",
-            time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(cutoff)),
+            time.strftime(DISPLAY_DATETIME_FORMAT, time.localtime(cutoff)),
         )
 
         try:

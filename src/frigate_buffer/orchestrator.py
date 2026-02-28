@@ -14,8 +14,11 @@ from urllib.parse import urlparse, urlunparse
 
 import schedule
 
+from frigate_buffer.constants import DISPLAY_DATETIME_FORMAT
 from frigate_buffer.managers.consolidation import ConsolidatedEventManager
 from frigate_buffer.managers.file import FileManager
+from frigate_buffer.managers.preferences import PreferencesManager
+from frigate_buffer.managers.snooze import SnoozeManager
 from frigate_buffer.managers.state import EventStateManager
 from frigate_buffer.managers.zone_filter import SmartZoneFilter
 from frigate_buffer.models import EventPhase
@@ -35,6 +38,7 @@ from frigate_buffer.services.mqtt_client import MqttClientWrapper
 from frigate_buffer.services.mqtt_handler import MqttMessageHandler
 from frigate_buffer.services.notifications import (
     HomeAssistantMqttProvider,
+    MobileAppProvider,
     NotificationDispatcher,
     PushoverProvider,
 )
@@ -75,6 +79,10 @@ class StateAwareOrchestrator:
         self.file_manager = FileManager(
             config["STORAGE_PATH"], config["RETENTION_DAYS"]
         )
+
+        self.preferences_manager = PreferencesManager(config["STORAGE_PATH"])
+
+        self.snooze_manager = SnoozeManager()
 
         # ConsolidatedEventManager: None callback first to break circular dependency
         self.consolidated_manager = ConsolidatedEventManager(
@@ -124,6 +132,20 @@ class StateAwareOrchestrator:
                 def _run():
                     if not self.ai_analyzer or not self._gemini_analysis_semaphore:
                         return
+                    cameras = ce_info.get("cameras") or (
+                        [ce_info["primary_camera"]]
+                        if ce_info.get("primary_camera")
+                        else []
+                    )
+                    if cameras and all(
+                        self.snooze_manager.is_ai_snoozed(c) for c in cameras
+                    ):
+                        logger.debug(
+                            "CE analysis skipped (AI snoozed): ce_id=%s cameras=%s",
+                            ce_id,
+                            cameras,
+                        )
+                        return
                     self._gemini_analysis_semaphore.acquire()
                     try:
                         result = self.ai_analyzer.analyze_multi_clip_ce(
@@ -157,6 +179,7 @@ class StateAwareOrchestrator:
                 self.video_service,
                 self.ai_analyzer,
                 self.notifier,
+                self.snooze_manager,
             )
             on_quick_title = quick_title_svc.run_quick_title
 
@@ -249,9 +272,12 @@ class StateAwareOrchestrator:
             providers.append(
                 PushoverProvider(po_config, player_base_url=player_base_url)
             )
+        if self.config.get("NOTIFICATIONS_MOBILE_APP_ENABLED"):
+            providers.append(MobileAppProvider(self.preferences_manager))
         return NotificationDispatcher(
             providers=providers,
             timeline_logger=self.timeline_logger,
+            snooze_manager=self.snooze_manager,
         )
 
     @property
@@ -372,6 +398,7 @@ class StateAwareOrchestrator:
                             )
                             if primary
                             else None,
+                            "cameras": ce.cameras,
                         },
                     )()
                 else:
@@ -398,6 +425,7 @@ class StateAwareOrchestrator:
                             "image_url_override": getattr(
                                 event, "image_url_override", None
                             ),
+                            "cameras": [event.camera],
                         },
                     )()
                 self.notifier.publish_notification(
@@ -427,7 +455,7 @@ class StateAwareOrchestrator:
                         "threat_level": threat_level,
                         "camera": camera,
                         "time": datetime.fromtimestamp(unix_ts).strftime(
-                            "%Y-%m-%d %H:%M:%S"
+                            DISPLAY_DATETIME_FORMAT
                         ),
                         "context": result.get("context", []),
                     },
@@ -501,6 +529,7 @@ class StateAwareOrchestrator:
                 "snapshot_downloaded": True,
                 "clip_downloaded": True,
                 "image_url_override": None,
+                "cameras": ce_info.get("cameras", []),
             },
         )()
         self.notifier.publish_notification(
@@ -528,7 +557,7 @@ class StateAwareOrchestrator:
                         "threat_level": threat_level,
                         "camera": camera,
                         "time": datetime.fromtimestamp(unix_ts).strftime(
-                            "%Y-%m-%d %H:%M:%S"
+                            DISPLAY_DATETIME_FORMAT
                         ),
                         "context": result.get("context", []),
                     },
@@ -605,7 +634,9 @@ class StateAwareOrchestrator:
             logger.exception(f"Export watchdog error: {e}")
 
     def start_services(self):
-        """Start background services (MQTT, notifier, scheduler). Does not run the web server."""
+        """Start background services (MQTT, notifier, scheduler).
+        Does not run the web server.
+        """
         logger.info("=" * 60)
         logger.info("Starting State-Aware Orchestrator")
         logger.info("=" * 60)
@@ -677,7 +708,9 @@ class StateAwareOrchestrator:
         threading.Thread(target=self._update_storage_stats, daemon=True).start()
 
     def start(self):
-        """Start all components (background services only; web server is run by Gunicorn)."""
+        """Start all components (background services only;
+        web server is run by Gunicorn).
+        """
         self.start_services()
 
     def stop(self):

@@ -7,13 +7,16 @@ Does not touch MQTT; overflow is handled by each provider's send_overflow().
 import logging
 import threading
 import time
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from frigate_buffer.services.notifications.base import (
     BaseNotificationProvider,
     NotificationResult,
 )
 from frigate_buffer.services.timeline import TimelineLogger
+
+if TYPE_CHECKING:
+    from frigate_buffer.managers.snooze import SnoozeManager
 
 logger = logging.getLogger("frigate-buffer")
 
@@ -31,9 +34,11 @@ class NotificationDispatcher:
         self,
         providers: list[BaseNotificationProvider],
         timeline_logger: TimelineLogger,
+        snooze_manager: "SnoozeManager | None" = None,
     ) -> None:
         self._providers = list(providers)
         self._timeline_logger = timeline_logger
+        self._snooze_manager = snooze_manager
         # Reference to any provider that supports mark_last_event_ended (e.g. HA MQTT)
         self._ha_provider: BaseNotificationProvider | None = None
         for p in self._providers:
@@ -118,6 +123,21 @@ class NotificationDispatcher:
     ) -> bool:
         """Publish via all providers with rate limiting and queue. Same
         signature as legacy notifier."""
+        if self._snooze_manager is not None:
+            cameras = getattr(event, "cameras", None)
+            if not cameras:
+                cam = getattr(event, "camera", None)
+                cameras = [cam] if cam is not None else []
+            if cameras and all(
+                self._snooze_manager.is_notifications_snoozed(c) for c in cameras
+            ):
+                logger.debug(
+                    "Notification skipped (snoozed): event_id=%s cameras=%s",
+                    getattr(event, "event_id", "?"),
+                    cameras,
+                )
+                return False
+
         with self._lock:
             if self._is_rate_limited():
                 self._pending_queue.append((event, status, message, tag_override))

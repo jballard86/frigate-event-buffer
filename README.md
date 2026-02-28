@@ -1,6 +1,6 @@
 # Frigate Cinematic AI & Notification Buffer
 
-**Target:** Frigate 0.17+ users who want advanced event descriptions, tiered Home Assistant notifications, multi-camera GenAI review, and a dynamic cinematic event player.
+**Target:** Frigate 0.17+ users who want advanced event descriptions, tiered notifications, multi-camera GenAI review, and a dynamic cinematic event player.  Send Notifications to the home Assistant Companian, Pushover, or an Android app (Frigate Event Viewer)
 
 This project is a state-aware, GPU-accelerated companion app for **Frigate NVR** that acts as a smart buffer between your cameras and Home Assistant. It transforms raw, multi-camera security footage into cinematic highlight reels and delivers tiered, narrative-driven notifications to eliminate alert fatigue.
 
@@ -70,7 +70,11 @@ If you use Compose, copy from `docker-compose.example.yaml` (if present) to `doc
 
 ---
 
-## Disclaimer / API usage warning
+## Time display
+
+All times shown in the app (event viewer, daily reports, stats dashboard, API responses, logs) use **12-hour format with AM/PM** (e.g. `02:30:45 PM`). This is consistent across the web UI and generated reports.
+
+---
 
 **You are solely responsible for your own API usage and costs.** This project integrates with third-party services (including but not limited to Google Gemini). Misconfiguration, bugs, or unexpected behavior (e.g. retries, high request volume, or logic errors) can lead to increased API calls and charges. **The author and contributors are not responsible for any API bills or other costs you incur.** Use at your own risk; monitor usage and set appropriate limits (e.g. `gemini_frames_per_hour_cap`, billing alerts) in your environment.
 
