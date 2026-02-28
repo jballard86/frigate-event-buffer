@@ -205,3 +205,5 @@ network:
 #     enabled: false
 #     # Path to service account JSON; optional if GOOGLE_APPLICATION_CREDENTIALS is set in env (e.g. Docker)
 #     # credentials_path: "/path/to/serviceAccount.json"
+#     # GCP project ID for FCM; optional if GOOGLE_CLOUD_PROJECT is set in env (recommended when using .env)
+#     # project_id: "your-gcp-project-id"

@@ -171,6 +171,7 @@ CONFIG_SCHEMA = Schema(
             Optional("mobile_app"): {
                 Optional("enabled"): bool,
                 Optional("credentials_path"): str,
+                Optional("project_id"): str,
             },
         },
         # Gemini proxy for main-app clip AI; API key often via env (GEMINI_API_KEY).
@@ -338,6 +339,7 @@ def load_config() -> dict:
         # credentials present.
         "NOTIFICATIONS_MOBILE_APP_ENABLED": False,
         "MOBILE_APP_GOOGLE_APPLICATION_CREDENTIALS": "",
+        "MOBILE_APP_FIREBASE_PROJECT_ID": "",
         # Filtering defaults (empty = allow all)
         "ALLOWED_CAMERAS": [],
         "ALLOWED_LABELS": [],
@@ -578,6 +580,9 @@ def load_config() -> dict:
                         )
                         config["MOBILE_APP_GOOGLE_APPLICATION_CREDENTIALS"] = (
                             mob.get("credentials_path") or ""
+                        ).strip() or ""
+                        config["MOBILE_APP_FIREBASE_PROJECT_ID"] = (
+                            mob.get("project_id") or ""
                         ).strip() or ""
 
                 # Normalize pushover block so po_config.get() never raises.
@@ -842,6 +847,13 @@ def load_config() -> dict:
     config["MOBILE_APP_GOOGLE_APPLICATION_CREDENTIALS"] = (
         os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
         or config.get("MOBILE_APP_GOOGLE_APPLICATION_CREDENTIALS")
+        or ""
+    ).strip()
+
+    # Mobile app (FCM): project ID from env GOOGLE_CLOUD_PROJECT or YAML project_id.
+    config["MOBILE_APP_FIREBASE_PROJECT_ID"] = (
+        os.getenv("GOOGLE_CLOUD_PROJECT")
+        or config.get("MOBILE_APP_FIREBASE_PROJECT_ID")
         or ""
     ).strip()
 

@@ -9,7 +9,9 @@ from frigate_buffer.main import bootstrap
 
 
 def _minimal_config(
-    mobile_app_enabled: bool = False, credentials_path: str = ""
+    mobile_app_enabled: bool = False,
+    credentials_path: str = "",
+    firebase_project_id: str = "",
 ) -> dict:
     """Minimal config dict that passes orchestrator and load_config requirements."""
     return {
@@ -21,6 +23,7 @@ def _minimal_config(
         "LOG_LEVEL": "INFO",
         "NOTIFICATIONS_MOBILE_APP_ENABLED": mobile_app_enabled,
         "MOBILE_APP_GOOGLE_APPLICATION_CREDENTIALS": credentials_path,
+        "MOBILE_APP_FIREBASE_PROJECT_ID": firebase_project_id,
     }
 
 
@@ -119,3 +122,34 @@ class TestBootstrapFirebase(unittest.TestCase):
                     os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = prev
                 elif "GOOGLE_APPLICATION_CREDENTIALS" in os.environ:
                     del os.environ["GOOGLE_APPLICATION_CREDENTIALS"]
+
+    @patch("frigate_buffer.main.StateAwareOrchestrator")
+    @patch("frigate_buffer.main.ensure_detection_model_ready")
+    @patch("frigate_buffer.main.log_gpu_status")
+    @patch("frigate_buffer.main.setup_logging")
+    @patch("frigate_buffer.main.load_config")
+    def test_firebase_init_with_project_id_from_config(
+        self,
+        mock_load_config,
+        mock_setup_logging,
+        mock_log_gpu,
+        mock_ensure_model,
+        mock_orch,
+    ):
+        """mobile_app enabled and project_id set: init uses options.projectId."""
+        mock_load_config.return_value = _minimal_config(
+            mobile_app_enabled=True,
+            credentials_path="",  # no file so Certificate path not used
+            firebase_project_id="my-gcp-project",
+        )
+        mock_orch.return_value = MagicMock()
+
+        mock_fa = MagicMock()
+
+        with patch.dict(os.environ, {"FRIGATE_BUFFER_SINGLE_WORKER": "1"}, clear=False):
+            with patch.dict(sys.modules, {"firebase_admin": mock_fa}):
+                bootstrap()
+
+        mock_fa.initialize_app.assert_called_once_with(
+            options={"projectId": "my-gcp-project"}
+        )

@@ -16,6 +16,10 @@ from datetime import date, datetime, timedelta
 from datetime import time as dt_time
 from typing import Any
 
+from frigate_buffer.constants import (
+    DISPLAY_DATETIME_FORMAT,
+    DISPLAY_TIME_ONLY_FORMAT,
+)
 from frigate_buffer.services.ai_analyzer import GeminiAnalysisService
 
 logger = logging.getLogger("frigate-buffer")
@@ -203,7 +207,9 @@ class DailyReporterService:
                 level = int(data.get("potential_threat_level", 0))
             except (TypeError, ValueError):
                 level = 0
-            time_str = datetime.fromtimestamp(unix_ts).strftime("%H:%M")
+            time_str = datetime.fromtimestamp(unix_ts).strftime(
+                DISPLAY_TIME_ONLY_FORMAT
+            )
             line = f"[{time_str}] {title}: {short_summary} (Threat: {level})"
             lines.append((unix_ts, line))
         lines.sort(key=lambda x: (x[0], x[1]))
@@ -233,7 +239,9 @@ class DailyReporterService:
                 "confidence": data.get("confidence", 0),
                 "threat_level": threat_level,
                 "camera": camera,
-                "time": datetime.fromtimestamp(unix_ts).strftime("%Y-%m-%d %H:%M:%S"),
+                "time": datetime.fromtimestamp(unix_ts).strftime(
+                    DISPLAY_DATETIME_FORMAT
+                ),
                 "context": data.get("context", []),
             }
             objects.append(obj)
@@ -292,7 +300,7 @@ class DailyReporterService:
                         "threat_level": threat_level,
                         "camera": camera,
                         "time": datetime.fromtimestamp(unix_ts).strftime(
-                            "%Y-%m-%d %H:%M:%S"
+                            DISPLAY_DATETIME_FORMAT
                         ),
                         "context": data.get("context", []),
                     }
@@ -317,8 +325,8 @@ class DailyReporterService:
         report_date_string = date_str
         start_of_day = datetime.combine(target_date, dt_time.min)
         end_of_day = datetime.combine(target_date, dt_time.max)
-        report_start_time = start_of_day.strftime("%Y-%m-%d %H:%M:%S")
-        report_end_time = end_of_day.strftime("%Y-%m-%d %H:%M:%S")
+        report_start_time = start_of_day.strftime(DISPLAY_DATETIME_FORMAT)
+        report_end_time = end_of_day.strftime(DISPLAY_DATETIME_FORMAT)
 
         template = self._load_prompt_template()
         if template is None:

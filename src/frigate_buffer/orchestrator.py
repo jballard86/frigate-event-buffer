@@ -14,6 +14,7 @@ from urllib.parse import urlparse, urlunparse
 
 import schedule
 
+from frigate_buffer.constants import DISPLAY_DATETIME_FORMAT
 from frigate_buffer.managers.consolidation import ConsolidatedEventManager
 from frigate_buffer.managers.file import FileManager
 from frigate_buffer.managers.preferences import PreferencesManager
@@ -454,7 +455,7 @@ class StateAwareOrchestrator:
                         "threat_level": threat_level,
                         "camera": camera,
                         "time": datetime.fromtimestamp(unix_ts).strftime(
-                            "%Y-%m-%d %H:%M:%S"
+                            DISPLAY_DATETIME_FORMAT
                         ),
                         "context": result.get("context", []),
                     },
@@ -556,7 +557,7 @@ class StateAwareOrchestrator:
                         "threat_level": threat_level,
                         "camera": camera,
                         "time": datetime.fromtimestamp(unix_ts).strftime(
-                            "%Y-%m-%d %H:%M:%S"
+                            DISPLAY_DATETIME_FORMAT
                         ),
                         "context": result.get("context", []),
                     },

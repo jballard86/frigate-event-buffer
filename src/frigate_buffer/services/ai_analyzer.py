@@ -20,6 +20,7 @@ import cv2
 import requests
 
 from frigate_buffer.constants import (
+    DISPLAY_DATETIME_FORMAT,
     FRAME_MAX_WIDTH,
     GEMINI_PROXY_ANALYSIS_TIMEOUT,
     GEMINI_PROXY_QUICK_TITLE_TIMEOUT,
@@ -500,7 +501,7 @@ class GeminiAnalysisService:
                 if ce_start_time > 0
                 else ef.timestamp_sec
             )
-            time_str = datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S")
+            time_str = datetime.fromtimestamp(ts).strftime(DISPLAY_DATETIME_FORMAT)
             person_area = (
                 ef.metadata.get("person_area")
                 if self.config.get("PERSON_AREA_DEBUG")
@@ -518,10 +519,10 @@ class GeminiAnalysisService:
         first_ts = frames_raw[0].timestamp_sec if frames_raw else 0
         activity_start_str = (
             datetime.fromtimestamp(ce_start_time + first_ts).strftime(
-                "%Y-%m-%d %H:%M:%S"
+                DISPLAY_DATETIME_FORMAT
             )
             if ce_start_time > 0
-            else datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            else datetime.now().strftime(DISPLAY_DATETIME_FORMAT)
         )
         if log_callback is None:
             logger.info("Preparing system prompt")

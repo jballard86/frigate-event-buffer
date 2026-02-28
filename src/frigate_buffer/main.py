@@ -22,9 +22,11 @@ from frigate_buffer.services.video import (
 )
 
 # Early logging for config loading (reconfigured after config is loaded)
+# Use 12-hour time format for consistency with rest of app (see constants.DISPLAY_*).
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    datefmt="%Y-%m-%d %I:%M:%S %p",
     handlers=[logging.StreamHandler(sys.stdout)],
 )
 
@@ -76,15 +78,24 @@ def bootstrap() -> tuple[dict, StateAwareOrchestrator]:
     ensure_detection_model_ready(config)
 
     # Optional Firebase init for FCM (mobile_app). Use GOOGLE_APPLICATION_CREDENTIALS
-    # from config path if set and env not already set; then init or disable on failure.
+    # from config path if set and env not already set. Pass project ID from env
+    # (GOOGLE_CLOUD_PROJECT) or config so Cloud Messaging has a project.
     if config.get("NOTIFICATIONS_MOBILE_APP_ENABLED"):
         creds_path = config.get("MOBILE_APP_GOOGLE_APPLICATION_CREDENTIALS", "").strip()
         if creds_path and not os.environ.get("GOOGLE_APPLICATION_CREDENTIALS"):
             os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = creds_path
+        project_id = config.get("MOBILE_APP_FIREBASE_PROJECT_ID", "").strip()
         try:
             import firebase_admin
+            from firebase_admin import credentials
 
-            firebase_admin.initialize_app()
+            if creds_path and os.path.isfile(creds_path):
+                cred = credentials.Certificate(creds_path)
+                firebase_admin.initialize_app(cred)
+            elif project_id:
+                firebase_admin.initialize_app(options={"projectId": project_id})
+            else:
+                firebase_admin.initialize_app()
         except Exception as e:
             logger.warning(
                 "Firebase credentials not found or invalid, "

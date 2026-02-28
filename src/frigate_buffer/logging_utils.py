@@ -4,7 +4,7 @@ import logging
 import threading
 import time
 
-from frigate_buffer.constants import ERROR_BUFFER_MAX_SIZE
+from frigate_buffer.constants import DISPLAY_DATETIME_FORMAT, ERROR_BUFFER_MAX_SIZE
 
 logger = logging.getLogger("frigate-buffer")
 
@@ -43,7 +43,7 @@ class ErrorBufferHandler(logging.Handler):
 
     def emit(self, record: logging.LogRecord) -> None:
         try:
-            ts = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(record.created))
+            ts = time.strftime(DISPLAY_DATETIME_FORMAT, time.localtime(record.created))
             self._buffer.append(ts, record.levelname, record.getMessage())
         except Exception:
             self.handleError(record)

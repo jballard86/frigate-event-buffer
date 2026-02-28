@@ -70,7 +70,11 @@ If you use Compose, copy from `docker-compose.example.yaml` (if present) to `doc
 
 ---
 
-## Disclaimer / API usage warning
+## Time display
+
+All times shown in the app (event viewer, daily reports, stats dashboard, API responses, logs) use **12-hour format with AM/PM** (e.g. `02:30:45 PM`). This is consistent across the web UI and generated reports.
+
+---
 
 **You are solely responsible for your own API usage and costs.** This project integrates with third-party services (including but not limited to Google Gemini). Misconfiguration, bugs, or unexpected behavior (e.g. retries, high request volume, or logic errors) can lead to increased API calls and charges. **The author and contributors are not responsible for any API bills or other costs you incur.** Use at your own risk; monitor usage and set appropriate limits (e.g. `gemini_frames_per_hour_cap`, billing alerts) in your environment.
 

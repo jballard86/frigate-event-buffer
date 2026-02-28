@@ -17,7 +17,7 @@ from flask import (
     send_from_directory,
 )
 
-from frigate_buffer.constants import NON_CAMERA_DIRS
+from frigate_buffer.constants import DISPLAY_DATETIME_FORMAT, NON_CAMERA_DIRS
 from frigate_buffer.logging_utils import error_buffer
 from frigate_buffer.services.query import (
     read_timeline_merged,
@@ -592,7 +592,8 @@ def create_bp(orchestrator):
         if orchestrator._last_cleanup_time is not None:
             last_cleanup = {
                 "at": time.strftime(
-                    "%Y-%m-%d %H:%M:%S", time.localtime(orchestrator._last_cleanup_time)
+                    DISPLAY_DATETIME_FORMAT,
+                    time.localtime(orchestrator._last_cleanup_time),
                 ),
                 "deleted": orchestrator._last_cleanup_deleted,
             }
@@ -700,7 +701,8 @@ def create_bp(orchestrator):
                 "uptime_seconds": uptime_seconds,
                 "uptime": uptime_str,
                 "started_at": time.strftime(
-                    "%Y-%m-%d %H:%M:%S", time.localtime(orchestrator._start_time)
+                    DISPLAY_DATETIME_FORMAT,
+                    time.localtime(orchestrator._start_time),
                 ),
                 "active_events": state_manager.get_stats(),
                 "metrics": metrics,

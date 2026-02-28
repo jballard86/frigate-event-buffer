@@ -293,8 +293,8 @@
     const ts = ev.timestamp ? new Date(parseInt(ev.timestamp) * 1000) : null;
     const endTs = ev.end_timestamp != null ? new Date(Math.round(parseFloat(ev.end_timestamp) * 1000)) : null;
     const dateStr = ts ? ts.toLocaleDateString() : 'Unknown';
-    const startTimeStr = ts ? ts.toLocaleTimeString() : '—';
-    const endTimeStr = endTs ? endTs.toLocaleTimeString() : 'Ongoing';
+    const startTimeStr = ts ? ts.toLocaleTimeString(undefined, { hour12: true, hour: 'numeric', minute: '2-digit', second: '2-digit' }) : '—';
+    const endTimeStr = endTs ? endTs.toLocaleTimeString(undefined, { hour12: true, hour: 'numeric', minute: '2-digit', second: '2-digit' }) : 'Ongoing';
     const durationSec = (ts && endTs && ev.end_timestamp != null)
       ? (parseFloat(ev.end_timestamp) - parseFloat(ev.timestamp))
       : null;

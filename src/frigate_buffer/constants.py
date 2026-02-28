@@ -83,6 +83,15 @@ ACTION_POSTROLL_SEC: float = 3.0
 AI_MODE_FRIGATE: str = "frigate"
 AI_MODE_EXTERNAL_API: str = "external_api"
 
+# -----------------------------------------------------------------------------
+# Time display (user-facing): 12-hour format with AM/PM
+# All user-visible timestamps (UI, reports, summaries, logs, API responses)
+# use 12-hour format for consistency. Internal/ISO formats (e.g. timeline entry
+# "ts") remain ISO 8601 where parsing is required.
+# -----------------------------------------------------------------------------
+DISPLAY_DATETIME_FORMAT: str = "%Y-%m-%d %I:%M:%S %p"
+DISPLAY_TIME_ONLY_FORMAT: str = "%I:%M %p"
+
 
 def is_tensor(x: Any) -> bool:
     """True if x is a torch.Tensor; avoids importing torch at module level for
