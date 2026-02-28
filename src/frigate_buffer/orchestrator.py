@@ -130,6 +130,20 @@ class StateAwareOrchestrator:
                 def _run():
                     if not self.ai_analyzer or not self._gemini_analysis_semaphore:
                         return
+                    cameras = ce_info.get("cameras") or (
+                        [ce_info["primary_camera"]]
+                        if ce_info.get("primary_camera")
+                        else []
+                    )
+                    if cameras and all(
+                        self.snooze_manager.is_ai_snoozed(c) for c in cameras
+                    ):
+                        logger.debug(
+                            "CE analysis skipped (AI snoozed): ce_id=%s cameras=%s",
+                            ce_id,
+                            cameras,
+                        )
+                        return
                     self._gemini_analysis_semaphore.acquire()
                     try:
                         result = self.ai_analyzer.analyze_multi_clip_ce(
@@ -163,6 +177,7 @@ class StateAwareOrchestrator:
                 self.video_service,
                 self.ai_analyzer,
                 self.notifier,
+                self.snooze_manager,
             )
             on_quick_title = quick_title_svc.run_quick_title
 
@@ -258,6 +273,7 @@ class StateAwareOrchestrator:
         return NotificationDispatcher(
             providers=providers,
             timeline_logger=self.timeline_logger,
+            snooze_manager=self.snooze_manager,
         )
 
     @property
@@ -378,6 +394,7 @@ class StateAwareOrchestrator:
                             )
                             if primary
                             else None,
+                            "cameras": ce.cameras,
                         },
                     )()
                 else:
@@ -404,6 +421,7 @@ class StateAwareOrchestrator:
                             "image_url_override": getattr(
                                 event, "image_url_override", None
                             ),
+                            "cameras": [event.camera],
                         },
                     )()
                 self.notifier.publish_notification(
@@ -507,6 +525,7 @@ class StateAwareOrchestrator:
                 "snapshot_downloaded": True,
                 "clip_downloaded": True,
                 "image_url_override": None,
+                "cameras": ce_info.get("cameras", []),
             },
         )()
         self.notifier.publish_notification(

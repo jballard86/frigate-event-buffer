@@ -52,6 +52,7 @@ class QuickTitleService:
         video_service: Any,
         ai_analyzer: Any,
         notifier: Any,
+        snooze_manager: Any = None,
     ) -> None:
         self._config = config
         self._state_manager = state_manager
@@ -60,6 +61,7 @@ class QuickTitleService:
         self._video_service = video_service
         self._ai_analyzer = ai_analyzer
         self._notifier = notifier
+        self._snooze_manager = snooze_manager
 
     def run_quick_title(
         self,
@@ -73,6 +75,13 @@ class QuickTitleService:
         """Fetch live frame, run YOLO, crop around detections with 10% padding,
         get AI title, update state and notify."""
         if not self._ai_analyzer:
+            return
+        if self._snooze_manager and self._snooze_manager.is_ai_snoozed(camera):
+            logger.debug(
+                "Quick title skipped (AI snoozed): camera=%s event_id=%s",
+                camera,
+                event_id,
+            )
             return
         frigate_url = (self._config.get("FRIGATE_URL") or "").rstrip("/")
         if not frigate_url:
@@ -100,6 +109,8 @@ class QuickTitleService:
             cropped_tensor = crop_utils.crop_around_detections_with_padding(
                 image_tensor, detections, padding_fraction=0.1
             )
+            out_path = os.path.join(camera_folder_path, "snapshot_cropped.jpg")
+            self._file_manager.write_stitched_frame(cropped_tensor, out_path)
             image_to_send = cropped_tensor
         else:
             image_to_send = image_bgr
@@ -175,6 +186,7 @@ class QuickTitleService:
                 "image_url_override": getattr(primary, "image_url_override", None)
                 if primary
                 else None,
+                "cameras": ce.cameras if ce else [camera],
             },
         )()
         self._notifier.publish_notification(

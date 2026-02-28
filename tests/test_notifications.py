@@ -233,6 +233,71 @@ class TestNotificationDispatcher(unittest.TestCase):
     def test_queue_size(self):
         assert self.dispatcher.queue_size == 0
 
+    def test_snooze_skip_when_all_cameras_snoozed_returns_false(self):
+        """When snooze_manager is set and all cameras are notifications-snoozed,
+        publish_notification returns False and does not call providers."""
+        snooze_manager = MagicMock()
+        snooze_manager.is_notifications_snoozed.return_value = True
+        dispatcher = NotificationDispatcher(
+            providers=[self.ha_provider],
+            timeline_logger=self.timeline_logger,
+            snooze_manager=snooze_manager,
+        )
+        dispatcher._notification_times.clear()
+        event = type(
+            "Event",
+            (),
+            {"event_id": "ce1", "camera": "cam1", "cameras": ["cam1"]},
+        )()
+        result = dispatcher.publish_notification(event, "finalized")
+        assert result is False
+        self.mqtt.publish.assert_not_called()
+        self.timeline_logger.log_dispatch_results.assert_not_called()
+
+    def test_snooze_no_skip_when_at_least_one_camera_not_snoozed(self):
+        """When at least one camera in CE is not snoozed, notification is sent."""
+        snooze_manager = MagicMock()
+        snooze_manager.is_notifications_snoozed.side_effect = lambda c: c == "cam1"
+        dispatcher = NotificationDispatcher(
+            providers=[self.ha_provider],
+            timeline_logger=self.timeline_logger,
+            snooze_manager=snooze_manager,
+        )
+        dispatcher._notification_times.clear()
+        event = type(
+            "NotifyTarget",
+            (),
+            {
+                "event_id": "ce1",
+                "camera": "events",
+                "cameras": ["cam1", "cam2"],
+                "label": "person",
+                "folder_path": "/storage/events/ce1/doorbell",
+                "created_at": 1234567890.0,
+                "end_time": 1234567900.0,
+                "phase": "finalized",
+                "threat_level": 0,
+                "snapshot_downloaded": True,
+                "clip_downloaded": True,
+                "genai_title": "Title",
+                "genai_description": None,
+                "ai_description": None,
+                "review_summary": None,
+                "image_url_override": None,
+            },
+        )()
+        result = dispatcher.publish_notification(event, "finalized")
+        assert result is True
+        self.mqtt.publish.assert_called_once()
+        self.timeline_logger.log_dispatch_results.assert_called_once()
+
+    def test_snooze_none_dispatcher_sends_as_before(self):
+        """When snooze_manager is None, dispatcher does not skip (backward compat)."""
+        event = _make_event("evt1")
+        result = self.dispatcher.publish_notification(event, "new")
+        assert result is True
+        self.timeline_logger.log_dispatch_results.assert_called_once()
+
 
 class TestNotificationEventCompliance(unittest.TestCase):
     """EventState and ConsolidatedEvent implement NotificationEvent

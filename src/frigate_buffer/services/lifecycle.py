@@ -353,6 +353,7 @@ class EventLifecycleService:
                     "severity": None,
                     "snapshot_downloaded": False,
                     "clip_downloaded": False,
+                    "cameras": ce.cameras,
                 },
             )()
             self.notifier.publish_notification(
@@ -558,6 +559,7 @@ class EventLifecycleService:
                 "snapshot_downloaded": ce.snapshot_downloaded,
                 "clip_downloaded": ce.clip_downloaded,
                 "image_url_override": gif_url,
+                "cameras": ce.cameras,
             },
         )()
 
