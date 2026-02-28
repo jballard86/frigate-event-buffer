@@ -178,7 +178,7 @@
   function appendLog(msg, isError) {
     const line = document.createElement('div');
     line.className = 'mb-1';
-    const timestamp = new Date().toLocaleTimeString();
+    const timestamp = new Date().toLocaleTimeString(undefined, { hour12: true, hour: 'numeric', minute: '2-digit', second: '2-digit' });
     if (isError) {
       line.innerHTML = '<span class="text-gray-500">[' + timestamp + ']</span> <span class="text-red-400">✗ ' + escapeHtml(msg) + '</span>';
     } else if (msg.toLowerCase().includes('done') || msg.toLowerCase().includes('success')) {
@@ -219,7 +219,7 @@
           const prepareSubdir = (ev.saved && ev.camera === 'events') ? ('saved/events/' + subdir) : subdir;
           const ts = ev.timestamp ? new Date(parseInt(ev.timestamp, 10) * 1000) : null;
           const dateStr = ts ? ts.toLocaleDateString() : '—';
-          const timeStr = ts ? ts.toLocaleTimeString() : '—';
+          const timeStr = ts ? ts.toLocaleTimeString(undefined, { hour12: true, hour: 'numeric', minute: '2-digit', second: '2-digit' }) : '—';
           const thumb = ev.hosted_snapshot || '';
           const cell = document.createElement('button');
           cell.type = 'button';

@@ -21,7 +21,7 @@ _orchestrator = None
 
 
 def _shutdown_handler(signum: int, frame) -> None:
-    """Call orchestrator.stop() on SIGTERM/SIGINT so MQTT and threads shut down cleanly."""
+    """Call orchestrator.stop() on SIGTERM/SIGINT so MQTT and threads shut down."""
     global _orchestrator
     logger.info("Received signal %s, shutting down orchestrator...", signum)
     if _orchestrator:
@@ -36,9 +36,10 @@ def create_application():
     # Mandatory single-worker guardrail: run_server.py sets this before execvp.
     if os.environ.get("FRIGATE_BUFFER_SINGLE_WORKER") != "1":
         raise RuntimeError(
-            "Gunicorn must be started via run_server.py with exactly one worker (-w 1). "
+            "Gunicorn must be started via run_server.py with one worker (-w 1). "
             "Multiple workers would break GPU_LOCK and StateAwareOrchestrator. "
-            "Set FRIGATE_BUFFER_SINGLE_WORKER=1 if invoking gunicorn manually with -w 1."
+            "Set FRIGATE_BUFFER_SINGLE_WORKER=1 if invoking gunicorn manually "
+            "with -w 1."
         )
 
     config, orchestrator = bootstrap()

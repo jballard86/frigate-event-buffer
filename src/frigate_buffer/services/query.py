@@ -1041,3 +1041,55 @@ class EventQueryService:
         result = sorted(active_cameras)
         self._set_cache(cache_key, result)
         return result
+
+    def get_unread_count(self) -> int:
+        """
+        Count event folders that do not have a .viewed file (lightweight scan).
+
+        Uses os.scandir only; does not run _parse_event_files. Result is cached
+        with the same TTL as list caches to avoid disk thrashing when the
+        mobile app polls frequently.
+        """
+        cached = self._get_cached("unread_count")
+        if cached is not None:
+            return cached
+
+        count = 0
+        try:
+            with os.scandir(self.storage_path) as it:
+                for entry in it:
+                    if not entry.is_dir():
+                        continue
+                    if entry.name in NON_CAMERA_DIRS:
+                        continue
+                    if entry.name.split("_")[0].isdigit():
+                        continue
+                    if entry.name == "events":
+                        try:
+                            with os.scandir(entry.path) as sub_it:
+                                for sub in sub_it:
+                                    if not sub.is_dir():
+                                        continue
+                                    if re.match(r"^test\d+$", sub.name):
+                                        continue
+                                    if not os.path.exists(
+                                        os.path.join(sub.path, ".viewed")
+                                    ):
+                                        count += 1
+                        except OSError:
+                            pass
+                    else:
+                        try:
+                            with os.scandir(entry.path) as sub_it:
+                                for sub in sub_it:
+                                    if sub.is_dir() and not os.path.exists(
+                                        os.path.join(sub.path, ".viewed")
+                                    ):
+                                        count += 1
+                        except OSError:
+                            pass
+        except OSError as e:
+            logger.error("Error scanning for unread count: %s", e)
+
+        self._set_cache("unread_count", count)
+        return count

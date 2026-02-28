@@ -17,7 +17,7 @@ from flask import (
     send_from_directory,
 )
 
-from frigate_buffer.constants import NON_CAMERA_DIRS
+from frigate_buffer.constants import DISPLAY_DATETIME_FORMAT, NON_CAMERA_DIRS
 from frigate_buffer.logging_utils import error_buffer
 from frigate_buffer.services.query import (
     read_timeline_merged,
@@ -75,6 +75,18 @@ def create_bp(orchestrator):
         return jsonify(
             {"cameras": all_cameras, "default": all_cameras[0] if all_cameras else None}
         )
+
+    @bp.route("/api/mobile/register", methods=["POST"])
+    def register_mobile():
+        """Register FCM device token from the mobile app; persists without restart."""
+        body = request.get_json(silent=True)
+        if not body or not isinstance(body, dict):
+            return jsonify({"error": "Missing or empty token"}), 400
+        token = body.get("token")
+        if not isinstance(token, str) or not token.strip():
+            return jsonify({"error": "Missing or empty token"}), 400
+        orchestrator.preferences_manager.set_fcm_token(token.strip())
+        return jsonify({"status": "success"}), 200
 
     @bp.route("/events/<camera>")
     def list_camera_events(camera):
@@ -156,6 +168,60 @@ def create_bp(orchestrator):
                 "events": filtered,
             }
         )
+
+    @bp.route("/api/events/unread_count")
+    def unread_count():
+        """Return count of event folders without .viewed (cached 5s TTL)."""
+        count = query_service.get_unread_count()
+        return jsonify({"unread_count": count})
+
+    @bp.route("/api/snooze/<camera>", methods=["POST"])
+    def set_snooze(camera):
+        """Set snooze for a camera. JSON: duration_minutes (required); optional
+        snooze_notifications, snooze_ai (default true)."""
+        body = request.get_json(silent=True)
+        if not body or not isinstance(body, dict):
+            return jsonify({"error": "Missing or invalid JSON body"}), 400
+        duration_minutes = body.get("duration_minutes")
+        try:
+            duration_minutes = int(duration_minutes)
+        except (TypeError, ValueError):
+            return (
+                jsonify({"error": "duration_minutes must be a positive integer"}),
+                400,
+            )
+        if duration_minutes <= 0:
+            return jsonify({"error": "duration_minutes must be positive"}), 400
+        snooze_notifications = body.get("snooze_notifications", True)
+        snooze_ai = body.get("snooze_ai", True)
+        if not isinstance(snooze_notifications, bool):
+            snooze_notifications = True
+        if not isinstance(snooze_ai, bool):
+            snooze_ai = True
+        sanitized = file_manager.sanitize_camera_name(camera)
+        expiration_time = orchestrator.snooze_manager.set_snooze(
+            sanitized, duration_minutes, snooze_notifications, snooze_ai
+        )
+        return jsonify(
+            {
+                "expiration_time": expiration_time,
+                "camera": sanitized,
+                "snooze_notifications": snooze_notifications,
+                "snooze_ai": snooze_ai,
+            }
+        )
+
+    @bp.route("/api/snooze")
+    def list_snoozes():
+        """Return all active snoozes: camera -> {expiration_time, snooze_*}."""
+        return jsonify(orchestrator.snooze_manager.get_active_snoozes())
+
+    @bp.route("/api/snooze/<camera>", methods=["DELETE"])
+    def clear_snooze(camera):
+        """Clear snooze for the given camera. Idempotent."""
+        sanitized = file_manager.sanitize_camera_name(camera)
+        orchestrator.snooze_manager.clear_snooze(sanitized)
+        return jsonify({"status": "success"})
 
     @bp.route("/keep/<path:event_path>", methods=["POST"])
     def keep_event(event_path):
@@ -526,7 +592,8 @@ def create_bp(orchestrator):
         if orchestrator._last_cleanup_time is not None:
             last_cleanup = {
                 "at": time.strftime(
-                    "%Y-%m-%d %H:%M:%S", time.localtime(orchestrator._last_cleanup_time)
+                    DISPLAY_DATETIME_FORMAT,
+                    time.localtime(orchestrator._last_cleanup_time),
                 ),
                 "deleted": orchestrator._last_cleanup_deleted,
             }
@@ -634,7 +701,8 @@ def create_bp(orchestrator):
                 "uptime_seconds": uptime_seconds,
                 "uptime": uptime_str,
                 "started_at": time.strftime(
-                    "%Y-%m-%d %H:%M:%S", time.localtime(orchestrator._start_time)
+                    DISPLAY_DATETIME_FORMAT,
+                    time.localtime(orchestrator._start_time),
                 ),
                 "active_events": state_manager.get_stats(),
                 "metrics": metrics,
