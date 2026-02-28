@@ -1,6 +1,6 @@
 # Frigate Cinematic AI & Notification Buffer
 
-**Target:** Frigate 0.17+ users who want advanced event descriptions, tiered Home Assistant notifications, multi-camera GenAI review, and a dynamic cinematic event player.
+**Target:** Frigate 0.17+ users who want advanced event descriptions, tiered notifications, multi-camera GenAI review, and a dynamic cinematic event player.  Send Notifications to the home Assistant Companian, Pushover, or an Android app (Frigate Event Viewer)
 
 This project is a state-aware, GPU-accelerated companion app for **Frigate NVR** that acts as a smart buffer between your cameras and Home Assistant. It transforms raw, multi-camera security footage into cinematic highlight reels and delivers tiered, narrative-driven notifications to eliminate alert fatigue.
 
