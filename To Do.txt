@@ -5,6 +5,17 @@
   - add to the api available to the app/webservers a method to request timelapses
     - should be fully configurable via the app or web event viewer
     
+  - sometimes the zoom, pulses add a feature to smooth it out so that quick sharp zooms are much smoother
+
+  - if event starts with a car, have yolo track the car for that portion of the ai and video sumary, 
+    but priortize people once they are in Frame
+
+  - standalone android app, for better mobile experience, notifications, etc
+    - done, except for notifications
+  
+  - add to the api available to the app/webservers a method to request timelapses
+    - should be fully configurable via the app or web event viewer
+
   - The "Daily Briefing" Video (Server-Side)
      - Instead of just a Markdown report, the server should generate a 60-second 
       "Daily Highlight Reel" every morning.
@@ -104,3 +115,4 @@ wiping the alert from the Android system tray.
 
 Wiring it up: Register the provider block in config.py and instantiate it inside 
 orchestrator._create_notifier().
+      Dashboard, giving you a 60-second situational awareness update before you start your day.
