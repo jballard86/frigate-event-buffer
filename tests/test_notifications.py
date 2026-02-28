@@ -1,7 +1,8 @@
-"""Tests for NotificationDispatcher, HomeAssistantMqttProvider, and
-NotificationEvent protocol compliance."""
+"""Tests for NotificationDispatcher, HomeAssistantMqttProvider,
+MobileAppProvider, and NotificationEvent protocol compliance."""
 
 import json
+import sys
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -9,6 +10,7 @@ from frigate_buffer.models import ConsolidatedEvent, EventPhase, EventState
 from frigate_buffer.services.notifications import (
     BaseNotificationProvider,
     HomeAssistantMqttProvider,
+    MobileAppProvider,
     NotificationDispatcher,
     NotificationResult,
 )
@@ -31,11 +33,39 @@ def _make_event(event_id: str = "evt1", created_at: float = 100.0) -> EventState
     )
 
 
+def _make_event_with_folder(
+    event_id: str = "ce_123_abc",
+    folder_path: str = "events/cam1/123_abc",
+) -> EventState:
+    """EventState with folder_path for cropped_image_url tests."""
+    return EventState(
+        event_id=event_id,
+        camera="cam1",
+        label="person",
+        created_at=100.0,
+        phase=EventPhase.NEW,
+        folder_path=folder_path,
+    )
+
+
 def _publish_success():
     """Return a result that paho treats as success."""
     r = MagicMock()
     r.rc = 0
     return r
+
+
+def _mock_firebase_modules():
+    """Create mock firebase_admin and messaging for tests (no real SDK required)."""
+    mock_messaging = MagicMock()
+    mock_exceptions = MagicMock()
+    mock_exceptions.FirebaseError = type(
+        "FirebaseError", (Exception,), {}
+    )  # instantiable exception
+    mock_fa = MagicMock()
+    mock_fa.messaging = mock_messaging
+    mock_fa.exceptions = mock_exceptions
+    return mock_fa, mock_messaging
 
 
 class TestHomeAssistantMqttProvider(unittest.TestCase):
@@ -138,6 +168,111 @@ class TestHomeAssistantMqttProvider(unittest.TestCase):
         payload = json.loads(args[1])
         assert payload.get("event_id") == "overflow_summary"
         assert payload.get("tag") == "frigate_overflow"
+
+
+class TestMobileAppProvider(unittest.TestCase):
+    """MobileAppProvider: send/send_overflow with FCM token; payload shape."""
+
+    def setUp(self):
+        self.preferences = MagicMock()
+
+    def test_send_no_token_returns_none_and_does_not_call_fcm(self):
+        self.preferences.get_fcm_token.return_value = None
+        provider = MobileAppProvider(self.preferences)
+        mock_fa, mock_messaging = _mock_firebase_modules()
+        with patch.dict(sys.modules, {"firebase_admin": mock_fa}):
+            result = provider.send(_make_event("evt1"), "new")
+        assert result is None
+        mock_messaging.send.assert_not_called()
+
+    def test_send_with_token_calls_fcm_with_data_payload(self):
+        self.preferences.get_fcm_token.return_value = "fcm_token_123"
+        provider = MobileAppProvider(self.preferences)
+        mock_fa, mock_messaging = _mock_firebase_modules()
+        with patch.dict(sys.modules, {"firebase_admin": mock_fa}):
+            result = provider.send(_make_event("evt1"), "new")
+        assert result == {"provider": "MOBILE_APP", "status": "success"}
+        mock_messaging.send.assert_called_once()
+        message_call_kw = mock_messaging.Message.call_args[1]
+        data = message_call_kw["data"]
+        assert message_call_kw["token"] == "fcm_token_123"
+        assert data["ce_id"] == "evt1"
+        assert data["phase"] == "NEW"
+        assert data["deep_link"] == "buffer://event_detail/evt1"
+        assert data["clear_notification"] == "false"
+        assert data["camera"] == "cam1"
+        assert "title" in data
+        assert "message" in data
+        assert data["cropped_image_url"] == ""
+
+    def test_send_discarded_sets_clear_notification_true(self):
+        self.preferences.get_fcm_token.return_value = "token"
+        provider = MobileAppProvider(self.preferences)
+        mock_fa, mock_messaging = _mock_firebase_modules()
+        with patch.dict(sys.modules, {"firebase_admin": mock_fa}):
+            provider.send(_make_event("evt1"), "discarded")
+        data = mock_messaging.Message.call_args[1]["data"]
+        assert data["clear_notification"] == "true"
+
+    def test_send_tag_override_strips_frigate_prefix_for_ce_id(self):
+        self.preferences.get_fcm_token.return_value = "token"
+        provider = MobileAppProvider(self.preferences)
+        mock_fa, mock_messaging = _mock_firebase_modules()
+        with patch.dict(sys.modules, {"firebase_admin": mock_fa}):
+            provider.send(
+                _make_event("evt1"),
+                "finalized",
+                tag_override="frigate_ce_123_abc",
+            )
+        data = mock_messaging.Message.call_args[1]["data"]
+        assert data["ce_id"] == "ce_123_abc"
+        assert data["deep_link"] == "buffer://event_detail/ce_123_abc"
+
+    def test_send_snapshot_ready_with_folder_path_sets_cropped_image_url(self):
+        self.preferences.get_fcm_token.return_value = "token"
+        provider = MobileAppProvider(self.preferences)
+        event = _make_event_with_folder("ce_1_xyz", "events/cam1/1_xyz")
+        mock_fa, mock_messaging = _mock_firebase_modules()
+        with patch.dict(sys.modules, {"firebase_admin": mock_fa}):
+            provider.send(event, "snapshot_ready")
+        data = mock_messaging.Message.call_args[1]["data"]
+        assert (
+            data["cropped_image_url"] == "/files/events/cam1/1_xyz/snapshot_cropped.jpg"
+        )
+
+    def test_send_firebase_error_returns_failure_result(self):
+        mock_fa, mock_messaging = _mock_firebase_modules()
+        mock_messaging.send.side_effect = mock_fa.exceptions.FirebaseError(
+            "invalid token"
+        )
+        self.preferences.get_fcm_token.return_value = "token"
+        provider = MobileAppProvider(self.preferences)
+        with patch.dict(sys.modules, {"firebase_admin": mock_fa}):
+            result = provider.send(_make_event("evt1"), "new")
+        assert result["provider"] == "MOBILE_APP"
+        assert result["status"] == "failure"
+        assert "message" in result
+
+    def test_send_overflow_no_token_returns_none(self):
+        self.preferences.get_fcm_token.return_value = None
+        provider = MobileAppProvider(self.preferences)
+        mock_fa, mock_messaging = _mock_firebase_modules()
+        with patch.dict(sys.modules, {"firebase_admin": mock_fa}):
+            result = provider.send_overflow()
+        assert result is None
+        mock_messaging.send.assert_not_called()
+
+    def test_send_overflow_with_token_sends_overflow_payload(self):
+        self.preferences.get_fcm_token.return_value = "token"
+        provider = MobileAppProvider(self.preferences)
+        mock_fa, mock_messaging = _mock_firebase_modules()
+        with patch.dict(sys.modules, {"firebase_admin": mock_fa}):
+            result = provider.send_overflow()
+        assert result == {"provider": "MOBILE_APP", "status": "success"}
+        mock_messaging.send.assert_called_once()
+        data = mock_messaging.Message.call_args[1]["data"]
+        assert data["phase"] == "OVERFLOW"
+        assert "Too many events" in data["message"]
 
 
 class TestNotificationDispatcher(unittest.TestCase):

@@ -37,6 +37,7 @@ from frigate_buffer.services.mqtt_client import MqttClientWrapper
 from frigate_buffer.services.mqtt_handler import MqttMessageHandler
 from frigate_buffer.services.notifications import (
     HomeAssistantMqttProvider,
+    MobileAppProvider,
     NotificationDispatcher,
     PushoverProvider,
 )
@@ -270,6 +271,8 @@ class StateAwareOrchestrator:
             providers.append(
                 PushoverProvider(po_config, player_base_url=player_base_url)
             )
+        if self.config.get("NOTIFICATIONS_MOBILE_APP_ENABLED"):
+            providers.append(MobileAppProvider(self.preferences_manager))
         return NotificationDispatcher(
             providers=providers,
             timeline_logger=self.timeline_logger,
