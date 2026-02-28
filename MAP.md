@@ -1,91 +1,120 @@
-# map.md — Project Holy Grail
+# MAP.md — Primary Entry Point for AI Agents
 
-**Primary context document for AI agents.** Read this before executing any task. It defines the project's logic, architecture, file locations, naming conventions, and data flows.
+Read this first; then open the Context Branch that matches your task to minimize
+token use and maximize surgical accuracy.
 
 ---
 
 ## 1. Project Overview & Core Logic
 
-### Summary
+**Frigate Event Buffer:** state-aware orchestrator for Frigate 0.17+ NVR.
 
-**Frigate Event Buffer** is a state-aware orchestrator that:
+- **Ingestion:** MQTT events, four-phase lifecycle (NEW → DESCRIBED → FINALIZED →
+  SUMMARIZED); zone/exception filtering via SmartZoneFilter; consolidated events.
+- **Outbound:** Ring-style HA notifications (clear_tag); rolling evidence locker
+  (default 3 days); clip export/transcode-free storage; export watchdog (DELETE
+  completed exports from Frigate).
+- **AI (optional):** Gemini proxy: motion-aware frame extraction, smart crop,
+  `analysis_result.json`; daily report from aggregated results.
+- **Web:** Flask app: `/player`, `/stats-page`, `/daily-review`, REST API for
+  events, clips, snapshots—embeddable in Home Assistant.
 
-- Listens to **Frigate NVR** via MQTT and tracks events through a **four-phase lifecycle**: NEW → DESCRIBED → FINALIZED → SUMMARIZED.
-- Sends **Ring-style sequential notifications** to Home Assistant and maintains a **configurable rolling evidence locker** (default 3 days).
-- Optionally runs **AI analysis** (Gemini proxy): motion-aware frame extraction, smart crop, writes `analysis_result.json`; daily report from aggregated results.
-- Serves a **Flask web app** for `/player`, `/stats-page`, `/daily-review`, and REST API for events, clips, and snapshots—embeddable in Home Assistant.
+**Tech stack:** Python 3.12+; setuptools src layout (`src/frigate_buffer/`);
+Flask + Gunicorn (single worker); paho-mqtt; schedule; YAML + env (Voluptuous).
+State: EventStateManager, ConsolidatedEventManager; filesystem for events, clips,
+timelines, daily reports. Video/AI: **PyNvVideoCodec** (gpu_decoder) only for
+decode; FFmpeg h264_nvenc for compilation encode; Ultralytics YOLO; Gemini proxy
+(HTTP). Testing: pytest, `pythonpath = ["src"]`.
 
-**Target audience:** Home automation users running Frigate 0.17+ who want event buffering, HA notifications, optional GenAI review, and a built-in event viewer.
-
-**Core business logic:**
-
-- **Multi-cam ingestion:** Consumes MQTT events from configured cameras; optional consolidated events; zone/exception filtering via SmartZoneFilter.
-- **Event lifecycle:** Creation → clip export/download → (optional) AI analysis → state/files/Frigate API/HA notification; short events discarded, long events canceled (no AI, folder `-canceled`).
-- **Outbound:** HA notifications (with `clear_tag` for updates), clip export/transcode-free storage, rolling retention, export watchdog (DELETE completed exports from Frigate).
-
-### Primary Tech Stack
-
-| Layer | Technology |
-|-------|------------|
-| **Language** | Python 3.12+ |
-| **Package** | setuptools, src layout (`src/frigate_buffer/`) |
-| **Frameworks** | Flask (web), **Gunicorn** (WSGI; single worker only), paho-mqtt (MQTT), schedule (cron-like jobs) |
-| **Config** | YAML + env, validated with Voluptuous |
-| **Data / state** | In-memory (EventStateManager, ConsolidatedEventManager); filesystem for events, clips, timelines, daily reports |
-| **Video / AI** | **PyNvVideoCodec** (gpu_decoder: NVDEC decode for sidecars, multi-clip extraction, and compilation); compilation **encode** via **FFmpeg h264_nvenc only** (GPU; no CPU fallback). Ultralytics YOLO (detection sidecars), subprocess FFmpeg for GIF and compilation encode; OpenAI-compatible Gemini proxy (HTTP) |
-| **Testing** | pytest (`pythonpath = ["src"]`) |
-
-### Video & AI pipeline: zero-copy PyNvVideoCodec/PyTorch (mandatory)
-
-The project uses a **zero-copy GPU pipeline** for all video decode and frame processing in the main path:
-
-- **Decode:** **PyNvVideoCodec** (gpu_decoder) only. Clips are opened with **create_decoder(clip_path, gpu_id)**; frames are decoded directly into PyTorch CUDA tensors (BCHW). There is **no CPU decode fallback** and **no ffmpegcv** anywhere in the codebase. Decoder access is **single-threaded**: the app-wide **GPU_LOCK** (in video.py) is the only lock; it serializes **create_decoder** and every **get_frames** call across video, multi_clip_extractor, and video_compilation.
-- **Detection sidecars:** gpu_decoder decode → batched frames via **get_frames(indices)** (batch size 4 to limit VRAM) → float32 [0,1] normalization via in-place `div_(255.0)` → **GPU resize** in _run_detection_on_batch to **DETECTION_IMGSZ** (aspect ratio, multiples of 32) → YOLO → bboxes scaled back to decoder resolution → `_scale_detections_to_native` → `del` batch + aggressive `torch.cuda.empty_cache()` after each batch. No ffmpegcv or subprocess FFmpeg for decode.
-- **Frame crops/resize:** All production frame manipulation uses **`crop_utils`** with **PyTorch tensors in BCHW**. NumPy/OpenCV (e.g. `cv2.resize`, `np.ndarray`) are allowed **only at boundaries** (e.g. decoding a single image from the network, or encoding tensor → JPEG for API/disk, or tensor → numpy for FFmpeg rawvideo stdin).
-- **Output encoding:** Tensor frames are encoded via `torchvision.io.encode_jpeg` for API (base64) and file writes; compilation **streams** HWC numpy frames to FFmpeg h264_nvenc rawvideo stdin (no in-memory frame list) to avoid RAM spikes.
+**Video & AI pipeline (mandatory):** Zero-copy GPU only. Decode: PyNvVideoCodec
+(gpu_decoder); `create_decoder(clip_path, gpu_id)`; frames → BCHW CUDA tensors.
+No CPU decode fallback; no ffmpegcv. Single-threaded decode: app-wide
+**GPU_LOCK** (video.py) serializes create_decoder and get_frames. Detection
+sidecars: batched get_frames(4) → float32/255 → GPU resize → YOLO → bbox
+scale-back; crop/resize via **crop_utils** (BCHW tensors only). NumPy/OpenCV only
+at boundaries (e.g. tensor → JPEG, FFmpeg rawvideo stdin). Output:
+torchvision.io.encode_jpeg; compilation streams HWC to FFmpeg h264_nvenc stdin.
 
 **Explicit prohibitions (do not reintroduce):**
 
-- **ffmpegcv** — Forbidden. Do not add it to dependencies or use it for decode/capture.
-- **CPU-decoding fallbacks** — Forbidden. Do not add fallback paths that decode video on CPU (e.g. OpenCV `VideoCapture`, FFmpeg subprocess for decode, or ffmpegcv). The only remaining FFmpeg use is **GIF generation** (subprocess) and **ffprobe** for metadata.
-- **Production frame processing on NumPy in the core path** — Forbidden. New crop/resize logic in the GPU pipeline must use `crop_utils` (BCHW tensors). Legacy NumPy crop helpers were removed from ai_analyzer; production uses `crop_utils`.
+- **ffmpegcv** — Forbidden for decode/capture.
+- **CPU-decoding fallbacks** — Forbidden (e.g. OpenCV VideoCapture, FFmpeg
+  subprocess for decode). FFmpeg only: GIF generation, ffprobe metadata.
+- **Production frame processing on NumPy in core path** — Forbidden; use
+  `crop_utils` (BCHW). Legacy NumPy crop helpers removed; production uses
+  crop_utils only.
 
 ---
 
 ## 2. Architectural Pattern
 
-- **Design:** **Orchestrator-centric service layer.** One central coordinator (`StateAwareOrchestrator`) owns MQTT routing, event/CE handling, and scheduling; it delegates to managers (state, file, consolidation, zone filter), services (lifecycle, download, notifications, timeline, AI analyzer, daily reporter, export watchdog), and the Flask app.
-- **Separation of concerns:**
-  - **Logic in `src/`:** Core package is `src/frigate_buffer/` (orchestrator, managers, services, config, models). **Entry:** `run_server.py` at repo root starts Gunicorn (single worker, multi-thread); `main.py` provides `bootstrap()` for the WSGI worker; no Flask built-in server.
-  - **Web:** Flask app, templates, and static assets live under `src/frigate_buffer/web/`. The server is created by `create_app(orchestrator)` and closes over the orchestrator; it does not own business logic.
-  - **Entrypoints:** Production: `python run_server.py` (loads config for FLASK_HOST/FLASK_PORT, execs Gunicorn with `-w 1 --threads 4`). WSGI app: `frigate_buffer.wsgi:application` (bootstrap, `start_services()`, graceful shutdown on SIGTERM/SIGINT).
-  - **API vs UI:** EventQueryService reads from disk; Flask routes call it for event lists, stats, timeline. No API-fetch logic inside templates.
-- **Architecture & Performance:** GPU pipeline audit and final verification: see `gpu_pipeline_audit_report.md` (findings and recommendations) and `performance_final_verification.md` (verification status, health grade).
+**Orchestrator-centric:** StateAwareOrchestrator owns MQTT routing, event/CE
+handling, scheduling; delegates to managers (state, file, consolidation, zone
+filter), services (lifecycle, download, notifications, timeline, AI, daily
+reporter, export watchdog), Flask app. Logic in `src/frigate_buffer/`; entry:
+`run_server.py` (Gunicorn -w 1 --threads 4); `main.py` → bootstrap(); wsgi.py →
+application. Web under `src/frigate_buffer/web/`; create_app(orchestrator);
+no business logic in server. EventQueryService reads from disk; routes call it;
+no API-fetch in templates. Refs: gpu_pipeline_audit_report.md,
+performance_final_verification.md.
 
 ---
 
 ## 3. Directory Structure (The Map)
 
-Excludes: `node_modules`, `.git`, `__pycache__`, `.pytest_cache`, build artifacts.
+Per-file purpose and dependencies live in Context Branches (see below).
+Excludes: node_modules, .git, __pycache__, .pytest_cache, build artifacts.
 
 ```
 frigate-event-buffer/
 ├── config.yaml
+<<<<<<< HEAD
+=======
 ├── config.example.yaml
 ├── .env.example              # Example env vars (e.g. GOOGLE_APPLICATION_CREDENTIALS for FCM); Docker uses env natively
+>>>>>>> 93705290231f5921bd87c5ae1f03e3480cc37136
 ├── docker-compose.yaml
 ├── docker-compose.example.yaml
 ├── Dockerfile
 ├── pyproject.toml
 ├── requirements.txt
-├── run_server.py              # Gunicorn launcher: reads config, execvp gunicorn (-w 1, --threads 4)
+├── run_server.py
 ├── RULE.md
-├── map.md
-├── MOBILE_API_CONTRACT.md
+├── MAP.md
 ├── README.md
-├── INSTALL.md
 ├── USER_GUIDE.md
+├── docs/
+│   ├── INSTALL.md
+│   ├── MOBILE_API_CONTRACT.md
+│   ├── SESSION.md
+│   └── maps/ (INGESTION, PROCESSING, WEB, LIFECYCLE, NOTIFICATIONS, AI, TESTING)
 ├── MULTI_CAM_PLAN.md
+<<<<<<< HEAD
+├── DIAGNOSTIC_SIDECAR_TIMELINE_COMPILATION.md
+├── gpu_pipeline_audit_report.md
+├── performance_final_verification.md
+├── .cursor/rules/
+├── scripts/ (bench_post_download_pre_api, verify_gemini_proxy, README, scripts_readme)
+├── src/frigate_buffer/
+│   ├── main.py, wsgi.py, config.py, models.py, logging_utils.py, constants.py
+│   ├── version.txt, orchestrator.py
+│   ├── event_test/ (__init__.py, event_test_orchestrator.py)
+│   ├── managers/ (file, state, consolidation, zone_filter)
+│   ├── services/
+│   │   ├── ai_analyzer, gemini_proxy_client, gpu_decoder, multi_clip_extractor
+│   │   ├── timeline_ema, compilation_math, video, lifecycle, download
+│   │   ├── notifications/ (base, dispatcher, providers/ha_mqtt, pushover)
+│   │   ├── query, daily_reporter, frigate_export_watchdog, ha_storage_stats
+│   │   ├── timeline, video_compilation, mqtt_handler, mqtt_client, crop_utils
+│   │   ├── quick_title_service
+│   │   └── report_prompt.txt, ai_analyzer_system_prompt.txt, quick_title_prompt.txt
+│   └── web/
+│       ├── frigate_proxy, path_helpers, report_helpers, server
+│       ├── routes/ (api, daily_review, pages, proxy_routes, test_routes)
+│       ├── templates/ (base, player, test_run, timeline, stats, daily_review, test.md)
+│       └── static/ (purify.min.js, marked.min.js)
+├── tests/ (conftest.py, test_*.py)
+=======
 ├── DIAGNOSTIC_SIDECAR_TIMELINE_COMPILATION.md  # Diagnostic: sidecar write, timeline EMA, compilation fallback
 ├── gpu_pipeline_audit_report.md               # GPU performance audit: CPU/GPU boundary, memory, I/O, lock contention
 ├── performance_final_verification.md          # Final GPU pipeline verification, status table 1.1–4.4, architectural health grade
@@ -216,18 +245,30 @@ frigate-event-buffer/
 │   ├── test_web_server_path_safety.py
 │   └── test_zone_filter.py
 │
+>>>>>>> 93705290231f5921bd87c5ae1f03e3480cc37136
 └── examples/
+    ├── .env.example
+    ├── config.example.yaml
     └── home-assistant/
-        ├── Home Assistant Notification Automation.yaml
-        └── Home Assistant Notification Dashboard.yaml
 ```
 
 ---
 
-## 4. File Registry & Descriptions
+## 4. Context Branches
 
-### Root
+For surgical edits, load only the branch that matches your task.
 
+<<<<<<< HEAD
+| Branch | Path | Scope |
+|--------|------|--------|
+| INGESTION | docs/maps/INGESTION.md | MQTT, Zone Filtering, State Management |
+| PROCESSING | docs/maps/PROCESSING.md | GPU Pipeline, Video Decoding, Crop Utils |
+| WEB | docs/maps/WEB.md | Flask Server, Routes, Templates, Proxy, Helpers |
+| LIFECYCLE | docs/maps/LIFECYCLE.md | Lifecycle, Download, File, Query, Timeline |
+| NOTIFICATIONS | docs/maps/NOTIFICATIONS.md | Dispatcher, Providers (HA, Pushover) |
+| AI | docs/maps/AI.md | Analyzer, Gemini Proxy, Quick Title, Daily Reporter, Prompts |
+| TESTING | docs/maps/TESTING.md | Test Suite (~10k lines), event_test (TEST button) |
+=======
 | Path/Name | Purpose | Dependencies/Interactions |
 |-----------|---------|---------------------------|
 | `config.yaml` | User config: cameras, network, settings, HA, Gemini, multi_cam. | Read by `config.load_config()` at startup. |
@@ -329,27 +370,32 @@ frigate-event-buffer/
 |-----------|---------|---------------------------|
 | `tests/conftest.py` | Pytest fixtures. | All tests. |
 | `tests/test_*.py` | Unit tests for config, lifecycle, ai_analyzer (including proxy retry and frame analysis writing), ai_analyzer_integration (persistence, orchestrator handoff, error handling), **bootstrap Firebase** (mobile_app enabled/disabled, init failure, env from config), video, video_compilation, multi_clip_extractor, gpu_decoder, query (including caching and read_timeline_merged), **notifications** (dispatcher, HA provider, event compliance), download, file manager (path validation, cleanup, max event length, storage stats, timeline append), crop_utils, consolidation, daily_reporter, frigate_export_watchdog, ha_storage_stats, timeline, mqtt, state, zone_filter, etc. Tensor mocks in test_ai_analyzer and test_ai_analyzer_integration for write_ai_frame_analysis_multi_cam and analyze_multi_clip_ce with tensor ExtractedFrame; test_multi_clip_extractor for sequential get_frames. | Run with `pytest tests/`; `pythonpath = ["src"]`. Benchmark and verify scripts live in `scripts/`. |
+>>>>>>> 93705290231f5921bd87c5ae1f03e3480cc37136
 
 ---
 
-## 5. Core Flows & Lifecycles
+## 5. Coding Standards & Conventions
 
-### Main application (orchestrator-centric)
+**Ruff:** Lint and format (`ruff check src tests`, `ruff format src tests`). Line
+length 88 chars (E501). Type hints on public APIs; Python 3.10+ union syntax
+(str | None). Config: extend CONFIG_SCHEMA in config.py; invalid config exits 1.
+Constants in constants.py; no magic numbers. Docstrings explain why (Google or
+NumPy). Early returns; tests: Setup → Execute → Verify. **Token density:**
+documentation targets ~12 tokens/line for agent efficiency.
 
-1. **Startup:** `run_server.py` loads config (FLASK_HOST, FLASK_PORT), sets `FRIGATE_BUFFER_SINGLE_WORKER=1`, then **execvp** Gunicorn with `-w 1 --threads 4`. Gunicorn worker loads `frigate_buffer.wsgi:application` → **bootstrap()** (config, logging, YOLO, GPU, orchestrator) → **orchestrator.start_services()** (MQTT, notifier, scheduler) → **application** = orchestrator.flask_app. SIGTERM/SIGINT in worker call **orchestrator.stop()** for graceful shutdown.
-2. **MQTT → Event creation/updates:** MQTT → `MqttClientWrapper` → **MqttMessageHandler.on_message** → SmartZoneFilter (should_start) → EventStateManager / ConsolidatedEventManager → **EventLifecycleService** (event creation, event end).
-3. **Quick-title (new event, external_api only):** When **ai_mode** is **external_api** and a new event starts with quick_title enabled, lifecycle sets canned title, writes metadata, sends initial notification with **latest.jpg** proxy. A delay thread then calls **QuickTitleService.run_quick_title**: fetch `latest.jpg`, YOLO, crop, **generate_quick_title** (returns JSON with title + description) → update state/CE, **write_summary** and **write_metadata_json** (Event Viewer), notify **snapshot_ready** with same tag. When **ai_mode** is **frigate**, on_quick_title_trigger is not wired so quick-title does not run.
-4. **Event end (short):** Lifecycle checks duration &lt; `minimum_event_seconds` → discard: delete folder, remove from state/CE, publish MQTT `status: "discarded"` with same tag for HA clear.
-5. **Event end (long/canceled):** Duration ≥ `max_event_length_seconds` → no clip export/AI; write canceled summary, notify HA, rename folder `-canceled`; cleanup later by retention.
-6. **Consolidated event (all events):** Every event is a CE. At CE close: Lifecycle exports clips, **generate_detection_sidecars_for_cameras**. When **ai_mode** is **external_api**, **on_ce_ready_for_analysis** is wired → **analyze_multi_clip_ce** → **\_handle_ce_analysis_result** → write CE summary/metadata, notify **finalized**. When **ai_mode** is **frigate**, on_ce_ready_for_analysis is not wired. Then (Frigate mode only) **fetch_review_summary**, write review summary; build notify target; send **clip_ready**; (Frigate only) if best title/desc, send **finalized**; (Frigate only) if summary and not no concerns, send **summarized**. **external_api** mode sends only **clip_ready** at CE close (no Frigate review summary, no finalized/summarized there).
-7. **Frigate review path (frigate mode only):** When **ai_mode** is **frigate**, **\_handle_review** processes MQTT `frigate/reviews` (update state, write files, notify **finalized**). When **external_api**, _handle_review returns immediately. **\_handle_tracked_update** description path (set_ai_description, **described** notification) runs only when not **external_api**. Per-event summarized (background thread fetching review summary) was removed globally.
-8. **Web:** Flask (create_app registers blueprints) uses **EventQueryService** to list events, stats, timeline; `resolve_clip_in_folder` for dynamic clip URLs; path safety via path_helpers (web) and FileManager. Daily report UI reads markdown from `daily_reports/`; POST `/api/daily-review/generate` triggers on-demand report generation.
-9. **Scheduled:** Cleanup (retention), export watchdog (DELETE completed exports), daily reporter (aggregate + report prompt → proxy → markdown; then `cleanup_old_reports`). Config: **quick_title_delay_seconds**, **quick_title_enabled**, **ai_mode** (`frigate` | `external_api`, default `external_api`). See **NOTIFICATION_TIMELINE.md** for the two-path flows and mermaid diagrams.
-
-**Files touched in primary flow:** `orchestrator.py`, `services/mqtt_handler.py`, `services/lifecycle.py`, `services/quick_title_service.py`, `services/ai_analyzer.py`, `services/mqtt_client.py`, `managers/state.py`, `managers/file.py`, `managers/consolidation.py`, `services/notifications/` (dispatcher, providers/ha_mqtt), `services/download.py`, `services/query.py`, `services/timeline.py`, `web/server.py`.
+**File placement:** New UI/route → web/routes/, web/templates/, web/static/. New
+service/logic → services/ or managers/; register in orchestrator. New API
+route → web/routes/; delegate to EventQueryService/FileManager. New config key
+→ CONFIG_SCHEMA then config.get. New notification provider →
+notifications/providers/; ADDING_PROVIDERS.md. Standalone script → scripts/.
+Tests → tests/test_<name>.py. **Map maintenance:** When adding/removing files
+or changing core flows, update MAP.md and the affected branch under docs/maps/.
 
 ---
 
+<<<<<<< HEAD
+*End of MAP.md*
+=======
 ## 6. AI Agent Directives (Rules & Conventions)
 
 ### Zero-copy GPU pipeline (mandatory)
@@ -399,3 +445,4 @@ frigate-event-buffer/
 ---
 
 *End of map.md*
+>>>>>>> 93705290231f5921bd87c5ae1f03e3480cc37136
