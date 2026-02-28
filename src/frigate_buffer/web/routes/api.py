@@ -76,6 +76,18 @@ def create_bp(orchestrator):
             {"cameras": all_cameras, "default": all_cameras[0] if all_cameras else None}
         )
 
+    @bp.route("/api/mobile/register", methods=["POST"])
+    def register_mobile():
+        """Register FCM device token from the mobile app; persists without restart."""
+        body = request.get_json(silent=True)
+        if not body or not isinstance(body, dict):
+            return jsonify({"error": "Missing or empty token"}), 400
+        token = body.get("token")
+        if not isinstance(token, str) or not token.strip():
+            return jsonify({"error": "Missing or empty token"}), 400
+        orchestrator.preferences_manager.set_fcm_token(token.strip())
+        return jsonify({"status": "success"}), 200
+
     @bp.route("/events/<camera>")
     def list_camera_events(camera):
         _maybe_cleanup()

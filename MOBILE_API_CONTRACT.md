@@ -721,4 +721,41 @@ Fields may vary by proxy; common: `title`, `shortSummary`, `description`, `scene
 
 ---
 
+## 6. Mobile registration
+
+### 6.1 Register FCM device token
+
+**Endpoint path:** `/api/mobile/register`  
+**HTTP method:** `POST`  
+**Query parameters:** None  
+**Path variables:** None  
+
+**Request body (JSON):**
+
+```json
+{
+  "token": "fcm_device_token_here"
+}
+```
+
+| Field   | Type   | Required | Description |
+|---------|--------|----------|-------------|
+| `token` | string | Yes      | FCM device token from the mobile app. |
+
+**Response (200):**
+
+```json
+{
+  "status": "success"
+}
+```
+
+**Errors:**
+
+- 400: Missing or empty `token`. Response body: `{ "error": "Missing or empty token" }`.
+
+**Note:** The token is persisted to `mobile_preferences.json` under the server's storage path. No server restart is required; the backend uses this token for FCM push when mobile notifications are enabled.
+
+---
+
 *End of contract.*
