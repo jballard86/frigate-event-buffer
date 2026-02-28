@@ -17,3 +17,106 @@
             - Topology Constraints: Filter matches based on travel time and camera adjacency.
 
   - standalone android app, for better mobile experience, notifications, etc
+    - done, except for notifications
+
+  - add to the api available to the app/webservers a method to request timelapses
+    - should be fully configurable via the app or web event viewer
+    
+  - The "Daily Briefing" Video (Server-Side)
+     - Instead of just a Markdown report, the server should generate a 60-second 
+      "Daily Highlight Reel" every morning.
+     - Smart Compilation: The video_compilation.py service would select the top 5 
+      events of the day based on threat_level and "Unique Entity" counts.
+     - AI Voiceover: The server could use a lightweight TTS (Text-to-Speech) engine 
+      to read the "Security Summary" over the footage.
+     - Provider Integration: This video appears as a "Story" bubble at the top of the 
+      Dashboard, giving you a 60-second situational awareness update before you start your day.
+
+
+
+
+mobile_app_provider.py Outline:
+
+Complete Project Outline: Mobile App Provider & API Enhancements
+
+Phase 1: Foundation & Credentials (FCM Setup)
+Manual Task (You): Set up a Firebase project, download google-services.json for the Android 
+app, and generate the firebase-service-account.json private key for the server.
+
+Server Dependencies: Add firebase-admin to requirements.txt.
+
+Configuration: Update config.py and the server initialization to read the Firebase credentials 
+path from your existing .env file (and optionally map it into the config.yaml schema).
+
+
+Phase 2: Mobile Registration & Dynamic Preferences
+Preferences Manager: Create src/frigate_buffer/managers/preferences.py to handle reading and 
+writing a dynamic mobile_preferences.json file in your storage directory. This allows the 
+server to save device tokens and user settings on the fly without requiring a Gunicorn restart.
+
+Registration API: Add a new POST /api/mobile/register endpoint in web/routes/api.py. The 
+Android app will hit this to hand its FCM Device Token to the server.
+
+Documentation: Update MOBILE_API_CONTRACT.md to include this new registration endpoint.
+
+
+Phase 3: State-Aware Mobile APIs (Unread Count & Snooze)
+Unread Count Endpoint: Add GET /api/events/unread_count to web/routes/api.py.
+
+Optimization: Instead of doing a full parse of all JSON files, this will do a lightweight 
+os.scandir across the event directories checking only for the absence of the .viewed file.
+
+Cache: Wrap this in a 5-second TTL cache to ensure it never becomes a bottleneck, even with 
+thousands of saved events.
+
+Snooze Manager: Create a SnoozeManager (either standalone or within managers/state.py) to 
+track muted cameras, expiration timestamps, and specific flags (snooze_notifications vs. 
+snooze_ai).
+
+Snooze Endpoints: Add POST /api/snooze/<camera>, GET /api/snooze, and DELETE 
+/api/snooze/<camera> to allow the app to control the manager.
+
+Documentation: Append all these new endpoints to MOBILE_API_CONTRACT.md.
+
+
+Phase 4: Logic Enforcement & Media Optimization (Smart-Crop)
+Notification Snooze Logic: Update NotificationDispatcher.publish_notification to check 
+the SnoozeManager. If snooze_notifications is active for a camera, it returns early before 
+hitting any providers.
+
+AI Snooze Logic: Update QuickTitleService and EventLifecycleService to bypass the Gemini 
+API proxy calls if snooze_ai is active for that camera.
+
+Smart-Crop Extraction: Modify QuickTitleService.run_quick_title. After it uses crop_utils 
+to grab the tensor of the bounding box, have it save that image to disk as 
+snapshot_cropped.jpg inside the event folder. This gives the mobile app a tiny, 
+data-friendly image to download instead of the full 4K frame.
+
+
+Phase 5: The Mobile App Notification Provider
+Provider Creation: Create src/frigate_buffer/services/notifications/providers/mobile_app.py 
+that inherits from the project's BaseNotificationProvider.
+
+FCM Integration: Implement the send() method using the firebase-admin SDK to push messages 
+directly to the FCM token stored in your preferences manager.
+
+Phase-Aware Payloads: The provider will translate the backend's status (new, snapshot_ready, 
+clip_ready, finalized) into a structured JSON payload for the app. It will include:
+
+ce_id (used as the unique notification tag/collapse key to update the existing notification 
+on the phone rather than spamming new ones).
+
+phase: The current lifecycle phase.
+
+title and message.
+
+deep_link: buffer://event_detail/{ce_id}.
+
+cropped_image_url: The path to the snapshot_cropped.jpg generated in Phase 4.
+
+Remote Dismissal: Implement logic where if the status is discarded (i.e., the event was 
+too short and deleted), the payload sends a clear_notification: true flag to the app, silently 
+wiping the alert from the Android system tray.
+
+Wiring it up: Register the provider block in config.py and instantiate it inside 
+orchestrator._create_notifier().

@@ -605,7 +605,9 @@ class StateAwareOrchestrator:
             logger.exception(f"Export watchdog error: {e}")
 
     def start_services(self):
-        """Start background services (MQTT, notifier, scheduler). Does not run the web server."""
+        """Start background services (MQTT, notifier, scheduler).
+        Does not run the web server.
+        """
         logger.info("=" * 60)
         logger.info("Starting State-Aware Orchestrator")
         logger.info("=" * 60)
@@ -677,7 +679,9 @@ class StateAwareOrchestrator:
         threading.Thread(target=self._update_storage_stats, daemon=True).start()
 
     def start(self):
-        """Start all components (background services only; web server is run by Gunicorn)."""
+        """Start all components (background services only;
+        web server is run by Gunicorn).
+        """
         self.start_services()
 
     def stop(self):

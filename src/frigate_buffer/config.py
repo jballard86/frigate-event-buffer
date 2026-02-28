@@ -168,6 +168,10 @@ CONFIG_SCHEMA = Schema(
                     }
                 ),
             ),
+            Optional("mobile_app"): {
+                Optional("enabled"): bool,
+                Optional("credentials_path"): str,
+            },
         },
         # Gemini proxy for main-app clip AI; API key often via env (GEMINI_API_KEY).
         Optional("gemini"): {
@@ -330,6 +334,10 @@ def load_config() -> dict:
         "NOTIFICATIONS_HOME_ASSISTANT_ENABLED": True,
         # Pushover: optional; orchestrator adds PushoverProvider when enabled.
         "pushover": {},
+        # Mobile app (FCM): optional; when True, Firebase init runs if
+        # credentials present.
+        "NOTIFICATIONS_MOBILE_APP_ENABLED": False,
+        "MOBILE_APP_GOOGLE_APPLICATION_CREDENTIALS": "",
         # Filtering defaults (empty = allow all)
         "ALLOWED_CAMERAS": [],
         "ALLOWED_LABELS": [],
@@ -563,6 +571,14 @@ def load_config() -> dict:
                         config["NOTIFICATIONS_HOME_ASSISTANT_ENABLED"] = bool(
                             notif["home_assistant"].get("enabled", True)
                         )
+                    if "mobile_app" in notif:
+                        mob = notif["mobile_app"]
+                        config["NOTIFICATIONS_MOBILE_APP_ENABLED"] = bool(
+                            mob.get("enabled", False)
+                        )
+                        config["MOBILE_APP_GOOGLE_APPLICATION_CREDENTIALS"] = (
+                            mob.get("credentials_path") or ""
+                        ).strip() or ""
 
                 # Normalize pushover block so po_config.get() never raises.
                 config["pushover"] = (yaml_config.get("notifications") or {}).get(
@@ -821,6 +837,13 @@ def load_config() -> dict:
             or config["pushover"].get("pushover_api_token")
             or ""
         )
+
+    # Mobile app (FCM): env overrides credentials path (GOOGLE_APPLICATION_CREDENTIALS).
+    config["MOBILE_APP_GOOGLE_APPLICATION_CREDENTIALS"] = (
+        os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
+        or config.get("MOBILE_APP_GOOGLE_APPLICATION_CREDENTIALS")
+        or ""
+    ).strip()
 
     # Gemini env overrides (api_key for secrets). Single API Key: GEMINI_API_KEY only.
     config["GEMINI"] = dict(config.get("GEMINI") or {})

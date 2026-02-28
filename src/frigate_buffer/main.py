@@ -57,6 +57,8 @@ def bootstrap() -> tuple[dict, StateAwareOrchestrator]:
     """Load config, setup logging/GPU/YOLO, create and return (config, orchestrator).
 
     Used by the WSGI entry point (wsgi.py). Does not start the web server.
+    When notifications.mobile_app is enabled, initializes Firebase Admin SDK;
+    on missing or invalid credentials, logs a warning and disables the mobile provider.
     """
     config = load_config()
     setup_logging(config.get("LOG_LEVEL", "INFO"))
@@ -72,6 +74,24 @@ def bootstrap() -> tuple[dict, StateAwareOrchestrator]:
 
     log_gpu_status()
     ensure_detection_model_ready(config)
+
+    # Optional Firebase init for FCM (mobile_app). Use GOOGLE_APPLICATION_CREDENTIALS
+    # from config path if set and env not already set; then init or disable on failure.
+    if config.get("NOTIFICATIONS_MOBILE_APP_ENABLED"):
+        creds_path = config.get("MOBILE_APP_GOOGLE_APPLICATION_CREDENTIALS", "").strip()
+        if creds_path and not os.environ.get("GOOGLE_APPLICATION_CREDENTIALS"):
+            os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = creds_path
+        try:
+            import firebase_admin
+
+            firebase_admin.initialize_app()
+        except Exception as e:
+            logger.warning(
+                "Firebase credentials not found or invalid, "
+                "disabling mobile_app provider: %s",
+                e,
+            )
+            config["NOTIFICATIONS_MOBILE_APP_ENABLED"] = False
 
     orchestrator = StateAwareOrchestrator(config)
     return config, orchestrator

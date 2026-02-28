@@ -195,3 +195,13 @@ network:
 #   token: "YOUR_LONG_LIVED_ACCESS_TOKEN"
 #   gemini_cost_entity: "input_number.gemini_daily_cost"
 #   gemini_tokens_entity: "input_number.gemini_total_tokens"
+
+# Optional: Notifications (Home Assistant MQTT, Pushover, FCM mobile app)
+# notifications:
+#   home_assistant:
+#     enabled: true
+#   # FCM for Android mobile app; requires Firebase service account JSON path
+#   mobile_app:
+#     enabled: false
+#     # Path to service account JSON; optional if GOOGLE_APPLICATION_CREDENTIALS is set in env (e.g. Docker)
+#     # credentials_path: "/path/to/serviceAccount.json"
