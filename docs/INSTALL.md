@@ -130,7 +130,7 @@ docker-compose up -d --build
 **Before running:** Edit `docker-compose.yml` so that:
 
 - **volumes** point to your storage directory and your `config.yaml` path (e.g. `/mnt/user/Drive/frigate-event-buffer/config.yaml` if config is in the repo).
-- **env_file** points to your `.env` file, or add the same variables under **environment** in the compose file. The app still needs **MQTT_BROKER**, **FRIGATE_URL**, and **BUFFER_IP** (or **HA_IP**), either in `config.yaml` or via env.
+- **env_file** points to your `.env` file, or add the same variables under **environment** in the compose file. The app still needs **MQTT_BROKER**, **FRIGATE_URL**, and **BUFFER_IP** (or **HA_IP**), either in `config.yaml` or via env. The default is `.env` in the **project root**. If you see "env file ... not found", copy `examples/.env.example` to `.env` in the repo root (e.g. `cp examples/.env.example .env` or on Windows `copy examples\.env.example .env`) and set your values, or remove the **env_file** block and set variables under **environment** or in your mounted config.
 - **For GPU:** Set **`NVIDIA_DRIVER_CAPABILITIES=compute,video,utility`** in **environment** — this is **mandatory** for GPU decode no matter how you build/start (same as with plain `docker run`).
 
 **Useful commands:**

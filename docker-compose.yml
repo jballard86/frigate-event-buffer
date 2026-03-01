@@ -13,8 +13,10 @@ services:
     shm_size: 1gb
     ports:
       - 5055:5055
+    # Optional: copy examples/.env.example to .env and set MQTT_BROKER, FRIGATE_URL, etc.
+    # If .env is missing, remove the env_file block or create .env from the example.
     env_file:
-      - ../../appdata/frigate_buffer/.env
+      - .env
     environment:
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=all

@@ -437,6 +437,29 @@ class TestGeminiAnalysisServiceProxyFailure(unittest.TestCase):
         result = service.send_to_proxy("Prompt", [frame])
         assert result is None
 
+    @patch("frigate_buffer.services.gemini_proxy_client.requests.post")
+    def test_send_to_proxy_returns_none_when_content_empty_after_fence_strip(
+        self, mock_post
+    ):
+        """Proxy returns content that becomes empty after stripping code fences."""
+        mock_post.return_value.status_code = 200
+        mock_post.return_value.raise_for_status = lambda: None
+        mock_post.return_value.json.return_value = {
+            "choices": [{"message": {"content": "```\n```"}}]
+        }
+        config = {
+            "GEMINI": {
+                "enabled": True,
+                "proxy_url": "http://proxy",
+                "api_key": "key",
+                "model": "m",
+            }
+        }
+        service = GeminiAnalysisService(config)
+        frame = np.zeros((50, 50, 3), dtype=np.uint8)
+        result = service.send_to_proxy("Prompt", [frame])
+        assert result is None
+
 
 class TestGeminiAnalysisServiceFlatConfig(unittest.TestCase):
     """Test that flat config keys (GEMINI_PROXY_*, multi_cam) are used when set."""

@@ -24,6 +24,7 @@ from frigate_buffer.constants import (
     FRAME_MAX_WIDTH,
     GEMINI_PROXY_ANALYSIS_TIMEOUT,
     GEMINI_PROXY_QUICK_TITLE_TIMEOUT,
+    LOG_MAX_RESPONSE_BODY,
     is_tensor,
 )
 from frigate_buffer.managers.file import write_ai_frame_analysis_multi_cam
@@ -406,10 +407,24 @@ class GeminiAnalysisService:
             if lines and lines[-1].strip() == "```":
                 lines = lines[:-1]
             raw = "\n".join(lines)
+        raw = raw.strip()
+        if not raw:
+            logger.warning(
+                "Proxy returned empty or whitespace-only content after stripping "
+                "code fences"
+            )
+            return None
         try:
             result = json.loads(raw)
         except json.JSONDecodeError as e:
-            logger.exception("Failed to parse proxy JSON: %s", e)
+            snippet = (raw or "")[:LOG_MAX_RESPONSE_BODY]
+            if len(raw or "") > LOG_MAX_RESPONSE_BODY:
+                snippet += "..."
+            logger.exception(
+                "Failed to parse proxy JSON: %s. Raw response (truncated): %s",
+                e,
+                snippet,
+            )
             return None
         self._record_frames_sent(len(image_buffers))
         return result
