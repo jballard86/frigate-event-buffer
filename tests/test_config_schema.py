@@ -111,6 +111,63 @@ class TestConfigSchema(unittest.TestCase):
     @patch("builtins.open", new_callable=mock_open)
     @patch("os.path.exists")
     @patch("frigate_buffer.config.yaml.safe_load")
+    def test_notifications_home_assistant_enabled_string_false(
+        self, mock_yaml_load, mock_exists, mock_file
+    ):
+        """When notifications.home_assistant.enabled is the string 'false',
+        NOTIFICATIONS_HOME_ASSISTANT_ENABLED becomes False."""
+        valid_yaml = {
+            "cameras": [{"name": "cam1"}],
+            "network": {
+                "mqtt_broker": "localhost",
+                "frigate_url": "http://frigate",
+                "buffer_ip": "localhost",
+                "storage_path": "/tmp",
+            },
+            "notifications": {
+                "home_assistant": {"enabled": "false"},
+            },
+        }
+        mock_exists.return_value = True
+        mock_yaml_load.return_value = valid_yaml
+
+        config = load_config()
+        assert not config["NOTIFICATIONS_HOME_ASSISTANT_ENABLED"]
+
+    @patch("builtins.open", new_callable=mock_open)
+    @patch("os.path.exists")
+    @patch("frigate_buffer.config.yaml.safe_load")
+    @patch.dict(
+        os.environ,
+        {"NOTIFICATIONS_HOME_ASSISTANT_ENABLED": "false"},
+        clear=False,
+    )
+    def test_notifications_home_assistant_env_override_false(
+        self, mock_yaml_load, mock_exists, mock_file
+    ):
+        """When NOTIFICATIONS_HOME_ASSISTANT_ENABLED env is 'false', HA notifications
+        are disabled even if config file has enabled true or omits it."""
+        valid_yaml = {
+            "cameras": [{"name": "cam1"}],
+            "network": {
+                "mqtt_broker": "localhost",
+                "frigate_url": "http://frigate",
+                "buffer_ip": "localhost",
+                "storage_path": "/tmp",
+            },
+            "notifications": {
+                "home_assistant": {"enabled": True},
+            },
+        }
+        mock_exists.return_value = True
+        mock_yaml_load.return_value = valid_yaml
+
+        config = load_config()
+        assert not config["NOTIFICATIONS_HOME_ASSISTANT_ENABLED"]
+
+    @patch("builtins.open", new_callable=mock_open)
+    @patch("os.path.exists")
+    @patch("frigate_buffer.config.yaml.safe_load")
     def test_minimum_event_seconds_config(self, mock_yaml_load, mock_exists, mock_file):
         """minimum_event_seconds from settings is merged into config as
         MINIMUM_EVENT_SECONDS."""

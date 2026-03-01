@@ -16,6 +16,7 @@ from typing import Any
 from frigate_buffer.constants import (
     COMPILATION_DEFAULT_NATIVE_HEIGHT,
     COMPILATION_DEFAULT_NATIVE_WIDTH,
+    DECODER_TIME_EPSILON_SEC,
     NVDEC_INIT_FAILURE_PREFIX,
 )
 from frigate_buffer.services import crop_utils, timeline_ema
@@ -355,10 +356,23 @@ def _run_pynv_compilation(
                         if frame_count <= 0:
                             fps = fallback_fps
                             frame_count = max(1, int(fallback_duration * fps))
+                        if frame_count > 0 and fallback_fps > 0:
+                            max_valid_t = max(
+                                0.0,
+                                (frame_count - 1) / fallback_fps
+                                - DECODER_TIME_EPSILON_SEC,
+                            )
+                        else:
+                            max_valid_t = 0.0
                         # PTS-based indices to reduce jitter (decoder time→index).
                         src_indices = [
                             min(
-                                max(0, ctx.get_index_from_time_in_seconds(t)),
+                                max(
+                                    0,
+                                    ctx.get_index_from_time_in_seconds(
+                                        min(t, max_valid_t)
+                                    ),
+                                ),
                                 frame_count - 1,
                             )
                             for t in output_times

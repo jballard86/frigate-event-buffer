@@ -93,6 +93,9 @@ network:
 # -----------------------------------------------------------------------------
 # Notifications — Home Assistant MQTT and Pushover
 # -----------------------------------------------------------------------------
+# Config is loaded from the first path that exists: /app/config.yaml,
+# /app/storage/config.yaml, ./config.yaml, config.yaml. To force HA notifications
+# off regardless of file, set NOTIFICATIONS_HOME_ASSISTANT_ENABLED=false in env.
 notifications:
   home_assistant:
     enabled: true

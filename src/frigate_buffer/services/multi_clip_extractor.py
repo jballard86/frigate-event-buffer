@@ -22,7 +22,7 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
-from frigate_buffer.constants import NVDEC_INIT_FAILURE_PREFIX
+from frigate_buffer.constants import DECODER_TIME_EPSILON_SEC, NVDEC_INIT_FAILURE_PREFIX
 from frigate_buffer.services import timeline_ema as _timeline_ema
 from frigate_buffer.services.gpu_decoder import create_decoder
 from frigate_buffer.services.video import GPU_LOCK
@@ -422,11 +422,16 @@ def extract_target_centric_frames(
             fcount = frame_count_per_cam.get(best_camera, 0)
             frame_idx = 0  # set before try so except can log it
             try:
+                duration_cam = durations.get(best_camera, 0)
+                safe_T = min(T, max(0.0, duration_cam - DECODER_TIME_EPSILON_SEC))
                 with GPU_LOCK:
                     # PTS-based index to reduce variable frame rate jitter
                     # (decoder time→index mapping).
                     frame_idx = (
-                        min(max(0, ctx.get_index_from_time_in_seconds(T)), fcount - 1)
+                        min(
+                            max(0, ctx.get_index_from_time_in_seconds(safe_T)),
+                            fcount - 1,
+                        )
                         if fcount > 0
                         else 0
                     )

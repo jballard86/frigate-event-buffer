@@ -56,6 +56,10 @@ ERROR_BUFFER_MAX_SIZE: int = 10
 # before container restart.
 NVDEC_INIT_FAILURE_PREFIX: str = "NVDEC hardware initialization failed"
 
+# Clamp time passed to PyNvVideoCodec get_index_from_time_in_seconds so it is
+# strictly less than clip duration (library rejects t_sec >= duration).
+DECODER_TIME_EPSILON_SEC: float = 1e-6
+
 # Video compilation dynamic zoom: min crop size as fraction of frame (max
 # zoom-in); crop window never smaller than this.
 ZOOM_MIN_FRAME_FRACTION: float = 0.4

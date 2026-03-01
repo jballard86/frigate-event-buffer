@@ -917,6 +917,80 @@ class TestGenerateCompilationVideo(unittest.TestCase):
     @patch("builtins.open", new_callable=mock_open)
     @patch("frigate_buffer.services.video_compilation._get_video_metadata")
     @patch("frigate_buffer.services.video_compilation.os.path.isfile")
+    def test_run_pynv_compilation_clamps_time_strictly_less_than_duration(
+        self,
+        mock_isfile,
+        mock_get_metadata,
+        mock_open_fn,
+        mock_popen,
+        mock_create_decoder,
+    ):
+        """When output_times includes a time at slice end (e.g. 2.0), decoder
+        is called with t_safe <= max_valid_t so NVDEC never sees t_sec >= duration."""
+        from frigate_buffer.constants import DECODER_TIME_EPSILON_SEC
+
+        try:
+            import torch
+        except ImportError:
+            self.skipTest("torch not available")
+        mock_isfile.return_value = True
+        frame_count = 40
+        fallback_fps = 20.0
+        mock_get_metadata.return_value = (640, 480, fallback_fps, 2.05)
+        times_passed: list[float] = []
+
+        def record_and_return(t_sec):
+            times_passed.append(t_sec)
+            return min(max(0, int(t_sec * fallback_fps)), frame_count - 1)
+
+        mock_ctx = MagicMock()
+        mock_ctx.__len__ = lambda self: frame_count
+        mock_ctx.get_index_from_time_in_seconds = record_and_return
+        mock_ctx.get_frames = lambda indices: torch.zeros(
+            (len(indices), 3, 480, 640), dtype=torch.uint8
+        )
+        mock_cm = MagicMock()
+        mock_cm.__enter__ = MagicMock(return_value=mock_ctx)
+        mock_cm.__exit__ = MagicMock(return_value=None)
+        mock_create_decoder.return_value = mock_cm
+        proc = MagicMock()
+        proc.stdin = MagicMock()
+        proc.returncode = 0
+        mock_popen.return_value = proc
+
+        slices = [
+            {
+                "camera": "doorbell",
+                "start_sec": 0.0,
+                "end_sec": 2.05,
+                "crop_start": (0, 0, 320, 240),
+                "crop_end": (0, 0, 320, 240),
+            },
+        ]
+        resolve_clip = MagicMock(return_value="doorbell-1.mp4")
+
+        _run_pynv_compilation(
+            slices=slices,
+            ce_dir="/ce",
+            tmp_output_path="/out.mp4.tmp",
+            target_w=1440,
+            target_h=1080,
+            resolve_clip_in_folder=resolve_clip,
+            cuda_device_index=0,
+        )
+
+        max_valid_t = (frame_count - 1) / fallback_fps - DECODER_TIME_EPSILON_SEC
+        assert all(t <= max_valid_t for t in times_passed), (
+            f"Decoder must not be called with t > max_valid_t: "
+            f"got max(times)={max(times_passed)!r} max_valid_t={max_valid_t}"
+        )
+
+    @patch("frigate_buffer.services.video_compilation.GPU_LOCK", MagicMock())
+    @patch("frigate_buffer.services.video_compilation.create_decoder")
+    @patch("frigate_buffer.services.video_compilation.subprocess.Popen")
+    @patch("builtins.open", new_callable=mock_open)
+    @patch("frigate_buffer.services.video_compilation._get_video_metadata")
+    @patch("frigate_buffer.services.video_compilation.os.path.isfile")
     def test_run_pynv_compilation_calls_ffmpeg_encode_with_h264_nvenc(
         self,
         mock_isfile,

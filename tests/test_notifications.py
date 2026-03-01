@@ -6,6 +6,8 @@ import sys
 import unittest
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from frigate_buffer.models import ConsolidatedEvent, EventPhase, EventState
 from frigate_buffer.services.notifications import (
     BaseNotificationProvider,
@@ -175,6 +177,15 @@ class TestMobileAppProvider(unittest.TestCase):
 
     def setUp(self):
         self.preferences = MagicMock()
+        # Prevent keep-alive thread from running (infinite loop would hang tests).
+        self._thread_patch = patch(
+            "frigate_buffer.services.notifications.providers.mobile_app.threading.Thread"
+        )
+        mock_thread_class = self._thread_patch.start()
+        mock_thread_class.return_value.start = MagicMock()
+
+    def tearDown(self):
+        self._thread_patch.stop()
 
     def test_send_no_token_returns_none_and_does_not_call_fcm(self):
         self.preferences.get_fcm_token.return_value = None
@@ -278,6 +289,68 @@ class TestMobileAppProvider(unittest.TestCase):
         data = mock_messaging.Message.call_args[1]["data"]
         assert data["phase"] == "OVERFLOW"
         assert "Too many events" in data["message"]
+
+    def test_send_uses_android_high_priority_config(self):
+        """Real notifications use AndroidConfig(priority='high') for Doze wake-up."""
+        self.preferences.get_fcm_token.return_value = "token"
+        provider = MobileAppProvider(self.preferences)
+        mock_fa, mock_messaging = _mock_firebase_modules()
+        with patch.dict(sys.modules, {"firebase_admin": mock_fa}):
+            provider.send(_make_event("evt1"), "new")
+        mock_messaging.AndroidConfig.assert_called_with(priority="high")
+        message_call_kw = mock_messaging.Message.call_args[1]
+        assert "android" in message_call_kw
+
+    def test_send_overflow_uses_android_high_priority_config(self):
+        """Overflow notifications use AndroidConfig(priority='high') for Doze."""
+        self.preferences.get_fcm_token.return_value = "token"
+        provider = MobileAppProvider(self.preferences)
+        mock_fa, mock_messaging = _mock_firebase_modules()
+        with patch.dict(sys.modules, {"firebase_admin": mock_fa}):
+            provider.send_overflow()
+        mock_messaging.AndroidConfig.assert_called_with(priority="high")
+        message_call_kw = mock_messaging.Message.call_args[1]
+        assert "android" in message_call_kw
+
+    def test_warmup_connection_sends_with_dry_run(self):
+        """_warmup_connection calls messaging.send with dry_run=True (one iteration)."""
+        self.preferences.get_fcm_token.return_value = None
+        provider = MobileAppProvider(self.preferences)
+        mock_fa, mock_messaging = _mock_firebase_modules()
+        stop_after_one = Exception("stop_after_one")
+
+        with patch.dict(sys.modules, {"firebase_admin": mock_fa}):
+            with patch(
+                "frigate_buffer.services.notifications.providers.mobile_app.time.sleep",
+                side_effect=stop_after_one,
+            ):
+                with pytest.raises(Exception, match="stop_after_one"):
+                    provider._warmup_connection()
+        mock_messaging.send.assert_called_once()
+        call_kw = mock_messaging.send.call_args[1]
+        assert call_kw["dry_run"] is True
+        # Message was built with data and token (warm-up uses dummy when no token).
+        msg_kw = mock_messaging.Message.call_args[1]
+        assert msg_kw["data"] == {"warmup": "true"}
+        assert msg_kw["token"] == "dummy_warmup_token"
+
+    def test_warmup_connection_handles_firebase_error_at_debug(self):
+        """_warmup_connection catches FirebaseError and does not raise."""
+        self.preferences.get_fcm_token.return_value = "token"
+        provider = MobileAppProvider(self.preferences)
+        mock_fa, mock_messaging = _mock_firebase_modules()
+        mock_messaging.send.side_effect = mock_fa.exceptions.FirebaseError("invalid")
+        stop_after_one = Exception("stop_after_one")
+
+        with patch.dict(sys.modules, {"firebase_admin": mock_fa}):
+            with patch(
+                "frigate_buffer.services.notifications.providers.mobile_app.time.sleep",
+                side_effect=stop_after_one,
+            ):
+                with pytest.raises(Exception, match="stop_after_one"):
+                    provider._warmup_connection()
+        mock_messaging.send.assert_called_once()
+        assert mock_messaging.send.call_args[1]["dry_run"] is True
 
 
 class TestNotificationDispatcher(unittest.TestCase):

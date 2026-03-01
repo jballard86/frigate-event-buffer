@@ -151,15 +151,14 @@ CONFIG_SCHEMA = Schema(
         # Notifications: per-provider config. Absent = legacy (HA MQTT enabled).
         Optional("notifications"): {
             Optional("home_assistant"): {
-                Optional(
-                    "enabled"
-                ): bool,  # When False, dispatcher omits HA MQTT provider.
+                # bool or str so "false" in YAML is accepted and coerced correctly.
+                Optional("enabled"): Any(bool, str),
             },
             Optional("pushover"): Any(
                 None,
                 Schema(
                     {
-                        Optional("enabled"): bool,
+                        Optional("enabled"): Any(bool, str),
                         Optional("pushover_user_key"): str,
                         Optional("pushover_api_token"): str,
                         Optional("device"): str,
@@ -169,7 +168,7 @@ CONFIG_SCHEMA = Schema(
                 ),
             ),
             Optional("mobile_app"): {
-                Optional("enabled"): bool,
+                Optional("enabled"): Any(bool, str),
                 Optional("credentials_path"): str,
                 Optional("project_id"): str,
             },
@@ -277,6 +276,24 @@ CONFIG_SCHEMA = Schema(
     },
     extra=ALLOW_EXTRA,
 )
+
+
+def _coerce_bool(value: object, default: bool) -> bool:
+    """Coerce config to bool; 'false'/'true' strings become False/True.
+
+    Avoids Python's bool('false') == True. Used for notification enabled flags.
+    """
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        lower = value.strip().lower()
+        if lower in ("false", "0", "no", "off"):
+            return False
+        if lower in ("true", "1", "yes", "on"):
+            return True
+    return bool(value)
 
 
 def load_config() -> dict:
@@ -569,14 +586,18 @@ def load_config() -> dict:
 
                 if "notifications" in yaml_config:
                     notif = yaml_config["notifications"]
+                    logger.debug(
+                        "notifications.home_assistant raw: %s",
+                        notif.get("home_assistant"),
+                    )
                     if "home_assistant" in notif:
-                        config["NOTIFICATIONS_HOME_ASSISTANT_ENABLED"] = bool(
-                            notif["home_assistant"].get("enabled", True)
+                        config["NOTIFICATIONS_HOME_ASSISTANT_ENABLED"] = _coerce_bool(
+                            notif["home_assistant"].get("enabled"), True
                         )
                     if "mobile_app" in notif:
                         mob = notif["mobile_app"]
-                        config["NOTIFICATIONS_MOBILE_APP_ENABLED"] = bool(
-                            mob.get("enabled", False)
+                        config["NOTIFICATIONS_MOBILE_APP_ENABLED"] = _coerce_bool(
+                            mob.get("enabled"), False
                         )
                         config["MOBILE_APP_GOOGLE_APPLICATION_CREDENTIALS"] = (
                             mob.get("credentials_path") or ""
@@ -586,9 +607,16 @@ def load_config() -> dict:
                         ).strip() or ""
 
                 # Normalize pushover block so po_config.get() never raises.
-                config["pushover"] = (yaml_config.get("notifications") or {}).get(
-                    "pushover"
-                ) or {}
+                po_raw = (yaml_config.get("notifications") or {}).get("pushover") or {}
+                if isinstance(po_raw, dict) and "enabled" in po_raw:
+                    config["pushover"] = {
+                        **po_raw,
+                        "enabled": _coerce_bool(po_raw.get("enabled"), False),
+                    }
+                else:
+                    config["pushover"] = (
+                        dict(po_raw) if isinstance(po_raw, dict) else {}
+                    )
 
                 if "gemini" in yaml_config:
                     gemini_cfg = yaml_config["gemini"]
@@ -842,6 +870,17 @@ def load_config() -> dict:
             or config["pushover"].get("pushover_api_token")
             or ""
         )
+        if "enabled" in config["pushover"]:
+            config["pushover"]["enabled"] = _coerce_bool(
+                config["pushover"]["enabled"], False
+            )
+
+    # Notifications: env override so HA can be forced off/on regardless of file.
+    _env_ha = os.getenv("NOTIFICATIONS_HOME_ASSISTANT_ENABLED")
+    if _env_ha is not None:
+        config["NOTIFICATIONS_HOME_ASSISTANT_ENABLED"] = _coerce_bool(
+            _env_ha, config["NOTIFICATIONS_HOME_ASSISTANT_ENABLED"]
+        )
 
     # Mobile app (FCM): env overrides credentials path (GOOGLE_APPLICATION_CREDENTIALS).
     config["MOBILE_APP_GOOGLE_APPLICATION_CREDENTIALS"] = (
@@ -886,5 +925,17 @@ def load_config() -> dict:
             f"Missing required configuration: {', '.join(missing)}. "
             f"Set these in config.yaml under 'network:' or as environment variables."
         )
+
+    po_enabled = (
+        _coerce_bool(config.get("pushover", {}).get("enabled"), False)
+        if isinstance(config.get("pushover"), dict)
+        else False
+    )
+    logger.info(
+        "Notifications: home_assistant=%s, pushover=%s, mobile_app=%s",
+        config["NOTIFICATIONS_HOME_ASSISTANT_ENABLED"],
+        po_enabled,
+        config["NOTIFICATIONS_MOBILE_APP_ENABLED"],
+    )
 
     return config

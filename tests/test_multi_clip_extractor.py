@@ -36,6 +36,7 @@ def _fake_create_decoder(path, gpu_id=0):
     return cm()
 
 
+from frigate_buffer.constants import DECODER_TIME_EPSILON_SEC
 from frigate_buffer.models import ExtractedFrame
 from frigate_buffer.services.multi_clip_extractor import (
     DETECTION_SIDECAR_FILENAME,
@@ -425,6 +426,71 @@ class TestMultiClipExtractor(unittest.TestCase):
         for item in result:
             assert isinstance(item, ExtractedFrame)
             assert item.frame is not None
+
+    @patch("frigate_buffer.services.multi_clip_extractor._get_fps_duration_from_path")
+    @patch("frigate_buffer.services.multi_clip_extractor.create_decoder")
+    def test_extract_clamps_time_to_strictly_less_than_duration(
+        self, mock_create_decoder, mock_get_fps_duration
+    ):
+        """When sample time T equals camera duration, decoder is called with
+        safe_T <= duration - epsilon (NVDEC rejects t_sec >= duration)."""
+        try:
+            import torch
+        except ImportError:
+            self.skipTest("torch not available")
+        from contextlib import contextmanager
+
+        os.makedirs(os.path.join(self.tmp, "cam1"))
+        with open(os.path.join(self.tmp, "cam1", "clip.mp4"), "wb"):
+            pass
+        sidecar_path = os.path.join(self.tmp, "cam1", DETECTION_SIDECAR_FILENAME)
+        with open(sidecar_path, "w", encoding="utf-8") as f:
+            json.dump(
+                {
+                    "native_width": 100,
+                    "native_height": 100,
+                    "entries": [
+                        {
+                            "timestamp_sec": t * 0.2,
+                            "detections": [{"label": "person", "area": 100}],
+                        }
+                        for t in range(11)
+                    ],
+                },
+                f,
+            )
+        duration_sec = 2.0
+        fps = 5.0
+        mock_get_fps_duration.return_value = (fps, duration_sec)
+        times_passed: list[float] = []
+
+        def record_and_return(t_sec):
+            times_passed.append(t_sec)
+            return min(max(0, int(t_sec * fps)), 9)
+
+        mock_ctx = MagicMock()
+        mock_ctx.__len__ = lambda self: 10
+        mock_ctx.get_index_from_time_in_seconds = record_and_return
+        mock_ctx.get_frames.side_effect = lambda indices: torch.zeros(
+            (len(indices), 3, 480, 640), dtype=torch.uint8
+        )
+
+        @contextmanager
+        def cm(*_args, **_kwargs):
+            yield mock_ctx
+
+        mock_create_decoder.side_effect = cm
+
+        result = extract_target_centric_frames(
+            self.tmp, max_frames_sec=0.5, max_frames_min=3
+        )
+
+        assert len(result) >= 1
+        max_valid = duration_sec - DECODER_TIME_EPSILON_SEC
+        assert all(t <= max_valid for t in times_passed), (
+            f"Decoder must not be called with t_sec > duration - epsilon: "
+            f"got {times_passed} (max_valid={max_valid})"
+        )
 
     @patch(
         "frigate_buffer.services.multi_clip_extractor.create_decoder",

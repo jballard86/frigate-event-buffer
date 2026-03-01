@@ -16,7 +16,7 @@ services:
     # Optional: copy examples/.env.example to .env and set MQTT_BROKER, FRIGATE_URL, etc.
     # If .env is missing, remove the env_file block or create .env from the example.
     env_file:
-      - .env
+       - ../../appdata/frigate_buffer/.env
     environment:
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=all

@@ -102,20 +102,18 @@ class EventLifecycleService:
 
         # Quick-title: after delay, run AI title pipeline (single image from latest.jpg)
         if self.on_quick_title_trigger and self.config.get("QUICK_TITLE_ENABLED", True):
-            delay_sec = max(0, int(self.config.get("QUICK_TITLE_DELAY_SECONDS", 4)))
-            if delay_sec > 0:
-                threading.Thread(
-                    target=self._run_quick_title_after_delay,
-                    args=(
-                        event_id,
-                        camera,
-                        label,
-                        ce.consolidated_id,
-                        camera_folder,
-                        ce_tag,
-                    ),
-                    daemon=True,
-                ).start()
+            threading.Thread(
+                target=self._run_quick_title_after_delay,
+                args=(
+                    event_id,
+                    camera,
+                    label,
+                    ce.consolidated_id,
+                    camera_folder,
+                    ce_tag,
+                ),
+                daemon=True,
+            ).start()
 
     def _run_quick_title_after_delay(
         self,
@@ -127,7 +125,7 @@ class EventLifecycleService:
         tag_override: str | None,
     ) -> None:
         """Sleep then invoke orchestrator callback for quick AI title (non-blocking)."""
-        delay_sec = max(0, int(self.config.get("QUICK_TITLE_DELAY_SECONDS", 4)))
+        delay_sec = max(0.0, float(self.config.get("QUICK_TITLE_DELAY_SECONDS", 0.5)))
         if delay_sec > 0:
             time.sleep(delay_sec)
         try:

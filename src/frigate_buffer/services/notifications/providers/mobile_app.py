@@ -2,9 +2,14 @@
 
 Sends data-only messages so the Android app can handle them in the background.
 Token is read dynamically from PreferencesManager (no notification block).
+A background keep-alive thread runs a periodic FCM dry-run (every 10 minutes)
+at init to warm and maintain the HTTP connection pool and TLS handshake,
+avoiding first-notification and post-idle latency.
 """
 
 import logging
+import threading
+import time
 from typing import TYPE_CHECKING, Any
 
 from frigate_buffer.services.notifications.base import (
@@ -83,7 +88,9 @@ class MobileAppProvider(BaseNotificationProvider):
     """Sends FCM data-only messages to the registered mobile app token.
 
     Token is fetched from PreferencesManager on each send so the app can
-    register/update without restarting the server.
+    register/update without restarting the server. A background keep-alive
+    thread runs a periodic FCM dry-run (every 10 minutes) at init to warm and
+    maintain the HTTP connection pool and TLS handshake.
     """
 
     def __init__(self, preferences_manager: "PreferencesManager") -> None:
@@ -93,6 +100,35 @@ class MobileAppProvider(BaseNotificationProvider):
             preferences_manager: Used to get_fcm_token() on each send/overflow.
         """
         self.preferences_manager = preferences_manager
+        thread = threading.Thread(target=self._warmup_connection, daemon=True)
+        thread.start()
+        logger.info("FCM keep-alive thread started.")
+
+    def _warmup_connection(self) -> None:
+        """Run a periodic FCM dry-run keep-alive to maintain the connection pool.
+
+        Runs in a daemon thread. Uses dry_run=True so no message is delivered;
+        failures (e.g. dummy token) are logged at DEBUG and ignored.
+        """
+        while True:
+            token = self.preferences_manager.get_fcm_token()
+            if not (token and str(token).strip()):
+                token = "dummy_warmup_token"
+            try:
+                from firebase_admin import messaging
+
+                message = messaging.Message(
+                    data={"warmup": "true"},
+                    token=token,
+                )
+                messaging.send(message, dry_run=True)
+                logger.debug("FCM keep-alive succeeded.")
+            except Exception as e:
+                logger.debug(
+                    "FCM keep-alive failed (expected for dummy token): %s",
+                    e,
+                )
+            time.sleep(600)
 
     def send(
         self,
@@ -163,7 +199,13 @@ class MobileAppProvider(BaseNotificationProvider):
             from firebase_admin import exceptions as firebase_exceptions
             from firebase_admin import messaging
 
-            messaging.send(messaging.Message(data=data, token=token))
+            messaging.send(
+                messaging.Message(
+                    data=data,
+                    token=token,
+                    android=messaging.AndroidConfig(priority="high"),
+                )
+            )
             logger.info(
                 "FCM notification sent for %s: %s",
                 ce_id,
@@ -193,7 +235,13 @@ class MobileAppProvider(BaseNotificationProvider):
             from firebase_admin import exceptions as firebase_exceptions
             from firebase_admin import messaging
 
-            messaging.send(messaging.Message(data=data, token=token))
+            messaging.send(
+                messaging.Message(
+                    data=data,
+                    token=token,
+                    android=messaging.AndroidConfig(priority="high"),
+                )
+            )
             logger.info("FCM overflow notification sent")
             return {"provider": "MOBILE_APP", "status": "success"}
         except firebase_exceptions.FirebaseError as e:
