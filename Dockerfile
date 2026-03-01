@@ -2,6 +2,7 @@
 # Build from repo root: docker build -t frigate-buffer:latest .
 # Base: Ubuntu 24.04 + CUDA 12.6 runtime for NVDEC/NVENC. FFmpeg from distro. PyNvVideoCodec from PyPI. No vendored wheels.
 # Use BuildKit (default in Docker 23+) for pip cache on app install: faster code-only rebuilds.
+
 ARG USE_GUI_OPENCV=false
 FROM nvidia/cuda:12.6.0-runtime-ubuntu24.04
 

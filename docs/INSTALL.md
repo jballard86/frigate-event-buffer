@@ -157,3 +157,6 @@ From repo root: `git pull`, then rebuild (step 4), then `docker restart frigate_
 - **Build fails with "frigate_buffer" or "examples/config.example.yaml" not found** — You are not in the repo root. The Dockerfile expects the repo root as build context (the directory that contains `Dockerfile` and `src/`). `cd` to that directory and run the build again.
 - **Decoder / get_frames errors** — Decode is GPU-only. Check GPU memory and driver; reduce concurrent load or clip length if needed. Ensure `NVIDIA_DRIVER_CAPABILITIES` includes `video`.
 
+- **"current commit information was not captured" / git rev-parse warning** — Harmless. It appears when the build directory is not a git work tree (e.g. copied folder without `.git`). Clone the repo with `git clone` so `.git` exists, or ignore the warning.
+- **"failed to solve: frontend grpc server closed unexpectedly"** — BuildKit can crash on some hosts (e.g. Unraid). Use the legacy builder: `DOCKER_BUILDKIT=0 docker-compose up -d --build`. The Dockerfile is written to work without BuildKit-only features so the build should succeed with the legacy builder. On Unraid you can also try increasing Docker memory (Settings → Docker → advanced) and retrying with BuildKit enabled.
+
