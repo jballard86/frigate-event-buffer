@@ -67,5 +67,8 @@ tests/tmp_event_test_miss/
 htmlcov/
 .coverage
 
+# Sync tools (e.g. FreeFileSync state DB)
+sync.ffs_db
+
 # Model weights (downloaded at runtime via ensure_detection_model_ready)
 *.pt
