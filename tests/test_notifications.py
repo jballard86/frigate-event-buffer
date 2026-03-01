@@ -203,7 +203,12 @@ class TestMobileAppProvider(unittest.TestCase):
         assert data["camera"] == "cam1"
         assert "title" in data
         assert "message" in data
-        assert data["cropped_image_url"] == ""
+        assert "description" in data
+        assert data["live_frame_proxy"] == "/api/cameras/cam1/latest.jpg"
+        assert data["hosted_snapshot"] == ""
+        assert data["notification_gif"] == ""
+        assert data["hosted_clip"] == ""
+        assert data["threat_level"] == "0"
 
     def test_send_discarded_sets_clear_notification_true(self):
         self.preferences.get_fcm_token.return_value = "token"
@@ -228,7 +233,7 @@ class TestMobileAppProvider(unittest.TestCase):
         assert data["ce_id"] == "ce_123_abc"
         assert data["deep_link"] == "buffer://event_detail/ce_123_abc"
 
-    def test_send_snapshot_ready_with_folder_path_sets_cropped_image_url(self):
+    def test_send_snapshot_ready_with_folder_path_sets_hosted_snapshot(self):
         self.preferences.get_fcm_token.return_value = "token"
         provider = MobileAppProvider(self.preferences)
         event = _make_event_with_folder("ce_1_xyz", "events/cam1/1_xyz")
@@ -237,7 +242,7 @@ class TestMobileAppProvider(unittest.TestCase):
             provider.send(event, "snapshot_ready")
         data = mock_messaging.Message.call_args[1]["data"]
         assert (
-            data["cropped_image_url"] == "/files/events/cam1/1_xyz/snapshot_cropped.jpg"
+            data["hosted_snapshot"] == "/files/events/cam1/1_xyz/snapshot_cropped.jpg"
         )
 
     def test_send_firebase_error_returns_failure_result(self):

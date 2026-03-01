@@ -51,21 +51,31 @@ def _build_fcm_data_payload(
     phase: str,
     title: str,
     message: str,
+    description: str,
     deep_link: str,
     clear_notification: str,
     camera: str,
-    cropped_image_url: str,
+    threat_level: str,
+    live_frame_proxy: str,
+    hosted_snapshot: str,
+    notification_gif: str,
+    hosted_clip: str,
 ) -> dict[str, str]:
-    """Build the FCM data dict; all values must be strings."""
+    """Build FCM data dict per MOBILE_API_CONTRACT.md §9; all values must be strings."""
     return {
         "ce_id": ce_id,
         "phase": phase,
-        "title": title,
-        "message": message,
-        "deep_link": deep_link,
         "clear_notification": clear_notification,
+        "threat_level": threat_level,
         "camera": camera,
-        "cropped_image_url": cropped_image_url or "",
+        "live_frame_proxy": live_frame_proxy or "",
+        "hosted_snapshot": hosted_snapshot or "",
+        "notification_gif": notification_gif or "",
+        "title": title,
+        "description": description or "",
+        "message": message,
+        "hosted_clip": hosted_clip or "",
+        "deep_link": deep_link,
     }
 
 
@@ -108,29 +118,43 @@ class MobileAppProvider(BaseNotificationProvider):
         phase = status.upper()
         title = _build_title(event)
         msg = (message or "").strip() or _build_title(event)
+        description = (getattr(event, "genai_description", None) or "").strip() or msg
         deep_link = f"buffer://event_detail/{ce_id}"
         clear_notification = "true" if status == "discarded" else "false"
         camera = getattr(event, "camera", None) or "unknown"
-
+        threat_level = str(getattr(event, "threat_level", 0))
         folder_path = getattr(event, "folder_path", None)
+
+        live_frame_proxy = getattr(event, "live_frame_proxy", None) or ""
+        if status == "new" and not live_frame_proxy:
+            live_frame_proxy = f"/api/cameras/{camera}/latest.jpg"
+
+        hosted_snapshot = getattr(event, "hosted_snapshot", None) or ""
         if (
-            status in _STATUSES_WITH_CROPPED_SNAPSHOT
+            not hosted_snapshot
+            and status in _STATUSES_WITH_CROPPED_SNAPSHOT
             and folder_path
             and str(folder_path).strip()
         ):
-            cropped_image_url = f"/files/{folder_path}/snapshot_cropped.jpg"
-        else:
-            cropped_image_url = ""
+            hosted_snapshot = f"/files/{folder_path}/snapshot_cropped.jpg"
+
+        notification_gif = getattr(event, "notification_gif", None) or ""
+        hosted_clip = getattr(event, "hosted_clip", None) or ""
 
         payload = _build_fcm_data_payload(
             ce_id=ce_id,
             phase=phase,
             title=title,
             message=msg,
+            description=description,
             deep_link=deep_link,
             clear_notification=clear_notification,
             camera=camera,
-            cropped_image_url=cropped_image_url,
+            threat_level=threat_level,
+            live_frame_proxy=live_frame_proxy,
+            hosted_snapshot=hosted_snapshot,
+            notification_gif=notification_gif,
+            hosted_clip=hosted_clip,
         )
         # Ensure every value is str (FCM data only accepts strings).
         data = {k: (v if isinstance(v, str) else str(v)) for k, v in payload.items()}

@@ -539,6 +539,28 @@ class EventLifecycleService:
             if os.path.exists(gif_path_joined)
             else None
         )
+        rel_media = os.path.relpath(
+            media_folder, self.file_manager.storage_path
+        ).replace("\\", "/")
+        hosted_snapshot_path = f"/files/{rel_media}/snapshot_cropped.jpg"
+        if os.path.exists(gif_path_joined):
+            notification_gif_path = "/files/" + os.path.relpath(
+                gif_path_joined, self.file_manager.storage_path
+            ).replace("\\", "/")
+        else:
+            notification_gif_path = ""
+        summary_basename = f"{ce.folder_name}_summary.mp4"
+        summary_path = os.path.join(ce.folder_path, summary_basename)
+        if os.path.isfile(summary_path):
+            hosted_clip_path = "/files/" + os.path.relpath(
+                summary_path, self.file_manager.storage_path
+            ).replace("\\", "/")
+        elif first_clip_path:
+            hosted_clip_path = "/files/" + os.path.relpath(
+                first_clip_path, self.file_manager.storage_path
+            ).replace("\\", "/")
+        else:
+            hosted_clip_path = ""
         notify_target = type(
             "NotifyTarget",
             (),
@@ -559,6 +581,9 @@ class EventLifecycleService:
                 "snapshot_downloaded": ce.snapshot_downloaded,
                 "clip_downloaded": ce.clip_downloaded,
                 "image_url_override": gif_url,
+                "notification_gif": notification_gif_path,
+                "hosted_clip": hosted_clip_path,
+                "hosted_snapshot": hosted_snapshot_path,
                 "cameras": ce.cameras,
             },
         )()

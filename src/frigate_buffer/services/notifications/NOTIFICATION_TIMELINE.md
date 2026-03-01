@@ -169,6 +169,23 @@ Per-event **summarized** was removed. Previously, when Frigate sent GenAI data f
 
 ---
 
+## FCM (mobile app) payload
+
+When **MobileAppProvider** is enabled, the Buffer sends **data-only** FCM messages whose keys and values are defined by **MOBILE_API_CONTRACT.md §9**. The app builds full media URLs as `{baseUrl}{path}`.
+
+For the **External API** path, the Buffer populates the following media and metadata keys at each phase so the viewer can remain strictly presentational:
+
+| Phase | Status           | Media keys populated                                      |
+|-------|------------------|-----------------------------------------------------------|
+| 1     | **NEW**          | `live_frame_proxy` (path to `/api/cameras/{camera}/latest.jpg`) |
+| 2     | **SNAPSHOT_READY** | `hosted_snapshot` (path to cropped snapshot)              |
+| 3     | **FINALIZED**    | `hosted_snapshot` (retained), `threat_level`, title/description |
+| 4     | **CLIP_READY**   | `hosted_snapshot`, `notification_gif`, `hosted_clip`, `threat_level` |
+
+All FCM data values are strings; missing values are sent as `""`. **Path 1 (Frigate GenAI)** uses the same notify_target shape when sending **clip_ready** (and **finalized** at CE close), so the mobile app receives the same keys when those phases fire.
+
+---
+
 ## Summary table
 
 | Status         | When in pipeline                    | Path(s)   | Main data source(s)                                      |

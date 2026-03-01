@@ -2,6 +2,8 @@
 
 **Source of truth for the native Android client** (Jetpack Compose + Retrofit) that talks to the Frigate Event Buffer Flask backend. Use this document to define Retrofit interfaces, data classes, and media URL construction.
 
+**Backend storage layout:** For the server's folder structure (events/, saved/, daily_reports/), file naming conventions, and how `/files/` paths correspond to on-disk paths, see `docs/BUFFER_FOLDER_STRUCTURE.md`. That document also lists the same file-serving and daily-review endpoints from the server's perspective.
+
 ## Base URL
 
 - All paths in this document are **relative** to the server base URL.
@@ -293,6 +295,8 @@ Used in `/events`, `/events/<camera>`, and anywhere the API returns a list or si
 ---
 
 ## 2. Media / Proxy
+
+The backend serves files under `STORAGE_PATH` via `GET /files/<path:filename>`. Paths (e.g. `events/{ce_id}/{camera}/snapshot.jpg`, `saved/events/{ce_id}/...`) follow the layout described in `docs/BUFFER_FOLDER_STRUCTURE.md`.
 
 ### 2.1 Serve stored file
 
@@ -813,6 +817,8 @@ Per-camera snooze to mute notifications or AI processing until an expiration tim
 | `snooze_notifications`| boolean | No       | If true, mute notifications for this camera; default true. |
 | `snooze_ai`           | boolean | No       | If true, skip AI processing for this camera; default true. |
 
+**App note:** The Android app defaults both fields to **false** in the Snooze UI so that a quick "Snooze" does not mute notifications unless the user explicitly turns "Notification Snooze" on.
+
 **Response (200):**
 
 ```json
@@ -872,6 +878,60 @@ Object maps camera name to `{ expiration_time, snooze_notifications, snooze_ai }
 **Response (200):** `{ "status": "success" }`  
 
 Idempotent: returns success even if the camera was not snoozed.
+
+---
+
+## 9. FCM data payload
+
+The backend sends **data-only** FCM messages to the registered device. The Android app reads `RemoteMessage.getData()` as `Map<String, String>`. The following keys define the contract between server and mobile; both sides must stay in sync.
+
+| Key | Type | Description |
+|-----|------|--------------|
+| `ce_id` | string | Consolidated event ID. Used for deterministic notification slotting; if missing, the app generates a fallback ID so the alert is not lost. |
+| `phase` | string | One of: `NEW`, `SNAPSHOT_READY`, `CLIP_READY`, `DISCARDED`. Drives which notification (or cancel) is shown. |
+| `clear_notification` | string | `"true"` or `"false"`. If true (or phase is `DISCARDED`), the app cancels the notification for this `ce_id`. |
+| `threat_level` | string | Integer as string: `"0"`, `"1"`, `"2"` (0=normal, 1=suspicious, 2=critical). |
+| `camera` | string | Camera name (e.g. for subtitle or "Snapshot: camera"). |
+| `live_frame_proxy` | string | Path for live frame (e.g. `/api/cameras/{camera}/latest.jpg`). Used in phase `NEW`. |
+| `hosted_snapshot` | string | Path to cropped snapshot (e.g. `/files/events/ce_id/camera/snapshot.jpg`). Used in `SNAPSHOT_READY`. |
+| `notification_gif` or `notification.gif` | string | Path to teaser GIF/image. Used in `CLIP_READY`; app uses first frame as large icon. |
+| `title` | string | AI-generated title. Used in `CLIP_READY`. |
+| `description` | string | AI-generated description. Used in `CLIP_READY`. |
+| `hosted_clip` | string | Path to clip for "Play" action. Used in `CLIP_READY`; app passes to MainActivity via intent extra. |
+
+Full media URLs are built on the client as `{baseUrl}{path}` (see §2.4); the app uses `buildMediaUrl(baseUrl, path)` from `ui.util`.
+
+---
+
+## 10. Frigate / go2rtc API (Live tab)
+
+The Live tab populates its "Select Camera" dropdown from the **Frigate** go2rtc API. This uses a separate base URL built from the **Frigate IP address** setting (not the Event Buffer base URL).
+
+- **Frigate IP setting:** The app has a Settings field **"Frigate IP address"** (hostname or IP, no scheme or port). The Frigate API base URL is built as **HTTP** with this IP and port 5000: e.g. `http://<frigate_ip>:5000/`. Use `SettingsPreferences.buildFrigateApiBaseUrl(frigateIp)`.
+- **Stream list:** `GET /api/go2rtc/streams` (path relative to that base URL).
+- **Response (200):** A JSON object whose **top-level keys** are the stream names (e.g. `front_door`, `back_yard`). The app uses only the keys; values are not required for the dropdown.
+- **MP4 playback:** The app **exclusively uses the Frigate proxy (port 5000)** for live MP4 streams. Stream URL = `{base}api/go2rtc/api/stream.mp4?src={streamName}` (base = `http://<frigate_ip>:5000/`). Frigate proxies `/api/go2rtc/` to the go2rtc root. ExoPlayer uses these URLs with a low-latency LoadControl; no LiveConfiguration (HLS/DASH) is used. The UI shows "Connecting..." or "Loading..." while buffering and displays a concrete error (e.g. HTTP 404, connection refused) below the player on playback failure.
+
+---
+
+**App usage:** The Android app uses **§7.1** (GET `/api/events/unread_count`) to drive the app icon badge on resume, and **§8** (Snooze: GET/POST/DELETE `/api/snooze`) for the Snooze screen (per-camera snooze with duration presets and Notification/AI toggles). The **Live** tab uses **§10** (GET `/api/go2rtc/streams` via Frigate base URL from Frigate IP setting) to populate the camera dropdown and plays the selected stream **exclusively via the Frigate proxy** (port 5000) MP4 URL above. **Settings** also calls GET `/api/go2rtc/streams` to show a "Default camera" dropdown; the chosen value is stored and used to preselect the Live tab camera when available.
+
+---
+
+## Merge note (combined from duplicate)
+
+This document was merged from two versions. **`MOBILE_API_CONTRACT.md`** (this file) was the longer version and is the single source of truth. The duplicate **`MOBILE_API_CONTRACT (2).md`** was missing the following, which remain only in this master:
+
+| Location | In master only |
+|----------|-----------------|
+| **Intro** | Paragraph linking to `docs/BUFFER_FOLDER_STRUCTURE.md` for backend storage layout and file-serving/daily-review from server perspective. |
+| **§2 (Media)** | Intro sentence: backend serves files under `STORAGE_PATH` via `GET /files/<path:filename>`, paths follow `BUFFER_FOLDER_STRUCTURE.md`. |
+| **§8.1 (Set snooze)** | **App note:** Android app defaults both snooze fields to **false** so a quick Snooze does not mute notifications unless the user turns "Notification Snooze" on. |
+| **§9** | **FCM data payload** — full table of FCM data keys (`ce_id`, `phase`, `clear_notification`, `threat_level`, `camera`, `live_frame_proxy`, `hosted_snapshot`, etc.) and note on building media URLs with `buildMediaUrl(baseUrl, path)`. |
+| **§10** | **Frigate / go2rtc API (Live tab)** — Frigate IP setting, `GET /api/go2rtc/streams`, MP4 playback via Frigate proxy, ExoPlayer usage. |
+| **End** | **App usage** paragraph summarizing use of §7.1 (unread count/badge), §8 (Snooze), §10 (Live tab, go2rtc, default camera in Settings). |
+
+Sections 1–8 and all endpoint details were otherwise the same between the two files.
 
 ---
 

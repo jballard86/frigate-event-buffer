@@ -509,6 +509,10 @@ class StateAwareOrchestrator:
                 ce_folder_path,
                 self.file_manager.sanitize_camera_name(ce_info["primary_camera"]),
             )
+        rel_media = os.path.relpath(
+            media_folder, self.file_manager.storage_path
+        ).replace("\\", "/")
+        hosted_snapshot_path = f"/files/{rel_media}/snapshot_cropped.jpg"
         notify_target = type(
             "NotifyTarget",
             (),
@@ -517,6 +521,7 @@ class StateAwareOrchestrator:
                 "camera": ce_info.get("camera", "events"),
                 "label": label,
                 "folder_path": media_folder,
+                "hosted_snapshot": hosted_snapshot_path,
                 "created_at": ce_info.get("_start_time", 0),
                 "end_time": ce_info.get("end_time"),
                 "phase": EventPhase.FINALIZED,

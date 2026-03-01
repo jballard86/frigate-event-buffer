@@ -160,6 +160,10 @@ class QuickTitleService:
                 "Quick title: event %s not in a CE (invariant: all events are CEs)",
                 event_id,
             )
+        rel_media = os.path.relpath(
+            media_folder, self._file_manager.storage_path
+        ).replace("\\", "/")
+        hosted_snapshot_path = f"/files/{rel_media}/snapshot_cropped.jpg"
         notify_target = type(
             "NotifyTarget",
             (),
@@ -168,6 +172,7 @@ class QuickTitleService:
                 "camera": ce.camera if ce else camera,
                 "label": ce.label if ce else label,
                 "folder_path": media_folder,
+                "hosted_snapshot": hosted_snapshot_path,
                 "created_at": ce.start_time if ce else event.created_at,
                 "end_time": ce.end_time if ce else event.end_time,
                 "phase": EventPhase.FINALIZED,
