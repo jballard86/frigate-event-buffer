@@ -18,7 +18,11 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
-from frigate_buffer.constants import NVDEC_INIT_FAILURE_PREFIX, is_tensor
+from frigate_buffer.constants import (
+    GIF_PREVIEW_WIDTH,
+    NVDEC_INIT_FAILURE_PREFIX,
+    is_tensor,
+)
 from frigate_buffer.services.gpu_decoder import create_decoder
 
 logger = logging.getLogger("frigate-buffer")
@@ -781,31 +785,59 @@ class VideoService:
         self, clip_path: str, output_path: str, fps: int = 5, duration_sec: float = 5.0
     ) -> bool:
         """
-        Generate animated GIF from video clip using FFmpeg subprocess.
-        No GPU GIF encoder; only remaining FFmpeg use (decode/encode for GIF).
-        Returns True on success.
+        Generate animated GIF from video clip using FFmpeg with CUDA hardware
+        acceleration. Uses NVDEC for decode and scale_cuda for resize to minimize
+        CPU usage. The CPU is only used for the final GIF palette generation
+        and encoding.
         """
         try:
-            scale = "320:-1"
+            # Mandatory HW acceleration: no CPU fallback.
+            # scale_cuda uses GIF_PREVIEW_WIDTH from constants.
+            # palettegen/paletteuse are CPU-bound filters, so we hwdownload after
+            # scaling.
+            filter_str = (
+                f"scale_cuda={GIF_PREVIEW_WIDTH}:-1,"
+                f"hwdownload,format=nv12,format=rgb24,"
+                f"fps={fps},split[a][b];"
+                f"[a]palettegen=stats_mode=single[p];"
+                f"[b][p]paletteuse=dither=bayer"
+            )
+
             cmd = [
                 "ffmpeg",
                 "-y",
+                "-hwaccel",
+                "cuda",
+                "-hwaccel_output_format",
+                "cuda",
                 "-i",
                 clip_path,
-                "-vf",
-                f"fps={fps},scale={scale}",
                 "-t",
                 str(duration_sec),
+                "-filter_complex",
+                filter_str,
                 output_path,
             ]
             proc = subprocess.run(cmd, capture_output=True, timeout=self.ffmpeg_timeout)
             if proc.returncode == 0 and os.path.exists(output_path):
-                logger.info("Generated GIF from %s", clip_path)
+                logger.info("Generated HW-accelerated GIF from %s", clip_path)
                 return True
+            else:
+                stderr = (
+                    proc.stderr.decode("utf-8", errors="replace") if proc.stderr else ""
+                )
+                logger.error(
+                    "GIF generation failed (exit %d). cmd=%s stderr=%s",
+                    proc.returncode,
+                    " ".join(cmd),
+                    stderr,
+                )
         except FileNotFoundError:
             logger.warning("GIF generation failed: 'ffmpeg' executable not found")
-        except subprocess.CalledProcessError as e:
-            logger.warning("GIF generation failed (subprocess error): %s", e)
+        except subprocess.TimeoutExpired:
+            logger.warning(
+                "GIF generation failed: FFmpeg timed out after %ss", self.ffmpeg_timeout
+            )
         except Exception as e:
-            logger.warning("GIF generation failed: %s", e)
+            logger.warning("GIF generation failed: %s", e, exc_info=True)
         return False

@@ -42,6 +42,34 @@ class TestVideoService(unittest.TestCase):
         result = self.video_service.generate_gif_from_clip("clip.mp4", "out.gif")
         assert not result
 
+    @patch("frigate_buffer.services.video.subprocess.run")
+    @patch("frigate_buffer.services.video.os.path.exists")
+    def test_generate_gif_uses_hw_accel_args(self, mock_exists, mock_run):
+        """generate_gif_from_clip uses CUDA hwaccel, scale_cuda, and hwdownload."""
+        mock_exists.return_value = True
+        mock_proc = MagicMock()
+        mock_proc.returncode = 0
+        mock_run.return_value = mock_proc
+
+        from frigate_buffer.constants import GIF_PREVIEW_WIDTH
+
+        self.video_service.generate_gif_from_clip("clip.mp4", "out.gif")
+
+        mock_run.assert_called_once()
+        call_args = mock_run.call_args[0][0]
+        assert "-hwaccel" in call_args
+        assert "cuda" in call_args
+        assert "-hwaccel_output_format" in call_args
+        # filter_complex must contain scale_cuda, hwdownload, palettegen
+        for i, arg in enumerate(call_args):
+            if arg == "-filter_complex" and i + 1 < len(call_args):
+                filt = call_args[i + 1]
+                assert "scale_cuda=" in filt
+                assert str(GIF_PREVIEW_WIDTH) in filt
+                assert "hwdownload" in filt
+                assert "palettegen" in filt
+                break
+
     @patch("frigate_buffer.services.video._run_detection_on_batch")
     @patch("frigate_buffer.services.video._get_video_metadata")
     def test_generate_detection_sidecar_opens_clip_and_writes_json_schema(

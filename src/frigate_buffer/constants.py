@@ -63,6 +63,9 @@ ZOOM_MIN_FRAME_FRACTION: float = 0.4
 # + 10%).
 ZOOM_CONTENT_PADDING: float = 0.10
 
+# GIF generation: target width for the hardware-accelerated preview GIF.
+GIF_PREVIEW_WIDTH: int = 480
+
 # Video compilation: default native resolution when sidecar is missing or empty.
 COMPILATION_DEFAULT_NATIVE_WIDTH: int = 1920
 COMPILATION_DEFAULT_NATIVE_HEIGHT: int = 1080

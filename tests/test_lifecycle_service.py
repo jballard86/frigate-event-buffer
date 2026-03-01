@@ -1,3 +1,4 @@
+import os
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -363,6 +364,89 @@ class TestEventLifecycleService(unittest.TestCase):
         call_args = self.video_service.generate_detection_sidecars_for_cameras.call_args
         assert len(call_args[0][0]) == 2, "Should pass 2 tasks (cam1, cam2)"
         self.consolidated_manager.remove.assert_called_with(ce_id)
+
+    @patch("frigate_buffer.services.lifecycle.os.path.isfile")
+    @patch("frigate_buffer.services.video_compilation.compile_ce_video")
+    def test_finalize_gif_uses_compilation_when_available(
+        self, mock_compile_ce_video, mock_isfile
+    ):
+        """When compile_ce_video returns a path and file exists, GIF uses that path."""
+        ce_id = "ce1"
+        ce = ConsolidatedEvent(ce_id, "folder", "/tmp/ce1", 100.0, 110.0)
+        ce.frigate_event_ids = ["evt1"]
+        ce.cameras = ["cam1"]
+        ce.primary_camera = "cam1"
+        ce.folder_name = "ce1"
+        ce.end_time_max = 110.0
+        ce.last_activity_time = 110.0
+        self.consolidated_manager.mark_closing.return_value = True
+        self.consolidated_manager._events = {ce_id: ce}
+        self.consolidated_manager._lock = MagicMock()
+        evt1 = EventState("evt1", "cam1", "person", created_at=100.0)
+        evt1.end_time = 110.0
+        self.state_manager.get_event.return_value = evt1
+        self.file_manager.ensure_consolidated_camera_folder.return_value = (
+            "/tmp/ce1/cam1"
+        )
+        self.download_service.export_and_download_clip.return_value = {
+            "success": True,
+            "clip_path": "/tmp/ce1/cam1/clip.mp4",
+        }
+        self.video_service.generate_detection_sidecars_for_cameras.return_value = None
+        self.file_manager.sanitize_camera_name.return_value = "cam1"
+        compilation_out = "/tmp/ce1/ce1_summary.mp4"
+        mock_compile_ce_video.return_value = compilation_out
+        mock_isfile.return_value = True
+
+        self.service.finalize_consolidated_event(ce_id)
+
+        self.video_service.generate_gif_from_clip.assert_called_once()
+        gif_call = self.video_service.generate_gif_from_clip.call_args[0]
+        assert gif_call[0] == compilation_out
+        assert os.path.normpath(gif_call[1]) == os.path.normpath(
+            "/tmp/ce1/notification.gif"
+        )
+
+    @patch("frigate_buffer.services.lifecycle.os.path.isfile")
+    @patch("frigate_buffer.services.video_compilation.compile_ce_video")
+    def test_finalize_gif_fallback_to_first_clip_when_compilation_fails(
+        self, mock_compile_ce_video, mock_isfile
+    ):
+        """When compile_ce_video returns None, GIF is generated from first_clip_path."""
+        ce_id = "ce1"
+        ce = ConsolidatedEvent(ce_id, "folder", "/tmp/ce1", 100.0, 110.0)
+        ce.frigate_event_ids = ["evt1"]
+        ce.cameras = ["cam1"]
+        ce.primary_camera = "cam1"
+        ce.folder_name = "ce1"
+        ce.end_time_max = 110.0
+        ce.last_activity_time = 110.0
+        self.consolidated_manager.mark_closing.return_value = True
+        self.consolidated_manager._events = {ce_id: ce}
+        self.consolidated_manager._lock = MagicMock()
+        evt1 = EventState("evt1", "cam1", "person", created_at=100.0)
+        evt1.end_time = 110.0
+        self.state_manager.get_event.return_value = evt1
+        self.file_manager.ensure_consolidated_camera_folder.return_value = (
+            "/tmp/ce1/cam1"
+        )
+        first_clip = "/tmp/ce1/cam1/clip.mp4"
+        self.download_service.export_and_download_clip.return_value = {
+            "success": True,
+            "clip_path": first_clip,
+        }
+        self.video_service.generate_detection_sidecars_for_cameras.return_value = None
+        self.file_manager.sanitize_camera_name.return_value = "cam1"
+        mock_compile_ce_video.return_value = None
+
+        self.service.finalize_consolidated_event(ce_id)
+
+        self.video_service.generate_gif_from_clip.assert_called_once()
+        gif_call = self.video_service.generate_gif_from_clip.call_args[0]
+        assert gif_call[0] == first_clip
+        assert os.path.normpath(gif_call[1]) == os.path.normpath(
+            "/tmp/ce1/notification.gif"
+        )
 
 
 if __name__ == "__main__":

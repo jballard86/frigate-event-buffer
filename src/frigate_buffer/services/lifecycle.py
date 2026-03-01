@@ -473,12 +473,13 @@ class EventLifecycleService:
                 },
             )
 
+        compilation_path = None
         if first_clip_path:
             # Trigger video compilation
             try:
                 from frigate_buffer.services.video_compilation import compile_ce_video
 
-                compile_ce_video(
+                compilation_path = compile_ce_video(
                     ce.folder_path,
                     float(end_ts - start_ts),
                     self.config,
@@ -487,9 +488,15 @@ class EventLifecycleService:
             except Exception as e:
                 logger.error("Error executing compilation hook for %s: %s", ce_id, e)
 
-        if first_clip_path:
+        gif_input_path = None
+        if compilation_path and os.path.isfile(compilation_path):
+            gif_input_path = compilation_path
+        elif first_clip_path:
+            gif_input_path = first_clip_path
+
+        if gif_input_path:
             gif_path = os.path.join(ce.folder_path, "notification.gif")
-            if self.video_service.generate_gif_from_clip(first_clip_path, gif_path):
+            if self.video_service.generate_gif_from_clip(gif_input_path, gif_path):
                 ce.snapshot_downloaded = True
             ce.clip_downloaded = True
 

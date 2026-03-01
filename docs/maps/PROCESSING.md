@@ -17,8 +17,8 @@ video.py); callers must hold it for create_decoder and get_frames.
 - **services/video.py** — VideoService: decode via gpu_decoder under GPU_LOCK;
   generate_detection_sidecar (batch 4, float32/255, GPU resize, YOLO, bbox
   scale-back); get_detection_model_path, generate_detection_sidecars_for_cameras
-  (shared YOLO + lock); generate_gif_from_clip (subprocess FFmpeg); ffprobe
-  metadata cached. GPU_LOCK defined here; injected by orchestrator. In:
+  (shared YOLO + lock); generate_gif_from_clip (HW-accelerated FFmpeg via CUDA);
+  ffprobe metadata cached. GPU_LOCK defined here; injected by orchestrator. In:
   lifecycle, ai_analyzer, event_test. Out: gpu_decoder, constants, crop_utils
   (indirect), torch, torchvision, Ultralytics.
 - **services/multi_clip_extractor.py** — Target-centric frame extraction for CE;
@@ -86,8 +86,8 @@ Do not reintroduce in the processing pipeline:
 
 - **ffmpegcv** — Forbidden. Do not add for decode or capture.
 - **CPU-decoding fallbacks** — Forbidden. No OpenCV VideoCapture, no FFmpeg
-  subprocess for decode. FFmpeg only: GIF generation (subprocess), ffprobe
-  metadata.
+  subprocess for decode. FFmpeg only: GIF generation (subprocess HW-accelerated),
+  ffprobe metadata. No CPU fallbacks for GIF decode or scale.
 - **Production frame processing on NumPy in core path** — Forbidden. New
   crop/resize in the GPU pipeline must use crop_utils (BCHW). No new
   NumPy/OpenCV-based crop or resize in the core frame path.
@@ -98,9 +98,10 @@ Do not reintroduce in the processing pipeline:
 
 - **constants.py** — ZOOM_MIN_FRAME_FRACTION, ZOOM_CONTENT_PADDING,
   COMPILATION_DEFAULT_NATIVE_WIDTH/HEIGHT, HOLD_CROP_MAX_DISTANCE_SEC,
-  ACTION_PREROLL_SEC, ACTION_POSTROLL_SEC; NVDEC_INIT_FAILURE_PREFIX.
-  is_tensor() helper. Used by video, multi_clip_extractor, video_compilation,
-  timeline_ema, compilation_math, crop_utils.
+  ACTION_PREROLL_SEC, ACTION_POSTROLL_SEC, GIF_PREVIEW_WIDTH;
+  NVDEC_INIT_FAILURE_PREFIX. is_tensor() helper. Used by video,
+  multi_clip_extractor, video_compilation, timeline_ema, compilation_math,
+  crop_utils.
 - **Prompt .txt files** (report_prompt.txt, ai_analyzer_system_prompt.txt,
   quick_title_prompt.txt) are consumed by AI/daily_reporter; not used by
   processing pipeline. Omit from processing leaf deps.

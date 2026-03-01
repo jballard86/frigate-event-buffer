@@ -67,7 +67,7 @@ flowchart LR
   Lifecycle -->|"paths, write, cleanup"| FileMgr
   Lifecycle -->|"export/clip download"| Download
   Lifecycle -->|"sidecars"| VideoService
-  Lifecycle -->|"notify"| Notifier
+  Lifecycle -->|"notify, GIF"| Notifier
   FileMgr -->|"download"| Download
   Query -->|"resolve_clip, list"| FileMgr
   Timeline -->|"append"| FileMgr
@@ -76,10 +76,8 @@ flowchart LR
 ```
 
 Lifecycle drives new/end/short/long/CE-close flows; at CE close it triggers
-export, sidecars, and (when external_api) on_ce_ready_for_analysis. Query
-reads from FileManager for events, timeline, saved/test_events. ExportWatchdog
-and StorageStats are scheduled by orchestrator; TimelineLogger is called by
-NotificationDispatcher. State/Consolidation see INGESTION.
+export, sidecars, compilation video, and (when external_api) on_ce_ready_for_analysis.
+GIF generation uses the compilation video with clip fallback.
 
 ---
 
