@@ -68,7 +68,7 @@ htmlcov/
 .coverage
 
 # Sync tools (e.g. FreeFileSync state DB)
-sync.ffs_db
+sync.ffs*
 
 # Model weights (downloaded at runtime via ensure_detection_model_ready)
 *.pt
