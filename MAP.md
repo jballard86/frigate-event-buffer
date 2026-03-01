@@ -84,6 +84,7 @@ frigate-event-buffer/
 ├── README.md
 ├── USER_GUIDE.md
 ├── docs/
+│   ├── FOLDER_STRUCTURE.md
 │   ├── INSTALL.md
 │   ├── MOBILE_API_CONTRACT.md
 │   ├── SESSION.md
