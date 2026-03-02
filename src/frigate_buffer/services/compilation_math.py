@@ -286,7 +286,8 @@ def smooth_zoom_ema(
         zoom_e = math.sqrt((we * he) / frame_area) if frame_area > 0 else 1.0
         zoom_s = max(ZOOM_MIN_FRAME_FRACTION, min(1.0, zoom_s))
         zoom_e = max(ZOOM_MIN_FRAME_FRACTION, min(1.0, zoom_e))
-        if idx == 0:
+        same_camera = idx > 0 and sl.get("camera") == slices[idx - 1].get("camera")
+        if idx == 0 or not same_camera:
             smooth_zoom_s, smooth_zoom_e = zoom_s, zoom_e
         else:
             smooth_zoom_s = alpha * zoom_s + (1.0 - alpha) * smooth_zoom_s
@@ -332,7 +333,8 @@ def smooth_crop_centers_ema(slices: list[dict], alpha: float) -> None:
         cy_s = ys + hs / 2.0
         cx_e = xe + we / 2.0
         cy_e = ye + he / 2.0
-        if idx == 0:
+        same_camera = idx > 0 and sl.get("camera") == slices[idx - 1].get("camera")
+        if idx == 0 or not same_camera:
             smooth_cx_s, smooth_cy_s = cx_s, cy_s
             smooth_cx_e, smooth_cy_e = cx_e, cy_e
         else:

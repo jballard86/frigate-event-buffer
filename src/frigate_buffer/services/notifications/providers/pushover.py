@@ -101,6 +101,7 @@ class PushoverProvider(BaseNotificationProvider):
         status: str,
         message: str | None = None,
         tag_override: str | None = None,
+        mqtt_payload: dict | None = None,
     ) -> NotificationResult | None:
         """Send notification for allowed phases; skip others with status 'skipped'."""
         if status not in ALLOWED_PHASES:

@@ -348,8 +348,8 @@ def load_config() -> dict:
         "HA_TOKEN": None,
         "HA_GEMINI_COST_ENTITY": "input_number.gemini_daily_cost",
         "HA_GEMINI_TOKENS_ENTITY": "input_number.gemini_total_tokens",
-        # Notifications: when True, orchestrator adds HomeAssistantMqttProvider.
-        "NOTIFICATIONS_HOME_ASSISTANT_ENABLED": True,
+        # HA notifications opt-in; True adds HomeAssistantMqttProvider.
+        "NOTIFICATIONS_HOME_ASSISTANT_ENABLED": False,
         # Pushover: optional; orchestrator adds PushoverProvider when enabled.
         "pushover": {},
         # Mobile app (FCM): optional; when True, Firebase init runs if
@@ -592,7 +592,7 @@ def load_config() -> dict:
                     )
                     if "home_assistant" in notif:
                         config["NOTIFICATIONS_HOME_ASSISTANT_ENABLED"] = _coerce_bool(
-                            notif["home_assistant"].get("enabled"), True
+                            notif["home_assistant"].get("enabled"), False
                         )
                     if "mobile_app" in notif:
                         mob = notif["mobile_app"]

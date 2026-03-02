@@ -36,11 +36,11 @@ class TestConfigSchema(unittest.TestCase):
     @patch("builtins.open", new_callable=mock_open)
     @patch("os.path.exists")
     @patch("frigate_buffer.config.yaml.safe_load")
-    def test_notifications_block_optional_legacy_default(
+    def test_notifications_block_optional_default_false(
         self, mock_yaml_load, mock_exists, mock_file
     ):
         """When notifications block is absent, NOTIFICATIONS_HOME_ASSISTANT_ENABLED
-        is True (legacy behavior)."""
+        is False (opt-in default)."""
         valid_yaml = {
             "cameras": [{"name": "cam1"}],
             "network": {
@@ -54,7 +54,7 @@ class TestConfigSchema(unittest.TestCase):
         mock_yaml_load.return_value = valid_yaml
 
         config = load_config()
-        assert config["NOTIFICATIONS_HOME_ASSISTANT_ENABLED"]
+        assert not config["NOTIFICATIONS_HOME_ASSISTANT_ENABLED"]
 
     @patch("builtins.open", new_callable=mock_open)
     @patch("os.path.exists")
@@ -85,11 +85,11 @@ class TestConfigSchema(unittest.TestCase):
     @patch("builtins.open", new_callable=mock_open)
     @patch("os.path.exists")
     @patch("frigate_buffer.config.yaml.safe_load")
-    def test_notifications_home_assistant_enabled_default_true(
+    def test_notifications_home_assistant_enabled_default_false(
         self, mock_yaml_load, mock_exists, mock_file
     ):
         """When notifications.home_assistant is present but enabled omitted,
-        default is True."""
+        default is False."""
         valid_yaml = {
             "cameras": [{"name": "cam1"}],
             "network": {
@@ -106,7 +106,7 @@ class TestConfigSchema(unittest.TestCase):
         mock_yaml_load.return_value = valid_yaml
 
         config = load_config()
-        assert config["NOTIFICATIONS_HOME_ASSISTANT_ENABLED"]
+        assert not config["NOTIFICATIONS_HOME_ASSISTANT_ENABLED"]
 
     @patch("builtins.open", new_callable=mock_open)
     @patch("os.path.exists")

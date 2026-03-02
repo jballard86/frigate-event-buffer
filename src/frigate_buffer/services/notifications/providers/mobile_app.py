@@ -26,6 +26,9 @@ logger = logging.getLogger("frigate-buffer")
 OVERFLOW_PHASE = "OVERFLOW"
 OVERFLOW_MESSAGE = "Too many events queued"
 
+# Max length for b64_thumb so total FCM data payload stays under 4KB.
+B64_THUMB_MAX_LEN = 3000
+
 # Statuses that have a cropped snapshot available (snapshot_ready or later).
 _STATUSES_WITH_CROPPED_SNAPSHOT = frozenset(
     {"snapshot_ready", "clip_ready", "finalized", "summarized"}
@@ -136,11 +139,14 @@ class MobileAppProvider(BaseNotificationProvider):
         status: str,
         message: str | None = None,
         tag_override: str | None = None,
+        mqtt_payload: dict | None = None,
     ) -> NotificationResult | None:
         """Send a phase-aware FCM data message; no notification block.
 
         If no FCM token is registered, logs at debug and returns None.
         All payload values are strings for FCM data message requirements.
+        For Phase NEW, optionally includes b64_thumb from MQTT after.snapshot
+        when present and within size limit (zero-latency extraction).
         """
         token = self.preferences_manager.get_fcm_token()
         if not token:
@@ -194,6 +200,12 @@ class MobileAppProvider(BaseNotificationProvider):
         )
         # Ensure every value is str (FCM data only accepts strings).
         data = {k: (v if isinstance(v, str) else str(v)) for k, v in payload.items()}
+
+        # Phase NEW only: attach MQTT snapshot as b64_thumb when within FCM size limit.
+        if status == "new" and mqtt_payload:
+            b64_str = mqtt_payload.get("after", {}).get("snapshot", "")
+            if isinstance(b64_str, str) and 0 < len(b64_str) <= B64_THUMB_MAX_LEN:
+                data["b64_thumb"] = b64_str
 
         try:
             from firebase_admin import exceptions as firebase_exceptions

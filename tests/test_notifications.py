@@ -244,6 +244,101 @@ class TestMobileAppProvider(unittest.TestCase):
         assert data["ce_id"] == "ce_123_abc"
         assert data["deep_link"] == "buffer://event_detail/ce_123_abc"
 
+    def test_send_new_with_empty_mqtt_payload_omits_b64_thumb(self):
+        """Phase NEW with mqtt_payload={} does not add b64_thumb."""
+        self.preferences.get_fcm_token.return_value = "token"
+        provider = MobileAppProvider(self.preferences)
+        mock_fa, mock_messaging = _mock_firebase_modules()
+        with patch.dict(sys.modules, {"firebase_admin": mock_fa}):
+            provider.send(_make_event("evt1"), "new", mqtt_payload={})
+        data = mock_messaging.Message.call_args[1]["data"]
+        assert "b64_thumb" not in data
+
+    def test_send_new_with_mqtt_payload_no_after_omits_b64_thumb(self):
+        """Phase NEW with mqtt_payload without 'after' does not add b64_thumb."""
+        self.preferences.get_fcm_token.return_value = "token"
+        provider = MobileAppProvider(self.preferences)
+        mock_fa, mock_messaging = _mock_firebase_modules()
+        with patch.dict(sys.modules, {"firebase_admin": mock_fa}):
+            provider.send(_make_event("evt1"), "new", mqtt_payload={"type": "new"})
+        data = mock_messaging.Message.call_args[1]["data"]
+        assert "b64_thumb" not in data
+
+    def test_send_new_with_empty_snapshot_omits_b64_thumb(self):
+        """Phase NEW with after.snapshot empty does not add b64_thumb."""
+        self.preferences.get_fcm_token.return_value = "token"
+        provider = MobileAppProvider(self.preferences)
+        mock_fa, mock_messaging = _mock_firebase_modules()
+        with patch.dict(sys.modules, {"firebase_admin": mock_fa}):
+            provider.send(
+                _make_event("evt1"),
+                "new",
+                mqtt_payload={"after": {"snapshot": ""}},
+            )
+        data = mock_messaging.Message.call_args[1]["data"]
+        assert "b64_thumb" not in data
+
+    def test_send_new_with_snapshot_over_limit_omits_b64_thumb(self):
+        """Phase NEW with after.snapshot longer than 3000 chars omits b64_thumb."""
+        from frigate_buffer.services.notifications.providers.mobile_app import (
+            B64_THUMB_MAX_LEN,
+        )
+
+        self.preferences.get_fcm_token.return_value = "token"
+        provider = MobileAppProvider(self.preferences)
+        mock_fa, mock_messaging = _mock_firebase_modules()
+        with patch.dict(sys.modules, {"firebase_admin": mock_fa}):
+            provider.send(
+                _make_event("evt1"),
+                "new",
+                mqtt_payload={"after": {"snapshot": "a" * (B64_THUMB_MAX_LEN + 1)}},
+            )
+        data = mock_messaging.Message.call_args[1]["data"]
+        assert "b64_thumb" not in data
+
+    def test_send_new_with_valid_snapshot_includes_b64_thumb(self):
+        """Phase NEW with after.snapshot valid and within limit adds b64_thumb."""
+        self.preferences.get_fcm_token.return_value = "token"
+        provider = MobileAppProvider(self.preferences)
+        mock_fa, mock_messaging = _mock_firebase_modules()
+        valid_b64 = "dGVzdA=="  # "test" in base64
+        with patch.dict(sys.modules, {"firebase_admin": mock_fa}):
+            provider.send(
+                _make_event("evt1"),
+                "new",
+                mqtt_payload={"after": {"snapshot": valid_b64}},
+            )
+        data = mock_messaging.Message.call_args[1]["data"]
+        assert data["b64_thumb"] == valid_b64
+
+    def test_send_snapshot_ready_omits_b64_thumb(self):
+        """Phase SNAPSHOT_READY never includes b64_thumb."""
+        self.preferences.get_fcm_token.return_value = "token"
+        provider = MobileAppProvider(self.preferences)
+        mock_fa, mock_messaging = _mock_firebase_modules()
+        with patch.dict(sys.modules, {"firebase_admin": mock_fa}):
+            provider.send(
+                _make_event("evt1"),
+                "snapshot_ready",
+                mqtt_payload={"after": {"snapshot": "would_be_included"}},
+            )
+        data = mock_messaging.Message.call_args[1]["data"]
+        assert "b64_thumb" not in data
+
+    def test_send_clip_ready_omits_b64_thumb(self):
+        """Phase CLIP_READY never includes b64_thumb."""
+        self.preferences.get_fcm_token.return_value = "token"
+        provider = MobileAppProvider(self.preferences)
+        mock_fa, mock_messaging = _mock_firebase_modules()
+        with patch.dict(sys.modules, {"firebase_admin": mock_fa}):
+            provider.send(
+                _make_event_with_folder("ce_1_x", "events/cam1/1_x"),
+                "clip_ready",
+                mqtt_payload={"after": {"snapshot": "would_be_included"}},
+            )
+        data = mock_messaging.Message.call_args[1]["data"]
+        assert "b64_thumb" not in data
+
     def test_send_snapshot_ready_with_folder_path_sets_hosted_snapshot(self):
         self.preferences.get_fcm_token.return_value = "token"
         provider = MobileAppProvider(self.preferences)

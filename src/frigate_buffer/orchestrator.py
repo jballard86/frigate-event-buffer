@@ -250,7 +250,7 @@ class StateAwareOrchestrator:
     def _create_notifier(self) -> NotificationDispatcher:
         """Build notification dispatcher with providers enabled by config."""
         providers: list = []
-        if self.config.get("NOTIFICATIONS_HOME_ASSISTANT_ENABLED", True):
+        if self.config.get("NOTIFICATIONS_HOME_ASSISTANT_ENABLED", False):
             providers.append(
                 HomeAssistantMqttProvider(
                     self.mqtt_wrapper.client,

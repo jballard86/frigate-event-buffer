@@ -98,6 +98,7 @@ network:
 # off regardless of file, set NOTIFICATIONS_HOME_ASSISTANT_ENABLED=false in env.
 notifications:
   home_assistant:
+    # Opt-in: set to true to enable HA MQTT notifications (default false).
     enabled: true
   # Pushover: for phone/push alerts. Keys can also be set via .env.
   # pushover:

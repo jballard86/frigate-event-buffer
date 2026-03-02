@@ -46,6 +46,17 @@ COMPILATION_OUTPUT_FPS = 20
 BATCH_SIZE = 4
 
 
+def _enforce_slice_boundary_continuity(slices: list[dict]) -> None:
+    """
+    Set crop_start of each slice to the previous slice's crop_end when the
+    camera is the same, so there is no zoom/pan jump at same-camera boundaries.
+    Mutates slices in place.
+    """
+    for i in range(len(slices) - 1):
+        if slices[i + 1].get("camera") == slices[i].get("camera"):
+            slices[i + 1]["crop_start"] = slices[i]["crop_end"]
+
+
 def _compilation_ffmpeg_cmd_and_log_path(
     tmp_output_path: str, target_w: int, target_h: int
 ) -> tuple[list[str], str]:
@@ -745,6 +756,8 @@ def generate_compilation_video(
 
     if crop_smooth_alpha > 0:
         smooth_crop_centers_ema(slices, crop_smooth_alpha)
+
+    _enforce_slice_boundary_continuity(slices)
 
     cuda_device_index = int(config.get("CUDA_DEVICE_INDEX", 0)) if config else 0
     temp_path = output_path.replace(".mp4", "_temp.mp4")

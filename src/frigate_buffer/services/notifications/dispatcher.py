@@ -47,7 +47,8 @@ class NotificationDispatcher:
                 break
 
         self._notification_times: list[float] = []
-        self._pending_queue: list[tuple] = []  # (event, status, message, tag_override)
+        # Queue item: (event, status, message, tag_override, mqtt_payload)
+        self._pending_queue: list[tuple] = []
         self._lock = threading.Lock()
         self._overflow_sent = False
         self._queue_processor_running = False
@@ -71,6 +72,7 @@ class NotificationDispatcher:
         status: str,
         message: str | None,
         tag_override: str | None,
+        mqtt_payload: dict | None = None,
     ) -> bool:
         """Call each provider, collect results, log to timeline. Returns True
         if at least one send was attempted."""
@@ -78,7 +80,11 @@ class NotificationDispatcher:
         for provider in self._providers:
             try:
                 r = provider.send(
-                    event, status, message=message, tag_override=tag_override
+                    event,
+                    status,
+                    message=message,
+                    tag_override=tag_override,
+                    mqtt_payload=mqtt_payload,
                 )
                 if r is not None:
                     results.append(r)
@@ -120,6 +126,7 @@ class NotificationDispatcher:
         status: str,
         message: str | None = None,
         tag_override: str | None = None,
+        mqtt_payload: dict | None = None,
     ) -> bool:
         """Publish via all providers with rate limiting and queue. Same
         signature as legacy notifier."""
@@ -140,7 +147,9 @@ class NotificationDispatcher:
 
         with self._lock:
             if self._is_rate_limited():
-                self._pending_queue.append((event, status, message, tag_override))
+                self._pending_queue.append(
+                    (event, status, message, tag_override, mqtt_payload)
+                )
                 logger.debug(
                     "Rate limited, queued notification for %s (queue size: %s)",
                     getattr(event, "event_id", "?"),
@@ -161,25 +170,34 @@ class NotificationDispatcher:
 
             self._record_notification()
 
-        return self._send_now(event, status, message, tag_override)
+        return self._send_now(event, status, message, tag_override, mqtt_payload)
 
     def _process_queue(self) -> None:
         """Background thread: drain queue when rate limit allows."""
         while self._queue_processor_running:
             time.sleep(1.0)
-            event, status, message, tag_override = None, None, None, None
+            event, status, message, tag_override, mqtt_payload = (
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
             with self._lock:
                 if not self._pending_queue:
                     continue
                 if not self._is_rate_limited():
                     item = self._pending_queue.pop(0)
-                    event, status, message = item[0], item[1], item[2]
+                    event = item[0]
+                    status = item[1]
+                    message = item[2]
                     tag_override = item[3] if len(item) > 3 else None
+                    mqtt_payload = item[4] if len(item) > 4 else None
                     self._record_notification()
                     if len(self._pending_queue) < MAX_QUEUE_SIZE:
                         self._overflow_sent = False
             if event is not None:
-                self._send_now(event, status, message, tag_override)
+                self._send_now(event, status, message, tag_override, mqtt_payload)
 
     def start_queue_processor(self) -> None:
         if not self._queue_processor_running:

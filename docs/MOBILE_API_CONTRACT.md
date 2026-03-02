@@ -893,6 +893,7 @@ The backend sends **data-only** FCM messages to the registered device. The Andro
 | `threat_level` | string | Integer as string: `"0"`, `"1"`, `"2"` (0=normal, 1=suspicious, 2=critical). |
 | `camera` | string | Camera name (e.g. for subtitle or "Snapshot: camera"). |
 | `live_frame_proxy` | string | Path for live frame (e.g. `/api/cameras/{camera}/latest.jpg`). Used in phase `NEW`. |
+| `b64_thumb` | string | Optional. Base64-encoded micro-thumbnail; present only in phase `NEW` when Frigate included it in MQTT (`after.snapshot`) and length ≤ 3000. Omit key if missing or over limit. Used by the app to show an inline image without opening a network connection (e.g. to avoid VPN hang on first alert). |
 | `hosted_snapshot` | string | Path to cropped snapshot (e.g. `/files/events/ce_id/camera/snapshot.jpg`). Used in `SNAPSHOT_READY`. |
 | `notification_gif` or `notification.gif` | string | Path to teaser GIF/image. Used in `CLIP_READY`; app uses first frame as large icon. |
 | `title` | string | AI-generated title. Used in `CLIP_READY`. |

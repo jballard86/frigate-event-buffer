@@ -28,6 +28,10 @@ Dispatcher does not touch MQTT directly; each provider implements send/send_over
   phase filter (snapshot_ready, clip_ready, finalized); priority/attachments;
   send_overflow() sends overflow message. In: dispatcher (as provider). Out:
   base, requests.
+- **notifications/providers/mobile_app.py** — MobileAppProvider: FCM data-only;
+  phase-aware payload; for Phase NEW may include b64_thumb from MQTT
+  after.snapshot when length ≤ 3000 (zero-latency; no HTTP/cv2). Token from
+  PreferencesManager. In: dispatcher. Out: base, firebase_admin.messaging.
 
 Doc files: ADDING_PROVIDERS.md (canonical guide for new providers),
 NOTIFICATION_TIMELINE.md (when each notification is sent, two paths),

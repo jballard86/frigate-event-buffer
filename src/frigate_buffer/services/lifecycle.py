@@ -97,7 +97,10 @@ class EventLifecycleService:
 
         ce_tag = f"frigate_{ce.consolidated_id}" if ce else None
         threading.Thread(
-            target=self._send_initial_notification, args=(event, ce_tag), daemon=True
+            target=self._send_initial_notification,
+            args=(event, ce_tag),
+            kwargs={"mqtt_payload": mqtt_payload},
+            daemon=True,
         ).start()
 
         # Quick-title: after delay, run AI title pipeline (single image from latest.jpg)
@@ -142,11 +145,16 @@ class EventLifecycleService:
             logger.error(f"Quick title trigger failed for {event_id}: {e}")
 
     def _send_initial_notification(
-        self, event: EventState, tag_override: str | None = None
+        self,
+        event: EventState,
+        tag_override: str | None = None,
+        mqtt_payload: dict | None = None,
     ):
         """Send initial notification with canned title and live frame (latest.jpg)."""
         try:
-            self.notifier.publish_notification(event, "new", tag_override=tag_override)
+            self.notifier.publish_notification(
+                event, "new", tag_override=tag_override, mqtt_payload=mqtt_payload
+            )
         except Exception as e:
             logger.error("Error in initial notification for %s: %s", event.event_id, e)
 

@@ -8,6 +8,7 @@ import pytest
 
 from frigate_buffer.services.video_compilation import (
     _encode_frames_via_ffmpeg,
+    _enforce_slice_boundary_continuity,
     _run_pynv_compilation,
     _trim_slices_to_action_window,
     assignments_to_slices,
@@ -440,6 +441,86 @@ class TestSmoothZoomEma(unittest.TestCase):
             assert xs + w <= 1920
             assert ys >= 0
             assert ys + h <= 1080
+
+    def test_smooth_zoom_ema_resets_on_camera_change_no_blend_across_cameras(self):
+        """When camera changes, second slice uses its own raw zoom (no blend)."""
+        # Slice 0: cam A zoomed in. Slice 1: cam B full frame. After smooth_zoom_ema,
+        # slice 1's crop_start (w,h) should match its raw full-frame zoom (target
+        # aspect), not blended with slice 0's smaller zoom.
+        slices = [
+            {
+                "camera": "doorbell",
+                "crop_start": (400, 200, 800, 450),
+                "crop_end": (420, 220, 800, 450),
+                "native_width": 1920,
+                "native_height": 1080,
+            },
+            {
+                "camera": "carport",
+                "crop_start": (0, 0, 1920, 1080),
+                "crop_end": (0, 0, 1920, 1080),
+                "native_width": 1920,
+                "native_height": 1080,
+            },
+        ]
+        smooth_zoom_ema(slices, 0.3, 1440, 1080)
+        # Full-frame zoom at aspect 1440/1080: w=1662, h clamped to source 1080.
+        _, _, w1, h1 = slices[1]["crop_start"]
+        assert w1 == 1662
+        assert h1 == 1080
+
+
+class TestEnforceSliceBoundaryContinuity(unittest.TestCase):
+    """Tests for _enforce_slice_boundary_continuity."""
+
+    def test_same_camera_consecutive_slices_crop_start_equals_prev_crop_end(self):
+        """Same-camera consecutive: second's crop_start = first's crop_end."""
+        crop_end_0 = (100, 50, 960, 540)
+        slices = [
+            {
+                "camera": "doorbell",
+                "crop_start": (0, 0, 1000, 600),
+                "crop_end": crop_end_0,
+            },
+            {
+                "camera": "doorbell",
+                "crop_start": (200, 100, 800, 450),
+                "crop_end": (220, 110, 800, 450),
+            },
+        ]
+        _enforce_slice_boundary_continuity(slices)
+        assert slices[1]["crop_start"] == slices[0]["crop_end"]
+        assert slices[1]["crop_start"] == crop_end_0
+
+    def test_different_camera_slices_unchanged(self):
+        """When camera changes, crop_start is not overwritten."""
+        slices = [
+            {
+                "camera": "doorbell",
+                "crop_start": (0, 0, 960, 540),
+                "crop_end": (10, 10, 960, 540),
+            },
+            {
+                "camera": "carport",
+                "crop_start": (100, 100, 800, 450),
+                "crop_end": (110, 110, 800, 450),
+            },
+        ]
+        orig_start_1 = slices[1]["crop_start"]
+        _enforce_slice_boundary_continuity(slices)
+        assert slices[1]["crop_start"] == orig_start_1
+
+    def test_single_slice_no_op(self):
+        """Single slice leaves list unchanged."""
+        slices = [
+            {
+                "camera": "doorbell",
+                "crop_start": (0, 0, 1920, 1080),
+                "crop_end": (0, 0, 1920, 1080),
+            }
+        ]
+        _enforce_slice_boundary_continuity(slices)
+        assert slices[0]["crop_start"] == (0, 0, 1920, 1080)
 
 
 class TestCalculateSegmentCrop(unittest.TestCase):

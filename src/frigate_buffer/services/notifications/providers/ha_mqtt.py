@@ -53,6 +53,7 @@ class HomeAssistantMqttProvider(BaseNotificationProvider):
         status: str,
         message: str | None = None,
         tag_override: str | None = None,
+        mqtt_payload: dict | None = None,
     ) -> NotificationResult | None:
         """Build HA payload, publish to MQTT, return NotificationResult for timeline."""
         current_tag = tag_override or f"frigate_{event.event_id}"

@@ -36,6 +36,7 @@ class BaseNotificationProvider(ABC):
         status: str,
         message: str | None = None,
         tag_override: str | None = None,
+        mqtt_payload: dict | None = None,
     ) -> NotificationResult | None:
         """Send a notification for the given event and status.
 
@@ -45,6 +46,8 @@ class BaseNotificationProvider(ABC):
             message: Optional override message; provider may build its own from event.
             tag_override: Optional tag (e.g. frigate_ce_{id}) instead of
                 frigate_{event_id}.
+            mqtt_payload: Optional raw MQTT event payload (e.g. frigate/events);
+                used by mobile provider for Phase NEW b64_thumb from after.snapshot.
 
         Returns:
             NotificationResult for timeline logging, or None if provider skipped send.
