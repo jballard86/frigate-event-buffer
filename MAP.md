@@ -85,6 +85,7 @@ frigate-event-buffer/
 │   ├── INSTALL.md
 │   ├── MOBILE_API_CONTRACT.md
 │   ├── SESSION.md
+│   ├── Multi_GPU_Support_Integration_Plan/ (gpu-00 primary, gpu-01..04, README)
 │   └── maps/ (INGESTION, PROCESSING, WEB, LIFECYCLE, NOTIFICATIONS, AI, TESTING)
 ├── DIAGNOSTIC_SIDECAR_TIMELINE_COMPILATION.md
 ├── gpu_pipeline_audit_report.md
