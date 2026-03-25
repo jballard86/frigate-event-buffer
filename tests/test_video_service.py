@@ -5,6 +5,10 @@ import unittest
 from contextlib import contextmanager
 from unittest.mock import MagicMock, patch
 
+from frigate_buffer.services.gpu_backends.registry import (
+    clear_gpu_backend_cache,
+    get_gpu_backend,
+)
 from frigate_buffer.services.video import (
     _METADATA_CACHE,
     _METADATA_CACHE_MAX_SIZE,
@@ -20,7 +24,12 @@ from frigate_buffer.services.video import (
 
 class TestVideoService(unittest.TestCase):
     def setUp(self):
-        self.video_service = VideoService(ffmpeg_timeout=1)
+        clear_gpu_backend_cache()
+        self.addCleanup(clear_gpu_backend_cache)
+        self.video_service = VideoService(
+            ffmpeg_timeout=1,
+            gpu_backend=get_gpu_backend({}),
+        )
 
     @patch("frigate_buffer.services.video.subprocess.run")
     @patch("frigate_buffer.services.video.os.path.exists")
@@ -75,8 +84,8 @@ class TestVideoService(unittest.TestCase):
     def test_generate_detection_sidecar_opens_clip_and_writes_json_schema(
         self, mock_get_metadata, mock_run_batch
     ):
-        """generate_detection_sidecar uses gpu_decoder create_decoder, batches
-        frames, writes detection.json with expected schema."""
+        """generate_detection_sidecar uses _decoder_context (GpuBackend decode),
+        batches frames, writes detection.json with expected schema."""
         try:
             import torch
         except ImportError:
@@ -109,14 +118,14 @@ class TestVideoService(unittest.TestCase):
             with open(clip_path, "wb"):
                 pass
 
-            @contextmanager
-            def fake_create_decoder(path, gpu_id=0):
-                yield mock_ctx
+            def fake_decoder_ctx(path, gpu_id=0):
+                @contextmanager
+                def cm():
+                    yield mock_ctx
 
-            with patch(
-                "frigate_buffer.services.video.create_decoder",
-                side_effect=fake_create_decoder,
-            ):
+                return cm()
+
+            with patch.object(self.video_service, "_decoder_context", fake_decoder_ctx):
                 with patch(
                     "frigate_buffer.services.video.get_detection_model_path",
                     return_value=os.path.join("/tmp", "yolo_models", "yolov8n.pt"),
@@ -218,8 +227,8 @@ class TestVideoService(unittest.TestCase):
     def test_generate_detection_sidecar_calls_get_frames(
         self, mock_get_metadata, mock_run_batch
     ):
-        """generate_detection_sidecar uses create_decoder and calls get_frames on
-        context."""
+        """generate_detection_sidecar opens decode via _decoder_context and calls
+        get_frames on context."""
         try:
             import torch
         except ImportError:
@@ -239,14 +248,14 @@ class TestVideoService(unittest.TestCase):
             with open(clip_path, "wb"):
                 pass
 
-            @contextmanager
-            def fake_create_decoder(path, gpu_id=0):
-                yield mock_ctx
+            def fake_decoder_ctx(path, gpu_id=0):
+                @contextmanager
+                def cm():
+                    yield mock_ctx
 
-            with patch(
-                "frigate_buffer.services.video.create_decoder",
-                side_effect=fake_create_decoder,
-            ):
+                return cm()
+
+            with patch.object(self.video_service, "_decoder_context", fake_decoder_ctx):
                 result = self.video_service.generate_detection_sidecar(
                     clip_path, sidecar_path, {"DETECTION_FRAME_INTERVAL": 5}
                 )
@@ -271,14 +280,15 @@ class TestVideoService(unittest.TestCase):
     ):
         mock_get_metadata.return_value = (640, 480, 30.0, 10.0)
 
-        @contextmanager
-        def fake_create_decoder_raises(path, gpu_id=0):
-            raise RuntimeError("decoder open failed")
+        def fake_decoder_raises(path, gpu_id=0):
+            @contextmanager
+            def cm():
+                raise RuntimeError("decoder open failed")
+                yield  # pragma: no cover
 
-        with patch(
-            "frigate_buffer.services.video.create_decoder",
-            side_effect=fake_create_decoder_raises,
-        ):
+            return cm()
+
+        with patch.object(self.video_service, "_decoder_context", fake_decoder_raises):
             tmp = tempfile.mkdtemp(prefix="tmp_video_sidecar_noclip_")
             try:
                 sidecar_path = os.path.join(tmp, "detection.json")
@@ -333,14 +343,14 @@ class TestVideoService(unittest.TestCase):
             with open(clip_path, "wb"):
                 pass
 
-            @contextmanager
-            def fake_create_decoder(path, gpu_id=0):
-                yield mock_ctx
+            def fake_decoder_ctx(path, gpu_id=0):
+                @contextmanager
+                def cm():
+                    yield mock_ctx
 
-            with patch(
-                "frigate_buffer.services.video.create_decoder",
-                side_effect=fake_create_decoder,
-            ):
+                return cm()
+
+            with patch.object(self.video_service, "_decoder_context", fake_decoder_ctx):
                 with patch(
                     "frigate_buffer.services.video.get_detection_model_path",
                     return_value=os.path.join("/tmp", "yolo_models", "yolov8n.pt"),

@@ -16,6 +16,9 @@ import requests
 
 from frigate_buffer.models import EventPhase
 from frigate_buffer.services import crop_utils
+from frigate_buffer.services.gpu_backends import get_gpu_backend
+from frigate_buffer.services.gpu_backends.protocols import GpuRuntimeProto
+from frigate_buffer.services.gpu_backends.types import GpuBackend
 
 logger = logging.getLogger("frigate-buffer")
 
@@ -23,13 +26,23 @@ logger = logging.getLogger("frigate-buffer")
 LATEST_JPG_TIMEOUT = 10
 
 
-def _numpy_bgr_to_tensor_bchw_rgb(arr: np.ndarray) -> Any:
-    """Convert numpy HWC BGR to torch.Tensor BCHW RGB for crop_utils (GPU pipeline)."""
+def _numpy_bgr_to_tensor_bchw_rgb(
+    arr: np.ndarray,
+    *,
+    config: dict[str, Any],
+    runtime: GpuRuntimeProto,
+) -> Any:
+    """Convert numpy HWC BGR to torch.Tensor BCHW RGB for crop_utils.
+
+    Device matches YOLO / sidecar policy via ``runtime.default_detection_device`` so
+    quick-title crops align with VideoService inference (vendor-neutral entry).
+    """
     import torch
 
     rgb = arr[:, :, [2, 1, 0]].copy()
     t = torch.from_numpy(rgb).permute(2, 0, 1).unsqueeze(0)
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    dev_str = runtime.default_detection_device(config)
+    device = torch.device(dev_str) if dev_str else torch.device("cpu")
     return t.to(device=device, dtype=torch.uint8)
 
 
@@ -53,6 +66,7 @@ class QuickTitleService:
         ai_analyzer: Any,
         notifier: Any,
         snooze_manager: Any = None,
+        gpu_backend: GpuBackend | None = None,
     ) -> None:
         self._config = config
         self._state_manager = state_manager
@@ -62,6 +76,9 @@ class QuickTitleService:
         self._ai_analyzer = ai_analyzer
         self._notifier = notifier
         self._snooze_manager = snooze_manager
+        self._gpu_backend = (
+            gpu_backend if gpu_backend is not None else get_gpu_backend({})
+        )
 
     def run_quick_title(
         self,
@@ -105,7 +122,11 @@ class QuickTitleService:
             return
         detections = self._video_service.run_detection_on_image(image_bgr, self._config)
         if detections:
-            image_tensor = _numpy_bgr_to_tensor_bchw_rgb(image_bgr)
+            image_tensor = _numpy_bgr_to_tensor_bchw_rgb(
+                image_bgr,
+                config=self._config,
+                runtime=self._gpu_backend.runtime,
+            )
             cropped_tensor = crop_utils.crop_around_detections_with_padding(
                 image_tensor, detections, padding_fraction=0.1
             )

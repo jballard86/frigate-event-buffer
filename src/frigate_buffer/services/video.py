@@ -1,9 +1,9 @@
 """
-Video service: PyNvVideoCodec GPU decode, YOLO detection, sidecars, GIF via FFmpeg.
+Video service: GPU decode, YOLO detection, sidecars, GIF via FFmpeg.
 
-Decode path uses gpu_decoder (SimpleDecoder, use_device_memory=True, max_width=4096).
-Frames are BCHW RGB from decoder, normalized to float32 [0,1] before YOLO. VRAM released
-after each chunk (del + empty_cache). GPU_LOCK serializes decoder and get_frames.
+Decode uses injected :class:`~frigate_buffer.services.gpu_backends.types.GpuBackend`
+(``create_decoder``; NVIDIA = PyNv). Frames are BCHW RGB, float32 [0,1] for YOLO.
+VRAM released via backend runtime after chunks. ``GPU_LOCK`` serializes decode.
 """
 
 from __future__ import annotations
@@ -16,19 +16,20 @@ import subprocess
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextlib import AbstractContextManager
 from typing import Any
 
+from frigate_buffer.config import effective_gpu_device_index
 from frigate_buffer.constants import (
     GIF_PREVIEW_WIDTH,
     NVDEC_INIT_FAILURE_PREFIX,
     is_tensor,
 )
-from frigate_buffer.services.gpu_decoder import create_decoder
+from frigate_buffer.services.gpu_backends import get_gpu_backend
+from frigate_buffer.services.gpu_backends.lock import GPU_LOCK
+from frigate_buffer.services.gpu_backends.types import GpuBackend
 
 logger = logging.getLogger("frigate-buffer")
-
-# Serialize PyNvVideoCodec decoder access (create_decoder and get_frames).
-GPU_LOCK = threading.Lock()
 
 # In-memory cache for ffprobe results keyed by clip path (realpath when exists).
 # Reduces redundant subprocess I/O when clip probed by sidecar, extraction, compilation.
@@ -63,41 +64,10 @@ _YOLO_INFERENCE_LOG_INTERVAL = 5.0
 _last_yolo_inference_log_time: float = 0.0
 
 
-def log_gpu_status() -> None:
-    """
-    At startup: log GPU diagnostic info for decode (NVDEC) troubleshooting.
-
-    Runs nvidia-smi to confirm GPU visibility. PyNvVideoCodec uses NVDEC for decode.
-    """
-    nvidia_smi = __import__("shutil").which("nvidia-smi")
-    if nvidia_smi:
-        try:
-            proc = subprocess.run(
-                [nvidia_smi, "--query-gpu=count", "--format=csv,noheader"],
-                capture_output=True,
-                timeout=5,
-            )
-            count_str = (proc.stdout or b"").decode("utf-8", errors="replace").strip()
-            gpu_count = count_str.split("\n")[0] if count_str else "?"
-            proc2 = subprocess.run(
-                [nvidia_smi, "--query-gpu=driver_version", "--format=csv,noheader"],
-                capture_output=True,
-                timeout=5,
-            )
-            driver = (proc2.stdout or b"").decode(
-                "utf-8", errors="replace"
-            ).strip().split("\n")[0] or "?"
-            logger.info(
-                "GPU status: nvidia-smi OK, GPUs=%s, driver=%s (NVDEC for decode)",
-                gpu_count,
-                driver,
-            )
-        except (subprocess.TimeoutExpired, OSError) as e:
-            logger.warning(
-                "nvidia-smi found but failed: %s; container may not have GPU access.", e
-            )
-    else:
-        logger.info("nvidia-smi not found; NVDEC decode requires GPU.")
+def log_gpu_status(config: dict | None = None) -> None:
+    """At startup: log GPU diagnostics via active backend (from merged config)."""
+    cfg = config if config is not None else {}
+    get_gpu_backend(cfg).runtime.log_gpu_status()
 
 
 def get_detection_model_path(config: dict) -> str:
@@ -492,13 +462,27 @@ class VideoService:
 
     DEFAULT_FFMPEG_TIMEOUT = 60
 
-    def __init__(self, ffmpeg_timeout: int = DEFAULT_FFMPEG_TIMEOUT):
+    def __init__(
+        self,
+        ffmpeg_timeout: int = DEFAULT_FFMPEG_TIMEOUT,
+        *,
+        gpu_backend: GpuBackend | None = None,
+    ):
         self.ffmpeg_timeout = ffmpeg_timeout
+        self._gpu_backend = (
+            gpu_backend if gpu_backend is not None else get_gpu_backend({})
+        )
         self._sidecar_app_lock: threading.Lock | None = None
         logger.debug(
-            "VideoService initialized with FFmpeg timeout=%ss (GIF only)",
+            "VideoService initialized with FFmpeg timeout=%ss (GIF via gpu_backend)",
             ffmpeg_timeout,
         )
+
+    def _decoder_context(
+        self, clip_path: str, gpu_id: int = 0
+    ) -> AbstractContextManager[Any]:
+        """Return decode context manager; patch point for tests."""
+        return self._gpu_backend.create_decoder(clip_path, gpu_id)
 
     def set_sidecar_app_lock(self, lock: threading.Lock) -> None:
         """Set app-level lock so one sidecar batch (TEST or lifecycle) runs at once."""
@@ -550,15 +534,13 @@ class VideoService:
         No CPU/ffmpegcv fallback; on failure logs context and returns False.
         Frames BCHW RGB, float32 [0,1]; after each chunk del batch and empty_cache().
         """
-        import torch
-
         detection_model = (config.get("DETECTION_MODEL") or "").strip()
         detection_device = (config.get("DETECTION_DEVICE") or "").strip() or None
         detection_frame_interval = max(
             1, int(config.get("DETECTION_FRAME_INTERVAL", 5))
         )
         detection_imgsz = max(320, int(config.get("DETECTION_IMGSZ", 640)))
-        cuda_device_index = int(config.get("CUDA_DEVICE_INDEX", 0))
+        gpu_device_index = effective_gpu_device_index(config)
 
         meta = _get_video_metadata(clip_path)
         if meta:
@@ -570,7 +552,7 @@ class VideoService:
 
         try:
             with GPU_LOCK:
-                with create_decoder(clip_path, gpu_id=cuda_device_index) as ctx:
+                with self._decoder_context(clip_path, gpu_id=gpu_device_index) as ctx:
                     frame_count = len(ctx)
                     if frame_count <= 0 and duration_sec > 0:
                         frame_count = max(1, int(duration_sec * fps))
@@ -620,13 +602,9 @@ class VideoService:
                                 clip_path,
                                 e,
                             )
-                            if torch.cuda.is_available():
-                                try:
-                                    logger.debug(
-                                        "VRAM summary: %s", torch.cuda.memory_summary()
-                                    )
-                                except Exception:
-                                    pass
+                            _ms = self._gpu_backend.runtime.memory_summary()
+                            if _ms:
+                                logger.debug("VRAM summary: %s", _ms)
                             break
 
                         if read_h == 0 and batch is not None and batch.numel() > 0:
@@ -681,8 +659,7 @@ class VideoService:
                                 )
 
                         del batch
-                        if torch.cuda.is_available():
-                            torch.cuda.empty_cache()  # Reclaim VRAM after each batch
+                        self._gpu_backend.runtime.empty_cache()
 
                     if native_w <= 0 and read_w > 0:
                         native_w, native_h = read_w, read_h
@@ -713,19 +690,16 @@ class VideoService:
                 e,
                 exc_info=True,
             )
-            if torch.cuda.is_available():
-                try:
-                    logger.debug("VRAM summary: %s", torch.cuda.memory_summary())
-                except Exception:
-                    pass
+            _ms = self._gpu_backend.runtime.memory_summary()
+            if _ms:
+                logger.debug("VRAM summary: %s", _ms)
             return False
         finally:
             try:
                 del batch
             except NameError:
                 pass
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
+            self._gpu_backend.runtime.empty_cache()
 
     def generate_detection_sidecars_for_cameras(
         self,
@@ -791,33 +765,13 @@ class VideoService:
         and encoding.
         """
         try:
-            # Mandatory HW acceleration: no CPU fallback.
-            # scale_cuda uses GIF_PREVIEW_WIDTH from constants.
-            # palettegen/paletteuse are CPU-bound filters, so we hwdownload after
-            # scaling.
-            filter_str = (
-                f"scale_cuda={GIF_PREVIEW_WIDTH}:-1,"
-                f"hwdownload,format=nv12,format=rgb24,"
-                f"fps={fps},split[a][b];"
-                f"[a]palettegen=stats_mode=single[p];"
-                f"[b][p]paletteuse=dither=bayer"
-            )
-
-            cmd = [
-                "ffmpeg",
-                "-y",
-                "-hwaccel",
-                "cuda",
-                "-hwaccel_output_format",
-                "cuda",
-                "-i",
+            cmd = self._gpu_backend.gif_ffmpeg.gif_ffmpeg_argv(
                 clip_path,
-                "-t",
-                str(duration_sec),
-                "-filter_complex",
-                filter_str,
                 output_path,
-            ]
+                fps,
+                duration_sec,
+                GIF_PREVIEW_WIDTH,
+            )
             proc = subprocess.run(cmd, capture_output=True, timeout=self.ffmpeg_timeout)
             if proc.returncode == 0 and os.path.exists(output_path):
                 logger.info("Generated HW-accelerated GIF from %s", clip_path)

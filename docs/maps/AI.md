@@ -23,10 +23,12 @@ when AI_MODE == external_api; DailyReporter scheduled.
 - **services/quick_title_service.py** — QuickTitleService: fetch Frigate
   latest.jpg, YOLO detection, crop_utils crop, generate_quick_title() (dict);
   write_summary, write_metadata_json; state/CE update; snapshot_ready
-  notification. Wired as on_quick_title_trigger by lifecycle when external_api.
-  In: orchestrator (instantiates when QUICK_TITLE_ENABLED and external_api),
+  notification. Crop tensor device from ``gpu_backend.runtime.default_detection_device``
+  (same policy as VideoService YOLO). Wired as on_quick_title_trigger by lifecycle
+  when external_api. In: orchestrator (``gpu_backend`` shared with VideoService),
   lifecycle (calls run_quick_title). Out: ai_analyzer (generate_quick_title),
-  VideoService (run_detection_on_image), crop_utils, file_manager, notifier.
+  VideoService (run_detection_on_image), gpu_backends (get_gpu_backend, types),
+  crop_utils, file_manager, notifier.
 - **services/daily_reporter.py** — DailyReporterService: scheduled; aggregate
   analysis_result or daily_reports JSONL; report prompt from file;
   send_text_prompt (proxy); write daily_reports/YYYY-MM-DD_report.md;

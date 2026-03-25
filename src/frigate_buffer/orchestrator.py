@@ -32,6 +32,7 @@ from frigate_buffer.services.download import (
 from frigate_buffer.services.frigate_export_watchdog import (
     run_once as export_watchdog_run_once,
 )
+from frigate_buffer.services.gpu_backends import get_gpu_backend
 from frigate_buffer.services.ha_storage_stats import StorageStatsAndHaHelper
 from frigate_buffer.services.lifecycle import EventLifecycleService
 from frigate_buffer.services.mqtt_client import MqttClientWrapper
@@ -60,8 +61,10 @@ class StateAwareOrchestrator:
 
         # Initialize components (file_manager first - needed by consolidated_manager)
         self.state_manager = EventStateManager()
+        _gpu_backend = get_gpu_backend(config)
         self.video_service = VideoService(
-            config.get("FFMPEG_TIMEOUT", VideoService.DEFAULT_FFMPEG_TIMEOUT)
+            config.get("FFMPEG_TIMEOUT", VideoService.DEFAULT_FFMPEG_TIMEOUT),
+            gpu_backend=_gpu_backend,
         )
         self._sidecar_generation_lock = threading.Lock()
         self.video_service.set_sidecar_app_lock(self._sidecar_generation_lock)
@@ -180,6 +183,7 @@ class StateAwareOrchestrator:
                 self.ai_analyzer,
                 self.notifier,
                 self.snooze_manager,
+                gpu_backend=_gpu_backend,
             )
             on_quick_title = quick_title_svc.run_quick_title
 

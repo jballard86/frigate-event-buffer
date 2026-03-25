@@ -1,8 +1,9 @@
 # TESTING — Test Suite (~10k lines), event_test (TEST button)
 
 Branch doc for pytest suite and event_test package. Tests run in CI/CD without
-live GPU or MQTT broker; see Mocking Strategy below. Scripts: bench/verify
-scripts live in scripts/.
+live GPU or MQTT broker; see Mocking Strategy below. GPU-related config keys and
+env are documented in **docs/INSTALL.md** and **examples/config.example.yaml**.
+Scripts: bench/verify scripts live in scripts/.
 
 ---
 
@@ -20,12 +21,17 @@ test_state_manager.py, test_consolidation.py, test_zone_filter.py. In: pytest.
 Out: sys.modules mocks (paho, requests, flask, schedule, etc.) or per-test
 MagicMock/patch.
 
-**Processing / GPU** — test_gpu_decoder.py (mock _create_simple_decoder/PyNvVideo
-Codec), test_video_service.py (patch create_decoder, fake DecoderContext with
-get_frames), test_multi_clip_extractor.py (fake_create_decoder, mock get_frames
-returning torch tensors), test_video_compilation.py, test_crop_utils.py,
-test_timeline_ema.py. In: pytest. Out: patch at frigate_buffer.services.video.
-create_decoder or gpu_decoder._create_simple_decoder; no real decode.
+**Processing / GPU** — test_gpu_backends_registry.py (get_gpu_backend cache,
+nvidia-only, shim identity vs gpu_decoder, blank GPU_VENDOR, concurrent init),
+test_gpu_decoder.py (mock
+gpu_backends.nvidia.decoder._create_simple_decoder / PyNv), test_video_service.py
+(patch ``VideoService._decoder_context``, fake DecoderContext with get_frames),
+test_multi_clip_extractor.py (patch ``get_gpu_backend``, backend ``create_decoder``
+side_effect), test_video_compilation.py (mock ``GpuBackend.create_decoder``, real
+NVENC argv helper + runtime), test_crop_utils.py, test_timeline_ema.py.
+In: pytest. Out: patch ``VideoService._decoder_context`` (instance, two-arg
+fake) or nvidia.decoder._create_simple_decoder; ``clear_gpu_backend_cache`` in
+setUp when constructing VideoService with ``get_gpu_backend``; no real decode.
 
 **Lifecycle / file / query** — test_lifecycle_service.py, test_file_manager.py,
 test_query_service.py, test_download_service.py, test_frigate_export_watchdog.py,
@@ -33,9 +39,10 @@ test_ha_storage_stats.py, test_timeline.py. In: pytest. Out: various mocks.
 
 **Notifications / AI** — test_notifications.py, test_pushover_provider.py,
 test_ai_analyzer.py, test_ai_analyzer_integration.py (tensor mocks for
-ExtractedFrame, analyze_multi_clip_ce), test_quick_title_service.py,
+ExtractedFrame, analyze_multi_clip_ce), test_quick_title_service.py (``gpu_backend``
+mock; ``runtime.default_detection_device`` → ``cpu`` for crop tensors),
 test_daily_reporter.py. In: pytest. Out: patch requests, proxy client, or
-internal create_decoder/analyzer.
+multi_clip ``get_gpu_backend`` / analyzer stubs.
 
 **Web / config / misc** — test_frigate_proxy.py, test_path_helpers.py,
 test_report_helpers.py, test_web_server_path_safety.py, test_config_schema.py,
@@ -84,10 +91,11 @@ each test patches dependencies as needed (no shared global GPU/MQTT in conftest)
   test_timeline.py) set sys.modules["paho"], sys.modules["paho.mqtt"], etc. to
   MagicMock() before importing frigate_buffer code so paho/requests/flask are
   never imported. Restored in teardown_module.
-- **Per-test (patch):** GPU: patch "frigate_buffer.services.video.create_decoder"
-  or "frigate_buffer.services.gpu_decoder._create_simple_decoder" with a fake
-  that yields a mock DecoderContext whose get_frames returns torch tensors (e.g.
-  torch.zeros(B, 3, H, W)). MQTT: patch "frigate_buffer.services.mqtt_client.mqtt.
+- **Per-test (patch):** GPU: patch.object(video_service, "_decoder_context", fake)
+  (fake takes ``path``, ``gpu_id`` only) or
+  "frigate_buffer.services.gpu_backends.nvidia.decoder._create_simple_decoder"
+  with a fake that yields a mock DecoderContext whose get_frames returns torch
+  tensors (e.g. torch.zeros(B, 3, H, W)). MQTT: patch "frigate_buffer.services.mqtt_client.mqtt.
   Client" so MqttClientWrapper never connects. Handler tests: inject MagicMock
   for state_manager, zone_filter, lifecycle_service, notifier, file_manager,
   etc.; build fake MQTT messages via MagicMock (topic, payload).
@@ -95,18 +103,18 @@ each test patches dependencies as needed (no shared global GPU/MQTT in conftest)
   is mocked per-test where needed.
 
 **What is never run live**
-- **Decode:** No real PyNvVideoCodec or create_decoder/get_frames against GPU.
-  All decoder access in tests goes through patched create_decoder or mocked
-  _create_simple_decoder returning a mock context with get_frames.side_effect.
+- **Decode:** No real PyNvVideoCodec or live get_frames. Tests patch
+  ``VideoService._decoder_context`` or ``_create_simple_decoder`` with a mock
+  context and ``get_frames.side_effect``.
 - **MQTT:** No real broker connect or subscribe. MqttClientWrapper tests patch
   mqtt.Client; handler tests use MagicMock for all handler dependencies and
   fake message objects; no paho loop_start or network.
 
 **Pattern for new tests**
-- For code that uses gpu_decoder or video.create_decoder: patch at the
-  boundary (e.g. "frigate_buffer.services.video.create_decoder") and provide a
-  fake context manager yielding a mock with get_frames returning tensors (CPU
-  torch is fine in tests).
+- For VideoService sidecars: patch ``_decoder_context`` on the instance (two-arg
+  fake returning a context manager yielding a mock with ``get_frames``). For
+  gpu_decoder-only tests: patch nvidia.decoder or use mocked
+  ``_create_simple_decoder``; CPU torch tensors are fine.
 - For code that uses MQTT client or handler: patch mqtt.Client if testing
   MqttClientWrapper; for MqttMessageHandler use MagicMock for all injected
   deps and _make_msg(topic, payload) for messages.

@@ -8,7 +8,7 @@ sys.path.append(os.getcwd())
 
 import pytest
 
-from frigate_buffer.config import load_config
+from frigate_buffer.config import effective_gpu_device_index, load_config
 
 
 class TestConfigSchema(unittest.TestCase):
@@ -815,6 +815,150 @@ class TestConfigSchema(unittest.TestCase):
         config = load_config()
         assert config["MOBILE_APP_GOOGLE_APPLICATION_CREDENTIALS"] == (
             "/env/path/to/creds.json"
+        )
+
+    @patch("builtins.open", new_callable=mock_open)
+    @patch("os.path.exists")
+    @patch("frigate_buffer.config.yaml.safe_load")
+    def test_gpu_vendor_and_device_defaults(
+        self, mock_yaml_load, mock_exists, mock_file
+    ):
+        """Unset multi_cam GPU keys yield nvidia, index 0, and CUDA_* mirror."""
+        mock_exists.return_value = True
+        mock_yaml_load.return_value = {
+            "cameras": [{"name": "cam1"}],
+            "network": {
+                "mqtt_broker": "localhost",
+                "frigate_url": "http://frigate",
+                "buffer_ip": "localhost",
+                "storage_path": "/tmp",
+            },
+        }
+        config = load_config()
+        assert config["GPU_VENDOR"] == "nvidia"
+        assert config["GPU_DEVICE_INDEX"] == 0
+        assert config["CUDA_DEVICE_INDEX"] == 0
+
+    @patch("builtins.open", new_callable=mock_open)
+    @patch("os.path.exists")
+    @patch("frigate_buffer.config.yaml.safe_load")
+    def test_yaml_cuda_device_index_legacy_maps_to_gpu_device_index(
+        self, mock_yaml_load, mock_exists, mock_file
+    ):
+        """Deprecated multi_cam.cuda_device_index sets GPU_DEVICE_INDEX and mirror."""
+        mock_exists.return_value = True
+        mock_yaml_load.return_value = {
+            "cameras": [{"name": "cam1"}],
+            "network": {
+                "mqtt_broker": "localhost",
+                "frigate_url": "http://frigate",
+                "buffer_ip": "localhost",
+                "storage_path": "/tmp",
+            },
+            "multi_cam": {"cuda_device_index": 2},
+        }
+        config = load_config()
+        assert config["GPU_DEVICE_INDEX"] == 2
+        assert config["CUDA_DEVICE_INDEX"] == 2
+
+    @patch("builtins.open", new_callable=mock_open)
+    @patch("os.path.exists")
+    @patch("frigate_buffer.config.yaml.safe_load")
+    def test_yaml_gpu_device_index_wins_over_cuda_device_index(
+        self, mock_yaml_load, mock_exists, mock_file
+    ):
+        """gpu_device_index takes precedence over cuda_device_index when both set."""
+        mock_exists.return_value = True
+        mock_yaml_load.return_value = {
+            "cameras": [{"name": "cam1"}],
+            "network": {
+                "mqtt_broker": "localhost",
+                "frigate_url": "http://frigate",
+                "buffer_ip": "localhost",
+                "storage_path": "/tmp",
+            },
+            "multi_cam": {"gpu_device_index": 1, "cuda_device_index": 9},
+        }
+        config = load_config()
+        assert config["GPU_DEVICE_INDEX"] == 1
+        assert config["CUDA_DEVICE_INDEX"] == 1
+
+    @patch("builtins.open", new_callable=mock_open)
+    @patch("os.path.exists")
+    @patch("frigate_buffer.config.yaml.safe_load")
+    @patch.dict(os.environ, {"CUDA_DEVICE_INDEX": "3"}, clear=False)
+    def test_env_cuda_device_index_overrides_yaml(
+        self, mock_yaml_load, mock_exists, mock_file
+    ):
+        """CUDA_DEVICE_INDEX env still works (deprecated) and overrides YAML index."""
+        mock_exists.return_value = True
+        mock_yaml_load.return_value = {
+            "cameras": [{"name": "cam1"}],
+            "network": {
+                "mqtt_broker": "localhost",
+                "frigate_url": "http://frigate",
+                "buffer_ip": "localhost",
+                "storage_path": "/tmp",
+            },
+            "multi_cam": {"gpu_device_index": 0},
+        }
+        config = load_config()
+        assert config["GPU_DEVICE_INDEX"] == 3
+        assert config["CUDA_DEVICE_INDEX"] == 3
+
+    @patch("builtins.open", new_callable=mock_open)
+    @patch("os.path.exists")
+    @patch("frigate_buffer.config.yaml.safe_load")
+    @patch.dict(
+        os.environ,
+        {"GPU_DEVICE_INDEX": "2", "CUDA_DEVICE_INDEX": "9"},
+        clear=False,
+    )
+    def test_env_gpu_device_index_wins_over_cuda_env(
+        self, mock_yaml_load, mock_exists, mock_file
+    ):
+        """GPU_DEVICE_INDEX env wins when both env vars are set."""
+        mock_exists.return_value = True
+        mock_yaml_load.return_value = {
+            "cameras": [{"name": "cam1"}],
+            "network": {
+                "mqtt_broker": "localhost",
+                "frigate_url": "http://frigate",
+                "buffer_ip": "localhost",
+                "storage_path": "/tmp",
+            },
+        }
+        config = load_config()
+        assert config["GPU_DEVICE_INDEX"] == 2
+        assert config["CUDA_DEVICE_INDEX"] == 2
+
+    @patch("builtins.open", new_callable=mock_open)
+    @patch("os.path.exists")
+    @patch("frigate_buffer.config.yaml.safe_load")
+    def test_gpu_vendor_unsupported_raises(
+        self, mock_yaml_load, mock_exists, mock_file
+    ):
+        """Only nvidia is valid until additional backends exist."""
+        mock_exists.return_value = True
+        mock_yaml_load.return_value = {
+            "cameras": [{"name": "cam1"}],
+            "network": {
+                "mqtt_broker": "localhost",
+                "frigate_url": "http://frigate",
+                "buffer_ip": "localhost",
+                "storage_path": "/tmp",
+            },
+            "multi_cam": {"gpu_vendor": "intel"},
+        }
+        with pytest.raises(ValueError, match="not supported"):
+            load_config()
+
+    def test_effective_gpu_device_index_prefers_gpu_key(self) -> None:
+        assert effective_gpu_device_index({"GPU_DEVICE_INDEX": 2}) == 2
+        assert effective_gpu_device_index({"CUDA_DEVICE_INDEX": 5}) == 5
+        assert (
+            effective_gpu_device_index({"GPU_DEVICE_INDEX": 1, "CUDA_DEVICE_INDEX": 9})
+            == 1
         )
 
 

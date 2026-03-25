@@ -255,6 +255,16 @@ CONFIG_SCHEMA = Schema(
             Optional("compilation_zoom_smooth_ema_alpha"): Any(
                 int, float
             ),  # EMA alpha for compilation zoom smoothing (0–1); default 0.25.
+            # GPU backend (multi-vendor prep; registry uses these in gpu-01+).
+            Optional(
+                "gpu_vendor"
+            ): str,  # e.g. nvidia; only nvidia supported until Intel/AMD backends land.
+            Optional(
+                "gpu_device_index"
+            ): int,  # Adapter index for decode/runtime (default 0).
+            Optional(
+                "cuda_device_index"
+            ): int,  # Deprecated: use gpu_device_index; still accepted for legacy YAML.
         },
         # Extended Gemini proxy; single API key GEMINI_API_KEY, URL here or env.
         Optional("gemini_proxy"): {
@@ -276,6 +286,34 @@ CONFIG_SCHEMA = Schema(
     },
     extra=ALLOW_EXTRA,
 )
+
+
+def effective_gpu_device_index(config: dict) -> int:
+    """Return the configured GPU adapter index for decode and runtime (vendor-neutral).
+
+    Prefer ``GPU_DEVICE_INDEX``; ``CUDA_DEVICE_INDEX`` is a deprecated alias set by
+    :func:`load_config` to the same value after merge.
+    """
+    if "GPU_DEVICE_INDEX" in config:
+        return int(config["GPU_DEVICE_INDEX"])
+    return int(config.get("CUDA_DEVICE_INDEX", 0))
+
+
+def _finalize_gpu_vendor_and_device(config: dict) -> None:
+    """Normalize GPU_VENDOR, enforce nvidia-only for now, set CUDA_* mirror."""
+    raw = config.get("GPU_VENDOR") or "nvidia"
+    vendor = str(raw).strip().lower() if raw is not None else "nvidia"
+    if not vendor:
+        vendor = "nvidia"
+    config["GPU_VENDOR"] = vendor
+    if vendor != "nvidia":
+        raise ValueError(
+            f"GPU_VENDOR={vendor!r} is not supported; only 'nvidia' is available until "
+            "Intel/AMD backends land (see docs/Multi_GPU_Support_Integration_Plan/)."
+        )
+    idx = effective_gpu_device_index(config)
+    config["GPU_DEVICE_INDEX"] = idx
+    config["CUDA_DEVICE_INDEX"] = idx
 
 
 def _coerce_bool(value: object, default: bool) -> bool:
@@ -374,6 +412,9 @@ def load_config() -> dict:
         "SMART_CROP_PADDING": 0.15,
         "DETECTION_MODEL": "yolov8n.pt",
         "DETECTION_DEVICE": "",  # Empty = auto (CUDA if available else CPU)
+        # GPU backend (gpu-01+); load_config mirrors CUDA_DEVICE_INDEX (legacy).
+        "GPU_VENDOR": "nvidia",
+        "GPU_DEVICE_INDEX": 0,
         "DETECTION_FRAME_INTERVAL": 5,
         "DETECTION_IMGSZ": 640,
         # Timeline / EMA (Phase 1 dense grid + EMA + hysteresis + merge; sole path)
@@ -733,6 +774,14 @@ def load_config() -> dict:
                             config["COMPILATION_ZOOM_SMOOTH_EMA_ALPHA"],
                         )
                     )
+                    if mc.get("gpu_vendor") is not None:
+                        gv = str(mc["gpu_vendor"]).strip().lower()
+                        if gv:
+                            config["GPU_VENDOR"] = gv
+                    if "gpu_device_index" in mc:
+                        config["GPU_DEVICE_INDEX"] = int(mc["gpu_device_index"])
+                    elif "cuda_device_index" in mc:
+                        config["GPU_DEVICE_INDEX"] = int(mc["cuda_device_index"])
                 if "gemini_proxy" in yaml_config:
                     gp = yaml_config["gemini_proxy"]
                     config["GEMINI_PROXY_URL"] = (
@@ -910,6 +959,19 @@ def load_config() -> dict:
     config["GEMINI_PROXY_URL"] = (
         os.getenv("GEMINI_PROXY_URL") or config.get("GEMINI_PROXY_URL") or ""
     ).strip() or ""
+
+    # GPU vendor/device: env overrides YAML; GPU_DEVICE_INDEX beats CUDA_* env.
+    _env_gv = os.getenv("GPU_VENDOR")
+    if _env_gv is not None and str(_env_gv).strip():
+        config["GPU_VENDOR"] = str(_env_gv).strip().lower()
+    _env_gpu_idx = os.getenv("GPU_DEVICE_INDEX")
+    _env_cuda_idx = os.getenv("CUDA_DEVICE_INDEX")
+    if _env_gpu_idx is not None:
+        config["GPU_DEVICE_INDEX"] = int(_env_gpu_idx)
+    elif _env_cuda_idx is not None:
+        config["GPU_DEVICE_INDEX"] = int(_env_cuda_idx)
+
+    _finalize_gpu_vendor_and_device(config)
 
     # Validate required settings
     missing = []

@@ -10,7 +10,7 @@ from unittest.mock import MagicMock, patch
 
 def _fake_create_decoder(path, gpu_id=0):
     """Context manager that yields a mock DecoderContext (used when patching
-    gpu_decoder.create_decoder)."""
+    backend.create_decoder via get_gpu_backend)."""
     try:
         import torch
     except ImportError:
@@ -34,6 +34,16 @@ def _fake_create_decoder(path, gpu_id=0):
         yield mock_ctx
 
     return cm()
+
+
+def _multi_clip_gpu_backend(decoder_side_effect):
+    """Minimal GpuBackend mock: create_decoder side_effect + real nvidia runtime."""
+    from frigate_buffer.services.gpu_backends.nvidia.runtime import nvidia_runtime
+
+    b = MagicMock()
+    b.create_decoder = MagicMock(side_effect=decoder_side_effect)
+    b.runtime = nvidia_runtime
+    return b
 
 
 from frigate_buffer.constants import DECODER_TIME_EPSILON_SEC
@@ -249,13 +259,12 @@ class TestMultiClipExtractor(unittest.TestCase):
         mock_ctx.get_frames.side_effect = get_frames
         return mock_ctx
 
-    @patch(
-        "frigate_buffer.services.multi_clip_extractor.create_decoder",
-        side_effect=_fake_create_decoder,
-    )
-    def test_extract_with_decoder_mock_returns_tensor_frames(self, mock_create_decoder):
-        """extract_target_centric_frames uses create_decoder and get_frames;
+    @patch("frigate_buffer.services.multi_clip_extractor.get_gpu_backend")
+    def test_extract_with_decoder_mock_returns_tensor_frames(self, mock_get_backend):
+        """extract_target_centric_frames uses backend create_decoder and get_frames;
         returns ExtractedFrame with tensor .frame."""
+        be = _multi_clip_gpu_backend(_fake_create_decoder)
+        mock_get_backend.return_value = be
         os.makedirs(os.path.join(self.tmp, "cam1"))
         os.makedirs(os.path.join(self.tmp, "cam2"))
         for c in ("cam1", "cam2"):
@@ -290,17 +299,15 @@ class TestMultiClipExtractor(unittest.TestCase):
             assert "person_area" in item.metadata
             assert isinstance(item.metadata["person_area"], int)
             assert item.metadata["person_area"] == 100
-        mock_create_decoder.assert_called()
+        be.create_decoder.assert_called()
         # One get_frames per sample time that yields a frame
-        assert mock_create_decoder.call_count >= 1
+        assert be.create_decoder.call_count >= 1
 
-    @patch(
-        "frigate_buffer.services.multi_clip_extractor.create_decoder",
-        side_effect=_fake_create_decoder,
-    )
-    def test_extract_calls_get_frames(self, mock_create_decoder):
-        """extract_target_centric_frames uses create_decoder and get_frames
+    @patch("frigate_buffer.services.multi_clip_extractor.get_gpu_backend")
+    def test_extract_calls_get_frames(self, mock_get_backend):
+        """extract_target_centric_frames uses backend create_decoder; get_frames
         is called on the context."""
+        mock_get_backend.return_value = _multi_clip_gpu_backend(_fake_create_decoder)
         os.makedirs(os.path.join(self.tmp, "cam1"))
         with open(os.path.join(self.tmp, "cam1", "clip.mp4"), "wb"):
             pass
@@ -323,10 +330,10 @@ class TestMultiClipExtractor(unittest.TestCase):
             self.tmp, max_frames_sec=1.0, max_frames_min=5
         )
         assert len(result) >= 1
-        mock_create_decoder.assert_called()
+        mock_get_backend.return_value.create_decoder.assert_called()
 
-    @patch("frigate_buffer.services.multi_clip_extractor.create_decoder")
-    def test_extract_drops_camera_when_get_frames_raises(self, mock_create_decoder):
+    @patch("frigate_buffer.services.multi_clip_extractor.get_gpu_backend")
+    def test_extract_drops_camera_when_get_frames_raises(self, mock_get_backend):
         """When one camera's get_frames raises, that camera is dropped and
         extraction continues with the other(s)."""
         try:
@@ -373,7 +380,12 @@ class TestMultiClipExtractor(unittest.TestCase):
 
             return cm()
 
-        mock_create_decoder.side_effect = make_cm
+        from frigate_buffer.services.gpu_backends.nvidia.runtime import nvidia_runtime
+
+        be = MagicMock()
+        be.create_decoder = MagicMock(side_effect=make_cm)
+        be.runtime = nvidia_runtime
+        mock_get_backend.return_value = be
 
         result = extract_target_centric_frames(
             self.tmp, max_frames_sec=1.0, max_frames_min=5
@@ -388,12 +400,9 @@ class TestMultiClipExtractor(unittest.TestCase):
             )
 
     @patch("frigate_buffer.services.multi_clip_extractor._get_fps_duration_from_path")
-    @patch(
-        "frigate_buffer.services.multi_clip_extractor.create_decoder",
-        side_effect=_fake_create_decoder,
-    )
+    @patch("frigate_buffer.services.multi_clip_extractor.get_gpu_backend")
     def test_extract_uses_metadata_fallback_when_len_zero(
-        self, mock_create_decoder, mock_get_fps_duration
+        self, mock_get_backend, mock_get_fps_duration
     ):
         """When decoder reports 0 frames, frame count comes from
         _get_fps_duration_from_path and extraction does not crash."""
@@ -416,6 +425,7 @@ class TestMultiClipExtractor(unittest.TestCase):
                 },
                 f,
             )
+        mock_get_backend.return_value = _multi_clip_gpu_backend(_fake_create_decoder)
         mock_get_fps_duration.return_value = (1.0, 10.0)
         # Default _fake_create_decoder yields ctx with len 10; extraction uses it.
         # Test just verifies metadata is used when needed.
@@ -428,9 +438,9 @@ class TestMultiClipExtractor(unittest.TestCase):
             assert item.frame is not None
 
     @patch("frigate_buffer.services.multi_clip_extractor._get_fps_duration_from_path")
-    @patch("frigate_buffer.services.multi_clip_extractor.create_decoder")
+    @patch("frigate_buffer.services.multi_clip_extractor.get_gpu_backend")
     def test_extract_clamps_time_to_strictly_less_than_duration(
-        self, mock_create_decoder, mock_get_fps_duration
+        self, mock_get_backend, mock_get_fps_duration
     ):
         """When sample time T equals camera duration, decoder is called with
         safe_T <= duration - epsilon (NVDEC rejects t_sec >= duration)."""
@@ -479,7 +489,12 @@ class TestMultiClipExtractor(unittest.TestCase):
         def cm(*_args, **_kwargs):
             yield mock_ctx
 
-        mock_create_decoder.side_effect = cm
+        from frigate_buffer.services.gpu_backends.nvidia.runtime import nvidia_runtime
+
+        be = MagicMock()
+        be.create_decoder = MagicMock(side_effect=cm)
+        be.runtime = nvidia_runtime
+        mock_get_backend.return_value = be
 
         result = extract_target_centric_frames(
             self.tmp, max_frames_sec=0.5, max_frames_min=3
@@ -492,12 +507,10 @@ class TestMultiClipExtractor(unittest.TestCase):
             f"got {times_passed} (max_valid={max_valid})"
         )
 
-    @patch(
-        "frigate_buffer.services.multi_clip_extractor.create_decoder",
-        side_effect=_fake_create_decoder,
-    )
-    def test_extract_logs_nvdec(self, mock_create_decoder):
+    @patch("frigate_buffer.services.multi_clip_extractor.get_gpu_backend")
+    def test_extract_logs_nvdec(self, mock_get_backend):
         """log_callback receives Decoding clips ... PyNvVideoCodec NVDEC."""
+        mock_get_backend.return_value = _multi_clip_gpu_backend(_fake_create_decoder)
         os.makedirs(os.path.join(self.tmp, "cam1"))
         with open(os.path.join(self.tmp, "cam1", "clip.mp4"), "wb"):
             pass
@@ -528,13 +541,11 @@ class TestMultiClipExtractor(unittest.TestCase):
             f"Expected PyNvVideoCodec/NVDEC in decode message: {decode_logs}"
         )
 
-    @patch(
-        "frigate_buffer.services.multi_clip_extractor.create_decoder",
-        side_effect=_fake_create_decoder,
-    )
-    def test_primary_camera_accepted(self, mock_create_decoder):
+    @patch("frigate_buffer.services.multi_clip_extractor.get_gpu_backend")
+    def test_primary_camera_accepted(self, mock_get_backend):
         """extract_target_centric_frames accepts primary_camera (EMA pipeline);
         returns frames without error."""
+        mock_get_backend.return_value = _multi_clip_gpu_backend(_fake_create_decoder)
         os.makedirs(os.path.join(self.tmp, "cam1"))
         os.makedirs(os.path.join(self.tmp, "cam2"))
         for c in ("cam1", "cam2"):
@@ -565,13 +576,11 @@ class TestMultiClipExtractor(unittest.TestCase):
             assert isinstance(item, ExtractedFrame)
             assert item.camera in ("cam1", "cam2")
 
-    @patch(
-        "frigate_buffer.services.multi_clip_extractor.create_decoder",
-        side_effect=_fake_create_decoder,
-    )
-    def test_ema_drop_no_person_excludes_zero_area_frames(self, mock_create_decoder):
+    @patch("frigate_buffer.services.multi_clip_extractor.get_gpu_backend")
+    def test_ema_drop_no_person_excludes_zero_area_frames(self, mock_get_backend):
         """With camera_timeline_final_yolo_drop_no_person=True, frames with
         person_area=0 are not in the result."""
+        mock_get_backend.return_value = _multi_clip_gpu_backend(_fake_create_decoder)
         os.makedirs(os.path.join(self.tmp, "cam1"))
         os.makedirs(os.path.join(self.tmp, "cam2"))
         for c in ("cam1", "cam2"):

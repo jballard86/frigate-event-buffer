@@ -2,7 +2,7 @@
 Temporary benchmarks for post-download, pre-API segment (sidecar → extract → overlay → write).
 Run from project root: pytest scripts/bench_post_download_pre_api.py -v -s
 Use BENCH_RUNS=5 to set repeat count (default 3). Results print mean ± stdev in seconds.
-Extract uses PyNvVideoCodec (gpu_decoder); bench mocks create_decoder so no GPU required.
+Extract uses GpuBackend (NVDEC); bench mocks get_gpu_backend so no GPU required.
 """
 
 import json
@@ -15,22 +15,29 @@ from contextlib import contextmanager
 from unittest.mock import MagicMock, patch
 
 # Ensure src is on path when run from scripts/
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "src")))
+sys.path.insert(
+    0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "src"))
+)
 
 import numpy as np
 
 # Fixture and segment helpers
-from frigate_buffer.services.multi_clip_extractor import DETECTION_SIDECAR_FILENAME, extract_target_centric_frames
+from frigate_buffer.services.multi_clip_extractor import (
+    DETECTION_SIDECAR_FILENAME,
+    extract_target_centric_frames,
+)
 from frigate_buffer.managers.file import write_ai_frame_analysis_multi_cam
 from frigate_buffer.models import ExtractedFrame
 
 BENCH_RUNS = int(os.environ.get("BENCH_RUNS", 3))
 
 
-def make_fixture_ce_folder(tmp_path: str, cameras: int = 2, num_sidecar_entries: int = 11) -> str:
+def make_fixture_ce_folder(
+    tmp_path: str, cameras: int = 2, num_sidecar_entries: int = 11
+) -> str:
     """Create a CE folder with camera subdirs, placeholder clips, and detection.json sidecars."""
     for i in range(cameras):
-        cam_name = f"cam{i+1}"
+        cam_name = f"cam{i + 1}"
         sub = os.path.join(tmp_path, cam_name)
         os.makedirs(sub, exist_ok=True)
         clip_path = os.path.join(sub, f"{cam_name}-00001.mp4")
@@ -41,11 +48,16 @@ def make_fixture_ce_folder(tmp_path: str, cameras: int = 2, num_sidecar_entries:
             "native_width": 1280,
             "native_height": 720,
             "entries": [
-                {"timestamp_sec": float(t), "detections": [{"label": "person", "area": 100}]}
+                {
+                    "timestamp_sec": float(t),
+                    "detections": [{"label": "person", "area": 100}],
+                }
                 for t in range(num_sidecar_entries)
             ],
         }
-        with open(os.path.join(sub, DETECTION_SIDECAR_FILENAME), "w", encoding="utf-8") as f:
+        with open(
+            os.path.join(sub, DETECTION_SIDECAR_FILENAME), "w", encoding="utf-8"
+        ) as f:
             json.dump(sidecar, f, separators=(",", ":"))
     return tmp_path
 
@@ -66,7 +78,12 @@ def run_extraction_only(ce_folder: str, config: dict | None = None) -> float:
 def run_write_zip_only(ce_folder: str, num_frames: int = 10) -> float:
     """Run write_ai_frame_analysis_multi_cam (frames + zip); return wall time."""
     frames_data = [
-        ExtractedFrame(frame=np.zeros((240, 320, 3), dtype=np.uint8), timestamp_sec=float(i), camera="cam1", metadata={})
+        ExtractedFrame(
+            frame=np.zeros((240, 320, 3), dtype=np.uint8),
+            timestamp_sec=float(i),
+            camera="cam1",
+            metadata={},
+        )
         for i in range(num_frames)
     ]
     t0 = time.perf_counter()
@@ -110,7 +127,7 @@ def _mean_stdev(times: list[float]) -> tuple[float, float]:
     if n < 2:
         return mean, 0.0
     variance = sum((t - mean) ** 2 for t in times) / (n - 1)
-    return mean, variance ** 0.5
+    return mean, variance**0.5
 
 
 def _fake_create_decoder(path: str, gpu_id: int = 0):
@@ -134,6 +151,15 @@ def _fake_create_decoder(path: str, gpu_id: int = 0):
     return cm()
 
 
+def _bench_mce_gpu_backend() -> MagicMock:
+    from frigate_buffer.services.gpu_backends.nvidia.runtime import nvidia_runtime
+
+    b = MagicMock()
+    b.create_decoder = MagicMock(side_effect=_fake_create_decoder)
+    b.runtime = nvidia_runtime
+    return b
+
+
 class BenchPostDownloadPreApi(unittest.TestCase):
     """Benchmarks for post-download pre-API segment. Use mocks so no GPU required."""
 
@@ -145,44 +171,59 @@ class BenchPostDownloadPreApi(unittest.TestCase):
             shutil.rmtree(self.tmp, ignore_errors=True)
 
     @patch("frigate_buffer.services.multi_clip_extractor.GPU_LOCK", MagicMock())
-    @patch("frigate_buffer.services.multi_clip_extractor.create_decoder", side_effect=_fake_create_decoder)
-    def test_bench_extraction_only_baseline(self, mock_create_decoder):
-        """Baseline: extract_target_centric_frames only (mocked PyNvVideoCodec decode)."""
-        try:
-            import torch
-        except ImportError:
+    @patch("frigate_buffer.services.multi_clip_extractor.get_gpu_backend")
+    def test_bench_extraction_only_baseline(self, mock_get_backend):
+        """Baseline: extract_target_centric_frames only (mocked backend decode)."""
+        import importlib.util
+
+        if importlib.util.find_spec("torch") is None:
             self.skipTest("torch not available")
-        self.tmp = os.path.join(os.environ.get("TEMP", "/tmp"), "bench_ce_" + str(time.time()).replace(".", "_"))
+        mock_get_backend.return_value = _bench_mce_gpu_backend()
+        self.tmp = os.path.join(
+            os.environ.get("TEMP", "/tmp"),
+            "bench_ce_" + str(time.time()).replace(".", "_"),
+        )
         os.makedirs(self.tmp, exist_ok=True)
         make_fixture_ce_folder(self.tmp, cameras=2, num_sidecar_entries=11)
         times: list[float] = []
         for _ in range(BENCH_RUNS):
             times.append(run_extraction_only(self.tmp))
         mean, stdev = _mean_stdev(times)
-        print(f"\n[bench] extraction_only_baseline: {mean:.3f} ± {stdev:.3f} s (n={BENCH_RUNS})")
+        print(
+            f"\n[bench] extraction_only_baseline: {mean:.3f} ± {stdev:.3f} s (n={BENCH_RUNS})"
+        )
         self.assertGreater(mean, 0)
 
     @patch("frigate_buffer.services.multi_clip_extractor.GPU_LOCK", MagicMock())
-    @patch("frigate_buffer.services.multi_clip_extractor.create_decoder", side_effect=_fake_create_decoder)
-    def test_bench_segment_extract_and_write_baseline(self, mock_create_decoder):
+    @patch("frigate_buffer.services.multi_clip_extractor.get_gpu_backend")
+    def test_bench_segment_extract_and_write_baseline(self, mock_get_backend):
         """Baseline: extract + write_ai_frame_analysis_multi_cam (no API)."""
-        try:
-            import torch
-        except ImportError:
+        import importlib.util
+
+        if importlib.util.find_spec("torch") is None:
             self.skipTest("torch not available")
-        self.tmp = os.path.join(os.environ.get("TEMP", "/tmp"), "bench_ce_" + str(time.time()).replace(".", "_"))
+        mock_get_backend.return_value = _bench_mce_gpu_backend()
+        self.tmp = os.path.join(
+            os.environ.get("TEMP", "/tmp"),
+            "bench_ce_" + str(time.time()).replace(".", "_"),
+        )
         os.makedirs(self.tmp, exist_ok=True)
         make_fixture_ce_folder(self.tmp, cameras=2, num_sidecar_entries=11)
         times: list[float] = []
         for _ in range(BENCH_RUNS):
             times.append(run_segment_extract_and_write(self.tmp))
         mean, stdev = _mean_stdev(times)
-        print(f"\n[bench] segment_extract_and_write_baseline: {mean:.3f} ± {stdev:.3f} s (n={BENCH_RUNS})")
+        print(
+            f"\n[bench] segment_extract_and_write_baseline: {mean:.3f} ± {stdev:.3f} s (n={BENCH_RUNS})"
+        )
         self.assertGreater(mean, 0)
 
     def test_bench_write_zip_only(self):
         """Write + zip only (no decode)."""
-        self.tmp = os.path.join(os.environ.get("TEMP", "/tmp"), "bench_write_" + str(time.time()).replace(".", "_"))
+        self.tmp = os.path.join(
+            os.environ.get("TEMP", "/tmp"),
+            "bench_write_" + str(time.time()).replace(".", "_"),
+        )
         os.makedirs(self.tmp, exist_ok=True)
         times: list[float] = []
         for _ in range(BENCH_RUNS):

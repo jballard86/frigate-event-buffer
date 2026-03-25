@@ -74,7 +74,7 @@ def bootstrap() -> tuple[dict, StateAwareOrchestrator]:
     version = _load_version()
     logger.info("VERSION = %s", version)
 
-    log_gpu_status()
+    log_gpu_status(config)
     ensure_detection_model_ready(config)
 
     # Optional Firebase init for FCM (mobile_app). Use GOOGLE_APPLICATION_CREDENTIALS

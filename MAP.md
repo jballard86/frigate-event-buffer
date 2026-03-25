@@ -22,14 +22,23 @@ token use and maximize surgical accuracy.
 **Tech stack:** Python 3.12+; setuptools src layout (`src/frigate_buffer/`);
 Flask + Gunicorn (single worker); paho-mqtt; schedule; YAML + env (Voluptuous).
 State: EventStateManager, ConsolidatedEventManager; filesystem for events, clips,
-timelines, daily reports. Video/AI: **PyNvVideoCodec** (gpu_decoder) only for
-decode; FFmpeg h264_nvenc for compilation encode; Ultralytics YOLO; Gemini proxy
+timelines, daily reports. Config: **`GPU_VENDOR`**, **`GPU_DEVICE_INDEX`** (legacy
+**`CUDA_DEVICE_INDEX`**); YAML under **`multi_cam`** (`gpu_vendor`, `gpu_device_index`);
+see **docs/INSTALL.md**. Video/AI: **PyNvVideoCodec** under **services/gpu_backends/nvidia/** (decode);
+public **gpu_decoder** shim re-exports; **get_gpu_backend(config)** (cached,
+``GPU_VENDOR``) returns **GpuBackend**; **orchestrator** injects it into **VideoService**
+and **QuickTitleService** (shared instance);
+FFmpeg h264_nvenc argv from **nvidia/ffmpeg_encode**;
+Ultralytics YOLO; Gemini proxy
 (HTTP). Testing: pytest, `pythonpath = ["src"]`.
 
 **Video & AI pipeline (mandatory):** Zero-copy GPU only. Decode: PyNvVideoCodec
-(gpu_decoder); `create_decoder(clip_path, gpu_id)`; frames → BCHW CUDA tensors.
+(gpu_decoder shim); ``GpuBackend.create_decoder(clip_path, gpu_id)`` via
+``get_gpu_backend(config)`` (VideoService injected; multi_clip_extractor and
+video_compilation resolve per call); frames → BCHW CUDA tensors.
 No CPU decode fallback; no ffmpegcv. Single-threaded decode: app-wide
-**GPU_LOCK** (video.py) serializes create_decoder and get_frames. Detection
+**GPU_LOCK** (**services/gpu_backends/lock.py**; re-used from video) serializes
+create_decoder and get_frames. Detection
 sidecars: batched get_frames(4) → float32/255 → GPU resize → YOLO → bbox
 scale-back; crop/resize via **crop_utils** (BCHW tensors only). NumPy/OpenCV only
 at boundaries (e.g. tensor → JPEG, FFmpeg rawvideo stdin). Output:
@@ -97,7 +106,7 @@ frigate-event-buffer/
 │   ├── version.txt, orchestrator.py
 │   ├── event_test/
 │   ├── managers/ (file, state, consolidation, zone_filter, preferences, snooze)
-│   ├── services/ (see docs/maps/ for per-module purpose and dependencies)
+│   ├── services/ (see docs/maps/; includes gpu_backends/ nvidia decode+ffmpeg)
 │   └── web/ (server, routes, templates, static; path_helpers, report_helpers, frigate_proxy)
 ├── tests/
 └── examples/

@@ -6,9 +6,10 @@ generate_detection_sidecar. Reads sidecars and picks the camera with largest
 person area per time step. If any camera lacks a sidecar, returns [] (no
 on-frame detector fallback). No Frigate metadata.
 
-Uses gpu_decoder (PyNvVideoCodec) for GPU decode: one decoder per camera,
-get_frames([frame_idx]) per sample time. ExtractedFrame.frame is torch.Tensor
-BCHW RGB. GPU_LOCK serializes decoder access. No ffmpegcv fallback.
+Uses ``get_gpu_backend(config)`` (or optional injected ``gpu_backend``) for
+``create_decoder``: one decoder per camera, get_frames([frame_idx]) per sample.
+ExtractedFrame.frame is torch.Tensor BCHW RGB. GPU_LOCK serializes decode.
+No ffmpegcv fallback.
 """
 
 from __future__ import annotations
@@ -22,10 +23,12 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
+from frigate_buffer.config import effective_gpu_device_index
 from frigate_buffer.constants import DECODER_TIME_EPSILON_SEC, NVDEC_INIT_FAILURE_PREFIX
 from frigate_buffer.services import timeline_ema as _timeline_ema
-from frigate_buffer.services.gpu_decoder import create_decoder
-from frigate_buffer.services.video import GPU_LOCK
+from frigate_buffer.services.gpu_backends import get_gpu_backend
+from frigate_buffer.services.gpu_backends.lock import GPU_LOCK
+from frigate_buffer.services.gpu_backends.types import GpuBackend
 
 logger = logging.getLogger("frigate-buffer")
 
@@ -184,28 +187,29 @@ def extract_target_centric_frames(
     camera_switch_min_segment_frames: int = 5,
     camera_switch_hysteresis_margin: float = 1.15,
     camera_timeline_final_yolo_drop_no_person: bool = False,
+    gpu_backend: GpuBackend | None = None,
 ) -> list[Any]:
     """
     Extract time-ordered, target-centric frames from all clips under a CE folder.
 
     Uses the EMA pipeline (dense grid + EMA smoothing + hysteresis + segment merge)
     to assign one camera per sample time from detection sidecars. Decode via
-    gpu_decoder (PyNvVideoCodec): one decoder per camera, get_frames([frame_idx])
-    per sample time. ExtractedFrame.frame is torch.Tensor BCHW RGB. When person
+    GpuBackend (NVDEC): one decoder per camera, get_frames([frame_idx]) per
+    sample time. ExtractedFrame.frame is torch.Tensor BCHW RGB. When person
     area >= tracking_target_frame_percent of reference_area, uses full-frame
     resize with letterbox and sets metadata is_full_frame_resize=True. Caps at
     max_frames_min. Returns [] if any camera lacks detection.json or if torch
     unavailable.
 
-    Optional config: LOG_EXTRACTION_PHASE_TIMING (bool), CUDA_DEVICE_INDEX
-    (int, default 0).
+    Optional config: LOG_EXTRACTION_PHASE_TIMING, GPU_DEVICE_INDEX (legacy
+    CUDA_DEVICE_INDEX fallback via effective_gpu_device_index).
     """
     if ExtractedFrame is None:
         logger.warning("ExtractedFrame not available, skipping multi-clip extraction")
         return []
-    try:
-        import torch
-    except ImportError:
+    import importlib.util
+
+    if importlib.util.find_spec("torch") is None:
         logger.warning("torch not available, skipping multi-clip extraction")
         return []
 
@@ -272,13 +276,14 @@ def extract_target_centric_frames(
     if log_callback:
         log_callback(f"Loaded sidecars for {len(sidecars)} camera(s).")
 
-    _log_phase_timing = (
-        bool(config.get("LOG_EXTRACTION_PHASE_TIMING", False)) if config else False
-    )
+    cfg = config if config is not None else {}
+    backend = gpu_backend if gpu_backend is not None else get_gpu_backend(cfg)
+
+    _log_phase_timing = bool(cfg.get("LOG_EXTRACTION_PHASE_TIMING", False))
     if not _log_phase_timing and logger.isEnabledFor(logging.DEBUG):
         _log_phase_timing = True
 
-    cuda_device_index = int(config.get("CUDA_DEVICE_INDEX", 0)) if config else 0
+    device_index = effective_gpu_device_index(cfg)
     _t0_open = time.monotonic() if _log_phase_timing else None
     decoders: dict[str, Any] = {}  # camera -> DecoderContext
     durations: dict[str, float] = {}
@@ -296,7 +301,7 @@ def extract_target_centric_frames(
             for cam, path in clip_paths:
                 try:
                     ctx = stack.enter_context(
-                        create_decoder(path, gpu_id=cuda_device_index)
+                        backend.create_decoder(path, gpu_id=device_index)
                     )
                 except Exception as e:
                     logger.error(
@@ -313,14 +318,9 @@ def extract_target_centric_frames(
                         path,
                         e,
                     )
-                    if torch.cuda.is_available():
-                        try:
-                            logger.debug(
-                                "CUDA memory: %s",
-                                torch.cuda.memory_summary(abbreviated=True),
-                            )
-                        except Exception:
-                            pass
+                    _ms = backend.runtime.memory_summary(abbreviated=True)
+                    if _ms:
+                        logger.debug("CUDA memory: %s", _ms)
                     return []
                 count = len(ctx)
                 path_meta = clip_metadata.get(path)
@@ -354,8 +354,7 @@ def extract_target_centric_frames(
             log_callback(f"Decoding clips ({cams}): PyNvVideoCodec NVDEC.")
         global_end = max(durations.values()) if durations else 0.0
         if global_end <= 0 or not decoders:
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
+            backend.runtime.empty_cache()
             return []
         use_sidecar = all_have_sidecar and len(sidecars) == len(clip_paths)
         if not use_sidecar:
@@ -366,8 +365,7 @@ def extract_target_centric_frames(
                 ce_folder_path,
                 missing_cameras,
             )
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
+            backend.runtime.empty_cache()
             return []
         if log_callback:
             log_callback("Creating extraction metadata (sidecar).")
@@ -462,8 +460,7 @@ def extract_target_centric_frames(
                 frame_t = batch[0:1].clone()
                 del batch
                 batch_to_free = None
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
+                backend.runtime.empty_cache()
                 best_tensor = frame_t
                 meta: dict[str, Any] = {}
                 if crop_width > 0 and crop_height > 0 and _CROP_AVAILABLE:
@@ -553,11 +550,9 @@ def extract_target_centric_frames(
             finally:
                 if batch_to_free is not None:
                     del batch_to_free
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
+                backend.runtime.empty_cache()
 
         if _log_phase_timing and _t0_read is not None and log_callback:
             log_callback(f"Reading frames: {time.monotonic() - _t0_read:.1f}s")
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
+        backend.runtime.empty_cache()
         return collected

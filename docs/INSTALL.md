@@ -11,6 +11,16 @@ Clone the repo so the **repo root** is the directory that contains `Dockerfile` 
 - **Docker** — Use `docker build` and `docker run`, or Docker Compose (`docker-compose up -d --build`).
 - **For GPU (video decode/summary):** NVIDIA GPU, driver, and [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html). Use `docker run --gpus all` and set **`NVIDIA_DRIVER_CAPABILITIES=compute,video,utility`** — this is **mandatory** for GPU decode no matter how you start the container (plain `docker run` or Docker Compose). Video uses GPU only (PyNvVideoCodec + FFmpeg); there is no CPU decode fallback.
 
+### GPU vendor and adapter index (config)
+
+The app selects the decode/runtime bundle via **`GPU_VENDOR`** (flat config; default **`nvidia`**). Only **NVIDIA** is implemented today; other values fail at startup with a clear error (see `docs/Multi_GPU_Support_Integration_Plan/`).
+
+**Which physical GPU** uses the in-app index **`GPU_DEVICE_INDEX`** (integer, default **`0`**), i.e. `cuda:0`, `cuda:1`, … for NVDEC, YOLO defaults, and compilation. Legacy name **`CUDA_DEVICE_INDEX`** is still read from environment and merged into the same value; prefer **`GPU_DEVICE_INDEX`** in new setups.
+
+Set them in **`config.yaml`** under **`multi_cam:`** as **`gpu_vendor`**, **`gpu_device_index`** (preferred), or deprecated **`cuda_device_index`**. You can also set **`GPU_VENDOR`**, **`GPU_DEVICE_INDEX`**, or **`CUDA_DEVICE_INDEX`** in **`.env`** / Docker **`environment`** — they override YAML after merge.
+
+**Docker note:** `NVIDIA_VISIBLE_DEVICES` restricts which GPUs the container sees; the in-app index is then **relative to that visible set** (e.g. one GPU exposed → use index `0`). See **`examples/config.example.yaml`** and **`examples/.env.example`**.
+
 ---
 
 ## 1. Clean (if you had a previous install)
@@ -155,8 +165,7 @@ From repo root: `git pull`, then rebuild (step 4), then `docker restart frigate_
 
 - **FFmpeg / GPU decode issues** — Video decode is GPU-only (PyNvVideoCodec). Rebuild with `docker build -t frigate-buffer:latest .` and run with `--gpus all` and `NVIDIA_DRIVER_CAPABILITIES=compute,video,utility`. Check logs for `NVDEC hardware initialization failed`; inside the container run `nvidia-smi` to confirm the GPU is visible.
 - **Build fails with "frigate_buffer" or "examples/config.example.yaml" not found** — You are not in the repo root. The Dockerfile expects the repo root as build context (the directory that contains `Dockerfile` and `src/`). `cd` to that directory and run the build again.
-- **Decoder / get_frames errors** — Decode is GPU-only. Check GPU memory and driver; reduce concurrent load or clip length if needed. Ensure `NVIDIA_DRIVER_CAPABILITIES` includes `video`.
-
+- **Decoder / get_frames errors** — Decode is GPU-only. Check GPU memory and driver; reduce concurrent load or clip length if needed. Ensure `NVIDIA_DRIVER_CAPABILITIES` includes `video`. If you use multiple GPUs, confirm **`GPU_DEVICE_INDEX`** (or **`multi_cam.gpu_device_index`**) matches the adapter you intend, and that **`NVIDIA_VISIBLE_DEVICES`** (if set) exposes that GPU to the container.
 - **"current commit information was not captured" / git rev-parse warning** — Harmless. It appears when the build directory is not a git work tree (e.g. copied folder without `.git`). Clone the repo with `git clone` so `.git` exists, or ignore the warning.
 - **"failed to solve: frontend grpc server closed unexpectedly"** — BuildKit can crash on some hosts (e.g. Unraid). Use the legacy builder: `DOCKER_BUILDKIT=0 docker-compose up -d --build`. The Dockerfile is written to work without BuildKit-only features so the build should succeed with the legacy builder. On Unraid you can also try increasing Docker memory (Settings → Docker → advanced) and retrying with BuildKit enabled.
 

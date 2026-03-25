@@ -28,6 +28,7 @@ class TestQuickTitleService(unittest.TestCase):
         ai_analyzer=None,
         notifier=None,
         snooze_manager=None,
+        gpu_backend=None,
     ):
         config = config or {"FRIGATE_URL": "http://frigate:5000"}
         state_manager = state_manager or MagicMock()
@@ -36,6 +37,9 @@ class TestQuickTitleService(unittest.TestCase):
         video_service = video_service or MagicMock()
         ai_analyzer = ai_analyzer or MagicMock()
         notifier = notifier or MagicMock()
+        if gpu_backend is None:
+            gpu_backend = MagicMock()
+            gpu_backend.runtime.default_detection_device = MagicMock(return_value="cpu")
         return QuickTitleService(
             config,
             state_manager,
@@ -45,6 +49,7 @@ class TestQuickTitleService(unittest.TestCase):
             ai_analyzer,
             notifier,
             snooze_manager=snooze_manager,
+            gpu_backend=gpu_backend,
         )
 
     def test_run_quick_title_skips_when_no_ai_analyzer(self):
@@ -208,6 +213,52 @@ class TestQuickTitleService(unittest.TestCase):
             call_args = file_manager.write_stitched_frame.call_args[0]
             expected_path = os.path.join(camera_folder, "snapshot_cropped.jpg")
             assert call_args[1] == expected_path
+
+    @patch("frigate_buffer.services.quick_title_service.requests.get")
+    def test_run_quick_title_uses_gpu_runtime_for_crop_tensor_device(self, mock_get):
+        """With detections, crop tensor device comes from default_detection_device."""
+        mock_get.return_value.content = b"\xff\xd8\xff"
+        mock_get.return_value.raise_for_status = MagicMock()
+        cfg = {"FRIGATE_URL": "http://frigate:5000"}
+        gpu_backend = MagicMock()
+        gpu_backend.runtime.default_detection_device = MagicMock(return_value="cpu")
+        with patch(
+            "frigate_buffer.services.quick_title_service.cv2.imdecode"
+        ) as mock_decode:
+            mock_decode.return_value = np.zeros((100, 100, 3), dtype=np.uint8)
+            video_service = MagicMock()
+            video_service.run_detection_on_image.return_value = [
+                {"bbox": [10, 10, 50, 50]}
+            ]
+            ai_analyzer = MagicMock()
+            ai_analyzer.generate_quick_title.return_value = {
+                "title": "x",
+                "description": "",
+            }
+            notifier = MagicMock()
+            service = self._make_service(
+                config=cfg,
+                video_service=video_service,
+                ai_analyzer=ai_analyzer,
+                notifier=notifier,
+                gpu_backend=gpu_backend,
+            )
+            state_manager = MagicMock()
+            state_manager.get_event.return_value = MagicMock(
+                event_id="ev1",
+                genai_description="",
+                severity="detection",
+                threat_level=0,
+                genai_scene=None,
+                folder_path="/p",
+                created_at=1.0,
+                end_time=2.0,
+            )
+            service._state_manager = state_manager
+            service.run_quick_title(
+                "ev1", "cam1", "person", "ce1", "/storage/events/ce1/cam1", None
+            )
+        gpu_backend.runtime.default_detection_device.assert_called_once_with(cfg)
 
     @patch("frigate_buffer.services.quick_title_service.requests.get")
     def test_run_quick_title_updates_state_and_notifies_with_tag(self, mock_get):

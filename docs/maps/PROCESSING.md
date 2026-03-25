@@ -1,31 +1,53 @@
 # PROCESSING — GPU Pipeline, Video Decoding, Crop Utils
 
 Branch doc for zero-copy GPU decode, frame extraction, crop/resize, and
-compilation. Decoder access is single-threaded via app-wide **GPU_LOCK** (in
-video.py); callers must hold it for create_decoder and get_frames.
+compilation. Decoder access is single-threaded via app-wide **GPU_LOCK** in
+**services/gpu_backends/lock.py** (imported from video, multi_clip_extractor,
+video_compilation); callers must hold it for create_decoder and get_frames.
 
 ---
 
 ## 1. Dependency-Linked Registry
 
-- **services/gpu_decoder.py** — Sole module importing PyNvVideoCodec. SimpleDecoder
-  (use_device_memory=True, max_width=4096, OutputColorType.RGBP).
-  create_decoder(clip_path, gpu_id) yields DecoderContext: frame_count,
-  get_frames(indices) → BCHW uint8 RGB (zero-copy DLPack). Callers must hold
-  GPU_LOCK. On init failure logs NVDEC_INIT_FAILURE_PREFIX, re-raises. In:
-  video, multi_clip_extractor, video_compilation. Out: PyNvVideoCodec.
-- **services/video.py** — VideoService: decode via gpu_decoder under GPU_LOCK;
-  generate_detection_sidecar (batch 4, float32/255, GPU resize, YOLO, bbox
-  scale-back); get_detection_model_path, generate_detection_sidecars_for_cameras
-  (shared YOLO + lock); generate_gif_from_clip (HW-accelerated FFmpeg via CUDA);
-  ffprobe metadata cached. GPU_LOCK defined here; injected by orchestrator. In:
-  lifecycle, ai_analyzer, event_test. Out: gpu_decoder, constants, crop_utils
-  (indirect), torch, torchvision, Ultralytics.
+- **services/gpu_backends/lock.py** — ``GPU_LOCK``; serializes decode across
+  video, multi_clip_extractor, video_compilation.
+- **services/gpu_backends/nvidia/decoder.py** — Sole PyNvVideoCodec import site.
+  SimpleDecoder (use_device_memory=True, max_width=4096, OutputColorType.RGBP).
+  create_decoder(clip_path, gpu_id) yields DecoderContext; empty-batch device via
+  nvidia/runtime ``tensor_device_for_decode``. In: via gpu_decoder shim. Out:
+  PyNvVideoCodec, nvidia/runtime.
+- **services/gpu_decoder.py** — Thin re-export of nvidia.decoder for stable imports.
+- **services/gpu_backends/nvidia/ffmpeg_encode.py** — h264_nvenc argv + log path
+  for compilation rawvideo stdin (COMPILATION_OUTPUT_FPS). In: video_compilation.
+- **services/gpu_backends/nvidia/gif_ffmpeg.py** — CUDA hwaccel + scale_cuda
+  filter argv for preview GIF. In: video (VideoService.generate_gif_from_clip).
+- **services/gpu_backends/nvidia/runtime.py** — nvidia-smi log at startup,
+  empty_cache, memory_summary, tensor_device_for_decode, default_detection_device.
+  In: nvidia.decoder, video.log_gpu_status delegate.
+- **services/gpu_backends/protocols.py**, **types.py** — DecoderContextProto,
+  GpuBackend dataclass.
+- **services/gpu_backends/registry.py** — ``get_gpu_backend(config)`` returns a
+  cached :class:`GpuBackend` (``nvidia`` only); ``clear_gpu_backend_cache()`` for
+  tests. Builds via ``nvidia.build_nvidia_backend``. Vendor/index come from merged
+  flat config (``GPU_VENDOR``, ``GPU_DEVICE_INDEX``, legacy ``CUDA_DEVICE_INDEX``),
+  YAML ``multi_cam.gpu_vendor`` / ``gpu_device_index``, and env; decode uses
+  ``effective_gpu_device_index(config)``. Orchestrator injects backend into
+  VideoService; multi_clip_extractor and video_compilation resolve via
+  ``get_gpu_backend(config)`` (optional ``gpu_backend`` kw on public APIs).
+- **services/video.py** — VideoService: ``gpu_backend`` injected (or
+  ``get_gpu_backend({})`` default); decode via ``_decoder_context`` →
+  ``backend.create_decoder`` under GPU_LOCK; device index from
+  ``effective_gpu_device_index(config)``; VRAM via ``backend.runtime``; GIF via
+  ``backend.gif_ffmpeg``. Orchestrator passes ``get_gpu_backend(config)``. In:
+  lifecycle, ai_analyzer, event_test. Out: gpu_backends (lock, get_gpu_backend,
+  types), config.effective_gpu_device_index, constants, crop_utils (indirect),
+  torch, torchvision, Ultralytics.
 - **services/multi_clip_extractor.py** — Target-centric frame extraction for CE;
-  requires detection sidecars. timeline_ema for camera assignment; gpu_decoder
-  under GPU_LOCK, get_frames per sample; ExtractedFrame.frame BCHW RGB; del +
-  torch.cuda.empty_cache() per frame. In: ai_analyzer, event_test_orchestrator.
-  Out: gpu_decoder, timeline_ema, video (GPU_LOCK), constants.
+  requires detection sidecars. timeline_ema for camera assignment;
+  ``get_gpu_backend(config)`` (or ``gpu_backend=``); ``backend.create_decoder`` under
+  GPU_LOCK; ``backend.runtime`` for empty_cache / memory_summary; ExtractedFrame.frame
+  BCHW RGB. In: ai_analyzer, event_test_orchestrator. Out: gpu_backends (get_gpu_backend,
+  lock, types), config.effective_gpu_device_index, timeline_ema, constants.
 - **services/timeline_ema.py** — Dense time grid, EMA, hysteresis, segment merge;
   convert_timeline_to_segments, assignments_to_slices,
   _trim_slices_to_action_window (ACTION_PREROLL_SEC, ACTION_POSTROLL_SEC). In:
@@ -36,10 +58,16 @@ video.py); callers must hold it for create_decoder and get_frames.
   constants.
 - **services/video_compilation.py** — compile_ce_video: load sidecars (COMPILATION_
   DEFAULT_* fallback), timeline_ema for slices, _trim_slices_to_action_window;
-  generate_compilation_video; PyNvVideoCodec per slice under GPU_LOCK; stream to
-  FFmpeg h264_nvenc stdin. Dynamic zoom via compilation_math. In: lifecycle,
-  orchestrator. Out: gpu_decoder, timeline_ema, compilation_math, crop_utils,
-  video (GPU_LOCK), constants.
+  generate_compilation_video; ``get_gpu_backend(config)`` (or ``gpu_backend=``);
+  ``_run_pynv_compilation`` uses ``backend.create_decoder`` per slice under GPU_LOCK,
+  ``backend.ffmpeg_compilation_encode`` for NVENC argv, ``backend.runtime`` for cache.
+  Dynamic zoom via compilation_math. In: lifecycle, orchestrator. Out: gpu_backends
+  (get_gpu_backend, lock, types), config.effective_gpu_device_index, nvidia/ffmpeg_encode
+  (constants re-export), timeline_ema, compilation_math, crop_utils, constants.
+- **services/quick_title_service.py** — Latest.jpg YOLO crop path: BCHW tensor device
+  from ``gpu_backend.runtime.default_detection_device(config)`` (orchestrator passes
+  same ``GpuBackend`` as VideoService). In: orchestrator. Out: gpu_backends, crop_utils,
+  VideoService, ai_analyzer (see AI map for full flow).
 - **services/crop_utils.py** — BCHW-only: center_crop, crop_around_center,
   crop_around_center_to_size (video_compilation dynamic zoom),
   full_frame_resize_to_target, crop_around_detections_with_padding, motion_crop
@@ -53,7 +81,8 @@ video.py); callers must hold it for create_decoder and get_frames.
 
 ```mermaid
 flowchart LR
-  GpuDec[gpu_decoder]
+  Reg[get_gpu_backend config]
+  GpuDec[gpu_decoder shim plus nvidia decoder]
   Video[VideoService]
   MCE[multi_clip_extractor]
   Comp[video_compilation]
@@ -61,6 +90,10 @@ flowchart LR
   TEMA[timeline_ema]
   CMath[compilation_math]
 
+  Reg --> GpuDec
+  Reg --> Video
+  Reg --> MCE
+  Reg --> Comp
   GpuDec -->|"create_decoder, get_frames"| Video
   GpuDec -->|"create_decoder, get_frames"| MCE
   GpuDec -->|"create_decoder, get_frames"| Comp
@@ -72,9 +105,9 @@ flowchart LR
   CMath -->|"zoom, crop, EMA"| Comp
 ```
 
-Decode path: gpu_decoder (PyNvVideoCodec) is the only decode source; video,
-multi_clip_extractor, and video_compilation all call create_decoder/get_frames
-under GPU_LOCK. timeline_ema drives slice building for extraction and
+Decode path: PyNvVideoCodec remains the sole NVDEC implementation (via GpuBackend);
+video (injected backend), multi_clip_extractor, and video_compilation resolve
+``GpuBackend`` and call ``create_decoder``/``get_frames`` under GPU_LOCK. timeline_ema drives slice building for extraction and
 compilation; compilation_math drives zoom/crop math for compilation. All
 production frame crops/resize use crop_utils (BCHW tensors).
 

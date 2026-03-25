@@ -13,6 +13,7 @@ import subprocess
 from collections import Counter, defaultdict
 from typing import Any
 
+from frigate_buffer.config import effective_gpu_device_index
 from frigate_buffer.constants import (
     COMPILATION_DEFAULT_NATIVE_HEIGHT,
     COMPILATION_DEFAULT_NATIVE_WIDTH,
@@ -27,8 +28,15 @@ from frigate_buffer.services.compilation_math import (
     smooth_crop_centers_ema,
     smooth_zoom_ema,
 )  # type: ignore[reportMissingModuleSource]
-from frigate_buffer.services.gpu_decoder import create_decoder
-from frigate_buffer.services.video import GPU_LOCK, _get_video_metadata
+from frigate_buffer.services.gpu_backends import get_gpu_backend
+from frigate_buffer.services.gpu_backends.lock import GPU_LOCK
+from frigate_buffer.services.gpu_backends.nvidia.ffmpeg_encode import (
+    COMPILATION_OUTPUT_FPS,
+    NVENC_COMPILE_NOT_FOUND_RUNTIME_MSG,
+    NVENC_COMPILE_NOT_FOUND_USER_MSG,
+)
+from frigate_buffer.services.gpu_backends.types import GpuBackend
+from frigate_buffer.services.video import _get_video_metadata
 
 logger = logging.getLogger("frigate-buffer")
 
@@ -36,9 +44,6 @@ logger = logging.getLogger("frigate-buffer")
 convert_timeline_to_segments = timeline_ema.convert_timeline_to_segments
 assignments_to_slices = timeline_ema.assignments_to_slices
 _trim_slices_to_action_window = timeline_ema._trim_slices_to_action_window
-
-# Output frame rate for compilation (smooth panning samples at this rate).
-COMPILATION_OUTPUT_FPS = 20
 
 # Chunk size for batched decode to protect VRAM (same pattern as video.py).
 # Decoder returns up to this many frames per get_frames call; after each chunk we
@@ -57,49 +62,12 @@ def _enforce_slice_boundary_continuity(slices: list[dict]) -> None:
             slices[i + 1]["crop_start"] = slices[i]["crop_end"]
 
 
-def _compilation_ffmpeg_cmd_and_log_path(
-    tmp_output_path: str, target_w: int, target_h: int
-) -> tuple[list[str], str]:
-    """
-    Build FFmpeg h264_nvenc command and log path for compilation encode.
-    Shared by _encode_frames_via_ffmpeg and _run_pynv_compilation (streaming path).
-    """
-    log_file_path = os.path.join(os.path.dirname(tmp_output_path), "ffmpeg_compile.log")
-    cmd = [
-        "ffmpeg",
-        "-y",
-        "-f",
-        "rawvideo",
-        "-pix_fmt",
-        "rgb24",
-        "-s",
-        f"{target_w}x{target_h}",
-        "-r",
-        "20",
-        "-thread_queue_size",
-        "512",
-        "-i",
-        "pipe:0",
-        "-c:v",
-        "h264_nvenc",
-        "-preset",
-        "p1",
-        "-tune",
-        "hq",
-        "-rc",
-        "vbr",
-        "-cq",
-        "24",
-        "-an",
-        "-pix_fmt",
-        "yuv420p",
-        tmp_output_path,
-    ]
-    return cmd, log_file_path
-
-
 def _open_compilation_ffmpeg_process(
-    tmp_output_path: str, target_w: int, target_h: int
+    tmp_output_path: str,
+    target_w: int,
+    target_h: int,
+    *,
+    gpu_backend: GpuBackend,
 ) -> tuple[subprocess.Popen[bytes], str, Any, list[str]]:
     """
     Open FFmpeg subprocess for compilation encode; stderr to log file.
@@ -107,8 +75,10 @@ def _open_compilation_ffmpeg_process(
     Returns (proc, log_file_path, log_file, cmd). Caller must call
     _close_compilation_ffmpeg_and_check when done (or on exception).
     """
-    cmd, log_file_path = _compilation_ffmpeg_cmd_and_log_path(
-        tmp_output_path, target_w, target_h
+    cmd, log_file_path = (
+        gpu_backend.ffmpeg_compilation_encode.compilation_ffmpeg_cmd_and_log_path(
+            tmp_output_path, target_w, target_h
+        )
     )
     log_file = open(log_file_path, "w", encoding="utf-8")
     try:
@@ -120,15 +90,8 @@ def _open_compilation_ffmpeg_process(
         )
     except FileNotFoundError:
         log_file.close()
-        logger.error(
-            "Compilation encode failed: ffmpeg not found. "
-            "Compilation requires GPU encoding (h264_nvenc). No CPU fallback. "
-            "Ensure FFmpeg is installed and on PATH with NVENC support.",
-        )
-        raise RuntimeError(
-            "ffmpeg not found; compilation encoding is GPU-only (h264_nvenc), "
-            "no CPU fallback"
-        ) from None
+        logger.error(NVENC_COMPILE_NOT_FOUND_USER_MSG)
+        raise RuntimeError(NVENC_COMPILE_NOT_FOUND_RUNTIME_MSG) from None
     return proc, log_file_path, log_file, cmd
 
 
@@ -169,6 +132,8 @@ def _encode_frames_via_ffmpeg(
     target_w: int,
     target_h: int,
     tmp_output_path: str,
+    *,
+    gpu_backend: GpuBackend,
 ) -> None:
     """
     Encode a list of RGB frames to MP4 using FFmpeg with h264_nvenc only (GPU).
@@ -181,7 +146,7 @@ def _encode_frames_via_ffmpeg(
     if not frames:
         return
     proc, log_file_path, log_file, cmd = _open_compilation_ffmpeg_process(
-        tmp_output_path, target_w, target_h
+        tmp_output_path, target_w, target_h, gpu_backend=gpu_backend
     )
     assert proc.stdin is not None
     try:
@@ -315,22 +280,22 @@ def _run_pynv_compilation(
     target_w: int,
     target_h: int,
     resolve_clip_in_folder: object,
-    cuda_device_index: int = 0,
+    *,
+    gpu_backend: GpuBackend,
+    gpu_device_index: int = 0,
 ) -> None:
     """
-    Decode each slice with PyNvVideoCodec (gpu_decoder); crop with smooth panning.
+    Decode each slice via ``gpu_backend.create_decoder``; crop with smooth panning.
     Uses PTS-based frame selection (get_index_from_time_in_seconds) to reduce
     variable frame rate jitter. Frames streamed to FFmpeg stdin (no in-memory
-    frame list) to avoid RAM spikes. Encode via FFmpeg h264_nvenc only (GPU);
+    frame list) to avoid RAM spikes. Encode via backend FFmpeg argv (e.g. h264_nvenc);
     no CPU fallback. Output 20fps, no audio.
     """
-    import torch
-
     if not slices:
         return
 
     proc, log_file_path, log_file, cmd = _open_compilation_ffmpeg_process(
-        tmp_output_path, target_w, target_h
+        tmp_output_path, target_w, target_h, gpu_backend=gpu_backend
     )
 
     assert proc.stdin is not None
@@ -362,7 +327,9 @@ def _run_pynv_compilation(
             batch_to_free: Any = None
             try:
                 with GPU_LOCK:
-                    with create_decoder(clip_path, gpu_id=cuda_device_index) as ctx:
+                    with gpu_backend.create_decoder(
+                        clip_path, gpu_id=gpu_device_index
+                    ) as ctx:
                         frame_count = len(ctx)
                         if frame_count <= 0:
                             fps = fallback_fps
@@ -421,14 +388,11 @@ def _run_pynv_compilation(
                                     clip_path,
                                     e,
                                 )
-                                if torch.cuda.is_available():
-                                    try:
-                                        logger.debug(
-                                            "VRAM summary: %s",
-                                            torch.cuda.memory_summary(),
-                                        )
-                                    except Exception:
-                                        pass
+                                _ms = gpu_backend.runtime.memory_summary(
+                                    abbreviated=False
+                                )
+                                if _ms:
+                                    logger.debug("VRAM summary: %s", _ms)
                                 break
                             if batch.shape[0] == 0:
                                 logger.error(
@@ -439,8 +403,7 @@ def _run_pynv_compilation(
                                 )
                                 del batch
                                 batch_to_free = None
-                                if torch.cuda.is_available():
-                                    torch.cuda.empty_cache()
+                                gpu_backend.runtime.empty_cache()
                                 continue
                             # First chunk: set decoder dims and crop params once.
                             if ih is None:
@@ -567,8 +530,7 @@ def _run_pynv_compilation(
                                 proc.stdin.flush()
                             del batch
                             batch_to_free = None
-                            if torch.cuda.is_available():
-                                torch.cuda.empty_cache()
+                            gpu_backend.runtime.empty_cache()
             except Exception as e:
                 logger.error(
                     "%s (decoder failed for slice %s). path=%s error=%s",
@@ -582,8 +544,7 @@ def _run_pynv_compilation(
             finally:
                 if batch_to_free is not None:
                     del batch_to_free
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
+                gpu_backend.runtime.empty_cache()
         for cam, pairs in missing_crop_by_cam.items():
             n = len(pairs)
             first, last = pairs[0], pairs[-1]
@@ -642,13 +603,16 @@ def generate_compilation_video(
     crop_smooth_alpha: float = 0.0,
     config: dict | None = None,
     sidecars: dict[str, dict] | None = None,
+    *,
+    gpu_backend: GpuBackend | None = None,
 ) -> None:
     """
     Concatenates slices into a final 20fps cropped video. Decode and crop via
-    PyNvVideoCodec (gpu_decoder) and PyTorch; encode via FFmpeg h264_nvenc only
-    (GPU; no CPU fallback). Smooth panning uses t/duration interpolation.
-    Optional EMA smoothing of crop centers. No audio. When sidecars is provided
-    (e.g. from compile_ce_video), detection.json is not read from disk.
+    ``get_gpu_backend(config)`` (or injected ``gpu_backend``) and crop_utils;
+    encode via backend FFmpeg argv (e.g. h264_nvenc). Smooth panning uses
+    t/duration interpolation. Optional EMA smoothing of crop centers. No audio.
+    When sidecars is provided (e.g. from compile_ce_video), detection.json is
+    not read from disk.
     """
     logger.info(f"Starting compilation of {len(slices)} slices to {output_path}")
 
@@ -759,7 +723,9 @@ def generate_compilation_video(
 
     _enforce_slice_boundary_continuity(slices)
 
-    cuda_device_index = int(config.get("CUDA_DEVICE_INDEX", 0)) if config else 0
+    cfg = config if config is not None else {}
+    backend = gpu_backend if gpu_backend is not None else get_gpu_backend(cfg)
+    gpu_device_index = effective_gpu_device_index(cfg)
     temp_path = output_path.replace(".mp4", "_temp.mp4")
     if not temp_path.endswith(".mp4"):
         temp_path = temp_path + ".mp4"
@@ -771,7 +737,8 @@ def generate_compilation_video(
             target_w=target_w,
             target_h=target_h,
             resolve_clip_in_folder=resolve_clip_in_folder,
-            cuda_device_index=cuda_device_index,
+            gpu_backend=backend,
+            gpu_device_index=gpu_device_index,
         )
         if os.path.isfile(temp_path) and os.path.getsize(temp_path) > 0:
             os.rename(temp_path, output_path)

@@ -2,6 +2,7 @@
 
 import json
 import unittest
+from typing import Any
 from unittest.mock import MagicMock, mock_open, patch
 
 import pytest
@@ -19,6 +20,20 @@ from frigate_buffer.services.video_compilation import (
     smooth_crop_centers_ema,
     smooth_zoom_ema,
 )
+
+
+def _gpu_backend_for_compilation_tests(**create_decoder_kw: Any) -> MagicMock:
+    """Real NVENC argv + runtime; ``create_decoder`` mocked per test kwargs."""
+    from frigate_buffer.services.gpu_backends.nvidia.ffmpeg_encode import (
+        nvidia_ffmpeg_compilation_encode,
+    )
+    from frigate_buffer.services.gpu_backends.nvidia.runtime import nvidia_runtime
+
+    b = MagicMock()
+    b.create_decoder = MagicMock(**create_decoder_kw)
+    b.ffmpeg_compilation_encode = nvidia_ffmpeg_compilation_encode
+    b.runtime = nvidia_runtime
+    return b
 
 
 def _fake_create_decoder_context(
@@ -923,7 +938,6 @@ class TestGenerateCompilationVideo(unittest.TestCase):
         assert "using fallback crop" in msg[0]
 
     @patch("frigate_buffer.services.video_compilation.GPU_LOCK", MagicMock())
-    @patch("frigate_buffer.services.video_compilation.create_decoder")
     @patch("frigate_buffer.services.video_compilation.subprocess.Popen")
     @patch("builtins.open", new_callable=mock_open)
     @patch("frigate_buffer.services.video_compilation._get_video_metadata")
@@ -934,7 +948,6 @@ class TestGenerateCompilationVideo(unittest.TestCase):
         mock_get_metadata,
         mock_open_fn,
         mock_popen,
-        mock_create_decoder,
     ):
         """Decoder len 0 → _get_video_metadata; _run_pynv completes; FFmpeg encode."""
         try:
@@ -953,7 +966,7 @@ class TestGenerateCompilationVideo(unittest.TestCase):
         mock_cm = MagicMock()
         mock_cm.__enter__ = MagicMock(return_value=mock_ctx)
         mock_cm.__exit__ = MagicMock(return_value=None)
-        mock_create_decoder.return_value = mock_cm
+        gpu_backend = _gpu_backend_for_compilation_tests(return_value=mock_cm)
         proc = MagicMock()
         proc.stdin = MagicMock()
         proc.returncode = 0
@@ -977,7 +990,8 @@ class TestGenerateCompilationVideo(unittest.TestCase):
             target_w=1440,
             target_h=1080,
             resolve_clip_in_folder=resolve_clip,
-            cuda_device_index=0,
+            gpu_backend=gpu_backend,
+            gpu_device_index=0,
         )
 
         mock_get_metadata.assert_called()
@@ -993,7 +1007,6 @@ class TestGenerateCompilationVideo(unittest.TestCase):
         proc.wait.assert_called()
 
     @patch("frigate_buffer.services.video_compilation.GPU_LOCK", MagicMock())
-    @patch("frigate_buffer.services.video_compilation.create_decoder")
     @patch("frigate_buffer.services.video_compilation.subprocess.Popen")
     @patch("builtins.open", new_callable=mock_open)
     @patch("frigate_buffer.services.video_compilation._get_video_metadata")
@@ -1004,7 +1017,6 @@ class TestGenerateCompilationVideo(unittest.TestCase):
         mock_get_metadata,
         mock_open_fn,
         mock_popen,
-        mock_create_decoder,
     ):
         """When output_times includes a time at slice end (e.g. 2.0), decoder
         is called with t_safe <= max_valid_t so NVDEC never sees t_sec >= duration."""
@@ -1033,7 +1045,7 @@ class TestGenerateCompilationVideo(unittest.TestCase):
         mock_cm = MagicMock()
         mock_cm.__enter__ = MagicMock(return_value=mock_ctx)
         mock_cm.__exit__ = MagicMock(return_value=None)
-        mock_create_decoder.return_value = mock_cm
+        gpu_backend = _gpu_backend_for_compilation_tests(return_value=mock_cm)
         proc = MagicMock()
         proc.stdin = MagicMock()
         proc.returncode = 0
@@ -1057,7 +1069,8 @@ class TestGenerateCompilationVideo(unittest.TestCase):
             target_w=1440,
             target_h=1080,
             resolve_clip_in_folder=resolve_clip,
-            cuda_device_index=0,
+            gpu_backend=gpu_backend,
+            gpu_device_index=0,
         )
 
         max_valid_t = (frame_count - 1) / fallback_fps - DECODER_TIME_EPSILON_SEC
@@ -1067,7 +1080,6 @@ class TestGenerateCompilationVideo(unittest.TestCase):
         )
 
     @patch("frigate_buffer.services.video_compilation.GPU_LOCK", MagicMock())
-    @patch("frigate_buffer.services.video_compilation.create_decoder")
     @patch("frigate_buffer.services.video_compilation.subprocess.Popen")
     @patch("builtins.open", new_callable=mock_open)
     @patch("frigate_buffer.services.video_compilation._get_video_metadata")
@@ -1078,7 +1090,6 @@ class TestGenerateCompilationVideo(unittest.TestCase):
         mock_get_metadata,
         mock_open_fn,
         mock_popen,
-        mock_create_decoder,
     ):
         """Compilation encode via FFmpeg (h264_nvenc; no CPU fallback)."""
         import importlib.util
@@ -1093,7 +1104,7 @@ class TestGenerateCompilationVideo(unittest.TestCase):
         mock_cm = MagicMock()
         mock_cm.__enter__ = MagicMock(return_value=mock_ctx)
         mock_cm.__exit__ = MagicMock(return_value=None)
-        mock_create_decoder.return_value = mock_cm
+        gpu_backend = _gpu_backend_for_compilation_tests(return_value=mock_cm)
         proc = MagicMock()
         proc.stdin = MagicMock()
         proc.returncode = 0
@@ -1117,7 +1128,8 @@ class TestGenerateCompilationVideo(unittest.TestCase):
             target_w=1440,
             target_h=1080,
             resolve_clip_in_folder=resolve_clip,
-            cuda_device_index=0,
+            gpu_backend=gpu_backend,
+            gpu_device_index=0,
         )
 
         mock_popen.assert_called_once()
@@ -1136,7 +1148,6 @@ class TestGenerateCompilationVideo(unittest.TestCase):
         proc.wait.assert_called()
 
     @patch("frigate_buffer.services.video_compilation.GPU_LOCK", MagicMock())
-    @patch("frigate_buffer.services.video_compilation.create_decoder")
     @patch("frigate_buffer.services.video_compilation.subprocess.Popen")
     @patch("builtins.open", new_callable=mock_open)
     @patch("frigate_buffer.services.video_compilation._get_video_metadata")
@@ -1147,12 +1158,13 @@ class TestGenerateCompilationVideo(unittest.TestCase):
         mock_get_metadata,
         mock_open_fn,
         mock_popen,
-        mock_create_decoder,
     ):
         """create_decoder raises → slice skipped; FFmpeg opened, no frames written."""
         mock_isfile.return_value = True
         mock_get_metadata.return_value = (640, 480, 20.0, 2.0)
-        mock_create_decoder.side_effect = RuntimeError("NVDEC init failed")
+        gpu_backend = _gpu_backend_for_compilation_tests(
+            side_effect=RuntimeError("NVDEC init failed")
+        )
         proc = MagicMock()
         proc.stdin = MagicMock()
         proc.returncode = 0
@@ -1176,7 +1188,8 @@ class TestGenerateCompilationVideo(unittest.TestCase):
             target_w=1440,
             target_h=1080,
             resolve_clip_in_folder=resolve_clip,
-            cuda_device_index=0,
+            gpu_backend=gpu_backend,
+            gpu_device_index=0,
         )
 
         mock_popen.assert_called_once()
@@ -1185,7 +1198,6 @@ class TestGenerateCompilationVideo(unittest.TestCase):
         proc.wait.assert_called()
 
     @patch("frigate_buffer.services.video_compilation.GPU_LOCK", MagicMock())
-    @patch("frigate_buffer.services.video_compilation.create_decoder")
     @patch("frigate_buffer.services.video_compilation.subprocess.Popen")
     @patch("builtins.open", new_callable=mock_open)
     @patch("frigate_buffer.services.video_compilation.logger")
@@ -1198,7 +1210,6 @@ class TestGenerateCompilationVideo(unittest.TestCase):
         mock_logger,
         mock_open_fn,
         mock_popen,
-        mock_create_decoder,
     ):
         """get_frames returns 0 → slice skipped; log clarifies not hardware init."""
         try:
@@ -1216,7 +1227,7 @@ class TestGenerateCompilationVideo(unittest.TestCase):
         mock_cm = MagicMock()
         mock_cm.__enter__ = MagicMock(return_value=mock_ctx)
         mock_cm.__exit__ = MagicMock(return_value=None)
-        mock_create_decoder.return_value = mock_cm
+        gpu_backend = _gpu_backend_for_compilation_tests(return_value=mock_cm)
         proc = MagicMock()
         proc.stdin = MagicMock()
         proc.returncode = 0
@@ -1240,7 +1251,8 @@ class TestGenerateCompilationVideo(unittest.TestCase):
             target_w=1440,
             target_h=1080,
             resolve_clip_in_folder=resolve_clip,
-            cuda_device_index=0,
+            gpu_backend=gpu_backend,
+            gpu_device_index=0,
         )
 
         assert proc.stdin.write.call_count == 0
@@ -1251,7 +1263,6 @@ class TestGenerateCompilationVideo(unittest.TestCase):
         assert "Skipping chunk" in msg
 
     @patch("frigate_buffer.services.video_compilation.GPU_LOCK", MagicMock())
-    @patch("frigate_buffer.services.video_compilation.create_decoder")
     @patch("frigate_buffer.services.video_compilation.subprocess.Popen")
     @patch("builtins.open", new_callable=mock_open)
     @patch("frigate_buffer.services.video_compilation._get_video_metadata")
@@ -1262,7 +1273,6 @@ class TestGenerateCompilationVideo(unittest.TestCase):
         mock_get_metadata,
         mock_open_fn,
         mock_popen,
-        mock_create_decoder,
     ):
         """get_frames in BATCH_SIZE chunks; empty_cache after each and in finally."""
         try:
@@ -1285,7 +1295,7 @@ class TestGenerateCompilationVideo(unittest.TestCase):
         mock_cm = MagicMock()
         mock_cm.__enter__ = MagicMock(return_value=mock_ctx)
         mock_cm.__exit__ = MagicMock(return_value=None)
-        mock_create_decoder.return_value = mock_cm
+        gpu_backend = _gpu_backend_for_compilation_tests(return_value=mock_cm)
         proc = MagicMock()
         proc.stdin = MagicMock()
         proc.returncode = 0
@@ -1302,10 +1312,9 @@ class TestGenerateCompilationVideo(unittest.TestCase):
         ]
         resolve_clip = MagicMock(return_value="doorbell-1.mp4")
 
-        with (
-            patch("torch.cuda.is_available", return_value=True),
-            patch("torch.cuda.empty_cache", MagicMock()) as mock_empty_cache,
-        ):
+        with patch(
+            "frigate_buffer.services.gpu_backends.nvidia.runtime.empty_cache"
+        ) as mock_empty_cache:
             _run_pynv_compilation(
                 slices=slices,
                 ce_dir="/ce",
@@ -1313,7 +1322,8 @@ class TestGenerateCompilationVideo(unittest.TestCase):
                 target_w=1440,
                 target_h=1080,
                 resolve_clip_in_folder=resolve_clip,
-                cuda_device_index=0,
+                gpu_backend=gpu_backend,
+                gpu_device_index=0,
             )
 
         # 20 frames in chunks of BATCH_SIZE (4) → 5 chunk calls
@@ -1331,7 +1341,6 @@ class TestGenerateCompilationVideo(unittest.TestCase):
         assert proc.stdin.write.call_count == 20
 
     @patch("frigate_buffer.services.video_compilation.GPU_LOCK", MagicMock())
-    @patch("frigate_buffer.services.video_compilation.create_decoder")
     @patch("frigate_buffer.services.video_compilation.subprocess.Popen")
     @patch("builtins.open", new_callable=mock_open)
     @patch(
@@ -1346,7 +1355,6 @@ class TestGenerateCompilationVideo(unittest.TestCase):
         mock_crop_to_size,
         mock_open_fn,
         mock_popen,
-        mock_create_decoder,
     ):
         """get_frames fewer than requested → repeat last frame; no IndexError."""
         try:
@@ -1364,7 +1372,7 @@ class TestGenerateCompilationVideo(unittest.TestCase):
         mock_cm = MagicMock()
         mock_cm.__enter__ = MagicMock(return_value=mock_ctx)
         mock_cm.__exit__ = MagicMock(return_value=None)
-        mock_create_decoder.return_value = mock_cm
+        gpu_backend = _gpu_backend_for_compilation_tests(return_value=mock_cm)
         mock_crop_to_size.side_effect = lambda frame, cx, cy, cw, ch, out_w, out_h: (
             torch.zeros((1, 3, out_h, out_w), dtype=torch.uint8)
         )
@@ -1393,14 +1401,14 @@ class TestGenerateCompilationVideo(unittest.TestCase):
             target_w=1440,
             target_h=1080,
             resolve_clip_in_folder=resolve_clip,
-            cuda_device_index=0,
+            gpu_backend=gpu_backend,
+            gpu_device_index=0,
         )
 
         n_frames_expected = 40
         assert proc.stdin.write.call_count == n_frames_expected
 
     @patch("frigate_buffer.services.video_compilation.GPU_LOCK", MagicMock())
-    @patch("frigate_buffer.services.video_compilation.create_decoder")
     @patch("frigate_buffer.services.video_compilation.subprocess.Popen")
     @patch("builtins.open", new_callable=mock_open)
     @patch("frigate_buffer.services.video_compilation.logger")
@@ -1417,7 +1425,6 @@ class TestGenerateCompilationVideo(unittest.TestCase):
         mock_logger,
         mock_open_fn,
         mock_popen,
-        mock_create_decoder,
     ):
         """Decoder fewer than requested → DEBUG + one INFO per camera per event."""
         try:
@@ -1435,7 +1442,7 @@ class TestGenerateCompilationVideo(unittest.TestCase):
         mock_cm = MagicMock()
         mock_cm.__enter__ = MagicMock(return_value=mock_ctx)
         mock_cm.__exit__ = MagicMock(return_value=None)
-        mock_create_decoder.return_value = mock_cm
+        gpu_backend = _gpu_backend_for_compilation_tests(return_value=mock_cm)
         mock_crop_to_size.side_effect = lambda frame, cx, cy, cw, ch, out_w, out_h: (
             torch.zeros((1, 3, out_h, out_w), dtype=torch.uint8)
         )
@@ -1463,7 +1470,8 @@ class TestGenerateCompilationVideo(unittest.TestCase):
             target_w=1440,
             target_h=1080,
             resolve_clip_in_folder=resolve_clip,
-            cuda_device_index=0,
+            gpu_backend=gpu_backend,
+            gpu_device_index=0,
         )
 
         info_calls = [
@@ -1477,7 +1485,6 @@ class TestGenerateCompilationVideo(unittest.TestCase):
         assert "/path/doorbell-1.mp4" in str(info_calls[0])
 
     @patch("frigate_buffer.services.video_compilation.GPU_LOCK", MagicMock())
-    @patch("frigate_buffer.services.video_compilation.create_decoder")
     @patch("frigate_buffer.services.video_compilation.subprocess.Popen")
     @patch("builtins.open", new_callable=mock_open)
     @patch(
@@ -1492,7 +1499,6 @@ class TestGenerateCompilationVideo(unittest.TestCase):
         mock_crop_to_size,
         mock_open_fn,
         mock_popen,
-        mock_create_decoder,
     ):
         """_run_pynv uses crop_around_center_to_size; frames to FFmpeg at target res."""
         try:
@@ -1511,7 +1517,7 @@ class TestGenerateCompilationVideo(unittest.TestCase):
         mock_cm = MagicMock()
         mock_cm.__enter__ = MagicMock(return_value=mock_ctx)
         mock_cm.__exit__ = MagicMock(return_value=None)
-        mock_create_decoder.return_value = mock_cm
+        gpu_backend = _gpu_backend_for_compilation_tests(return_value=mock_cm)
         # crop_around_center_to_size(frame, cx, cy, crop_w, crop_h, output_w, output_h)
         mock_crop_to_size.side_effect = lambda frame, cx, cy, cw, ch, out_w, out_h: (
             torch.zeros((1, 3, out_h, out_w), dtype=torch.uint8)
@@ -1542,7 +1548,8 @@ class TestGenerateCompilationVideo(unittest.TestCase):
             target_w=target_w,
             target_h=target_h,
             resolve_clip_in_folder=resolve_clip,
-            cuda_device_index=0,
+            gpu_backend=gpu_backend,
+            gpu_device_index=0,
         )
 
         mock_crop_to_size.assert_called()
@@ -1560,13 +1567,12 @@ class TestGenerateCompilationVideo(unittest.TestCase):
         proc.wait.assert_called()
 
     @patch("frigate_buffer.services.video_compilation.GPU_LOCK", MagicMock())
-    @patch("frigate_buffer.services.video_compilation.create_decoder")
     @patch("frigate_buffer.services.video_compilation.subprocess.Popen")
     @patch("builtins.open", new_callable=mock_open)
     @patch("frigate_buffer.services.video_compilation.logger")
     @patch("frigate_buffer.services.video_compilation.os.path.isfile")
     def test_run_pynv_compilation_logs_error_when_all_src_indices_identical(
-        self, mock_isfile, mock_logger, mock_open_fn, mock_popen, mock_create_decoder
+        self, mock_isfile, mock_logger, mock_open_fn, mock_popen
     ):
         """Same frame index for all → DEBUG and INFO once per camera (static)."""
         try:
@@ -1584,7 +1590,7 @@ class TestGenerateCompilationVideo(unittest.TestCase):
         mock_cm = MagicMock()
         mock_cm.__enter__ = MagicMock(return_value=mock_ctx)
         mock_cm.__exit__ = MagicMock(return_value=None)
-        mock_create_decoder.return_value = mock_cm
+        gpu_backend = _gpu_backend_for_compilation_tests(return_value=mock_cm)
         proc = MagicMock()
         proc.stdin = MagicMock()
         proc.returncode = 0
@@ -1610,7 +1616,8 @@ class TestGenerateCompilationVideo(unittest.TestCase):
             target_w=1440,
             target_h=1080,
             resolve_clip_in_folder=resolve_clip,
-            cuda_device_index=0,
+            gpu_backend=gpu_backend,
+            gpu_device_index=0,
         )
 
         debug_calls = [
@@ -1634,13 +1641,12 @@ class TestGenerateCompilationVideo(unittest.TestCase):
         assert "doorbell-1.mp4" in str(info_calls[0])
 
     @patch("frigate_buffer.services.video_compilation.GPU_LOCK", MagicMock())
-    @patch("frigate_buffer.services.video_compilation.create_decoder")
     @patch("frigate_buffer.services.video_compilation.subprocess.Popen")
     @patch("builtins.open", new_callable=mock_open)
     @patch("frigate_buffer.services.video_compilation.logger")
     @patch("frigate_buffer.services.video_compilation.os.path.isfile")
     def test_run_pynv_compilation_logs_once_per_camera_not_per_slice(
-        self, mock_isfile, mock_logger, mock_open_fn, mock_popen, mock_create_decoder
+        self, mock_isfile, mock_logger, mock_open_fn, mock_popen
     ):
         """DEBUG compilation log emitted once per camera, not per slice."""
         try:
@@ -1657,7 +1663,7 @@ class TestGenerateCompilationVideo(unittest.TestCase):
         mock_cm = MagicMock()
         mock_cm.__enter__ = MagicMock(return_value=mock_ctx)
         mock_cm.__exit__ = MagicMock(return_value=None)
-        mock_create_decoder.return_value = mock_cm
+        gpu_backend = _gpu_backend_for_compilation_tests(return_value=mock_cm)
         proc = MagicMock()
         proc.stdin = MagicMock()
         proc.returncode = 0
@@ -1710,7 +1716,8 @@ class TestGenerateCompilationVideo(unittest.TestCase):
             target_w=1440,
             target_h=1080,
             resolve_clip_in_folder=resolve_clip,
-            cuda_device_index=0,
+            gpu_backend=gpu_backend,
+            gpu_device_index=0,
         )
 
         compilation_debug_calls = [
@@ -1740,7 +1747,10 @@ class TestEncodeFramesViaFfmpeg(unittest.TestCase):
                 proc.stdin = MagicMock()
                 proc.returncode = 0
                 mock_popen.return_value = proc
-                _encode_frames_via_ffmpeg(frames, 1440, 1080, "/tmp/out.mp4")
+                be = _gpu_backend_for_compilation_tests()
+                _encode_frames_via_ffmpeg(
+                    frames, 1440, 1080, "/tmp/out.mp4", gpu_backend=be
+                )
         call_args = mock_popen.call_args[0][0]
         assert "h264_nvenc" in call_args
         assert "libx264" not in call_args
@@ -1759,7 +1769,10 @@ class TestEncodeFramesViaFfmpeg(unittest.TestCase):
                 proc.stdin = MagicMock()
                 proc.returncode = 0
                 mock_popen.return_value = proc
-                _encode_frames_via_ffmpeg(frames, 1440, 1080, "/tmp/out.mp4")
+                be = _gpu_backend_for_compilation_tests()
+                _encode_frames_via_ffmpeg(
+                    frames, 1440, 1080, "/tmp/out.mp4", gpu_backend=be
+                )
         call_args = mock_popen.call_args[0][0]
         cmd_str = " ".join(call_args) if isinstance(call_args, list) else str(call_args)
         assert "thread_queue_size" in cmd_str
@@ -1782,8 +1795,11 @@ class TestEncodeFramesViaFfmpeg(unittest.TestCase):
                 proc.stdin = MagicMock()
                 proc.returncode = 1
                 mock_popen.return_value = proc
+                be = _gpu_backend_for_compilation_tests()
                 with pytest.raises(RuntimeError) as ctx:
-                    _encode_frames_via_ffmpeg(frames, 1440, 1080, "/tmp/out.mp4")
+                    _encode_frames_via_ffmpeg(
+                        frames, 1440, 1080, "/tmp/out.mp4", gpu_backend=be
+                    )
         assert "h264_nvenc" in str(ctx.value)
         assert "ffmpeg_compile.log" in str(ctx.value)
 
@@ -1800,8 +1816,11 @@ class TestEncodeFramesViaFfmpeg(unittest.TestCase):
                 proc.stdin = MagicMock()
                 proc.stdin.write.side_effect = BrokenPipeError
                 mock_popen.return_value = proc
+                be = _gpu_backend_for_compilation_tests()
                 with pytest.raises(RuntimeError) as ctx:
-                    _encode_frames_via_ffmpeg(frames, 1440, 1080, "/tmp/out.mp4")
+                    _encode_frames_via_ffmpeg(
+                        frames, 1440, 1080, "/tmp/out.mp4", gpu_backend=be
+                    )
         assert "broke pipe" in str(ctx.value)
         assert "ffmpeg_compile.log" in str(ctx.value)
         proc.wait.assert_called_once()
@@ -2055,19 +2074,22 @@ class TestCompileCeVideoConfig(unittest.TestCase):
         )
 
 
-class TestCompilationDecoderImport(unittest.TestCase):
-    """Compilation uses gpu_decoder.create_decoder; test guards import."""
+class TestCompilationGpuBackendSurface(unittest.TestCase):
+    """Compilation uses GpuBackend for decode argv and NVENC (no gpu_decoder)."""
 
-    def test_video_compilation_imports_create_decoder(self):
-        """video_compilation module uses create_decoder from gpu_decoder for decode."""
+    def test_generate_compilation_video_has_gpu_backend_parameter(self):
+        from inspect import signature
+
         from frigate_buffer.services import video_compilation
 
-        assert hasattr(video_compilation, "create_decoder") or "create_decoder" in dir(
-            video_compilation
-        )
-        from frigate_buffer.services.gpu_decoder import create_decoder
+        sig = signature(video_compilation.generate_compilation_video)
+        assert "gpu_backend" in sig.parameters
 
-        assert video_compilation.create_decoder is create_decoder
+    def test_run_pynv_compilation_requires_gpu_backend(self):
+        from inspect import signature
+
+        sig = signature(_run_pynv_compilation)
+        assert "gpu_backend" in sig.parameters
 
 
 if __name__ == "__main__":

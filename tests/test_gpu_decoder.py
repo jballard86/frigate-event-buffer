@@ -1,7 +1,8 @@
 """
-Tests for the GPU decoder wrapper (gpu_decoder.py).
+Tests for the GPU decoder shim (gpu_decoder.py re-exports nvidia.decoder).
 
-Uses mocks so tests run without PyNvVideoCodec/GPU. Verifies DecoderContext API,
+Uses mocks so tests run without PyNvVideoCodec/GPU. Patches
+gpu_backends.nvidia.decoder._create_simple_decoder. Verifies DecoderContext API,
 create_decoder context manager, and BCHW tensor shape from get_frames.
 """
 
@@ -63,7 +64,7 @@ def mock_pynv(monkeypatch):
         OutputColorType = type("OutputColorType", (), {"RGBP": "RGBP"})()
 
     monkeypatch.setattr(
-        "frigate_buffer.services.gpu_decoder._create_simple_decoder",
+        "frigate_buffer.services.gpu_backends.nvidia.decoder._create_simple_decoder",
         lambda path, gpu_id: MockSimpleDecoder(path, gpu_id=gpu_id),
     )
     return Nvc
@@ -164,7 +165,7 @@ def test_create_decoder_logs_on_failure(monkeypatch):
         raise RuntimeError("fake NVDEC init failure")
 
     monkeypatch.setattr(
-        "frigate_buffer.services.gpu_decoder._create_simple_decoder",
+        "frigate_buffer.services.gpu_backends.nvidia.decoder._create_simple_decoder",
         fail,
     )
     with pytest.raises(RuntimeError, match="fake NVDEC"):
