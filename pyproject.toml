@@ -43,6 +43,9 @@ testpaths = ["tests"]
 addopts = "-v"
 asyncio_mode = "auto"  # <-- Add this line
 asyncio_default_fixture_loop_scope = "function" # <-- Prevents loop scope warnings in newer versions
+markers = [
+    "amd_gpu: needs AMD ROCm + ROCm torch; enable with RUN_AMD_GPU_TESTS=1",
+]
 
 [tool.ruff]
 line-length = 88

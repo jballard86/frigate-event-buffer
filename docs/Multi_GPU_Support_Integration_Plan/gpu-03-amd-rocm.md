@@ -35,9 +35,9 @@ src/frigate_buffer/services/gpu_backends/
 
 ```
 native/
-└── amd_decode/                  # name TBD
+└── amd_decode/                  # Phase 3: VAAPI/SW + CPU BCHW; ROCm tensor interop later
     ├── CMakeLists.txt
-    └── src/                     # FFmpeg hw (VAAPI/AMF), ROCm-importable memory, libtorch ROCm, pybind11
+    └── src/                     # FFmpeg VAAPI, libtorch, pybind11 (AMF/ROCm interop TBD)
 ```
 
 **Removed from plan (superseded by pivot):** separate **`decoder_torchcodec.py`**, **`decoder_copy_path.py`**, and multi-strategy **`AMD_DECODE_STRATEGY`** — the **only** GPU decode implementation for AMD in this plan is the **native extension**.
@@ -87,12 +87,14 @@ native/
 
 ## 5. Compilation and deployment (Docker)
 
+**Implemented:** root **`Dockerfile.rocm`** ( **`rocm/pytorch`** base + **`docker-compose.rocm.example.yml`** ). Builder installs FFmpeg **-dev**, compiles **`native/amd_decode`**; runtime installs **`requirements-rocm.txt`**, copies **`.so`**, **`scripts/docker_entrypoint_rocm.sh`**. Manual workflow: **`.github/workflows/rocm_docker_build.yml`**.
+
 ### 5.1 Multi-stage build (required)
 
 | Stage | Purpose | Contents |
 |-------|---------|----------|
-| **1 — builder** | Compile AMD decode extension | Toolchain, **cmake**, FFmpeg **-dev**, **libtorch (ROCm)**, ROCm **device** headers if needed for interop, Python dev headers, **pybind11**. Output: **`frigate_amd_decode*.so`** (name TBD). |
-| **2 — runtime** | Run frigate-buffer | ROCm-capable **base** (or minimal runtime), **`torch` ROCm** from pip, app code, **FFmpeg** runtime `.so`, **only** the built **`.so`** from stage 1. **Strip** compilers and `-dev` packages. |
+| **1 — builder** | Compile AMD decode extension | Toolchain, **cmake**, FFmpeg **-dev**, **libtorch** from ROCm **torch** base image, Python dev headers, **pybind11** (FetchContent). Output: **`frigate_amd_decode*.so`**. |
+| **2 — runtime** | Run frigate-buffer | Same **ROCm torch** base (slim vs Intel: still large), **`requirements-rocm.txt`**, app code, **FFmpeg** runtime, **only** the built **`.so`** from stage 1. **No** separate compiler packages in runtime stage beyond base image. |
 
 ### 5.2 Host deployment (containers)
 
@@ -155,10 +157,10 @@ native/
 
 ## 11. Acceptance criteria
 
-- [ ] `GPU_VENDOR=amd` E2E with **native** `.so` on documented Linux + AMD GPU.
-- [ ] Runtime image **slim** (no build toolchain).
-- [ ] **DecoderContextProto** complete; no NVIDIA imports.
-- [ ] MAP/INSTALL describe **multi-stage** Docker and **device** nodes.
+- [ ] `GPU_VENDOR=amd` E2E with **native** `.so` on documented Linux + AMD GPU — verify with **`scripts/run_amd_rocm_docker_smoke.sh`** and optional clip path (**`amd-rocm-hardware-smoke.md`**).
+- [x] Runtime image **without added compiler toolchain** in stage 2 (**`Dockerfile.rocm`**); base **`rocm/pytorch`** image remains large by design.
+- [x] **DecoderContextProto** complete for **amd/**; decode path does not use NVIDIA decode APIs (**`COMPILATION_OUTPUT_FPS`** is vendor-neutral in **`constants.py`**).
+- [x] MAP/INSTALL describe **multi-stage** Docker and **`/dev/kfd`** + **DRI** device nodes.
 
 ---
 
@@ -170,6 +172,8 @@ native/
 4. AMF encode + GIF; registry wiring.
 5. **Dockerfile.rocm** multi-stage + docs.
 6. Tests + PROCESSING.
+
+**Phase 6 (hardening):** **`COMPILATION_OUTPUT_FPS`** centralized; **`run_amd_rocm_docker_smoke.sh`**, **`amd-rocm-hardware-smoke.md`**, **`amd_rocm_smoke.yml`** (self-hosted); **`smoke_amd_rocm_torch.py`** gains **`--strict-native`** and optional clip decode.
 
 ---
 

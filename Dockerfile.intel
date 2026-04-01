@@ -1,0 +1,123 @@
+# syntax=docker/dockerfile:1
+# Multi-stage Intel (Arc) image: build frigate_intel_decode in builder; slim runtime, no compiler.
+# Build: docker build -f Dockerfile.intel -t frigate-buffer:intel .
+# Compose: see docker-compose.intel.example.yml (DRI render node, GPU_VENDOR=intel).
+#
+# Torch CPU wheels: versions come from requirements-intel.txt (torch/torchvision pins);
+# the builder installs only those lines so the .so matches the runtime stack.
+
+ARG USE_GUI_OPENCV=false
+ARG TORCH_INDEX_URL=https://download.pytorch.org/whl/cpu
+
+# -----------------------------------------------------------------------------
+# Stage 1 — compile native extension
+# -----------------------------------------------------------------------------
+FROM ubuntu:24.04 AS builder
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    cmake \
+    git \
+    pkg-config \
+    build-essential \
+    python3.12 \
+    python3.12-dev \
+    python3-pip \
+    libavcodec-dev \
+    libavformat-dev \
+    libavutil-dev \
+    libswscale-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN ln -sf /usr/bin/python3.12 /usr/bin/python3
+
+WORKDIR /opt/build
+
+COPY requirements-intel.txt /opt/build/requirements-intel.txt
+
+ARG TORCH_INDEX_URL
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip3 install --break-system-packages --index-url "${TORCH_INDEX_URL}" \
+    $(grep -E '^torch(vision)?==' /opt/build/requirements-intel.txt | xargs)
+
+COPY native/intel_decode /opt/build/native/intel_decode
+
+RUN cd /opt/build/native/intel_decode \
+    && export CMAKE_PREFIX_PATH="$(python3 -c 'import torch; print(torch.utils.cmake_prefix_path)')" \
+    && cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
+    && cmake --build build -j"$(nproc)"
+
+# -----------------------------------------------------------------------------
+# Stage 2 — runtime (no g++, cmake, *-dev)
+# -----------------------------------------------------------------------------
+FROM ubuntu:24.04
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    software-properties-common \
+    && add-apt-repository -y universe && apt-get update \
+    && apt-get install -y --no-install-recommends \
+    python3.12 \
+    python3.12-venv \
+    python3-pip \
+    ffmpeg \
+    curl \
+    ca-certificates \
+    libgomp1 \
+    intel-media-va-driver \
+    vainfo \
+    && apt-get purge -y software-properties-common && apt-get autoremove -y --purge \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN ln -sf /usr/bin/python3.12 /usr/bin/python3
+
+WORKDIR /app
+
+ARG TORCH_INDEX_URL
+COPY requirements-intel.txt .
+ARG USE_GUI_OPENCV
+RUN --mount=type=cache,target=/root/.cache/pip \
+    if [ "$USE_GUI_OPENCV" = "true" ]; then \
+        pip3 install --no-cache-dir --break-system-packages --index-url "${TORCH_INDEX_URL}" \
+            -r requirements-intel.txt; \
+    else \
+        pip3 install --no-cache-dir --break-system-packages --index-url "${TORCH_INDEX_URL}" \
+            -r requirements-intel.txt && \
+        pip3 uninstall -y opencv-python opencv-python-headless 2>/dev/null || true && \
+        pip3 install --no-cache-dir --force-reinstall --break-system-packages \
+            --index-url "${TORCH_INDEX_URL}" opencv-python-headless; \
+    fi
+
+COPY pyproject.toml ./
+COPY src/frigate_buffer/ ./src/frigate_buffer/
+COPY examples/config.example.yaml ./
+COPY run_server.py ./
+COPY scripts/smoke_intel_gpu_path.py ./scripts/smoke_intel_gpu_path.py
+COPY scripts/docker_entrypoint_intel.sh /usr/local/bin/docker_entrypoint_intel.sh
+RUN chmod +x /usr/local/bin/docker_entrypoint_intel.sh \
+    && mkdir -p /app/storage /usr/local/lib/frigate_intel_decode
+
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip3 install --break-system-packages --no-deps .
+
+# Optional XPU inference: build with --build-arg INSTALL_IPEX=1 (may change torch;
+# verify against https://intel.github.io/intel-extension-for-pytorch/ for your stack).
+ARG INSTALL_IPEX=0
+RUN if [ "$INSTALL_IPEX" = "1" ]; then \
+    pip3 install --no-cache-dir --break-system-packages intel-extension-for-pytorch; \
+fi
+
+COPY --from=builder /opt/build/native/intel_decode/build/frigate_intel_decode*.so \
+    /usr/local/lib/frigate_intel_decode/
+
+ENV PYTHONPATH=/usr/local/lib/frigate_intel_decode
+ENV GPU_VENDOR=intel
+
+EXPOSE 5055
+
+HEALTHCHECK --interval=60s --timeout=10s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:5055/status || exit 1
+
+ENTRYPOINT ["/usr/local/bin/docker_entrypoint_intel.sh"]
+CMD ["python3", "run_server.py"]

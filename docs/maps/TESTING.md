@@ -3,7 +3,13 @@
 Branch doc for pytest suite and event_test package. Tests run in CI/CD without
 live GPU or MQTT broker; see Mocking Strategy below. GPU-related config keys and
 env are documented in **docs/INSTALL.md** and **examples/config.example.yaml**.
-Scripts: bench/verify scripts live in scripts/.
+Manual workflows: **`.github/workflows/rocm_docker_build.yml`** (ROCm image build only),
+**`.github/workflows/amd_rocm_smoke.yml`** (self-hosted **`amd-rocm`** + **`run_amd_rocm_docker_smoke.sh`**).
+Scripts: bench/verify scripts live in scripts/; **`smoke_intel_gpu_path.py`** (Intel Docker /
+bare metal) for torch + native import + optional **`vainfo`** (see **docs/INSTALL.md** and
+**docs/Multi_GPU_Support_Integration_Plan/intel-arc-hardware-smoke.md**); **`smoke_amd_rocm_torch.py`**
+for ROCm torch + **amd** runtime (gpu-03); **`run_intel_arc_docker_smoke.sh`**
+for DRI **`docker run`** on Arc hosts.
 
 ---
 
@@ -22,13 +28,22 @@ Out: sys.modules mocks (paho, requests, flask, schedule, etc.) or per-test
 MagicMock/patch.
 
 **Processing / GPU** — test_gpu_backends_registry.py (get_gpu_backend cache,
-nvidia-only, shim identity vs gpu_decoder, blank GPU_VENDOR, concurrent init),
-test_gpu_decoder.py (mock
+vendor nvidia vs intel vs amd, shim identity vs gpu_decoder, blank GPU_VENDOR, concurrent
+init), test_intel_ffmpeg.py (QSV compilation argv + ``INTEL_QSV_*`` config + GIF
+``-hwaccel qsv`` / filter_complex snapshots), test_amd_ffmpeg.py (h264_amf compilation
+argv + VAAPI ``-hwaccel_device`` / GIF filter_complex), test_smoke_amd_rocm_path.py
+(``@pytest.mark.amd_gpu``; skipped unless ``RUN_AMD_GPU_TESTS=1``; ``conftest`` hook),
+test_amd_decode_spike.py (``importorskip(frigate_amd_decode)``; gpu-03 Phase 3),
+test_intel_decode_spike.py (``importorskip(frigate_intel_decode)``;
+version + missing file when built), test_amd_decoder.py (mock ``frigate_amd_decode``,
+reload ``amd/decoder``), test_intel_decoder.py (mock ``frigate_intel_decode``
++ reload decoder), test_gpu_decoder.py (mock
 gpu_backends.nvidia.decoder._create_simple_decoder / PyNv), test_video_service.py
 (patch ``VideoService._decoder_context``, fake DecoderContext with get_frames),
 test_multi_clip_extractor.py (patch ``get_gpu_backend``, backend ``create_decoder``
 side_effect), test_video_compilation.py (mock ``GpuBackend.create_decoder``, real
-NVENC argv helper + runtime), test_crop_utils.py, test_timeline_ema.py.
+NVENC argv + Intel QSV argv via ``_gpu_backend_for_compilation_tests_intel`` + AMD
+h264_amf via ``_gpu_backend_for_compilation_tests_amd``), test_crop_utils.py, test_timeline_ema.py.
 In: pytest. Out: patch ``VideoService._decoder_context`` (instance, two-arg
 fake) or nvidia.decoder._create_simple_decoder; ``clear_gpu_backend_cache`` in
 setUp when constructing VideoService with ``get_gpu_backend``; no real decode.

@@ -1,0 +1,102 @@
+# syntax=docker/dockerfile:1
+# Multi-stage AMD ROCm image: build frigate_amd_decode in builder; runtime keeps ROCm stack, no compiler.
+# Base image pins PyTorch 2.6 + ROCm user-space; align PYTORCH_ROCM_INDEX with that ROCm series (default 6.4).
+#
+# Build: docker build -f Dockerfile.rocm -t frigate-buffer:rocm .
+# Compose: docker-compose.rocm.example.yml (/dev/kfd + DRI, GPU_VENDOR=amd).
+#
+# Image is large (~tens of GB). CI uses a manual workflow (see .github/workflows/rocm_docker_build.yml).
+
+ARG ROCM_PYTORCH_IMAGE=rocm/pytorch:rocm6.4.2_ubuntu24.04_py3.12_pytorch_release_2.6.0
+ARG PYTORCH_ROCM_INDEX=https://download.pytorch.org/whl/rocm6.4
+
+# -----------------------------------------------------------------------------
+# Stage 1 — compile native extension (same libtorch as ROCm base)
+# -----------------------------------------------------------------------------
+FROM ${ROCM_PYTORCH_IMAGE} AS builder
+ENV DEBIAN_FRONTEND=noninteractive
+USER root
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    cmake \
+    git \
+    pkg-config \
+    build-essential \
+    python3-dev \
+    libavcodec-dev \
+    libavformat-dev \
+    libavutil-dev \
+    libswscale-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /opt/build
+COPY native/amd_decode /opt/build/native/amd_decode
+
+RUN cd /opt/build/native/amd_decode \
+    && export CMAKE_PREFIX_PATH="$(python3 -c 'import torch; print(torch.utils.cmake_prefix_path)')" \
+    && cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
+        -DPython_EXECUTABLE="$(command -v python3)" \
+    && cmake --build build -j"$(nproc)"
+
+# -----------------------------------------------------------------------------
+# Stage 2 — runtime (no g++, cmake, *-dev)
+# -----------------------------------------------------------------------------
+FROM ${ROCM_PYTORCH_IMAGE}
+ENV DEBIAN_FRONTEND=noninteractive
+USER root
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ffmpeg \
+    curl \
+    ca-certificates \
+    libgomp1 \
+    vainfo \
+    libva2 \
+    libva-drm2 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+ARG PYTORCH_ROCM_INDEX
+COPY requirements-rocm.txt .
+ARG USE_GUI_OPENCV=false
+RUN --mount=type=cache,target=/root/.cache/pip \
+    if [ "$USE_GUI_OPENCV" = "true" ]; then \
+        python3 -m pip install --no-cache-dir --break-system-packages \
+            --extra-index-url "${PYTORCH_ROCM_INDEX}" \
+            -r requirements-rocm.txt; \
+    else \
+        python3 -m pip install --no-cache-dir --break-system-packages \
+            --extra-index-url "${PYTORCH_ROCM_INDEX}" \
+            -r requirements-rocm.txt && \
+        python3 -m pip uninstall -y opencv-python opencv-python-headless 2>/dev/null || true && \
+        python3 -m pip install --no-cache-dir --force-reinstall --break-system-packages \
+            --extra-index-url "${PYTORCH_ROCM_INDEX}" opencv-python-headless; \
+    fi
+
+COPY pyproject.toml ./
+COPY src/frigate_buffer/ ./src/frigate_buffer/
+COPY examples/config.example.yaml ./
+COPY run_server.py ./
+COPY scripts/smoke_amd_rocm_torch.py ./scripts/smoke_amd_rocm_torch.py
+COPY scripts/docker_entrypoint_rocm.sh /usr/local/bin/docker_entrypoint_rocm.sh
+RUN chmod +x /usr/local/bin/docker_entrypoint_rocm.sh \
+    && mkdir -p /app/storage /usr/local/lib/frigate_amd_decode
+
+RUN --mount=type=cache,target=/root/.cache/pip \
+    python3 -m pip install --break-system-packages --no-deps .
+
+COPY --from=builder /opt/build/native/amd_decode/build/frigate_amd_decode*.so \
+    /usr/local/lib/frigate_amd_decode/
+
+ENV PYTHONPATH=/usr/local/lib/frigate_amd_decode
+ENV GPU_VENDOR=amd
+
+EXPOSE 5055
+
+HEALTHCHECK --interval=60s --timeout=10s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:5055/status || exit 1
+
+ENTRYPOINT ["/usr/local/bin/docker_entrypoint_rocm.sh"]
+CMD ["python3", "run_server.py"]

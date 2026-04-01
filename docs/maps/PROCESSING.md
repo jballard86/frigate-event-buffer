@@ -18,7 +18,7 @@ video_compilation); callers must hold it for create_decoder and get_frames.
   PyNvVideoCodec, nvidia/runtime.
 - **services/gpu_decoder.py** — Thin re-export of nvidia.decoder for stable imports.
 - **services/gpu_backends/nvidia/ffmpeg_encode.py** — h264_nvenc argv + log path
-  for compilation rawvideo stdin (COMPILATION_OUTPUT_FPS). In: video_compilation.
+  for compilation rawvideo stdin (**COMPILATION_OUTPUT_FPS** in **constants.py**). In: video_compilation.
 - **services/gpu_backends/nvidia/gif_ffmpeg.py** — CUDA hwaccel + scale_cuda
   filter argv for preview GIF. In: video (VideoService.generate_gif_from_clip).
 - **services/gpu_backends/nvidia/runtime.py** — nvidia-smi log at startup,
@@ -26,9 +26,28 @@ video_compilation); callers must hold it for create_decoder and get_frames.
   In: nvidia.decoder, video.log_gpu_status delegate.
 - **services/gpu_backends/protocols.py**, **types.py** — DecoderContextProto,
   GpuBackend dataclass.
+- **native/intel_decode/** — C++ ``frigate_intel_decode``: ``IntelDecoderSession`` (QSV
+  when available, else SW FFmpeg), BCHW uint8 CPU tensors → Python may move to XPU.
+  Build: ``Dockerfile.intel`` (multi-stage), ``scripts/build_intel_decode.sh``, README.
+- **native/amd_decode/** — C++ ``frigate_amd_decode``: ``AmdDecoderSession`` (VAAPI when
+  DRM device works, else SW FFmpeg), BCHW uint8 CPU tensors; Python ``amd/decoder.py`` may
+  ``.to(cuda)`` on ROCm torch. Build: ``scripts/build_amd_decode.sh``, README;
+  Docker: ``Dockerfile.rocm``, ``docker-compose.rocm.example.yml``.
+- **services/gpu_backends/intel/** — ``decoder.create_decoder`` (native session),
+  ``runtime`` (XPU/CPU), ``ffmpeg_encode`` (h264_qsv; reads ``INTEL_QSV_*`` from merged
+  config), ``gif_ffmpeg`` (QSV hwaccel).
+  In: registry when ``GPU_VENDOR=intel``. Requires ``frigate_intel_decode`` at decode
+  time (``import`` inside ``create_decoder``).
+- **services/gpu_backends/amd/** — ``decoder.create_decoder`` (native
+  ``frigate_amd_decode`` / ``AmdDecoderSession``; build ``native/amd_decode/``),
+  ``runtime`` (ROCm via ``cuda:`` torch API), ``ffmpeg_encode`` (h264_amf),
+  ``gif_ffmpeg`` (VAAPI hwaccel, Linux-first). In: registry when ``GPU_VENDOR=amd``.
+  Contract tests: ``tests/test_amd_decoder.py`` (mock native), ``test_video_compilation``
+  AMD h264_amf argv via ``_gpu_backend_for_compilation_tests_amd``.
 - **services/gpu_backends/registry.py** — ``get_gpu_backend(config)`` returns a
-  cached :class:`GpuBackend` (``nvidia`` only); ``clear_gpu_backend_cache()`` for
-  tests. Builds via ``nvidia.build_nvidia_backend``. Vendor/index come from merged
+  cached :class:`GpuBackend` per ``GPU_VENDOR`` (``nvidia`` | ``intel`` | ``amd``);
+  ``clear_gpu_backend_cache()`` for tests. Builds via ``build_nvidia_backend`` /
+  ``build_intel_backend`` / ``build_amd_backend``. Vendor/index come from merged
   flat config (``GPU_VENDOR``, ``GPU_DEVICE_INDEX``, legacy ``CUDA_DEVICE_INDEX``),
   YAML ``multi_cam.gpu_vendor`` / ``gpu_device_index``, and env; decode uses
   ``effective_gpu_device_index(config)``. Orchestrator injects backend into

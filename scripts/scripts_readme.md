@@ -1,3 +1,3 @@
 # scripts/
 
-This directory is reserved for standalone scripts. Per MAP.md §6 (File placement rules), new standalone scripts belong here at the repo root.
+This directory is reserved for standalone scripts. Per MAP.md §6 (File placement rules), new standalone scripts belong here at the repo root. Intel Arc + Docker DRI smoke: **`run_intel_arc_docker_smoke.sh`** (see **`docs/Multi_GPU_Support_Integration_Plan/intel-arc-hardware-smoke.md`**). AMD ROCm + **`/dev/kfd`** + DRI Docker smoke: **`run_amd_rocm_docker_smoke.sh`** (see **`docs/Multi_GPU_Support_Integration_Plan/amd-rocm-hardware-smoke.md`**). AMD ROCm torch smoke: **`smoke_amd_rocm_torch.py`** (see **`docs/INSTALL.md`** AMD section). Native AMD decode build: **`build_amd_decode.sh`** (see **`native/amd_decode/README.md`**). ROCm container entrypoint: **`docker_entrypoint_rocm.sh`** (see **`Dockerfile.rocm`**).

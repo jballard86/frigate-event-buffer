@@ -17,4 +17,8 @@ Executable sub-plans for multi-vendor GPU support and an **optional CPU-only** m
 
 **Run order:** **1 → 2**, **1 → 3**, **1 → 4** (2, 3, 4 can proceed in parallel after 1).
 
+**Intel Arc host smoke (gpu-02 Phase 8):** [intel-arc-hardware-smoke.md](./intel-arc-hardware-smoke.md).
+
+**AMD ROCm host smoke (gpu-03 Phase 6):** [amd-rocm-hardware-smoke.md](./amd-rocm-hardware-smoke.md).
+
 The same primary plan may exist under `.cursor/plans/amd_intel_gpu_support_d5add60b.plan.md` for Cursor UI; **prefer [gpu-00-primary-multi-vendor-gpu-plan.md](./gpu-00-primary-multi-vendor-gpu-plan.md)** under `docs/Multi_GPU_Support_Integration_Plan/` for links and reviews.

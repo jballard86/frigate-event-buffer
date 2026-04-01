@@ -54,7 +54,12 @@ class FfmpegCompilationEncodeProto(Protocol):
     """Argv builders for compilation encode (stdin rawvideo → NVENC/QSV/AMF)."""
 
     def compilation_ffmpeg_cmd_and_log_path(
-        self, tmp_output_path: str, target_w: int, target_h: int
+        self,
+        tmp_output_path: str,
+        target_w: int,
+        target_h: int,
+        *,
+        config: dict | None = None,
     ) -> tuple[list[str], str]: ...
 
 

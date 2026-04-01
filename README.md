@@ -22,7 +22,7 @@ This project is a state-aware, GPU-accelerated companion app for **Frigate NVR**
 
 ## Quick start
 
-- **Docker (recommended):** See for clone, build, config, and run. No compose required; `docker build` + `docker run` with GPU and env vars.
+- **Docker (recommended):** See **docs/INSTALL.md** for clone, build, config, and run. Default **`Dockerfile`** targets **NVIDIA**; **Intel Arc** uses **`Dockerfile.intel`** and **`docker-compose.intel.example.yml`**; **AMD ROCm** uses **`Dockerfile.rocm`** and **`docker-compose.rocm.example.yml`**.
 - **Layout:** Repo root must have `Dockerfile` and `src/`. If you only see `frigate_buffer/` at root, run `git checkout main && git pull`.
 
 ---
@@ -59,13 +59,13 @@ Paths in `docker run` must match where you put `config.yaml` and storage (see do
 
 ### 3. Docker Compose (optional)
 
-If you use Compose, copy from `docker-compose.example.yaml` (if present) to `docker-compose.yaml`, then set the same env vars and volume mounts as in docs/INSTALL.md's `docker run` example. The app does not require Compose; plain `docker run` is supported.
+If you use Compose, start from `docker-compose.yml`, **`docker-compose.intel.example.yml`** (Intel + DRI), or **`docker-compose.rocm.example.yml`** (AMD + `/dev/kfd` + DRI), then set env vars and volumes per **docs/INSTALL.md**. Plain `docker run` is supported.
 
 ---
 
 ## Requirements
 
-- **Docker** (and for GPU: NVIDIA GPU, driver, , e.g. `docker run --gpus all` with `NVIDIA_DRIVER_CAPABILITIES=compute,video,utility`).
+- **Docker**; for GPU use **NVIDIA** (default image + `docker run --gpus all`, `NVIDIA_DRIVER_CAPABILITIES=...`), **Intel** (**`Dockerfile.intel`**, DRI), or **AMD ROCm** (**`Dockerfile.rocm`**, `/dev/kfd` + DRI — see **docs/INSTALL.md**).
 - **Frigate** 0.17+ and **MQTT**; **Home Assistant** for notifications. Optional: **Gemini API** (or proxy) for AI analysis.
 
 ---

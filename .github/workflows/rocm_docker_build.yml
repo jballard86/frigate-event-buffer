@@ -1,0 +1,17 @@
+# Manual ROCm image build (gpu-03 Phase 5). Base image is very large; not run on every PR.
+name: ROCm Docker build
+
+on:
+  workflow_dispatch:
+
+jobs:
+  docker-rocm:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build ROCm image
+        run: docker build -f Dockerfile.rocm -t frigate-buffer:rocm-ci .
+      - name: Smoke (non-strict; GHA has no AMD GPU)
+        run: |
+          docker run --rm frigate-buffer:rocm-ci python3 scripts/smoke_amd_rocm_torch.py

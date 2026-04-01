@@ -4,18 +4,22 @@ from __future__ import annotations
 
 import os
 
-# Output frame rate for compilation (must match callers that stream at this rate).
-COMPILATION_OUTPUT_FPS = 20
+from frigate_buffer.constants import COMPILATION_OUTPUT_FPS
 
 
 def compilation_ffmpeg_cmd_and_log_path(
-    tmp_output_path: str, target_w: int, target_h: int
+    tmp_output_path: str,
+    target_w: int,
+    target_h: int,
+    *,
+    config: dict | None = None,
 ) -> tuple[list[str], str]:
     """
     Build FFmpeg h264_nvenc command and log path for compilation encode.
 
     Shared by streaming and batch encode paths; behavior unchanged from
-    pre-refactor video_compilation.
+    pre-refactor video_compilation. ``config`` is accepted for protocol parity
+    with the Intel backend (NVENC argv does not read it).
     """
     log_file_path = os.path.join(os.path.dirname(tmp_output_path), "ffmpeg_compile.log")
     cmd = [
@@ -66,9 +70,16 @@ class NvidiaFfmpegCompilationEncode:
     """Concrete :class:`FfmpegCompilationEncodeProto` for NVENC compilation."""
 
     def compilation_ffmpeg_cmd_and_log_path(
-        self, tmp_output_path: str, target_w: int, target_h: int
+        self,
+        tmp_output_path: str,
+        target_w: int,
+        target_h: int,
+        *,
+        config: dict | None = None,
     ) -> tuple[list[str], str]:
-        return compilation_ffmpeg_cmd_and_log_path(tmp_output_path, target_w, target_h)
+        return compilation_ffmpeg_cmd_and_log_path(
+            tmp_output_path, target_w, target_h, config=config
+        )
 
 
 nvidia_ffmpeg_compilation_encode = NvidiaFfmpegCompilationEncode()

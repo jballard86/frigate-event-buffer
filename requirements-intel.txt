@@ -1,0 +1,18 @@
+# Intel / GPU_VENDOR=intel image: same as requirements.txt without PyNvVideoCodec (NVIDIA-only).
+# Use with Dockerfile.intel. For XPU inference add Intel Extension for PyTorch per docs/INSTALL.md.
+#
+# Pin torch/torchvision together: native frigate_intel_decode links libtorch from this
+# version; bump both when upgrading (keep Dockerfile.intel builder grep step in sync).
+torch==2.6.0
+torchvision==0.21.0
+flask
+gunicorn
+paho-mqtt>=2.0.0
+requests
+schedule
+pyyaml
+voluptuous
+opencv-python-headless
+ultralytics>=8.0.0
+numpy
+firebase-admin

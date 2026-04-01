@@ -56,6 +56,9 @@ ERROR_BUFFER_MAX_SIZE: int = 10
 # before container restart.
 NVDEC_INIT_FAILURE_PREFIX: str = "NVDEC hardware initialization failed"
 
+# Intel / generic GPU decode init (gpu-02+); use with vendor tag in log messages.
+GPU_DECODE_INIT_FAILURE_PREFIX: str = "GPU hardware decode initialization failed"
+
 # Clamp time passed to PyNvVideoCodec get_index_from_time_in_seconds so it is
 # strictly less than clip duration (library rejects t_sec >= duration).
 DECODER_TIME_EPSILON_SEC: float = 1e-6
@@ -73,6 +76,9 @@ GIF_PREVIEW_WIDTH: int = 480
 # Video compilation: default native resolution when sidecar is missing or empty.
 COMPILATION_DEFAULT_NATIVE_WIDTH: int = 1920
 COMPILATION_DEFAULT_NATIVE_HEIGHT: int = 1080
+
+# Rawvideo frame rate for compilation encode stdin (NVENC / QSV / h264_amf; shared).
+COMPILATION_OUTPUT_FPS: int = 20
 
 # When nearest sidecar entry has no detections (e.g. person left frame), search
 # for nearest entry with detections within this many seconds; hold that crop.

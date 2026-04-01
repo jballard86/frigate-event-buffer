@@ -130,7 +130,7 @@ notifications:
 #   crop_height: 720                    # Output height for stitched/multi-cam frames
 #   multi_cam_system_prompt_file: ""   # Custom prompt file; empty = use built-in
 #   smart_crop_padding: 0.15            # Padding around motion crop (0.15 = 15%); increase if crop feels tight
-#   gpu_vendor: "nvidia"               # Decode/runtime backend; only nvidia supported today
+#   gpu_vendor: "nvidia"               # Decode backend: nvidia | intel | amd (native .so when not nvidia)
 #   gpu_device_index: 0                # Adapter index for NVDEC/YOLO/compile (cuda:N); preferred
 #   cuda_device_index: 0               # Deprecated: use gpu_device_index (same meaning)
 #   detection_model: "yolov8n.pt"      # YOLO model for person/object detection
@@ -149,6 +149,9 @@ notifications:
 #   tracking_target_frame_percent: 40   # When person fills this % of frame, use full-frame resize
 #   person_area_debug: false           # true = draw person area on frame (for tuning)
 #   compilation_zoom_smooth_ema_alpha: 0.25   # Smoothing for zoom in summary video (0-1)
+#   intel:                             # Optional — Intel QSV summary encode (when gpu_vendor: intel)
+#     qsv_encode_preset: medium        # h264_qsv -preset (e.g. veryfast … veryslow)
+#     qsv_encode_global_quality: 24    # 1–51 typical; lower = higher quality
 
 # -----------------------------------------------------------------------------
 # Gemini proxy (extended) — model parameters for API calls

@@ -170,6 +170,13 @@ The **wheel/sdist** or **Docker copy step** must place the `.so` where `intel.de
 4. FFmpeg QSV encode + GIF helpers; IPEX YOLO validation.
 5. **Dockerfile.intel** multi-stage + compose docs.
 6. Tests + MAP/PROCESSING.
+7. **Phase 7 (repo):** CI **`docker run`** smoke **`--strict`** after Intel image build;
+   optional **`multi_cam.intel`** QSV compilation preset/quality + env overrides;
+   **`FfmpegCompilationEncodeProto.config`** plumbed from **`generate_compilation_video`**.
+8. **Phase 8 (hardware):** Runbook **[intel-arc-hardware-smoke.md](./intel-arc-hardware-smoke.md)**,
+   **`scripts/run_intel_arc_docker_smoke.sh`**, smoke **`--vainfo` / `--strict-dri`**,
+   runtime **`vainfo`** package in **`Dockerfile.intel`**, optional self-hosted workflow
+   **`.github/workflows/intel_arc_smoke.yml`**.
 
 ---
 

@@ -25,8 +25,10 @@ State: EventStateManager, ConsolidatedEventManager; filesystem for events, clips
 timelines, daily reports. Config: **`GPU_VENDOR`**, **`GPU_DEVICE_INDEX`** (legacy
 **`CUDA_DEVICE_INDEX`**); YAML under **`multi_cam`** (`gpu_vendor`, `gpu_device_index`);
 see **docs/INSTALL.md**. Video/AI: **PyNvVideoCodec** under **services/gpu_backends/nvidia/** (decode);
-public **gpu_decoder** shim re-exports; **get_gpu_backend(config)** (cached,
-``GPU_VENDOR``) returns **GpuBackend**; **orchestrator** injects it into **VideoService**
+**GPU_VENDOR=intel** uses **native/intel_decode** + **services/gpu_backends/intel/** (QSV preferred);
+**GPU_VENDOR=amd** uses **native/amd_decode** (**frigate_amd_decode**) + **services/gpu_backends/amd/** (VAAPI/SW FFmpeg → CPU BCHW; gpu-03);
+public **gpu_decoder** shim re-exports NVIDIA; **get_gpu_backend(config)** (cached by
+vendor) returns **GpuBackend**; **orchestrator** injects it into **VideoService**
 and **QuickTitleService** (shared instance);
 FFmpeg h264_nvenc argv from **nvidia/ffmpeg_encode**;
 Ultralytics YOLO; Gemini proxy
@@ -80,10 +82,16 @@ frigate-event-buffer/
 ├── config.example.yaml
 ├── .env.example
 ├── docker-compose.yaml
+├── docker-compose.intel.example.yml (GPU_VENDOR=intel + DRI; see INSTALL)
+├── docker-compose.rocm.example.yml (GPU_VENDOR=amd + /dev/kfd + DRI; see INSTALL)
 ├── docker-compose.example.yaml
 ├── Dockerfile
+├── Dockerfile.intel (multi-stage: build frigate_intel_decode; no compiler in runtime)
+├── Dockerfile.rocm (multi-stage: frigate_amd_decode; rocm/pytorch base; gpu-03)
 ├── pyproject.toml
 ├── requirements.txt
+├── requirements-intel.txt (no PyNvVideoCodec; used by Dockerfile.intel)
+├── requirements-rocm.txt (no PyNvVideoCodec; ROCm torch index; gpu-03 AMD)
 ├── run_server.py
 ├── RULE.md
 ├── MAP.md
@@ -100,15 +108,21 @@ frigate-event-buffer/
 ├── gpu_pipeline_audit_report.md
 ├── performance_final_verification.md
 ├── .cursor/rules/
-├── scripts/
+├── .github/workflows/ci.yml (Ruff, pytest, docker build Dockerfile.intel + smoke --strict)
+├── .github/workflows/intel_arc_smoke.yml (manual; self-hosted intel-arc + DRI)
+├── .github/workflows/rocm_docker_build.yml (manual; Dockerfile.rocm; large base image)
+├── .github/workflows/amd_rocm_smoke.yml (manual; self-hosted amd-rocm + kfd/DRI)
+├── scripts/ (build_*_decode.sh, docker_entrypoint_*.sh, smoke_* paths, run_intel_arc_docker_smoke.sh, run_amd_rocm_docker_smoke.sh)
+├── native/intel_decode/ (gpu-02: QSV/SW FFmpeg + libtorch; GPU_VENDOR=intel)
+├── native/amd_decode/ (gpu-03: VAAPI/SW FFmpeg + libtorch; GPU_VENDOR=amd)
 ├── src/frigate_buffer/
 │   ├── main.py, wsgi.py, config.py, models.py, logging_utils.py, constants.py
 │   ├── version.txt, orchestrator.py
 │   ├── event_test/
 │   ├── managers/ (file, state, consolidation, zone_filter, preferences, snooze)
-│   ├── services/ (see docs/maps/; includes gpu_backends/ nvidia decode+ffmpeg)
+│   ├── services/ (see docs/maps/; gpu_backends/ nvidia, intel, amd decode+ffmpeg)
 │   └── web/ (server, routes, templates, static; path_helpers, report_helpers, frigate_proxy)
-├── tests/
+├── tests/ (test_*ffmpeg.py, test_amd_decode_spike, test_amd_decoder mock, test_smoke_amd_rocm_path.py)
 └── examples/
 
 ---

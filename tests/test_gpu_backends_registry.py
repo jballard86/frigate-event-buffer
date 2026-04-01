@@ -1,4 +1,4 @@
-"""Tests for gpu_backends registry (get_gpu_backend cache, nvidia-only vendor)."""
+"""Tests for gpu_backends registry (get_gpu_backend cache, multi-vendor)."""
 
 from __future__ import annotations
 
@@ -38,7 +38,7 @@ def test_get_gpu_backend_normalizes_vendor_case() -> None:
 
 def test_get_gpu_backend_unsupported_vendor_raises() -> None:
     with pytest.raises(ValueError, match="not supported"):
-        get_gpu_backend({"GPU_VENDOR": "intel"})
+        get_gpu_backend({"GPU_VENDOR": "matrox"})
 
 
 def test_get_gpu_backend_returns_same_cached_instance() -> None:
@@ -46,6 +46,58 @@ def test_get_gpu_backend_returns_same_cached_instance() -> None:
     a = get_gpu_backend(cfg)
     b = get_gpu_backend({"GPU_VENDOR": "nvidia", "GPU_DEVICE_INDEX": 1})
     assert a is b
+
+
+def test_get_gpu_backend_intel_returns_distinct_backend() -> None:
+    clear_gpu_backend_cache()
+    n = get_gpu_backend({"GPU_VENDOR": "nvidia"})
+    clear_gpu_backend_cache()
+    i = get_gpu_backend({"GPU_VENDOR": "intel"})
+    assert i.create_decoder is not n.create_decoder
+    assert i.runtime is not n.runtime
+
+
+def test_get_gpu_backend_intel_exposes_intel_ffmpeg_helpers() -> None:
+    from frigate_buffer.services.gpu_backends.intel.ffmpeg_encode import (
+        intel_ffmpeg_compilation_encode,
+    )
+    from frigate_buffer.services.gpu_backends.intel.gif_ffmpeg import intel_gif_ffmpeg
+
+    clear_gpu_backend_cache()
+    b = get_gpu_backend({"GPU_VENDOR": "intel"})
+    assert b.ffmpeg_compilation_encode is intel_ffmpeg_compilation_encode
+    assert b.gif_ffmpeg is intel_gif_ffmpeg
+
+
+def test_get_gpu_backend_amd_returns_distinct_backend() -> None:
+    clear_gpu_backend_cache()
+    n = get_gpu_backend({"GPU_VENDOR": "nvidia"})
+    clear_gpu_backend_cache()
+    a = get_gpu_backend({"GPU_VENDOR": "amd"})
+    assert a.create_decoder is not n.create_decoder
+    assert a.runtime is not n.runtime
+
+
+def test_get_gpu_backend_amd_exposes_amd_ffmpeg_helpers() -> None:
+    from frigate_buffer.services.gpu_backends.amd.ffmpeg_encode import (
+        amd_ffmpeg_compilation_encode,
+    )
+    from frigate_buffer.services.gpu_backends.amd.gif_ffmpeg import amd_gif_ffmpeg
+
+    clear_gpu_backend_cache()
+    b = get_gpu_backend({"GPU_VENDOR": "amd"})
+    assert b.ffmpeg_compilation_encode is amd_ffmpeg_compilation_encode
+    assert b.gif_ffmpeg is amd_gif_ffmpeg
+
+
+def test_get_gpu_backend_switches_vendor_when_config_changes() -> None:
+    from frigate_buffer.services.gpu_backends.nvidia import create_decoder as nvidia_cd
+
+    clear_gpu_backend_cache()
+    a = get_gpu_backend({"GPU_VENDOR": "intel"})
+    b = get_gpu_backend({"GPU_VENDOR": "nvidia"})
+    assert a is not b
+    assert b.create_decoder is nvidia_cd
 
 
 def test_gpu_backend_exposes_nvidia_components() -> None:

@@ -1,0 +1,43 @@
+# AMD ROCm / GPU_VENDOR=amd — copy to docker-compose.yml or merge patterns into yours.
+# Requires: Dockerfile.rocm build; host passes /dev/kfd and a DRM render node (adjust renderD128 if needed).
+# On the host: `getent group video render` — use group_add names or numeric GIDs if names missing.
+# Smoke (no strict GPU): docker run --rm frigate-buffer:rocm python3 scripts/smoke_amd_rocm_torch.py
+# With GPU: docker run --rm --device /dev/kfd --device /dev/dri/renderD128 --group-add video ...
+#
+# docker compose -f docker-compose.rocm.example.yml up -d --build
+
+services:
+  frigate_buffer:
+    container_name: frigate_buffer_rocm
+    build:
+      context: .
+      dockerfile: Dockerfile.rocm
+      args:
+        USE_GUI_OPENCV: "false"
+        # Override if you use a different rocm/pytorch tag (keep PYTORCH_ROCM_INDEX in sync).
+        ROCM_PYTORCH_IMAGE: rocm/pytorch:rocm6.4.2_ubuntu24.04_py3.12_pytorch_release_2.6.0
+        PYTORCH_ROCM_INDEX: https://download.pytorch.org/whl/rocm6.4
+    image: frigate-buffer:rocm
+    restart: unless-stopped
+    network_mode: bridge
+    shm_size: 1gb
+    ports:
+      - "5055:5055"
+    env_file:
+      - .env
+    environment:
+      DOCKER_ENV: "true"
+      LOG_LEVEL: INFO
+      GPU_VENDOR: amd
+    volumes:
+      - ./storage:/app/storage
+      - ./config.yaml:/app/config.yaml:ro
+      - /etc/localtime:/etc/localtime:ro
+    devices:
+      - /dev/kfd:/dev/kfd
+      - /dev/dri/renderD128:/dev/dri/renderD128
+    group_add:
+      - video
+      - render
+
+networks: {}

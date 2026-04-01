@@ -36,6 +36,34 @@ def _gpu_backend_for_compilation_tests(**create_decoder_kw: Any) -> MagicMock:
     return b
 
 
+def _gpu_backend_for_compilation_tests_intel(**create_decoder_kw: Any) -> MagicMock:
+    """Real QSV argv + Intel runtime; ``create_decoder`` mocked per test kwargs."""
+    from frigate_buffer.services.gpu_backends.intel.ffmpeg_encode import (
+        intel_ffmpeg_compilation_encode,
+    )
+    from frigate_buffer.services.gpu_backends.intel.runtime import intel_runtime
+
+    b = MagicMock()
+    b.create_decoder = MagicMock(**create_decoder_kw)
+    b.ffmpeg_compilation_encode = intel_ffmpeg_compilation_encode
+    b.runtime = intel_runtime
+    return b
+
+
+def _gpu_backend_for_compilation_tests_amd(**create_decoder_kw: Any) -> MagicMock:
+    """Real h264_amf argv + AMD runtime; ``create_decoder`` mocked per test kwargs."""
+    from frigate_buffer.services.gpu_backends.amd.ffmpeg_encode import (
+        amd_ffmpeg_compilation_encode,
+    )
+    from frigate_buffer.services.gpu_backends.amd.runtime import amd_runtime
+
+    b = MagicMock()
+    b.create_decoder = MagicMock(**create_decoder_kw)
+    b.ffmpeg_compilation_encode = amd_ffmpeg_compilation_encode
+    b.runtime = amd_runtime
+    return b
+
+
 def _fake_create_decoder_context(
     frame_count: int = 200, height: int = 480, width: int = 640
 ):
@@ -2075,7 +2103,10 @@ class TestCompileCeVideoConfig(unittest.TestCase):
 
 
 class TestCompilationGpuBackendSurface(unittest.TestCase):
-    """Compilation uses GpuBackend for decode argv and NVENC (no gpu_decoder)."""
+    """Compilation uses GpuBackend for decode argv (NVENC / QSV / AMF).
+
+    Does not use gpu_decoder shim.
+    """
 
     def test_generate_compilation_video_has_gpu_backend_parameter(self):
         from inspect import signature
@@ -2090,6 +2121,207 @@ class TestCompilationGpuBackendSurface(unittest.TestCase):
 
         sig = signature(_run_pynv_compilation)
         assert "gpu_backend" in sig.parameters
+
+    @patch("frigate_buffer.services.video_compilation.GPU_LOCK", MagicMock())
+    @patch("frigate_buffer.services.video_compilation.subprocess.Popen")
+    @patch("builtins.open", new_callable=mock_open)
+    @patch("frigate_buffer.services.video_compilation._get_video_metadata")
+    @patch("frigate_buffer.services.video_compilation.os.path.isfile")
+    def test_run_pynv_compilation_intel_backend_calls_h264_qsv(
+        self,
+        mock_isfile,
+        mock_get_metadata,
+        mock_open_fn,
+        mock_popen,
+    ):
+        """Same compilation path as NVENC test; Intel backend → h264_qsv argv."""
+        import importlib.util
+
+        if importlib.util.find_spec("torch") is None:
+            self.skipTest("torch not available")
+        mock_isfile.return_value = True
+        mock_get_metadata.return_value = (640, 480, 20.0, 2.0)
+        mock_ctx = _fake_create_decoder_context(200, 480, 640)
+        if mock_ctx is None:
+            self.skipTest("torch not available")
+        mock_cm = MagicMock()
+        mock_cm.__enter__ = MagicMock(return_value=mock_ctx)
+        mock_cm.__exit__ = MagicMock(return_value=None)
+        gpu_backend = _gpu_backend_for_compilation_tests_intel(return_value=mock_cm)
+        proc = MagicMock()
+        proc.stdin = MagicMock()
+        proc.returncode = 0
+        mock_popen.return_value = proc
+
+        slices = [
+            {
+                "camera": "doorbell",
+                "start_sec": 0.0,
+                "end_sec": 2.0,
+                "crop_start": (0, 0, 320, 240),
+                "crop_end": (0, 0, 320, 240),
+            },
+        ]
+        resolve_clip = MagicMock(return_value="doorbell-1.mp4")
+
+        _run_pynv_compilation(
+            slices=slices,
+            ce_dir="/ce",
+            tmp_output_path="/out.mp4.tmp",
+            target_w=1440,
+            target_h=1080,
+            resolve_clip_in_folder=resolve_clip,
+            gpu_backend=gpu_backend,
+            gpu_device_index=0,
+        )
+
+        mock_popen.assert_called_once()
+        call_args = mock_popen.call_args[0][0]
+        assert "h264_qsv" in call_args
+        assert "h264_nvenc" not in call_args
+        assert "-thread_queue_size" in call_args
+        assert "512" in call_args
+        assert "medium" in call_args
+        gq = call_args.index("-global_quality")
+        assert call_args[gq + 1] == "24"
+        assert call_args[call_args.index("-s") + 1] == "1440x1080"
+        assert call_args[-1] == "/out.mp4.tmp"
+        assert proc.stdin.write.call_count == 40
+        proc.stdin.flush.assert_called()
+        proc.stdin.close.assert_called_once()
+        proc.wait.assert_called()
+
+    @patch("frigate_buffer.services.video_compilation.GPU_LOCK", MagicMock())
+    @patch("frigate_buffer.services.video_compilation.subprocess.Popen")
+    @patch("builtins.open", new_callable=mock_open)
+    @patch("frigate_buffer.services.video_compilation._get_video_metadata")
+    @patch("frigate_buffer.services.video_compilation.os.path.isfile")
+    def test_run_pynv_compilation_intel_backend_uses_config_qsv_options(
+        self,
+        mock_isfile,
+        mock_get_metadata,
+        mock_open_fn,
+        mock_popen,
+    ):
+        """INTEL_QSV_* from merged config flow into h264_qsv argv."""
+        import importlib.util
+
+        if importlib.util.find_spec("torch") is None:
+            self.skipTest("torch not available")
+        mock_isfile.return_value = True
+        mock_get_metadata.return_value = (640, 480, 20.0, 2.0)
+        mock_ctx = _fake_create_decoder_context(200, 480, 640)
+        if mock_ctx is None:
+            self.skipTest("torch not available")
+        mock_cm = MagicMock()
+        mock_cm.__enter__ = MagicMock(return_value=mock_ctx)
+        mock_cm.__exit__ = MagicMock(return_value=None)
+        gpu_backend = _gpu_backend_for_compilation_tests_intel(return_value=mock_cm)
+        proc = MagicMock()
+        proc.stdin = MagicMock()
+        proc.returncode = 0
+        mock_popen.return_value = proc
+
+        slices = [
+            {
+                "camera": "doorbell",
+                "start_sec": 0.0,
+                "end_sec": 2.0,
+                "crop_start": (0, 0, 320, 240),
+                "crop_end": (0, 0, 320, 240),
+            },
+        ]
+        resolve_clip = MagicMock(return_value="doorbell-1.mp4")
+        cfg = {
+            "INTEL_QSV_ENCODE_PRESET": "faster",
+            "INTEL_QSV_ENCODE_GLOBAL_QUALITY": 30,
+        }
+
+        _run_pynv_compilation(
+            slices=slices,
+            ce_dir="/ce",
+            tmp_output_path="/out.mp4.tmp",
+            target_w=1440,
+            target_h=1080,
+            resolve_clip_in_folder=resolve_clip,
+            gpu_backend=gpu_backend,
+            gpu_device_index=0,
+            config=cfg,
+        )
+
+        mock_popen.assert_called_once()
+        call_args = mock_popen.call_args[0][0]
+        assert call_args[call_args.index("-preset") + 1] == "faster"
+        assert call_args[call_args.index("-global_quality") + 1] == "30"
+
+    @patch("frigate_buffer.services.video_compilation.GPU_LOCK", MagicMock())
+    @patch("frigate_buffer.services.video_compilation.subprocess.Popen")
+    @patch("builtins.open", new_callable=mock_open)
+    @patch("frigate_buffer.services.video_compilation._get_video_metadata")
+    @patch("frigate_buffer.services.video_compilation.os.path.isfile")
+    def test_run_pynv_compilation_amd_backend_calls_h264_amf(
+        self,
+        mock_isfile,
+        mock_get_metadata,
+        mock_open_fn,
+        mock_popen,
+    ):
+        """Same compilation path as QSV test; AMD backend → h264_amf argv."""
+        import importlib.util
+
+        if importlib.util.find_spec("torch") is None:
+            self.skipTest("torch not available")
+        mock_isfile.return_value = True
+        mock_get_metadata.return_value = (640, 480, 20.0, 2.0)
+        mock_ctx = _fake_create_decoder_context(200, 480, 640)
+        if mock_ctx is None:
+            self.skipTest("torch not available")
+        mock_cm = MagicMock()
+        mock_cm.__enter__ = MagicMock(return_value=mock_ctx)
+        mock_cm.__exit__ = MagicMock(return_value=None)
+        gpu_backend = _gpu_backend_for_compilation_tests_amd(return_value=mock_cm)
+        proc = MagicMock()
+        proc.stdin = MagicMock()
+        proc.returncode = 0
+        mock_popen.return_value = proc
+
+        slices = [
+            {
+                "camera": "doorbell",
+                "start_sec": 0.0,
+                "end_sec": 2.0,
+                "crop_start": (0, 0, 320, 240),
+                "crop_end": (0, 0, 320, 240),
+            },
+        ]
+        resolve_clip = MagicMock(return_value="doorbell-1.mp4")
+
+        _run_pynv_compilation(
+            slices=slices,
+            ce_dir="/ce",
+            tmp_output_path="/out.mp4.tmp",
+            target_w=1440,
+            target_h=1080,
+            resolve_clip_in_folder=resolve_clip,
+            gpu_backend=gpu_backend,
+            gpu_device_index=0,
+        )
+
+        mock_popen.assert_called_once()
+        call_args = mock_popen.call_args[0][0]
+        assert "h264_amf" in call_args
+        assert "h264_nvenc" not in call_args
+        assert "h264_qsv" not in call_args
+        assert "-thread_queue_size" in call_args
+        assert "512" in call_args
+        q = call_args.index("-quality")
+        assert call_args[q + 1] == "balanced"
+        assert call_args[call_args.index("-s") + 1] == "1440x1080"
+        assert call_args[-1] == "/out.mp4.tmp"
+        assert proc.stdin.write.call_count == 40
+        proc.stdin.flush.assert_called()
+        proc.stdin.close.assert_called_once()
+        proc.wait.assert_called()
 
 
 if __name__ == "__main__":

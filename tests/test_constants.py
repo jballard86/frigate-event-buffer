@@ -5,9 +5,11 @@ import unittest
 import numpy as np
 
 from frigate_buffer.constants import (
+    COMPILATION_OUTPUT_FPS,
     DEFAULT_STORAGE_STATS_MAX_AGE_SECONDS,
     ERROR_BUFFER_MAX_SIZE,
     FRAME_MAX_WIDTH,
+    GPU_DECODE_INIT_FAILURE_PREFIX,
     HTTP_DOWNLOAD_CHUNK_SIZE,
     HTTP_STREAM_CHUNK_SIZE,
     LOG_MAX_RESPONSE_BODY,
@@ -91,6 +93,10 @@ class TestNumericConstants(unittest.TestCase):
         assert DEFAULT_STORAGE_STATS_MAX_AGE_SECONDS == 30 * 60
         assert ERROR_BUFFER_MAX_SIZE == 10
 
+    def test_compilation_output_fps(self) -> None:
+        """Compilation encode argv builders and video_compilation share this rate."""
+        assert COMPILATION_OUTPUT_FPS == 20
+
 
 class TestNvdecInitFailurePrefix(unittest.TestCase):
     """NVDEC init failure log prefix is searchable in crash-loop logs."""
@@ -99,3 +105,7 @@ class TestNvdecInitFailurePrefix(unittest.TestCase):
         """NVDEC_INIT_FAILURE_PREFIX is used when NVDEC/decoder init fails."""
         assert NVDEC_INIT_FAILURE_PREFIX == "NVDEC hardware initialization failed"
         assert "NVDEC" in NVDEC_INIT_FAILURE_PREFIX
+
+    def test_gpu_decode_init_prefix(self) -> None:
+        assert "GPU" in GPU_DECODE_INIT_FAILURE_PREFIX
+        assert "decode" in GPU_DECODE_INIT_FAILURE_PREFIX.lower()

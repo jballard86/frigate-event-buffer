@@ -1,0 +1,27 @@
+# Manual Intel Arc + DRI smoke on a self-hosted runner (gpu-02 Phase 8).
+# Add a runner with labels [self-hosted, intel-arc] or edit runs-on below.
+name: Intel Arc hardware smoke
+
+on:
+  workflow_dispatch:
+    inputs:
+      skip_build:
+        description: "Skip docker build (reuse existing frigate-buffer:intel on the runner)"
+        required: false
+        default: false
+        type: boolean
+
+jobs:
+  intel-arc-smoke:
+    runs-on: [self-hosted, intel-arc]
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Smoke with DRI (build image first)
+        if: ${{ !inputs.skip_build }}
+        run: ./scripts/run_intel_arc_docker_smoke.sh --strict --vainfo --strict-dri
+
+      - name: Smoke with DRI (existing image)
+        if: ${{ inputs.skip_build }}
+        run: BUILD=0 ./scripts/run_intel_arc_docker_smoke.sh --strict --vainfo --strict-dri

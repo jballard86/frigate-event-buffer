@@ -255,10 +255,15 @@ CONFIG_SCHEMA = Schema(
             Optional("compilation_zoom_smooth_ema_alpha"): Any(
                 int, float
             ),  # EMA alpha for compilation zoom smoothing (0–1); default 0.25.
+            # Intel QSV compilation encode tuning (gpu-02 Phase 7); optional.
+            Optional("intel"): {
+                Optional("qsv_encode_preset"): str,
+                Optional("qsv_encode_global_quality"): int,
+            },
             # GPU backend (multi-vendor prep; registry uses these in gpu-01+).
             Optional(
                 "gpu_vendor"
-            ): str,  # e.g. nvidia; only nvidia supported until Intel/AMD backends land.
+            ): str,  # nvidia | intel | amd (see registry and native/*/).
             Optional(
                 "gpu_device_index"
             ): int,  # Adapter index for decode/runtime (default 0).
@@ -300,16 +305,16 @@ def effective_gpu_device_index(config: dict) -> int:
 
 
 def _finalize_gpu_vendor_and_device(config: dict) -> None:
-    """Normalize GPU_VENDOR, enforce nvidia-only for now, set CUDA_* mirror."""
+    """Normalize GPU_VENDOR (nvidia | intel | amd), set CUDA_* mirror."""
     raw = config.get("GPU_VENDOR") or "nvidia"
     vendor = str(raw).strip().lower() if raw is not None else "nvidia"
     if not vendor:
         vendor = "nvidia"
     config["GPU_VENDOR"] = vendor
-    if vendor != "nvidia":
+    if vendor not in ("nvidia", "intel", "amd"):
         raise ValueError(
-            f"GPU_VENDOR={vendor!r} is not supported; only 'nvidia' is available until "
-            "Intel/AMD backends land (see docs/Multi_GPU_Support_Integration_Plan/)."
+            f"GPU_VENDOR={vendor!r} is not supported; use 'nvidia', 'intel', or "
+            "'amd' (see docs/Multi_GPU_Support_Integration_Plan/)."
         )
     idx = effective_gpu_device_index(config)
     config["GPU_DEVICE_INDEX"] = idx
@@ -430,6 +435,9 @@ def load_config() -> dict:
         "TRACKING_TARGET_FRAME_PERCENT": 40,
         "PERSON_AREA_DEBUG": False,
         "COMPILATION_ZOOM_SMOOTH_EMA_ALPHA": 0.25,
+        # Intel h264_qsv compilation encode (multi_cam.intel or env; see INSTALL).
+        "INTEL_QSV_ENCODE_PRESET": "medium",
+        "INTEL_QSV_ENCODE_GLOBAL_QUALITY": 24,
         # Gemini proxy (extended): Single API Key (GEMINI_API_KEY). URL default "".
         "GEMINI_PROXY_URL": "",
         "GEMINI_PROXY_MODEL": "gemini-2.5-flash-lite",
@@ -782,6 +790,16 @@ def load_config() -> dict:
                         config["GPU_DEVICE_INDEX"] = int(mc["gpu_device_index"])
                     elif "cuda_device_index" in mc:
                         config["GPU_DEVICE_INDEX"] = int(mc["cuda_device_index"])
+                    _intel_mc = mc.get("intel")
+                    if isinstance(_intel_mc, dict):
+                        if _intel_mc.get("qsv_encode_preset") is not None:
+                            _preset = str(_intel_mc["qsv_encode_preset"]).strip()
+                            if _preset:
+                                config["INTEL_QSV_ENCODE_PRESET"] = _preset
+                        if _intel_mc.get("qsv_encode_global_quality") is not None:
+                            config["INTEL_QSV_ENCODE_GLOBAL_QUALITY"] = int(
+                                _intel_mc["qsv_encode_global_quality"]
+                            )
                 if "gemini_proxy" in yaml_config:
                     gp = yaml_config["gemini_proxy"]
                     config["GEMINI_PROXY_URL"] = (
@@ -970,6 +988,16 @@ def load_config() -> dict:
         config["GPU_DEVICE_INDEX"] = int(_env_gpu_idx)
     elif _env_cuda_idx is not None:
         config["GPU_DEVICE_INDEX"] = int(_env_cuda_idx)
+
+    _env_intel_preset = os.getenv("INTEL_QSV_ENCODE_PRESET")
+    if _env_intel_preset is not None and str(_env_intel_preset).strip():
+        config["INTEL_QSV_ENCODE_PRESET"] = str(_env_intel_preset).strip()
+    _env_intel_gq = os.getenv("INTEL_QSV_ENCODE_GLOBAL_QUALITY")
+    if _env_intel_gq is not None:
+        try:
+            config["INTEL_QSV_ENCODE_GLOBAL_QUALITY"] = int(_env_intel_gq)
+        except ValueError:
+            pass
 
     _finalize_gpu_vendor_and_device(config)
 

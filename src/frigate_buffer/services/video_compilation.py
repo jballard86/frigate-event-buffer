@@ -17,6 +17,7 @@ from frigate_buffer.config import effective_gpu_device_index
 from frigate_buffer.constants import (
     COMPILATION_DEFAULT_NATIVE_HEIGHT,
     COMPILATION_DEFAULT_NATIVE_WIDTH,
+    COMPILATION_OUTPUT_FPS,
     DECODER_TIME_EPSILON_SEC,
     NVDEC_INIT_FAILURE_PREFIX,
 )
@@ -31,7 +32,6 @@ from frigate_buffer.services.compilation_math import (
 from frigate_buffer.services.gpu_backends import get_gpu_backend
 from frigate_buffer.services.gpu_backends.lock import GPU_LOCK
 from frigate_buffer.services.gpu_backends.nvidia.ffmpeg_encode import (
-    COMPILATION_OUTPUT_FPS,
     NVENC_COMPILE_NOT_FOUND_RUNTIME_MSG,
     NVENC_COMPILE_NOT_FOUND_USER_MSG,
 )
@@ -68,6 +68,7 @@ def _open_compilation_ffmpeg_process(
     target_h: int,
     *,
     gpu_backend: GpuBackend,
+    config: dict | None = None,
 ) -> tuple[subprocess.Popen[bytes], str, Any, list[str]]:
     """
     Open FFmpeg subprocess for compilation encode; stderr to log file.
@@ -77,7 +78,7 @@ def _open_compilation_ffmpeg_process(
     """
     cmd, log_file_path = (
         gpu_backend.ffmpeg_compilation_encode.compilation_ffmpeg_cmd_and_log_path(
-            tmp_output_path, target_w, target_h
+            tmp_output_path, target_w, target_h, config=config
         )
     )
     log_file = open(log_file_path, "w", encoding="utf-8")
@@ -134,6 +135,7 @@ def _encode_frames_via_ffmpeg(
     tmp_output_path: str,
     *,
     gpu_backend: GpuBackend,
+    config: dict | None = None,
 ) -> None:
     """
     Encode a list of RGB frames to MP4 using FFmpeg with h264_nvenc only (GPU).
@@ -146,7 +148,7 @@ def _encode_frames_via_ffmpeg(
     if not frames:
         return
     proc, log_file_path, log_file, cmd = _open_compilation_ffmpeg_process(
-        tmp_output_path, target_w, target_h, gpu_backend=gpu_backend
+        tmp_output_path, target_w, target_h, gpu_backend=gpu_backend, config=config
     )
     assert proc.stdin is not None
     try:
@@ -283,6 +285,7 @@ def _run_pynv_compilation(
     *,
     gpu_backend: GpuBackend,
     gpu_device_index: int = 0,
+    config: dict | None = None,
 ) -> None:
     """
     Decode each slice via ``gpu_backend.create_decoder``; crop with smooth panning.
@@ -295,7 +298,7 @@ def _run_pynv_compilation(
         return
 
     proc, log_file_path, log_file, cmd = _open_compilation_ffmpeg_process(
-        tmp_output_path, target_w, target_h, gpu_backend=gpu_backend
+        tmp_output_path, target_w, target_h, gpu_backend=gpu_backend, config=config
     )
 
     assert proc.stdin is not None
@@ -739,6 +742,7 @@ def generate_compilation_video(
             resolve_clip_in_folder=resolve_clip_in_folder,
             gpu_backend=backend,
             gpu_device_index=gpu_device_index,
+            config=cfg,
         )
         if os.path.isfile(temp_path) and os.path.getsize(temp_path) > 0:
             os.rename(temp_path, output_path)

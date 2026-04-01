@@ -1,0 +1,21 @@
+# GPU_VENDOR=amd / ROCm Linux: same app deps as requirements.txt without PyNvVideoCodec.
+# Install torch/torchvision ROCm wheels from the PyTorch ROCm index, e.g.:
+#   pip install -r requirements-rocm.txt --extra-index-url https://download.pytorch.org/whl/rocm6.2
+# Dockerfile.rocm defaults to rocm6.4 index + rocm/pytorch 2.6.0 base — keep those in sync when bumping.
+# Pick an index URL that matches your ROCm driver; see https://pytorch.org/get-started/locally/
+#
+# Pin torch/torchvision together: future native frigate_amd_decode must link libtorch from
+# this version; bump both when upgrading (mirror requirements-intel.txt policy).
+torch==2.6.0
+torchvision==0.21.0
+flask
+gunicorn
+paho-mqtt>=2.0.0
+requests
+schedule
+pyyaml
+voluptuous
+opencv-python-headless
+ultralytics>=8.0.0
+numpy
+firebase-admin

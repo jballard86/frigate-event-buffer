@@ -938,7 +938,26 @@ class TestConfigSchema(unittest.TestCase):
     def test_gpu_vendor_unsupported_raises(
         self, mock_yaml_load, mock_exists, mock_file
     ):
-        """Only nvidia is valid until additional backends exist."""
+        """Unknown GPU_VENDOR values are rejected."""
+        mock_exists.return_value = True
+        mock_yaml_load.return_value = {
+            "cameras": [{"name": "cam1"}],
+            "network": {
+                "mqtt_broker": "localhost",
+                "frigate_url": "http://frigate",
+                "buffer_ip": "localhost",
+                "storage_path": "/tmp",
+            },
+            "multi_cam": {"gpu_vendor": "matrox"},
+        }
+        with pytest.raises(ValueError, match="not supported"):
+            load_config()
+
+    @patch("builtins.open", new_callable=mock_open)
+    @patch("os.path.exists")
+    @patch("frigate_buffer.config.yaml.safe_load")
+    def test_gpu_vendor_intel_allowed(self, mock_yaml_load, mock_exists, mock_file):
+        """multi_cam.gpu_vendor intel is accepted (.so required when decoding)."""
         mock_exists.return_value = True
         mock_yaml_load.return_value = {
             "cameras": [{"name": "cam1"}],
@@ -950,8 +969,89 @@ class TestConfigSchema(unittest.TestCase):
             },
             "multi_cam": {"gpu_vendor": "intel"},
         }
-        with pytest.raises(ValueError, match="not supported"):
-            load_config()
+        config = load_config()
+        assert config["GPU_VENDOR"] == "intel"
+
+    @patch("builtins.open", new_callable=mock_open)
+    @patch("os.path.exists")
+    @patch("frigate_buffer.config.yaml.safe_load")
+    def test_gpu_vendor_amd_allowed(self, mock_yaml_load, mock_exists, mock_file):
+        """multi_cam.gpu_vendor amd is accepted (native .so required when decoding)."""
+        mock_exists.return_value = True
+        mock_yaml_load.return_value = {
+            "cameras": [{"name": "cam1"}],
+            "network": {
+                "mqtt_broker": "localhost",
+                "frigate_url": "http://frigate",
+                "buffer_ip": "localhost",
+                "storage_path": "/tmp",
+            },
+            "multi_cam": {"gpu_vendor": "amd"},
+        }
+        config = load_config()
+        assert config["GPU_VENDOR"] == "amd"
+
+    @patch("builtins.open", new_callable=mock_open)
+    @patch("os.path.exists")
+    @patch("frigate_buffer.config.yaml.safe_load")
+    def test_multi_cam_intel_qsv_encode_options_merge(
+        self, mock_yaml_load, mock_exists, mock_file
+    ):
+        """multi_cam.intel qsv_encode_* map to INTEL_QSV_* flat keys."""
+        mock_exists.return_value = True
+        mock_yaml_load.return_value = {
+            "cameras": [{"name": "cam1"}],
+            "network": {
+                "mqtt_broker": "localhost",
+                "frigate_url": "http://frigate",
+                "buffer_ip": "localhost",
+                "storage_path": "/tmp",
+            },
+            "multi_cam": {
+                "intel": {
+                    "qsv_encode_preset": "slow",
+                    "qsv_encode_global_quality": 22,
+                },
+            },
+        }
+        config = load_config()
+        assert config["INTEL_QSV_ENCODE_PRESET"] == "slow"
+        assert config["INTEL_QSV_ENCODE_GLOBAL_QUALITY"] == 22
+
+    @patch("builtins.open", new_callable=mock_open)
+    @patch("os.path.exists")
+    @patch("frigate_buffer.config.yaml.safe_load")
+    @patch.dict(
+        os.environ,
+        {
+            "INTEL_QSV_ENCODE_PRESET": "veryfast",
+            "INTEL_QSV_ENCODE_GLOBAL_QUALITY": "31",
+        },
+        clear=False,
+    )
+    def test_env_intel_qsv_options_override_yaml(
+        self, mock_yaml_load, mock_exists, mock_file
+    ):
+        """INTEL_QSV_ENCODE_* env overrides YAML after merge."""
+        mock_exists.return_value = True
+        mock_yaml_load.return_value = {
+            "cameras": [{"name": "cam1"}],
+            "network": {
+                "mqtt_broker": "localhost",
+                "frigate_url": "http://frigate",
+                "buffer_ip": "localhost",
+                "storage_path": "/tmp",
+            },
+            "multi_cam": {
+                "intel": {
+                    "qsv_encode_preset": "slow",
+                    "qsv_encode_global_quality": 22,
+                },
+            },
+        }
+        config = load_config()
+        assert config["INTEL_QSV_ENCODE_PRESET"] == "veryfast"
+        assert config["INTEL_QSV_ENCODE_GLOBAL_QUALITY"] == 31
 
     def test_effective_gpu_device_index_prefers_gpu_key(self) -> None:
         assert effective_gpu_device_index({"GPU_DEVICE_INDEX": 2}) == 2

@@ -1,0 +1,39 @@
+# Lint, pytest, Dockerfile.intel build, and in-container Intel smoke (gpu-02 Phase 7).
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  lint-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install package and dev tools
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+      - name: Ruff check
+        run: ruff check src tests
+      - name: Ruff format
+        run: ruff format --check src tests
+      - name: Pytest
+        run: pytest -q
+
+  docker-intel:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build Intel image
+        run: docker build -f Dockerfile.intel -t frigate-buffer:intel-ci .
+      - name: Smoke Intel image (native .so + torch)
+        run: |
+          docker run --rm frigate-buffer:intel-ci \
+            python3 scripts/smoke_intel_gpu_path.py --strict

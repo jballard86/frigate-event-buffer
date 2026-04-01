@@ -1,0 +1,27 @@
+# Manual AMD ROCm + /dev/kfd + DRI smoke on a self-hosted runner (gpu-03 Phase 6).
+# Add a runner with labels [self-hosted, amd-rocm] or edit runs-on below.
+name: AMD ROCm hardware smoke
+
+on:
+  workflow_dispatch:
+    inputs:
+      skip_build:
+        description: "Skip docker build (reuse existing frigate-buffer:rocm on the runner)"
+        required: false
+        default: false
+        type: boolean
+
+jobs:
+  amd-rocm-smoke:
+    runs-on: [self-hosted, amd-rocm]
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Smoke with GPU devices (build image first)
+        if: ${{ !inputs.skip_build }}
+        run: ./scripts/run_amd_rocm_docker_smoke.sh --strict --strict-native
+
+      - name: Smoke with GPU devices (existing image)
+        if: ${{ inputs.skip_build }}
+        run: BUILD=0 ./scripts/run_amd_rocm_docker_smoke.sh --strict --strict-native

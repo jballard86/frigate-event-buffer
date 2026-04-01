@@ -1,6 +1,6 @@
 # Frigate Event Buffer — Console install
 
-Install and run via the command line only. You can use **plain Docker** (`docker build` + `docker run`) or **Docker Compose** (`docker-compose up -d --build`). You need **Docker**; for video features you need an **NVIDIA GPU**. Frigate and MQTT are required; Home Assistant and Gemini API are optional.
+Install and run via the command line only. You can use **plain Docker** (`docker build` + `docker run`) or **Docker Compose** (`docker compose up -d --build`). You need **Docker**; for video features use an **NVIDIA GPU** (default **`Dockerfile`**) or **Intel Arc** (**`Dockerfile.intel`** + DRI) or **AMD ROCm** (**`Dockerfile.rocm`** + **`/dev/kfd`** and DRI). Frigate and MQTT are required; Home Assistant and Gemini API are optional.
 
 Clone the repo so the **repo root** is the directory that contains `Dockerfile` and `src/`. All commands below are run from that directory. **In the steps below, replace `/mnt/user/appdata/frigate-buffer` with your repo root path if you cloned somewhere else.**
 
@@ -9,17 +9,47 @@ Clone the repo so the **repo root** is the directory that contains `Dockerfile` 
 ## Prerequisites
 
 - **Docker** — Use `docker build` and `docker run`, or Docker Compose (`docker-compose up -d --build`).
-- **For GPU (video decode/summary):** NVIDIA GPU, driver, and [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html). Use `docker run --gpus all` and set **`NVIDIA_DRIVER_CAPABILITIES=compute,video,utility`** — this is **mandatory** for GPU decode no matter how you start the container (plain `docker run` or Docker Compose). Video uses GPU only (PyNvVideoCodec + FFmpeg); there is no CPU decode fallback.
+- **For GPU (NVIDIA):** Driver and [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html). Use `docker run --gpus all` and set **`NVIDIA_DRIVER_CAPABILITIES=compute,video,utility`**. Video uses PyNvVideoCodec + FFmpeg; there is no CPU decode fallback on that path.
+- **For GPU (Intel):** Use **`Dockerfile.intel`** and pass **`/dev/dri/renderD*`** into the container (see below). Decode uses **`frigate_intel_decode`** (QSV when available). Host Intel / VAAPI drivers apply.
 
 ### GPU vendor and adapter index (config)
 
-The app selects the decode/runtime bundle via **`GPU_VENDOR`** (flat config; default **`nvidia`**). Only **NVIDIA** is implemented today; other values fail at startup with a clear error (see `docs/Multi_GPU_Support_Integration_Plan/`).
+The app selects the decode/runtime bundle via **`GPU_VENDOR`** (flat config; default **`nvidia`**). **`nvidia`** uses PyNvVideoCodec (CUDA). **`intel`** uses the **`frigate_intel_decode`** native extension (FFmpeg QSV when available; build from `native/intel_decode/`) plus Intel QSV FFmpeg helpers; see `docs/Multi_GPU_Support_Integration_Plan/gpu-02-intel-arc.md`. **`amd`** selects **`services/gpu_backends/amd/`** plus native **`frigate_amd_decode`** (build from **`native/amd_decode/`**, **`scripts/build_amd_decode.sh`**; see **`native/amd_decode/README.md`** and `docs/Multi_GPU_Support_Integration_Plan/gpu-03-amd-rocm.md`). Other vendors fail at startup.
 
-**Which physical GPU** uses the in-app index **`GPU_DEVICE_INDEX`** (integer, default **`0`**), i.e. `cuda:0`, `cuda:1`, … for NVDEC, YOLO defaults, and compilation. Legacy name **`CUDA_DEVICE_INDEX`** is still read from environment and merged into the same value; prefer **`GPU_DEVICE_INDEX`** in new setups.
+**Which physical GPU** uses **`GPU_DEVICE_INDEX`** (default **`0`**): for NVIDIA and AMD (ROCm), `cuda:N`; for Intel decode, the native session’s adapter index; YOLO defaults follow **`DETECTION_DEVICE`** or vendor runtime (`xpu:N` when Intel Extension for PyTorch is available; `cuda:N` when ROCm torch sees a GPU). Legacy **`CUDA_DEVICE_INDEX`** is still merged; prefer **`GPU_DEVICE_INDEX`**.
 
 Set them in **`config.yaml`** under **`multi_cam:`** as **`gpu_vendor`**, **`gpu_device_index`** (preferred), or deprecated **`cuda_device_index`**. You can also set **`GPU_VENDOR`**, **`GPU_DEVICE_INDEX`**, or **`CUDA_DEVICE_INDEX`** in **`.env`** / Docker **`environment`** — they override YAML after merge.
 
 **Docker note:** `NVIDIA_VISIBLE_DEVICES` restricts which GPUs the container sees; the in-app index is then **relative to that visible set** (e.g. one GPU exposed → use index `0`). See **`examples/config.example.yaml`** and **`examples/.env.example`**.
+
+### Intel GPU Docker (multi-stage)
+
+For **`GPU_VENDOR=intel`**, build the Intel image (compiles **`native/intel_decode`** in stage 1; runtime has **no** compiler toolchain):
+
+```bash
+docker build -f Dockerfile.intel -t frigate-buffer:intel .
+```
+
+**CI:** On push/PR to **`main`** / **`master`**, **`.github/workflows/ci.yml`** runs **Ruff**, **pytest**, and **`docker build -f Dockerfile.intel`** so the native extension and image stay buildable.
+
+- **Runtime** installs **`requirements-intel.txt`** (same as **`requirements.txt`** but **without** `PyNvVideoCodec`) and **`pip install --no-deps .`** so the metadata dependency on PyNv is not pulled.
+- **Torch / torchvision** are **pinned** in **`requirements-intel.txt`**; the **builder** installs only those `torch==` / `torchvision==` lines (CPU wheels via **`TORCH_INDEX_URL`**, default PyTorch CPU) so **`frigate_intel_decode`** matches runtime libtorch. Bump both pins together when upgrading.
+- **Smoke (optional):** after build, `docker run --rm … frigate-buffer:intel python3 scripts/smoke_intel_gpu_path.py --strict` checks **`import frigate_intel_decode`** and torch. Add **`--vainfo`** for VA-API output; **`--strict-dri`** with **`--vainfo`** fails if **`vainfo`** is missing or errors (use on Arc hosts with **`/dev/dri`** passed through). Add a bind-mounted test clip to run SW decode: `… python3 scripts/smoke_intel_gpu_path.py --strict /path/in/container/clip.mp4`.
+- **Hardware verify (Phase 8):** on a Linux host with Intel GPU + Docker, **`./scripts/run_intel_arc_docker_smoke.sh --strict --vainfo`** (see **`docs/Multi_GPU_Support_Integration_Plan/intel-arc-hardware-smoke.md`**). Manual self-hosted CI: **`.github/workflows/intel_arc_smoke.yml`**.
+- **Entrypoint** **`scripts/docker_entrypoint_intel.sh`** prepends **`torch/lib`** to **`LD_LIBRARY_PATH`** so **`import frigate_intel_decode`** resolves **`libtorch`**.
+- **Compose:** use **`docker-compose.intel.example.yml`** as a template: **`devices:`** `/dev/dri/renderD128` (change if your Arc node differs), **`group_add:`** `video` and `render` (or numeric GIDs from the host if group names are missing).
+- **XPU / IPEX:** build with **`--build-arg INSTALL_IPEX=1`** (or Compose **`INSTALL_IPEX: "1"`**) to **`pip install intel-extension-for-pytorch`** after the main deps. This can change the effective **`torch`** build; confirm versions against [Intel Extension for PyTorch](https://intel.github.io/intel-extension-for-pytorch/). For bare metal, install IPEX per Intel’s docs and set **`DETECTION_DEVICE`** / rely on **`default_detection_device`** when **`torch.xpu`** is available.
+- **QSV compilation encode:** optional **`multi_cam.intel.qsv_encode_preset`** and **`qsv_encode_global_quality`** in **`config.yaml`** tune **`h264_qsv`** for summary MP4s; env **`INTEL_QSV_ENCODE_PRESET`** and **`INTEL_QSV_ENCODE_GLOBAL_QUALITY`** override YAML (see **`examples/config.example.yaml`**).
+
+### AMD ROCm (GPU_VENDOR=amd; gpu-03)
+
+- **Dependencies:** **`requirements-rocm.txt`** mirrors **`requirements-intel.txt`** (no **`PyNvVideoCodec`**) but pins **`torch`** / **`torchvision`** for a **ROCm** wheel. Install with a PyTorch ROCm index URL that matches your driver, for example:
+  `pip install -r requirements-rocm.txt --extra-index-url https://download.pytorch.org/whl/rocm6.2`
+  (see [PyTorch Get Started](https://pytorch.org/get-started/locally/) for current indices). **`Dockerfile.rocm`** defaults to **`rocm/pytorch:…pytorch_release_2.6.0`** and **`rocm6.4`** pip index — keep **`ROCM_PYTORCH_IMAGE`** and **`PYTORCH_ROCM_INDEX`** build-args aligned when you override them.
+- **AMD GPU Docker (multi-stage):** **`docker build -f Dockerfile.rocm -t frigate-buffer:rocm .`** — stage 1 compiles **`native/amd_decode`** against the base image’s libtorch; stage 2 installs **`requirements-rocm.txt`**, copies **`frigate_amd_decode*.so`** to **`/usr/local/lib/frigate_amd_decode`**, sets **`PYTHONPATH`** and **`GPU_VENDOR=amd`**, and uses **`scripts/docker_entrypoint_rocm.sh`** for **`LD_LIBRARY_PATH`**. Runtime has **no** compiler toolchain. **Compose:** **`docker-compose.rocm.example.yml`** — pass **`/dev/kfd`**, **`/dev/dri/renderD128`** (or your render node), and **`group_add:`** **`video`** / **`render`**. The base image is **very large**; CI does not build it on every push — use **`.github/workflows/rocm_docker_build.yml`** (**workflow_dispatch**) when you need a registry build.
+- **Native decode (bare metal):** on Linux, run **`./scripts/build_amd_decode.sh`** after installing FFmpeg **-dev** packages (see **`native/amd_decode/README.md`**). Add **`native/amd_decode/build`** to **`PYTHONPATH`** (or install the ``.so`` on the module search path) so **`import frigate_amd_decode`** succeeds.
+- **Smoke:** **`python scripts/smoke_amd_rocm_torch.py`** — allocates a **`cuda:0`** tensor when **`torch.version.hip`** is set (ROCm build). Without ROCm, it prints **`skip`** and exits **`0`**; **`--strict`** exits **`2`** if the ROCm GPU path is missing; **`--strict-native`** exits **`2`** if **`frigate_amd_decode`** cannot be imported. Optional **clip path** decodes the first frame via native when built. **`--yolo`** imports **`ultralytics`** and prints its version (no model download). On a host with **`/dev/kfd`** + DRI, use **`./scripts/run_amd_rocm_docker_smoke.sh`** (**`docs/Multi_GPU_Support_Integration_Plan/amd-rocm-hardware-smoke.md`**).
+- **pytest:** tests marked **`@pytest.mark.amd_gpu`** are **skipped** unless **`RUN_AMD_GPU_TESTS=1`** (see **`tests/test_smoke_amd_rocm_path.py`**).
 
 ---
 
