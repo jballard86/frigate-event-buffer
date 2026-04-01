@@ -13,11 +13,15 @@ else()
   set(_intel_decode_default ON)
 endif()
 option(INTEL_DECODE_BUILD "Build frigate_intel_decode Python extension" ${_intel_decode_default})
-option(INTEL_DECODE_XPU_ZEROCOPY "Enable experimental Intel XPU zero-copy path (requires icpx + -fsycl)" OFF)
+option(INTEL_DECODE_XPU_ZEROCOPY "Enable Intel XPU zero-copy path (requires icpx + -fsycl)" ON)
 
 if(NOT INTEL_DECODE_BUILD)
   message(STATUS "INTEL_DECODE_BUILD=OFF — skipping frigate_intel_decode (set ON with deps to build).")
   return()
+endif()
+
+if(NOT INTEL_DECODE_XPU_ZEROCOPY)
+  message(FATAL_ERROR "Intel decode requires INTEL_DECODE_XPU_ZEROCOPY=ON (no CPU fallback build is supported).")
 endif()
 
 find_package(Torch REQUIRED)

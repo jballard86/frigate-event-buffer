@@ -39,10 +39,6 @@ struct FrameDeleter {
   void operator()(AVFrame* p) const { av_frame_free(&p); }
 };
 
-struct SwsCtxDeleter {
-  void operator()(SwsContext* p) const { sws_freeContext(p); }
-};
-
 std::string drm_device_from_index(int device_index) {
   const char* env = std::getenv("FRIGATE_INTEL_DRM_DEVICE");
   if (env != nullptr && env[0] != '\0') {
@@ -277,23 +273,9 @@ torch::Tensor IntelDecoderSession::avframe_to_bchw_rgb_(AVFrame* src) {
   }
 #endif
 
-#if defined(INTEL_DECODE_XPU_ZEROCOPY) && INTEL_DECODE_XPU_ZEROCOPY
-  // XPU zero-copy builds: never use host readback + swscale for QSV hw frames.
+  // Intel XPU zero-copy builds: no host readback / swscale path is supported.
   if (using_hw_ && src->hw_frames_ctx != nullptr) {
-    throw std::runtime_error("Intel zero-copy required: refusing CPU hwframe transfer");
-  }
-#endif
-
-  if (src->hw_frames_ctx != nullptr) {
-    transferred.reset(av_frame_alloc());
-    if (!transferred) {
-      throw std::runtime_error("av_frame_alloc failed for hw transfer");
-    }
-    int tr = av_hwframe_transfer_data(transferred.get(), src, 0);
-    if (tr < 0) {
-      throw std::runtime_error("av_hwframe_transfer_data: " + av_error_string(tr));
-    }
-    frame = transferred.get();
+    throw std::runtime_error("Intel zero-copy required: fast path unavailable for this frame");
   }
 
   const int w = frame->width;
@@ -302,50 +284,8 @@ torch::Tensor IntelDecoderSession::avframe_to_bchw_rgb_(AVFrame* src) {
     throw std::runtime_error("invalid decoded frame dimensions");
   }
 
-  std::unique_ptr<SwsContext, SwsCtxDeleter> sws(sws_getContext(
-      w,
-      h,
-      static_cast<AVPixelFormat>(frame->format),
-      w,
-      h,
-      AV_PIX_FMT_RGB24,
-      SWS_BILINEAR,
-      nullptr,
-      nullptr,
-      nullptr));
-  if (!sws) {
-    throw std::runtime_error("sws_getContext failed");
-  }
-
-  std::vector<uint8_t> rgb(static_cast<size_t>(w) * static_cast<size_t>(h) * 3u);
-  uint8_t* dst_slices[1] = {rgb.data()};
-  int dst_linesize[1] = {3 * w};
-  const int scale_ret = sws_scale(
-      sws.get(), frame->data, frame->linesize, 0, h, dst_slices, dst_linesize);
-  if (scale_ret != h) {
-    throw std::runtime_error("sws_scale did not convert full frame");
-  }
-
-  auto opts = torch::TensorOptions().dtype(torch::kUInt8).device(torch::kCPU);
-  torch::Tensor hwc = torch::from_blob(rgb.data(), {h, w, 3}, opts).clone();
-  torch::Tensor chw = hwc.permute({2, 0, 1}).contiguous();
-  torch::Tensor out = chw.unsqueeze(0);
-
-#if defined(INTEL_DECODE_XPU_ZEROCOPY) && INTEL_DECODE_XPU_ZEROCOPY
-  const char* disable = std::getenv("FRIGATE_INTEL_DECODE_DISABLE_XPU_OUTPUT");
-  if (!(disable != nullptr && disable[0] == '1')) {
-    try {
-      // Note: this enables native XPU output when built against an XPU-capable torch.
-      // The true zero-copy path (DRM PRIME -> XPU import) is handled separately.
-      out = out.to(torch::Device(torch::kXPU, device_index_), /*non_blocking=*/true);
-      xpu_output_active_ = (out.device().type() == torch::kXPU);
-    } catch (const std::exception&) {
-      // Keep CPU output if XPU is unavailable at runtime.
-    }
-  }
-#endif
-
-  return out;
+  throw std::runtime_error(
+      "Intel zero-copy required: unexpected non-hw frame; only DRM PRIME -> XPU is supported");
 }
 
 void IntelDecoderSession::probe_drm_map_(AVFrame* src) {

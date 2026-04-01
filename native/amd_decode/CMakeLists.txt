@@ -36,7 +36,7 @@ if(AMD_DECODE_HIP AND NOT WIN32)
     list(APPEND _amd_hip_sources "${CMAKE_CURRENT_SOURCE_DIR}/src/nv12_to_rgb_hip.hip")
     message(STATUS "AMD decode: HIP enabled (zero-copy path). CMAKE_HIP_ARCHITECTURES=${CMAKE_HIP_ARCHITECTURES}")
   else()
-    message(STATUS "AMD decode: HIP not found — building without zero-copy ROCm path (CPU transfer + sws).")
+    message(FATAL_ERROR "AMD decode requires HIP (zero-copy only). Install ROCm/HIP or set a valid ROCM_PATH/CMAKE_PREFIX_PATH.")
   endif()
 endif()
 

@@ -27,20 +27,17 @@ video_compilation); callers must hold it for create_decoder and get_frames.
 - **services/gpu_backends/protocols.py**, **types.py** — DecoderContextProto,
   GpuBackend dataclass.
 - **native/intel_decode/** — C++ ``frigate_intel_decode``: ``IntelDecoderSession`` (**QSV
-  only** — h264_qsv/hevc_qsv; no software libavcodec fallback). Session probes hw frame → DRM PRIME mapping
-  (``can_map_to_drm_prime``). Experimental true zero-copy is gated by building the
-  extension against XPU torch and enabling ``INTEL_DECODE_XPU_ZEROCOPY``: when active,
-  frames are mapped to DRM PRIME and imported via DMA-BUF into XPU, with NV12→RGB
-  performed on-device (``uses_zero_copy_decode()`` indicates activation). When
-  built with ``INTEL_DECODE_XPU_ZEROCOPY``, Intel HW frames do **not** fall back to
-  CPU transfer+sws; failure to map/import is treated as a decode failure.
+  only** — h264_qsv/hevc_qsv; no software libavcodec fallback). Intel decode is
+  **XPU zero-copy only**: frames are mapped to DRM PRIME and imported via DMA-BUF
+  into XPU, with NV12→RGB performed on-device (``uses_zero_copy_decode()`` indicates
+  activation). Failure to map/import is treated as a decode failure (no host readback).
   Python ``intel/decoder.py`` skips redundant moves when tensors are already on ``xpu:N``.
   Build: ``Dockerfile.intel`` (multi-stage), ``scripts/build_intel_decode.sh``, README.
 - **native/amd_decode/** — C++ ``frigate_amd_decode``: ``AmdDecoderSession`` (VAAPI when
   DRM works; HIP build maps DRM PRIME → ROCm ``cuda:N`` uint8 BCHW when
-  ``uses_zero_copy_decode()``; else ``av_hwframe_transfer_data`` + sws → CPU).
-  Env: ``FRIGATE_AMD_DECODE_STRICT_ZEROCOPY=1`` fails closed on map/HIP errors;
-  default falls back to CPU transfer. Python ``amd/decoder.py`` skips redundant ``.to(cuda)``.
+  ``uses_zero_copy_decode()``). AMD decode is **HIP zero-copy only**; mapping/import
+  failures raise (no software decode, no CPU transfer fallback). Python ``amd/decoder.py``
+  skips redundant ``.to(cuda)``.
   Build: ``CMake`` + optional HIP (ROCm); ``Dockerfile.rocm``, ``docker-compose.rocm.example.yml``.
 - **services/gpu_backends/intel/** — ``decoder.create_decoder`` (native session),
   ``runtime`` (XPU/CPU), ``ffmpeg_encode`` (h264_qsv; reads ``INTEL_QSV_*`` from merged

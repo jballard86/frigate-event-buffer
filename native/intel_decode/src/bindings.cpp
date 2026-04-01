@@ -15,7 +15,7 @@ namespace py = pybind11;
 
 namespace {
 
-torch::Tensor decode_first_frame_bchw_rgb_sw(const std::string& path) {
+torch::Tensor decode_first_frame_bchw_rgb(const std::string& path) {
   IntelDecoderSession session(path, 0);
   return session.get_frame_at_index(0);
 }
@@ -44,5 +44,7 @@ PYBIND11_MODULE(frigate_intel_decode, m) {
       .def("uses_xpu_output", &IntelDecoderSession::uses_xpu_output)
       .def("uses_zero_copy_decode", &IntelDecoderSession::uses_zero_copy_decode);
 
-  m.def("decode_first_frame_bchw_rgb_sw", &decode_first_frame_bchw_rgb_sw, py::arg("path"));
+  m.def("decode_first_frame_bchw_rgb", &decode_first_frame_bchw_rgb, py::arg("path"));
+  // Back-compat alias (historical name from early spike).
+  m.def("decode_first_frame_bchw_rgb_sw", &decode_first_frame_bchw_rgb, py::arg("path"));
 }

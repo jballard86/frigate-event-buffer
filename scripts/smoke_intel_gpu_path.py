@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Optional Arc / Intel path smoke: torch, frigate_intel_decode, app runtime helpers.
 
-Run from repo root after building native/intel_decode (see native/intel_decode/README.md)
-or inside Dockerfile.intel. Use ``--strict`` in CI when the extension must be present.
+Run from repo root after building native/intel_decode (see
+native/intel_decode/README.md) or inside Dockerfile.intel. Use ``--strict`` in CI
+when the extension must be present.
 
 Why: catches libtorch ABI skew and missing LD_LIBRARY_PATH before full app startup.
 """
@@ -24,7 +25,10 @@ def _prepend_src_to_path() -> None:
 
 
 def _run_vainfo(*, strict_dri: bool) -> int:
-    """Print ``vainfo --display drm`` output; return 3 if strict_dri and probe failed."""
+    """Print ``vainfo --display drm`` output.
+
+    Returns 3 if strict_dri and the probe failed.
+    """
     vainfo_bin = shutil.which("vainfo")
     if not vainfo_bin:
         print("vainfo: not found on PATH (install vainfo in image or on host)")
@@ -42,7 +46,10 @@ def _run_vainfo(*, strict_dri: bool) -> int:
         return 3 if strict_dri else 0
     combined = (proc.stdout or "") + (proc.stderr or "")
     limit = 12000
-    print(combined if len(combined) <= limit else combined[:limit] + "\n... [truncated]")
+    if len(combined) <= limit:
+        print(combined)
+    else:
+        print(combined[:limit] + "\n... [truncated]")
     if proc.returncode != 0:
         print(f"vainfo: exit code {proc.returncode}")
         return 3 if strict_dri else 0
@@ -57,7 +64,10 @@ def main() -> int:
         "clip",
         nargs="?",
         default=None,
-        help="Optional H.264/HEVC clip; decodes first frame via native QSV (frigate_intel_decode).",
+        help=(
+            "Optional H.264/HEVC clip; decodes first frame via native QSV "
+            "(frigate_intel_decode)."
+        ),
     )
     parser.add_argument(
         "--strict",
@@ -113,7 +123,7 @@ def main() -> int:
     print(f"default_detection_device(cfg)={default_detection_device(cfg)!r}")
 
     if args.clip:
-        t = native.decode_first_frame_bchw_rgb_sw(args.clip)
+        t = native.decode_first_frame_bchw_rgb(args.clip)
         print(f"first_frame {tuple(t.shape)} {t.dtype}")
     return 0
 

@@ -6,7 +6,7 @@ C++ extension for [gpu-02 Intel Arc plan](../../docs/Multi_GPU_Support_Integrati
 
 **DRM PRIME probe:** The session initializes a DRM hwframes context and probes mapping a hw frame to **DRM PRIME NV12**; read ``can_map_to_drm_prime()`` for driver/FFmpeg compatibility.
 
-**Experimental XPU zero-copy:** Build with ``-DINTEL_DECODE_XPU_ZEROCOPY=ON`` (``icpx`` + XPU torch). Returns **XPU** BCHW uint8 when the DRM PRIME → DMA-BUF path works. Non–zero-copy builds still decode on QSV but may use host readback + swscale for RGB; env ``FRIGATE_INTEL_DECODE_DISABLE_XPU_OUTPUT=1`` skips `.to(xpu)` for that legacy RGB path.
+**XPU zero-copy (required):** Build with ``-DINTEL_DECODE_XPU_ZEROCOPY=ON`` (requires Intel oneAPI ``icpx`` + an XPU torch stack). Returns **XPU** BCHW uint8 when the DRM PRIME → DMA-BUF path works. This project does **not** support a host readback + swscale RGB fallback in the Intel path; failure to map/import is treated as a decode failure.
 
 ## Prerequisites (Linux)
 
@@ -34,7 +34,7 @@ cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j
 ```
 
-To enable experimental XPU zero-copy (requires Intel oneAPI `icpx` and an XPU torch stack):
+To enable XPU zero-copy (requires Intel oneAPI `icpx` and an XPU torch stack):
 
 ```bash
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DINTEL_DECODE_XPU_ZEROCOPY=ON
@@ -51,7 +51,7 @@ On **Windows**, the project defaults to `INTEL_DECODE_BUILD=OFF`; use **WSL** or
 PYTHONPATH=native/intel_decode/build python -c "
 import frigate_intel_decode as m
 print(m.version())
-t = m.decode_first_frame_bchw_rgb_sw('path/to/clip.mp4')
+t = m.decode_first_frame_bchw_rgb('path/to/clip.mp4')
 print(t.shape, t.dtype)
 "
 ```

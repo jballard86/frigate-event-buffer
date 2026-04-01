@@ -25,8 +25,8 @@ State: EventStateManager, ConsolidatedEventManager; filesystem for events, clips
 timelines, daily reports. Config: **`GPU_VENDOR`**, **`GPU_DEVICE_INDEX`** (legacy
 **`CUDA_DEVICE_INDEX`**); YAML under **`multi_cam`** (`gpu_vendor`, `gpu_device_index`);
 see **docs/INSTALL.md**. Video/AI: **PyNvVideoCodec** under **services/gpu_backends/nvidia/** (decode);
-**GPU_VENDOR=intel** uses **native/intel_decode** + **services/gpu_backends/intel/** (QSV only);
-**GPU_VENDOR=amd** uses **native/amd_decode** (**frigate_amd_decode**) + **services/gpu_backends/amd/** (VAAPI + optional HIP DRM→ROCm zero-copy BCHW, else CPU transfer; gpu-03);
+**GPU_VENDOR=intel** uses **native/intel_decode** + **services/gpu_backends/intel/** (QSV-only, XPU zero-copy);
+**GPU_VENDOR=amd** uses **native/amd_decode** (**frigate_amd_decode**) + **services/gpu_backends/amd/** (VAAPI + HIP DRM→ROCm zero-copy BCHW; fail closed; gpu-03);
 public **gpu_decoder** shim re-exports NVIDIA; **get_gpu_backend(config)** (cached by
 vendor) returns **GpuBackend**; **orchestrator** injects it into **VideoService**
 and **QuickTitleService** (shared instance);
@@ -55,12 +55,10 @@ torchvision.io.encode_jpeg; compilation streams HWC to FFmpeg h264_nvenc stdin.
   `crop_utils` (BCHW). Legacy NumPy crop helpers removed; production uses
   crop_utils only.
 
-**Intel note:** `GPU_VENDOR=intel` uses **QSV-only** decode via `frigate_intel_decode` (no CPU libavcodec fallback). True
-DRM PRIME → XPU zero-copy is an experimental path gated by `INTEL_DECODE_XPU_ZEROCOPY` builds and
-driver support for mapping hw frames to DRM PRIME.
-When enabled, the native session attempts DRM PRIME mapping per frame and uses Level Zero DMA-BUF
-import + an on-device NV12→RGB kernel to return `torch::kXPU` BCHW uint8 without CPU staging; env
-CPU staging is not used for Intel HW frames when built with `INTEL_DECODE_XPU_ZEROCOPY` (fail closed).
+**Intel note:** `GPU_VENDOR=intel` uses **QSV-only** decode via `frigate_intel_decode` (no CPU libavcodec fallback).
+Intel decode is **XPU zero-copy only** (requires `INTEL_DECODE_XPU_ZEROCOPY` build): the native session maps per-frame
+to DRM PRIME and uses Level Zero DMA-BUF import + an on-device NV12→RGB kernel to return `torch::kXPU` BCHW `uint8`;
+there is no CPU staging fallback (fail closed on map/import failure).
 
 ---
 
@@ -113,6 +111,7 @@ frigate-event-buffer/
 │   └── maps/ (INGESTION, PROCESSING, WEB, LIFECYCLE, NOTIFICATIONS, AI, TESTING)
 ├── DIAGNOSTIC_SIDECAR_TIMELINE_COMPILATION.md
 ├── gpu_pipeline_audit_report.md
+├── GPU_ZEROCOPY_VENDOR_SCORECARD.md (NVIDIA/AMD/Intel decode zero-copy audit)
 ├── performance_final_verification.md
 ├── .cursor/rules/
 ├── .github/workflows/ci.yml (Ruff, pytest, docker build Dockerfile.intel + smoke --strict)

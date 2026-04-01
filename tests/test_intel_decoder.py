@@ -50,7 +50,7 @@ def fake_native_module() -> types.ModuleType:
     m = types.ModuleType("frigate_intel_decode")
     m.IntelDecoderSession = FakeSession
     m.version = lambda: "0.2.0-mock"
-    m.decode_first_frame_bchw_rgb_sw = MagicMock()
+    m.decode_first_frame_bchw_rgb = MagicMock()
     return m
 
 

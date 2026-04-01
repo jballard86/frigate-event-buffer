@@ -10,7 +10,7 @@ Clone the repo so the **repo root** is the directory that contains `Dockerfile` 
 
 - **Docker** — Use `docker build` and `docker run`, or Docker Compose (`docker-compose up -d --build`).
 - **For GPU (NVIDIA):** Driver and [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html). Use `docker run --gpus all` and set **`NVIDIA_DRIVER_CAPABILITIES=compute,video,utility`**. Video uses PyNvVideoCodec + FFmpeg; there is no CPU decode fallback on that path.
-- **For GPU (Intel):** Use **`Dockerfile.intel`** and pass **`/dev/dri/renderD*`** into the container (see below). Decode uses **`frigate_intel_decode`** (**QSV only** — h264_qsv/hevc_qsv). Host Intel / VAAPI drivers apply.
+- **For GPU (Intel):** Use **`Dockerfile.intel`** and pass **`/dev/dri/renderD*`** into the container (see below). Decode uses **`frigate_intel_decode`** (**QSV only** — h264_qsv/hevc_qsv) with an **XPU zero-copy** output path (no host readback fallback). Host Intel / VAAPI drivers apply.
 
 ### GPU vendor and adapter index (config)
 
@@ -40,7 +40,7 @@ docker build -f Dockerfile.intel -t frigate-buffer:intel .
 - **Compose:** use **`docker-compose.intel.example.yml`** as a template: **`devices:`** `/dev/dri/renderD128` (change if your Arc node differs), **`group_add:`** `video` and `render` (or numeric GIDs from the host if group names are missing).
 - **XPU / IPEX:** if you enable IPEX, set `INSTALL_IPEX=1` at build time so **builder and runtime** remain aligned. For bare metal, install IPEX per Intel’s docs and set **`DETECTION_DEVICE`** / rely on **`default_detection_device`** when **`torch.xpu`** is available.
 - **QSV compilation encode:** optional **`multi_cam.intel.qsv_encode_preset`** and **`qsv_encode_global_quality`** in **`config.yaml`** tune **`h264_qsv`** for summary MP4s; env **`INTEL_QSV_ENCODE_PRESET`** and **`INTEL_QSV_ENCODE_GLOBAL_QUALITY`** override YAML (see **`examples/config.example.yaml`**).
-- **Experimental Intel true zero-copy (Arc XPU):** build with `--build-arg TORCH_STACK=xpu --build-arg INTEL_DECODE_XPU_ZEROCOPY=1` to enable the native DRM PRIME → DMA-BUF import path (requires Arc + Level Zero runtime in-container). When enabled, Intel HW frames **do not** fall back to CPU transfer + swscale; failure to map/import is treated as a decode failure. `frigate_intel_decode.IntelDecoderSession.uses_zero_copy_decode()` reports whether the fast path is active.
+- **Intel true zero-copy (Arc XPU):** the Intel image builds with `TORCH_STACK=xpu` and `INTEL_DECODE_XPU_ZEROCOPY=1` and requires the native DRM PRIME → DMA-BUF import path (requires Arc + Level Zero runtime in-container). Intel HW frames do **not** fall back to CPU transfer + swscale; failure to map/import is treated as a decode failure. `frigate_intel_decode.IntelDecoderSession.uses_zero_copy_decode()` reports whether the fast path is active.
 
 ### AMD ROCm (GPU_VENDOR=amd; gpu-03)
 

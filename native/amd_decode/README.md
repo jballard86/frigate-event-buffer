@@ -4,16 +4,20 @@ C++ extension for [gpu-03 AMD ROCm plan](../../docs/Multi_GPU_Support_Integratio
 
 **Decode:** ``AmdDecoderSession`` prefers **VAAPI** on a DRM render node (default ``/dev/dri/renderD128`` + ``device_index``, or ``FRIGATE_AMD_VAAPI_DEVICE``). If device init or ``avcodec_open2`` fails, falls back to **software** libavcodec.
 
-**Zero-copy (optional HIP):** When CMake finds **ROCm HIP** (``AMD_DECODE_HIP=ON``, default on Linux), the session builds a **DRM** hwframes context and maps VAAPI frames to **DRM PRIME**; DMA-BUF fds are imported with **``hipImportExternalMemory``**, NV12 is converted to RGB on-GPU via **``nv12_to_rgb_hip.hip``**, and the module returns **``torch::kCUDA``** (ROCm) **uint8 BCHW** tensors. Call **``uses_zero_copy_decode()``** after construction to see if the fast path is active. If mapping/HIP fails, the code falls back to **``av_hwframe_transfer_data``** + **sws_scale** → **CPU** tensors unless **``FRIGATE_AMD_DECODE_STRICT_ZEROCOPY=1``** (then errors propagate). Set **``FRIGATE_AMD_DECODE_DISABLE_ZEROCOPY=1``** to force the CPU transfer path without rebuilding.
+**Zero-copy (HIP required):** The session uses **VAAPI** hw frames and maps them to
+**DRM PRIME**; DMA-BUF fds are imported with **``hipImportExternalMemory``**, NV12 is
+converted to RGB on-GPU via **``nv12_to_rgb_hip.hip``**, and the module returns
+**``torch::kCUDA``** (ROCm) **uint8 BCHW** tensors. If VAAPI init, DRM PRIME mapping,
+HIP import, or the conversion kernel fails, the session **throws** (no CPU decode /
+transfer fallback). ``zero_copy_capable()`` reports whether the session is armed for
+the zero-copy path; ``uses_zero_copy_decode()`` becomes true after at least one frame
+was produced via the zero-copy path.
 
 ## Environment
 
 | Variable | Effect |
 |----------|--------|
-| ``FRIGATE_AMD_DECODE_FORCE_SW=1`` | Skip VAAPI; software decode only. |
 | ``FRIGATE_AMD_VAAPI_DEVICE`` | Override DRM node (e.g. ``/dev/dri/renderD129``). |
-| ``FRIGATE_AMD_DECODE_DISABLE_ZEROCOPY=1`` | Skip HIP/DRM map; use CPU transfer for hw frames. |
-| ``FRIGATE_AMD_DECODE_STRICT_ZEROCOPY=1`` | Do not fall back to CPU transfer when zero-copy fails. |
 
 ## Prerequisites (Linux)
 
@@ -41,6 +45,7 @@ cmake --build build -j
 ```
 
 Disable HIP (CPU transfer only): ``cmake -S . -B build -DAMD_DECODE_HIP=OFF``.
+HIP is required by this project’s zero-copy rules; builds without HIP are not supported.
 
 The shared library is under ``build/`` (e.g. ``frigate_amd_decode*.so``). Add that directory to ``PYTHONPATH`` to ``import frigate_amd_decode``.
 

@@ -24,7 +24,7 @@ def test_version_string() -> None:
 
 def test_decode_first_frame_requires_existing_file() -> None:
     with pytest.raises(RuntimeError, match="avformat_open_input"):
-        frigate_intel_decode.decode_first_frame_bchw_rgb_sw("/nonexistent/clip.mp4")
+        frigate_intel_decode.decode_first_frame_bchw_rgb("/nonexistent/clip.mp4")
 
 
 def test_module_spec_when_imported() -> None:

@@ -14,10 +14,12 @@ struct AVFrame;
 struct AVStream;
 
 /**
- * FFmpeg-backed AMD decode: VAAPI (DRM render node) when available, else SW.
- * When built with HIP and DRM map succeeds, frames are uint8 BCHW RGB on the
- * ROCm device (torch::kCUDA index). Otherwise hw frames use av_hwframe_transfer_data
- * + sws_scale and output CPU tensors (Python may .to(cuda) on ROCm).
+ * FFmpeg-backed AMD decode (no CPU fallbacks):
+ * - Requires VAAPI hw frames on a DRM render node.
+ * - Requires HIP-enabled zero-copy path (VAAPI -> DRM PRIME -> HIP import).
+ *
+ * This module intentionally fails closed when VAAPI, DRM PRIME mapping, or HIP
+ * import/conversion are unavailable, mirroring the NVIDIA decode posture.
  */
 class AmdDecoderSession {
  public:
@@ -40,8 +42,11 @@ class AmdDecoderSession {
   /** True when VAAPI hw device + hw frames are active (else software decode). */
   bool uses_hw_decode() const { return using_vaapi_; }
 
-  /** True when VAAPI + DRM map + HIP produce device tensors (no CPU readback). */
-  bool uses_zero_copy_decode() const { return zero_copy_ready_; }
+  /** True when this build can perform HIP zero-copy (capability/armed). */
+  bool zero_copy_capable() const { return zero_copy_ready_; }
+
+  /** True only after a frame has been produced via the HIP zero-copy path. */
+  bool uses_zero_copy_decode() const { return zero_copy_active_; }
 
  private:
   void open_demuxer_(const std::string& path);
@@ -53,7 +58,6 @@ class AmdDecoderSession {
   void flush_decoder_();
   torch::Tensor decode_one_displayed_frame_();
   torch::Tensor avframe_to_bchw_rgb_(AVFrame* frame);
-  torch::Tensor avframe_to_bchw_rgb_cpu_(AVFrame* frame);
 
 #if defined(AMD_DECODE_WITH_HIP) && AMD_DECODE_WITH_HIP
   torch::Tensor avframe_vaapi_drm_to_cuda_(AVFrame* src);
@@ -79,4 +83,5 @@ class AmdDecoderSession {
 
   bool using_vaapi_{false};
   bool zero_copy_ready_{false};
+  bool zero_copy_active_{false};
 };

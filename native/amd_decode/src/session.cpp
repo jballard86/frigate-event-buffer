@@ -88,19 +88,23 @@ constexpr uint32_t kDrmFormatNv12 = 0x3231564e;
 
 AmdDecoderSession::AmdDecoderSession(const std::string& path, int device_index)
     : path_(path), device_index_(device_index) {
-  const char* force_sw = std::getenv("FRIGATE_AMD_DECODE_FORCE_SW");
-  const bool prefer_vaapi = !(force_sw != nullptr && force_sw[0] == '1');
+  const bool prefer_vaapi = true;
   open_demuxer_(path);
   setup_decoder_(prefer_vaapi);
-  if (using_vaapi_) {
-    init_drm_map_context_();
+  if (!using_vaapi_) {
+    throw std::runtime_error("AMD decode requires VAAPI hw decode; no software fallback is supported");
+  }
+  init_drm_map_context_();
 #if defined(AMD_DECODE_WITH_HIP) && AMD_DECODE_WITH_HIP
-    int n = 0;
-    if (drm_frames_ctx_ != nullptr && hipGetDeviceCount(&n) == hipSuccess && n > 0 &&
-        device_index_ >= 0 && device_index_ < n) {
-      zero_copy_ready_ = true;
-    }
+  int n = 0;
+  if (drm_frames_ctx_ != nullptr && hipGetDeviceCount(&n) == hipSuccess && n > 0 &&
+      device_index_ >= 0 && device_index_ < n) {
+    zero_copy_ready_ = true;
+  }
 #endif
+  if (!zero_copy_ready_) {
+    throw std::runtime_error(
+        "AMD decode requires HIP zero-copy (VAAPI->DRM PRIME->HIP import); build with ROCm HIP");
   }
   compute_frame_count_();
   if (video_width_ > 4096) {
@@ -217,31 +221,10 @@ void AmdDecoderSession::setup_decoder_(bool prefer_vaapi) {
 
   int oerr = avcodec_open2(dec_ctx_, dec, nullptr);
   if (oerr < 0) {
-    if (have_vaapi) {
-      dec_ctx_->hw_device_ctx = nullptr;
-      dec_ctx_->get_format = nullptr;
-      avcodec_free_context(&dec_ctx_);
-      if (hw_device_ctx_) {
-        av_buffer_unref(&hw_device_ctx_);
-        hw_device_ctx_ = nullptr;
-      }
-      dec_ctx_ = avcodec_alloc_context3(dec);
-      if (!dec_ctx_) {
-        throw std::runtime_error("avcodec_alloc_context3 failed (sw retry)");
-      }
-      if (avcodec_parameters_to_context(dec_ctx_, par) < 0) {
-        avcodec_free_context(&dec_ctx_);
-        throw std::runtime_error("avcodec_parameters_to_context failed (sw retry)");
-      }
-      using_vaapi_ = false;
-      if (avcodec_open2(dec_ctx_, dec, nullptr) < 0) {
-        avcodec_free_context(&dec_ctx_);
-        throw std::runtime_error("avcodec_open2 failed (software fallback)");
-      }
-    } else {
-      avcodec_free_context(&dec_ctx_);
-      throw std::runtime_error("avcodec_open2 failed");
-    }
+    avcodec_free_context(&dec_ctx_);
+    throw std::runtime_error(
+        "avcodec_open2 failed (AMD decode requires VAAPI; no software fallback): " +
+        av_error_string(oerr));
   }
 }
 
@@ -401,81 +384,25 @@ torch::Tensor AmdDecoderSession::avframe_vaapi_drm_to_cuda_(AVFrame* src) {
   if (hipDeviceSynchronize() != hipSuccess) {
     throw std::runtime_error("hipDeviceSynchronize after NV12 kernel failed");
   }
+  zero_copy_active_ = true;
   return out;
 }
 
 #endif  // AMD_DECODE_WITH_HIP
 
-torch::Tensor AmdDecoderSession::avframe_to_bchw_rgb_cpu_(AVFrame* frame) {
-  AVFrame* sw = frame;
-  std::unique_ptr<AVFrame, FrameDeleter> transferred;
-
-  if (frame->hw_frames_ctx != nullptr) {
-    transferred.reset(av_frame_alloc());
-    if (!transferred) {
-      throw std::runtime_error("av_frame_alloc failed for hw transfer");
-    }
-    int tr = av_hwframe_transfer_data(transferred.get(), frame, 0);
-    if (tr < 0) {
-      throw std::runtime_error("av_hwframe_transfer_data: " + av_error_string(tr));
-    }
-    sw = transferred.get();
-  }
-
-  const int w = sw->width;
-  const int h = sw->height;
-  if (w <= 0 || h <= 0) {
-    throw std::runtime_error("invalid decoded frame dimensions");
-  }
-
-  std::unique_ptr<SwsContext, SwsCtxDeleter> sws(sws_getContext(
-      w,
-      h,
-      static_cast<AVPixelFormat>(sw->format),
-      w,
-      h,
-      AV_PIX_FMT_RGB24,
-      SWS_BILINEAR,
-      nullptr,
-      nullptr,
-      nullptr));
-  if (!sws) {
-    throw std::runtime_error("sws_getContext failed");
-  }
-
-  std::vector<uint8_t> rgb(static_cast<size_t>(w) * static_cast<size_t>(h) * 3u);
-  uint8_t* dst_slices[1] = {rgb.data()};
-  int dst_linesize[1] = {3 * w};
-  const int scale_ret = sws_scale(
-      sws.get(), sw->data, sw->linesize, 0, h, dst_slices, dst_linesize);
-  if (scale_ret != h) {
-    throw std::runtime_error("sws_scale did not convert full frame");
-  }
-
-  auto opts = torch::TensorOptions().dtype(torch::kUInt8).device(torch::kCPU);
-  torch::Tensor hwc = torch::from_blob(rgb.data(), {h, w, 3}, opts).clone();
-  torch::Tensor chw = hwc.permute({2, 0, 1}).contiguous();
-  return chw.unsqueeze(0);
-}
-
 torch::Tensor AmdDecoderSession::avframe_to_bchw_rgb_(AVFrame* src) {
 #if defined(AMD_DECODE_WITH_HIP) && AMD_DECODE_WITH_HIP
-  if (zero_copy_ready_ && using_vaapi_ && src->format == AV_PIX_FMT_VAAPI && src->hw_frames_ctx != nullptr) {
-    const char* zc = std::getenv("FRIGATE_AMD_DECODE_DISABLE_ZEROCOPY");
-    if (!(zc != nullptr && zc[0] == '1')) {
-      try {
-        return avframe_vaapi_drm_to_cuda_(src);
-      } catch (const std::exception&) {
-        const char* strict = std::getenv("FRIGATE_AMD_DECODE_STRICT_ZEROCOPY");
-        if (strict != nullptr && strict[0] == '1') {
-          throw;
-        }
-        return avframe_to_bchw_rgb_cpu_(src);
-      }
-    }
+  if (!zero_copy_ready_ || !using_vaapi_) {
+    throw std::runtime_error("AMD decode requires HIP zero-copy; session not ready");
   }
+  if (src->format != AV_PIX_FMT_VAAPI || src->hw_frames_ctx == nullptr) {
+    throw std::runtime_error("AMD decode expected VAAPI hw frames for zero-copy path");
+  }
+  return avframe_vaapi_drm_to_cuda_(src);
+#else
+  (void)src;
+  throw std::runtime_error("AMD decode built without HIP; zero-copy path unavailable");
 #endif
-  return avframe_to_bchw_rgb_cpu_(src);
 }
 
 torch::Tensor AmdDecoderSession::decode_one_displayed_frame_() {
