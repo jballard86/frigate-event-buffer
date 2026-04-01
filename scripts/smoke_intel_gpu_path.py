@@ -57,7 +57,7 @@ def main() -> int:
         "clip",
         nargs="?",
         default=None,
-        help="Optional video path; decodes first frame via SW FFmpeg when native is built.",
+        help="Optional H.264/HEVC clip; decodes first frame via native QSV (frigate_intel_decode).",
     )
     parser.add_argument(
         "--strict",

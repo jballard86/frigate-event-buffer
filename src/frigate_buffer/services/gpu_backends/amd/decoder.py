@@ -1,10 +1,11 @@
 """
 AMD decode: native ``frigate_amd_decode.AmdDecoderSession`` → BCHW ``uint8``.
 
-Native builds from ``native/amd_decode/`` (VAAPI/SW FFmpeg → CPU tensors); when
-``amd_runtime.tensor_device_for_decode`` is ``cuda:N`` (ROCm torch), frames are
-moved to the GPU in Python. Missing ``import`` raises a chained error with build
-hints. Callers hold ``GPU_LOCK`` (same contract as NVIDIA / Intel).
+Native builds from ``native/amd_decode/``: VAAPI + optional HIP maps DRM PRIME
+DMA-BUF into ROCm and returns ``cuda:N`` uint8 BCHW tensors when zero-copy is
+active; otherwise CPU tensors (Python may ``.to(cuda)``).
+Missing ``import`` raises a chained error with build hints.
+Callers hold ``GPU_LOCK`` (same contract as NVIDIA / Intel).
 """
 
 from __future__ import annotations
@@ -23,6 +24,18 @@ _AMD_DECODE_IMPORT_HINT = (
     "Build and install the frigate_amd_decode extension (see native/amd_decode/ "
     "and docs/Multi_GPU_Support_Integration_Plan/gpu-03-amd-rocm.md)."
 )
+
+
+def _to_decode_device(batch: Any, dev_s: str) -> Any:
+    """Move tensor to ``dev_s`` only when it is not already on that device."""
+    import torch
+
+    if dev_s == "cpu":
+        return batch.cpu() if getattr(batch, "is_cuda", False) else batch
+    dev = torch.device(dev_s)
+    if batch.device.type == dev.type and batch.device.index == dev.index:
+        return batch
+    return batch.to(device=dev, non_blocking=True)
 
 
 class DecoderContext:
@@ -48,32 +61,17 @@ class DecoderContext:
         conv = [int(i) for i in indices]
         batch = self._session.get_frames(conv)
         dev_s = amd_runtime.tensor_device_for_decode(self._gpu_id)
-        if dev_s == "cpu":
-            return batch
-        return batch.to(device=torch.device(dev_s), non_blocking=True)
+        return _to_decode_device(batch, dev_s)
 
     def get_frame_at_index(self, index: int) -> Any:
-        import torch
-
         one = self._session.get_frame_at_index(int(index))
         dev_s = amd_runtime.tensor_device_for_decode(self._gpu_id)
-        if dev_s == "cpu":
-            return one
-        return one.to(device=torch.device(dev_s), non_blocking=True)
+        return _to_decode_device(one, dev_s)
 
     def get_batch_frames(self, count: int) -> list[Any]:
-        import torch
-
         raw = self._session.get_batch_frames(int(count))
         dev_s = amd_runtime.tensor_device_for_decode(self._gpu_id)
-        dev = torch.device(dev_s)
-        out: list[Any] = []
-        for t in raw:
-            if dev_s == "cpu":
-                out.append(t)
-            else:
-                out.append(t.to(device=dev, non_blocking=True))
-        return out
+        return [_to_decode_device(t, dev_s) for t in raw]
 
     def seek_to_index(self, index: int) -> None:
         self._session.seek_to_index(int(index))

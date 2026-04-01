@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 
+from frigate_buffer.constants import COMPILATION_OUTPUT_FPS
 from frigate_buffer.services.gpu_backends.amd.ffmpeg_encode import (
     AmdFfmpegCompilationEncode,
     amd_ffmpeg_compilation_encode,
@@ -16,7 +17,6 @@ from frigate_buffer.services.gpu_backends.amd.gif_ffmpeg import (
     gif_ffmpeg_argv,
     gif_filter_complex,
 )
-from frigate_buffer.constants import COMPILATION_OUTPUT_FPS
 
 
 def test_compilation_cmd_uses_h264_amf_not_libx264() -> None:

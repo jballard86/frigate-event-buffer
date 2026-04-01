@@ -20,6 +20,18 @@ logger = logging.getLogger("frigate-buffer")
 DECODER_MAX_WIDTH = 4096
 
 
+def _to_decode_device(batch: Any, dev_s: str) -> Any:
+    """Move tensor to ``dev_s`` only when it is not already on that device."""
+    import torch
+
+    if dev_s == "cpu":
+        return batch.cpu() if getattr(batch, "is_cuda", False) else batch
+    dev = torch.device(dev_s)
+    if batch.device.type == dev.type and batch.device.index == dev.index:
+        return batch
+    return batch.to(device=dev, non_blocking=True)
+
+
 class DecoderContext:
     """Adapter implementing :class:`DecoderContextProto` over the native session."""
 
@@ -43,32 +55,17 @@ class DecoderContext:
         conv = [int(i) for i in indices]
         batch_cpu = self._session.get_frames(conv)
         dev_s = intel_runtime.tensor_device_for_decode(self._gpu_id)
-        if dev_s == "cpu":
-            return batch_cpu
-        return batch_cpu.to(device=torch.device(dev_s), non_blocking=True)
+        return _to_decode_device(batch_cpu, dev_s)
 
     def get_frame_at_index(self, index: int) -> Any:
-        import torch
-
         t_cpu = self._session.get_frame_at_index(int(index))
         dev_s = intel_runtime.tensor_device_for_decode(self._gpu_id)
-        if dev_s == "cpu":
-            return t_cpu
-        return t_cpu.to(device=torch.device(dev_s), non_blocking=True)
+        return _to_decode_device(t_cpu, dev_s)
 
     def get_batch_frames(self, count: int) -> list[Any]:
-        import torch
-
         raw = self._session.get_batch_frames(int(count))
         dev_s = intel_runtime.tensor_device_for_decode(self._gpu_id)
-        dev = torch.device(dev_s)
-        out: list[Any] = []
-        for t_cpu in raw:
-            if dev_s == "cpu":
-                out.append(t_cpu)
-            else:
-                out.append(t_cpu.to(device=dev, non_blocking=True))
-        return out
+        return [_to_decode_device(t_cpu, dev_s) for t_cpu in raw]
 
     def seek_to_index(self, index: int) -> None:
         self._session.seek_to_index(int(index))

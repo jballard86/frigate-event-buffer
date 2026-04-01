@@ -2,7 +2,11 @@
 
 C++ extension for [gpu-02 Intel Arc plan](../../docs/Multi_GPU_Support_Integration_Plan/gpu-02-intel-arc.md): **CMake + pybind11 + libtorch + FFmpeg** linked in one module.
 
-**Phase 2:** ``IntelDecoderSession`` prefers **h264_qsv / hevc_qsv** + **QSV** device (`auto`); falls back to software libavcodec if QSV init fails. Set ``FRIGATE_INTEL_DECODE_FORCE_SW=1`` to skip QSV. Decoded frames transfer to **CPU** BCHW ``uint8``; Python ``gpu_backends/intel/decoder.py`` may **``.to(xpu)``** when Intel Extension for PyTorch is available.
+**Decode:** ``IntelDecoderSession`` uses **QSV only** (**h264_qsv** / **hevc_qsv**) with QSV device ``auto``. Unsupported codecs or QSV init failure **throws**; there is no software libavcodec fallback (same policy as the rest of the project: no CPU decode path).
+
+**DRM PRIME probe:** The session initializes a DRM hwframes context and probes mapping a hw frame to **DRM PRIME NV12**; read ``can_map_to_drm_prime()`` for driver/FFmpeg compatibility.
+
+**Experimental XPU zero-copy:** Build with ``-DINTEL_DECODE_XPU_ZEROCOPY=ON`` (``icpx`` + XPU torch). Returns **XPU** BCHW uint8 when the DRM PRIME → DMA-BUF path works. Non–zero-copy builds still decode on QSV but may use host readback + swscale for RGB; env ``FRIGATE_INTEL_DECODE_DISABLE_XPU_OUTPUT=1`` skips `.to(xpu)` for that legacy RGB path.
 
 ## Prerequisites (Linux)
 
@@ -27,6 +31,13 @@ Point CMake at the same libtorch as your `torch` wheel:
 cd native/intel_decode
 export CMAKE_PREFIX_PATH="$(python -c 'import torch; print(torch.utils.cmake_prefix_path)')"
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build -j
+```
+
+To enable experimental XPU zero-copy (requires Intel oneAPI `icpx` and an XPU torch stack):
+
+```bash
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DINTEL_DECODE_XPU_ZEROCOPY=ON
 cmake --build build -j
 ```
 

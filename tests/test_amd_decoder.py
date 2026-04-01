@@ -48,6 +48,12 @@ def fake_native_module() -> types.ModuleType:
         def get_index_from_time_in_seconds(self, t_sec: float) -> int:
             return int(t_sec * 30.0)
 
+        def uses_hw_decode(self) -> bool:
+            return False
+
+        def uses_zero_copy_decode(self) -> bool:
+            return False
+
     m = types.ModuleType("frigate_amd_decode")
     m.AmdDecoderSession = FakeSession
     m.version = lambda: "0.1.0-mock"

@@ -53,7 +53,7 @@ The **wheel/sdist** or **Docker copy step** must place the `.so` where `intel.de
 1. Open input with **libavformat**; configure **hwaccel** appropriate for **QSV / VAAPI / oneVPL** per target OS (Linux container is the first-class target).
 2. Decode to **hardware frames** (`AVHWFramesContext`); avoid readback to CPU for the hot path.
 3. Convert to **RGB planar / BCHW** layout on GPU if needed (FFmpeg filters in-graph, or custom CUDA-less Intel paths — spike in implementation).
-4. Wrap or copy into **libtorch** `at::Tensor` on **XPU** with **ABI compatibility** to the **same** `libtorch` version as the installed **`torch`** wheel.
+4. For true zero-copy, map hw frames to **DRM PRIME** (DMA-BUF) and import into an **XPU** tensor without a CPU staging copy. As an interim step, the native module may return XPU tensors by moving CPU tensors to `xpu:N` inside the extension when built against an XPU torch stack.
 5. Expose to Python via **pybind11** (return `torch::Tensor` or capsule + **DLPack** as PyNv-style).
 
 ### 3.2 Python adapter (`intel/decoder.py`)

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 
+from frigate_buffer.constants import COMPILATION_OUTPUT_FPS
 from frigate_buffer.services.gpu_backends.intel.ffmpeg_encode import (
     IntelFfmpegCompilationEncode,
     compilation_ffmpeg_cmd_and_log_path,
@@ -17,7 +18,6 @@ from frigate_buffer.services.gpu_backends.intel.gif_ffmpeg import (
     gif_filter_complex,
     intel_gif_ffmpeg,
 )
-from frigate_buffer.constants import COMPILATION_OUTPUT_FPS
 
 
 def test_compilation_cmd_uses_h264_qsv_not_libx264() -> None:

@@ -1,8 +1,7 @@
 /**
  * pybind11 entry for Intel decode session (gpu-02 Phase 2).
  *
- * QSV hardware decode when available; software FFmpeg fallback or
- * FRIGATE_INTEL_DECODE_FORCE_SW=1. Output tensors are CPU uint8 BCHW RGB.
+ * QSV-only decode (h264_qsv/hevc_qsv); no software libavcodec fallback.
  */
 
 #include "session.hpp"
@@ -24,7 +23,7 @@ torch::Tensor decode_first_frame_bchw_rgb_sw(const std::string& path) {
 }  // namespace
 
 PYBIND11_MODULE(frigate_intel_decode, m) {
-  m.doc() = "Intel decode: FFmpeg QSV (preferred) or SW; DecoderSession API; CPU BCHW RGB.";
+  m.doc() = "Intel decode: FFmpeg QSV only (h264_qsv/hevc_qsv); DecoderSession API.";
 
   m.def("version", []() { return std::string("0.2.0-phase2"); });
 
@@ -40,7 +39,10 @@ PYBIND11_MODULE(frigate_intel_decode, m) {
           "get_index_from_time_in_seconds",
           &IntelDecoderSession::get_index_from_time_in_seconds,
           py::arg("t_sec"))
-      .def("uses_hw_decode", &IntelDecoderSession::uses_hw_decode);
+      .def("uses_hw_decode", &IntelDecoderSession::uses_hw_decode)
+      .def("can_map_to_drm_prime", &IntelDecoderSession::can_map_to_drm_prime)
+      .def("uses_xpu_output", &IntelDecoderSession::uses_xpu_output)
+      .def("uses_zero_copy_decode", &IntelDecoderSession::uses_zero_copy_decode);
 
   m.def("decode_first_frame_bchw_rgb_sw", &decode_first_frame_bchw_rgb_sw, py::arg("path"));
 }

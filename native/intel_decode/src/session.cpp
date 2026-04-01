@@ -6,11 +6,16 @@
 #include <cstring>
 #include <stdexcept>
 
+#if defined(INTEL_DECODE_XPU_ZEROCOPY) && INTEL_DECODE_XPU_ZEROCOPY
+#include "xpu_zerocopy.hpp"
+#endif
+
 extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
 #include <libavutil/avutil.h>
 #include <libavutil/hwcontext.h>
+#include <libavutil/hwcontext_drm.h>
 #include <libavutil/imgutils.h>
 #include <libavutil/mathematics.h>
 #include <libswscale/swscale.h>
@@ -38,6 +43,19 @@ struct SwsCtxDeleter {
   void operator()(SwsContext* p) const { sws_freeContext(p); }
 };
 
+std::string drm_device_from_index(int device_index) {
+  const char* env = std::getenv("FRIGATE_INTEL_DRM_DEVICE");
+  if (env != nullptr && env[0] != '\0') {
+    return std::string(env);
+  }
+  const int base = 128;
+  const int n = base + std::max(0, device_index);
+  return "/dev/dri/renderD" + std::to_string(n);
+}
+
+/** DRM_FORMAT_NV12 from linux/drm_fourcc.h (avoid hard dependency on libdrm headers). */
+constexpr uint32_t kDrmFormatNv12 = 0x3231564e;
+
 const AVCodec* pick_qsv_decoder(enum AVCodecID id) {
   switch (id) {
     case AV_CODEC_ID_H264:
@@ -53,11 +71,11 @@ const AVCodec* pick_qsv_decoder(enum AVCodecID id) {
 
 IntelDecoderSession::IntelDecoderSession(const std::string& path, int device_index)
     : path_(path), device_index_(device_index) {
-  (void)device_index_;  // Reserved for future per-adapter QSV device selection.
-  const char* force_sw = std::getenv("FRIGATE_INTEL_DECODE_FORCE_SW");
-  const bool prefer_qsv = !(force_sw && force_sw[0] == '1');
   open_demuxer_(path);
-  setup_decoder_(prefer_qsv);
+  setup_decoder_();
+  if (using_hw_) {
+    init_drm_map_context_();
+  }
   compute_frame_count_();
   if (video_width_ > 4096) {
     throw std::runtime_error("video width exceeds DECODER_MAX_WIDTH 4096 (Intel decode)");
@@ -73,6 +91,12 @@ IntelDecoderSession::~IntelDecoderSession() {
   }
   if (hw_device_ctx_) {
     av_buffer_unref(&hw_device_ctx_);
+  }
+  if (drm_frames_ctx_) {
+    av_buffer_unref(&drm_frames_ctx_);
+  }
+  if (drm_device_ctx_) {
+    av_buffer_unref(&drm_device_ctx_);
   }
   if (fmt_) {
     avformat_close_input(&fmt_);
@@ -102,33 +126,20 @@ void IntelDecoderSession::open_demuxer_(const std::string& path) {
   video_height_ = par->height;
 }
 
-void IntelDecoderSession::setup_decoder_(bool prefer_qsv) {
+void IntelDecoderSession::setup_decoder_() {
   AVCodecParameters* par = video_st_->codecpar;
-  const AVCodec* dec = nullptr;
-
-  if (prefer_qsv) {
-    dec = pick_qsv_decoder(par->codec_id);
-    if (dec != nullptr) {
-      int hwr = av_hwdevice_ctx_create(
-          &hw_device_ctx_, AV_HWDEVICE_TYPE_QSV, "auto", nullptr, 0);
-      if (hwr < 0) {
-        av_buffer_unref(&hw_device_ctx_);
-        hw_device_ctx_ = nullptr;
-        dec = nullptr;
-      }
-    }
-  }
-
+  const AVCodec* dec = pick_qsv_decoder(par->codec_id);
   if (dec == nullptr) {
-    dec = avcodec_find_decoder(par->codec_id);
-    using_hw_ = false;
-  } else {
-    using_hw_ = true;
+    throw std::runtime_error(
+        "Intel decode requires QSV (h264_qsv/hevc_qsv); unsupported codec for this stream");
   }
-
-  if (dec == nullptr) {
-    throw std::runtime_error("no suitable FFmpeg decoder for video stream");
+  int hwr = av_hwdevice_ctx_create(&hw_device_ctx_, AV_HWDEVICE_TYPE_QSV, "auto", nullptr, 0);
+  if (hwr < 0) {
+    av_buffer_unref(&hw_device_ctx_);
+    hw_device_ctx_ = nullptr;
+    throw std::runtime_error("Intel decode: QSV device init failed: " + av_error_string(hwr));
   }
+  using_hw_ = true;
 
   dec_ctx_ = avcodec_alloc_context3(dec);
   if (!dec_ctx_) {
@@ -144,6 +155,32 @@ void IntelDecoderSession::setup_decoder_(bool prefer_qsv) {
 
   if (avcodec_open2(dec_ctx_, dec, nullptr) < 0) {
     throw std::runtime_error("avcodec_open2 failed");
+  }
+}
+
+void IntelDecoderSession::init_drm_map_context_() {
+  std::string dev = drm_device_from_index(device_index_);
+  int rr = av_hwdevice_ctx_create(&drm_device_ctx_, AV_HWDEVICE_TYPE_DRM, dev.c_str(), nullptr, 0);
+  if (rr < 0) {
+    drm_device_ctx_ = nullptr;
+    return;
+  }
+  drm_frames_ctx_ = av_hwframe_ctx_alloc(drm_device_ctx_);
+  if (drm_frames_ctx_ == nullptr) {
+    av_buffer_unref(&drm_device_ctx_);
+    drm_device_ctx_ = nullptr;
+    return;
+  }
+  auto* fc = reinterpret_cast<AVHWFramesContext*>(drm_frames_ctx_->data);
+  fc->format = AV_PIX_FMT_DRM_PRIME;
+  fc->sw_format = AV_PIX_FMT_NV12;
+  fc->width = video_width_;
+  fc->height = video_height_;
+  if (av_hwframe_ctx_init(drm_frames_ctx_) < 0) {
+    av_buffer_unref(&drm_frames_ctx_);
+    av_buffer_unref(&drm_device_ctx_);
+    drm_frames_ctx_ = nullptr;
+    drm_device_ctx_ = nullptr;
   }
 }
 
@@ -199,6 +236,54 @@ torch::Tensor IntelDecoderSession::avframe_to_bchw_rgb_(AVFrame* src) {
   AVFrame* frame = src;
   std::unique_ptr<AVFrame, FrameDeleter> transferred;
 
+  if (!drm_map_ready_ && using_hw_ && drm_frames_ctx_ != nullptr && src->hw_frames_ctx != nullptr) {
+    probe_drm_map_(src);
+  }
+
+#if defined(INTEL_DECODE_XPU_ZEROCOPY) && INTEL_DECODE_XPU_ZEROCOPY
+  // Attempt true zero-copy (DRM PRIME -> DMA-BUF import -> on-XPU NV12->RGB).
+  // Intel uses QSV-only decode; when this build flag is on, do not fall back to
+  // host readback + swscale for hw frames.
+  if (using_hw_ && drm_map_ready_ && drm_frames_ctx_ != nullptr && src->hw_frames_ctx != nullptr) {
+    std::unique_ptr<AVFrame, FrameDeleter> mapped(av_frame_alloc());
+    if (!mapped) {
+      throw std::runtime_error("Intel zero-copy required: av_frame_alloc failed");
+    }
+    mapped->format = AV_PIX_FMT_DRM_PRIME;
+    mapped->width = src->width;
+    mapped->height = src->height;
+    mapped->hw_frames_ctx = av_buffer_ref(drm_frames_ctx_);
+    if (mapped->hw_frames_ctx == nullptr) {
+      throw std::runtime_error("Intel zero-copy required: av_buffer_ref(drm_frames_ctx) failed");
+    }
+    if (av_hwframe_get_buffer(drm_frames_ctx_, mapped.get(), 0) < 0) {
+      throw std::runtime_error("Intel zero-copy required: av_hwframe_get_buffer failed");
+    }
+    const int map_flags = AV_HWFRAME_MAP_READ | AV_HWFRAME_MAP_OVERWRITE;
+    if (av_hwframe_map(mapped.get(), src, map_flags) < 0) {
+      throw std::runtime_error("Intel zero-copy required: av_hwframe_map to DRM PRIME failed");
+    }
+    if (mapped->data[0] == nullptr) {
+      throw std::runtime_error("Intel zero-copy required: mapped DRM PRIME missing descriptor");
+    }
+    auto zc = intel_xpu_zerocopy::try_nv12_drmprime_to_bchw_rgb_xpu(
+        mapped.get(), device_index_, mapped->width, mapped->height);
+    if (zc.has_value() && zc->used_zero_copy) {
+      zero_copy_active_ = true;
+      xpu_output_active_ = (zc->tensor.device().type() == torch::kXPU);
+      return zc->tensor;
+    }
+    throw std::runtime_error("Intel zero-copy required: fast path unavailable for mapped frame");
+  }
+#endif
+
+#if defined(INTEL_DECODE_XPU_ZEROCOPY) && INTEL_DECODE_XPU_ZEROCOPY
+  // XPU zero-copy builds: never use host readback + swscale for QSV hw frames.
+  if (using_hw_ && src->hw_frames_ctx != nullptr) {
+    throw std::runtime_error("Intel zero-copy required: refusing CPU hwframe transfer");
+  }
+#endif
+
   if (src->hw_frames_ctx != nullptr) {
     transferred.reset(av_frame_alloc());
     if (!transferred) {
@@ -244,7 +329,58 @@ torch::Tensor IntelDecoderSession::avframe_to_bchw_rgb_(AVFrame* src) {
   auto opts = torch::TensorOptions().dtype(torch::kUInt8).device(torch::kCPU);
   torch::Tensor hwc = torch::from_blob(rgb.data(), {h, w, 3}, opts).clone();
   torch::Tensor chw = hwc.permute({2, 0, 1}).contiguous();
-  return chw.unsqueeze(0);
+  torch::Tensor out = chw.unsqueeze(0);
+
+#if defined(INTEL_DECODE_XPU_ZEROCOPY) && INTEL_DECODE_XPU_ZEROCOPY
+  const char* disable = std::getenv("FRIGATE_INTEL_DECODE_DISABLE_XPU_OUTPUT");
+  if (!(disable != nullptr && disable[0] == '1')) {
+    try {
+      // Note: this enables native XPU output when built against an XPU-capable torch.
+      // The true zero-copy path (DRM PRIME -> XPU import) is handled separately.
+      out = out.to(torch::Device(torch::kXPU, device_index_), /*non_blocking=*/true);
+      xpu_output_active_ = (out.device().type() == torch::kXPU);
+    } catch (const std::exception&) {
+      // Keep CPU output if XPU is unavailable at runtime.
+    }
+  }
+#endif
+
+  return out;
+}
+
+void IntelDecoderSession::probe_drm_map_(AVFrame* src) {
+  // Best-effort probe: can we map the hw frame to DRM PRIME NV12?
+  // This is intentionally side-effect free for the decode API.
+  std::unique_ptr<AVFrame, FrameDeleter> mapped(av_frame_alloc());
+  if (!mapped) {
+    return;
+  }
+  mapped->format = AV_PIX_FMT_DRM_PRIME;
+  mapped->width = src->width;
+  mapped->height = src->height;
+  mapped->hw_frames_ctx = av_buffer_ref(drm_frames_ctx_);
+  if (av_hwframe_get_buffer(drm_frames_ctx_, mapped.get(), 0) < 0) {
+    return;
+  }
+  const int map_flags = AV_HWFRAME_MAP_READ | AV_HWFRAME_MAP_OVERWRITE;
+  if (av_hwframe_map(mapped.get(), src, map_flags) < 0) {
+    return;
+  }
+  if (mapped->data[0] == nullptr) {
+    return;
+  }
+  auto* desc = reinterpret_cast<AVDRMFrameDescriptor*>(mapped->data[0]);
+  if (desc->nb_layers < 1 || desc->nb_objects < 1) {
+    return;
+  }
+  const AVDRMLayerDescriptor& layer = desc->layers[0];
+  if (layer.nb_planes < 2) {
+    return;
+  }
+  if (layer.format != static_cast<int>(kDrmFormatNv12)) {
+    return;
+  }
+  drm_map_ready_ = true;
 }
 
 torch::Tensor IntelDecoderSession::decode_one_displayed_frame_() {

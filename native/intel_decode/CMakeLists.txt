@@ -1,5 +1,5 @@
-# gpu-02: pybind11 + libtorch + FFmpeg. IntelDecoderSession prefers QSV decode;
-# software fallback when QSV init fails or FRIGATE_INTEL_DECODE_FORCE_SW=1.
+# gpu-02: pybind11 + libtorch + FFmpeg. IntelDecoderSession uses QSV only
+# (h264_qsv/hevc_qsv); no software libavcodec fallback.
 
 cmake_minimum_required(VERSION 3.18)
 project(frigate_intel_decode LANGUAGES CXX)
@@ -13,6 +13,7 @@ else()
   set(_intel_decode_default ON)
 endif()
 option(INTEL_DECODE_BUILD "Build frigate_intel_decode Python extension" ${_intel_decode_default})
+option(INTEL_DECODE_XPU_ZEROCOPY "Enable experimental Intel XPU zero-copy path (requires icpx + -fsycl)" OFF)
 
 if(NOT INTEL_DECODE_BUILD)
   message(STATUS "INTEL_DECODE_BUILD=OFF — skipping frigate_intel_decode (set ON with deps to build).")
@@ -40,7 +41,22 @@ pkg_check_modules(FFMPEG REQUIRED IMPORTED_TARGET
   libswscale>=5
 )
 
-pybind11_add_module(frigate_intel_decode MODULE src/bindings.cpp src/session.cpp)
+set(_intel_sources src/bindings.cpp src/session.cpp)
+
+if(INTEL_DECODE_XPU_ZEROCOPY)
+  find_program(ICPX icpx)
+  if(NOT ICPX)
+    message(FATAL_ERROR "INTEL_DECODE_XPU_ZEROCOPY=ON requires icpx (Intel oneAPI DPC++/C++ compiler).")
+  endif()
+  add_compile_options(-fsycl)
+  add_link_options(-fsycl)
+  list(APPEND _intel_sources src/xpu_zerocopy.cpp)
+endif()
+
+pybind11_add_module(frigate_intel_decode MODULE ${_intel_sources})
+if(INTEL_DECODE_XPU_ZEROCOPY)
+  target_compile_definitions(frigate_intel_decode PRIVATE INTEL_DECODE_XPU_ZEROCOPY=1)
+endif()
 target_link_libraries(
   frigate_intel_decode PRIVATE
   "${TORCH_LIBRARIES}"

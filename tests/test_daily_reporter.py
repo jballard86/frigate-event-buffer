@@ -216,8 +216,8 @@ class TestDailyReporterServicePrompt(unittest.TestCase):
         service = DailyReporterService(config, storage, mock_analyzer)
         service.generate_report(date(2025, 1, 15))
         system_prompt = mock_analyzer.send_text_prompt.call_args[0][0]
-        assert "2025-01-15 00:00:00" in system_prompt
-        assert "2025-01-15 23:59:59" in system_prompt
+        assert "2025-01-15 12:00:00 AM" in system_prompt
+        assert "2025-01-15 11:59:59 PM" in system_prompt
         assert "Title: 2025-01-15." in system_prompt
         assert "Events: []." in system_prompt
         assert "{report_start_time}" not in system_prompt

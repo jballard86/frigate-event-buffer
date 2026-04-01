@@ -3,11 +3,14 @@
 # Build: docker build -f Dockerfile.intel -t frigate-buffer:intel .
 # Compose: see docker-compose.intel.example.yml (DRI render node, GPU_VENDOR=intel).
 #
-# Torch CPU wheels: versions come from requirements-intel.txt (torch/torchvision pins);
-# the builder installs only those lines so the .so matches the runtime stack.
+# Torch wheels: versions come from requirements-intel.txt (torch/torchvision pins).
+# IMPORTANT: builder and runtime must install the SAME torch stack, or the native
+# frigate_intel_decode .so can ABI-mismatch libtorch at import time.
 
 ARG USE_GUI_OPENCV=false
-ARG TORCH_INDEX_URL=https://download.pytorch.org/whl/cpu
+ARG TORCH_STACK=cpu
+ARG TORCH_INDEX_URL_CPU=https://download.pytorch.org/whl/cpu
+ARG TORCH_INDEX_URL_XPU=https://download.pytorch.org/whl/xpu
 
 # -----------------------------------------------------------------------------
 # Stage 1 — compile native extension
@@ -36,16 +39,38 @@ WORKDIR /opt/build
 
 COPY requirements-intel.txt /opt/build/requirements-intel.txt
 
-ARG TORCH_INDEX_URL
+ARG TORCH_STACK
+ARG TORCH_INDEX_URL_CPU
+ARG TORCH_INDEX_URL_XPU
+ARG INSTALL_IPEX=0
+ARG INTEL_DECODE_XPU_ZEROCOPY=0
+
+# Optional: oneAPI DPC++ compiler for experimental XPU zero-copy path.
+RUN if [ "${TORCH_STACK}" = "xpu" ] && [ "${INTEL_DECODE_XPU_ZEROCOPY}" = "1" ]; then \
+    apt-get update && apt-get install -y --no-install-recommends wget gpg-agent && \
+    wget -qO /etc/apt/trusted.gpg.d/intel-oneapi.asc https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB && \
+    echo "deb https://apt.repos.intel.com/oneapi all main" > /etc/apt/sources.list.d/intel-oneapi.list && \
+    apt-get update && apt-get install -y --no-install-recommends intel-oneapi-compiler-dpcpp-cpp libze-dev && \
+    rm -rf /var/lib/apt/lists/*; \
+  fi
+
 RUN --mount=type=cache,target=/root/.cache/pip \
-    pip3 install --break-system-packages --index-url "${TORCH_INDEX_URL}" \
-    $(grep -E '^torch(vision)?==' /opt/build/requirements-intel.txt | xargs)
+    if [ "${TORCH_STACK}" = "xpu" ]; then \
+        TORCH_INDEX_URL="${TORCH_INDEX_URL_XPU}"; \
+    else \
+        TORCH_INDEX_URL="${TORCH_INDEX_URL_CPU}"; \
+    fi \
+    && pip3 install --break-system-packages --retries 10 --timeout 60 --index-url "${TORCH_INDEX_URL}" \
+        $(grep -E '^torch(vision)?==' /opt/build/requirements-intel.txt | xargs) \
+    && if [ "${INSTALL_IPEX}" = "1" ]; then \
+        pip3 install --no-cache-dir --break-system-packages --retries 10 --timeout 60 intel-extension-for-pytorch; \
+    fi
 
 COPY native/intel_decode /opt/build/native/intel_decode
 
 RUN cd /opt/build/native/intel_decode \
     && export CMAKE_PREFIX_PATH="$(python3 -c 'import torch; print(torch.utils.cmake_prefix_path)')" \
-    && cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
+    && cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DINTEL_DECODE_XPU_ZEROCOPY="${INTEL_DECODE_XPU_ZEROCOPY}" \
     && cmake --build build -j"$(nproc)"
 
 # -----------------------------------------------------------------------------
@@ -66,6 +91,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     libgomp1 \
     intel-media-va-driver \
+    libze1 \
     vainfo \
     && apt-get purge -y software-properties-common && apt-get autoremove -y --purge \
     && rm -rf /var/lib/apt/lists/*
@@ -74,19 +100,26 @@ RUN ln -sf /usr/bin/python3.12 /usr/bin/python3
 
 WORKDIR /app
 
-ARG TORCH_INDEX_URL
+ARG TORCH_STACK
+ARG TORCH_INDEX_URL_CPU
+ARG TORCH_INDEX_URL_XPU
 COPY requirements-intel.txt .
 ARG USE_GUI_OPENCV
 RUN --mount=type=cache,target=/root/.cache/pip \
+    if [ "${TORCH_STACK}" = "xpu" ]; then \
+        TORCH_INDEX_URL="${TORCH_INDEX_URL_XPU}"; \
+    else \
+        TORCH_INDEX_URL="${TORCH_INDEX_URL_CPU}"; \
+    fi && \
     if [ "$USE_GUI_OPENCV" = "true" ]; then \
-        pip3 install --no-cache-dir --break-system-packages --index-url "${TORCH_INDEX_URL}" \
+        pip3 install --no-cache-dir --break-system-packages --retries 10 --timeout 60 --extra-index-url "${TORCH_INDEX_URL}" \
             -r requirements-intel.txt; \
     else \
-        pip3 install --no-cache-dir --break-system-packages --index-url "${TORCH_INDEX_URL}" \
+        pip3 install --no-cache-dir --break-system-packages --retries 10 --timeout 60 --extra-index-url "${TORCH_INDEX_URL}" \
             -r requirements-intel.txt && \
         pip3 uninstall -y opencv-python opencv-python-headless 2>/dev/null || true && \
-        pip3 install --no-cache-dir --force-reinstall --break-system-packages \
-            --index-url "${TORCH_INDEX_URL}" opencv-python-headless; \
+        pip3 install --no-cache-dir --force-reinstall --break-system-packages --retries 10 --timeout 60 \
+            opencv-python-headless; \
     fi
 
 COPY pyproject.toml ./
@@ -101,11 +134,11 @@ RUN chmod +x /usr/local/bin/docker_entrypoint_intel.sh \
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip3 install --break-system-packages --no-deps .
 
-# Optional XPU inference: build with --build-arg INSTALL_IPEX=1 (may change torch;
-# verify against https://intel.github.io/intel-extension-for-pytorch/ for your stack).
-ARG INSTALL_IPEX=0
+# Optional XPU inference: build with --build-arg INSTALL_IPEX=1.
+# NOTE: This must match the builder stage or the native .so may ABI-mismatch libtorch.
+ARG INSTALL_IPEX
 RUN if [ "$INSTALL_IPEX" = "1" ]; then \
-    pip3 install --no-cache-dir --break-system-packages intel-extension-for-pytorch; \
+    pip3 install --no-cache-dir --break-system-packages --retries 10 --timeout 60 intel-extension-for-pytorch; \
 fi
 
 COPY --from=builder /opt/build/native/intel_decode/build/frigate_intel_decode*.so \
