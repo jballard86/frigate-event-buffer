@@ -2,18 +2,18 @@
 
 from __future__ import annotations
 
+from frigate_buffer.services.gpu_backends.gif_common import (
+    build_gif_ffmpeg_argv,
+    cpu_palette_gif_filter_complex,
+)
+
 # Default DRM render node; override per host if decode fails (e.g. renderD129).
 DEFAULT_VAAPI_RENDER_NODE = "/dev/dri/renderD128"
 
 
 def gif_filter_complex(fps: int, preview_width: int) -> str:
     """CPU scale and palette after VAAPI decode (same structure as Intel QSV GIF)."""
-    return (
-        f"scale={preview_width}:-1:flags=bilinear,"
-        f"fps={fps},split[a][b];"
-        f"[a]palettegen=stats_mode=single[p];"
-        f"[b][p]paletteuse=dither=bayer"
-    )
+    return cpu_palette_gif_filter_complex(fps, preview_width)
 
 
 def gif_ffmpeg_argv(
@@ -24,22 +24,18 @@ def gif_ffmpeg_argv(
     preview_width: int,
 ) -> list[str]:
     """VAAPI hwaccel decode; CPU scale and palette for GIF (gpu-03 Linux-first)."""
-    filter_str = gif_filter_complex(fps, preview_width)
-    return [
-        "ffmpeg",
-        "-y",
-        "-hwaccel",
-        "vaapi",
-        "-hwaccel_device",
-        DEFAULT_VAAPI_RENDER_NODE,
-        "-i",
+    return build_gif_ffmpeg_argv(
         clip_path,
-        "-t",
-        str(duration_sec),
-        "-filter_complex",
-        filter_str,
         output_path,
-    ]
+        duration_sec,
+        gif_filter_complex(fps, preview_width),
+        [
+            "-hwaccel",
+            "vaapi",
+            "-hwaccel_device",
+            DEFAULT_VAAPI_RENDER_NODE,
+        ],
+    )
 
 
 class AmdGifFfmpeg:

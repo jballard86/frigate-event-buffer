@@ -5,8 +5,16 @@ import os
 import sys
 
 import yaml
-from voluptuous import ALLOW_EXTRA, Any, Invalid, Optional, Required, Schema
+from voluptuous import ALLOW_EXTRA, Invalid, Optional, Required, Schema
 
+from frigate_buffer.config_schema.cameras import CAMERAS_LIST_SCHEMA
+from frigate_buffer.config_schema.gemini_block import GEMINI_BLOCK_SCHEMA
+from frigate_buffer.config_schema.gemini_proxy import GEMINI_PROXY_SCHEMA
+from frigate_buffer.config_schema.ha import HA_SCHEMA
+from frigate_buffer.config_schema.multi_cam import MULTI_CAM_SCHEMA
+from frigate_buffer.config_schema.network import NETWORK_SCHEMA
+from frigate_buffer.config_schema.notifications import NOTIFICATIONS_SCHEMA
+from frigate_buffer.config_schema.settings import SETTINGS_SCHEMA
 from frigate_buffer.constants import AI_MODE_EXTERNAL_API, AI_MODE_FRIGATE
 
 logger = logging.getLogger("frigate-buffer")
@@ -16,278 +24,15 @@ logger = logging.getLogger("frigate-buffer")
 CONFIG_SCHEMA = Schema(
     {
         # List of cameras to process; only events from these cameras are ingested.
-        Required("cameras"): [
-            {
-                # Frigate camera name; must match the camera key in Frigate config.
-                Required("name"): str,
-                # If set, only events with these object labels (e.g. person, car) are
-                # processed; empty or omit = allow all.
-                Optional("labels"): [str],
-                # Smart zone filter: event creation gated by zone and exceptions
-                # (omit for legacy: all events start immediately).
-                Optional("event_filters"): {
-                    # Only create an event when the object enters one of these zones.
-                    Optional("tracked_zones"): [str],
-                    # Labels or sub_labels that start an event regardless of zone.
-                    Optional("exceptions"): [str],
-                },
-            }
-        ],
+        Required("cameras"): CAMERAS_LIST_SCHEMA,
         # Network and storage; MQTT, Frigate URL, buffer IP required at runtime.
-        Optional("network"): {
-            Optional(
-                "mqtt_broker"
-            ): str,  # MQTT broker hostname or IP for Frigate events.
-            Optional("mqtt_port"): int,  # MQTT broker port (default 1883).
-            Optional("mqtt_user"): str,  # Optional MQTT username.
-            Optional("mqtt_password"): str,  # Optional MQTT password.
-            Optional(
-                "frigate_url"
-            ): str,  # Base URL of Frigate (e.g. http://host:5000).
-            Optional(
-                "buffer_ip"
-            ): str,  # IP/hostname where buffer is reachable (notification URLs).
-            Optional(
-                "flask_port"
-            ): int,  # Port for the Flask web server (player, stats, API).
-            Optional(
-                "flask_host"
-            ): str,  # Bind address for the web server (default 0.0.0.0 for Docker).
-            Optional(
-                "storage_path"
-            ): str,  # Root path for event clips, snapshots, exported files.
-            Optional(
-                "ha_ip"
-            ): str,  # Legacy fallback for buffer_ip when building notification URLs.
-        },
-        # Application behavior: retention, cleanup, export, logging, report, AI.
-        Optional("settings"): {
-            Optional("retention_days"): int,  # Days to keep event data before cleanup.
-            Optional(
-                "cleanup_interval_hours"
-            ): int,  # How often to run retention cleanup (hours).
-            Optional(
-                "export_watchdog_interval_minutes"
-            ): int,  # How often to check/remove completed exports in Frigate (min).
-            Optional(
-                "ffmpeg_timeout_seconds"
-            ): int,  # Timeout for FFmpeg (e.g. GIF generation); kills hung processes.
-            Optional(
-                "notification_delay_seconds"
-            ): int,  # Delay before snapshot (lets Frigate pick a better frame).
-            Optional("log_level"): Any(
-                "DEBUG", "INFO", "WARNING", "ERROR"
-            ),  # Logging verbosity.
-            Optional(
-                "summary_padding_before"
-            ): int,  # Seconds before event start for Frigate review summary.
-            Optional(
-                "summary_padding_after"
-            ): int,  # Seconds after event end for Frigate review summary.
-            Optional(
-                "stats_refresh_seconds"
-            ): int,  # Stats page auto-refresh interval (seconds).
-            Optional(
-                "daily_report_retention_days"
-            ): int,  # How long to keep saved daily reports (days).
-            Optional(
-                "daily_report_schedule_hour"
-            ): int,  # Hour (0-23) to generate AI daily report.
-            Optional(
-                "report_prompt_file"
-            ): str,  # Path to prompt file for daily report; empty = default.
-            Optional(
-                "report_known_person_name"
-            ): str,  # Placeholder for {known_person_name} in report prompt.
-            Optional(
-                "event_gap_seconds"
-            ): int,  # Seconds of inactivity before next event starts new group.
-            Optional(
-                "minimum_event_seconds"
-            ): int,  # Shorter events discarded (data deleted, MQTT sent).
-            Optional(
-                "max_event_length_seconds"
-            ): int,  # Events >= this canceled; no AI/decode, folder -canceled. Def 120.
-            Optional(
-                "export_buffer_before"
-            ): int,  # Seconds before event start in exported clip.
-            Optional(
-                "export_buffer_after"
-            ): int,  # Seconds after event end in exported clip.
-            Optional(
-                "gemini_max_concurrent_analyses"
-            ): int,  # Max concurrent Gemini clip analyses (throttling).
-            Optional(
-                "save_ai_frames"
-            ): bool,  # Whether to save extracted AI analysis frames to disk.
-            Optional(
-                "create_ai_analysis_zip"
-            ): bool,  # Whether to create zip of AI analysis assets (e.g. multi-cam).
-            Optional(
-                "gemini_frames_per_hour_cap"
-            ): int,  # Rolling cap: max frames to proxy per hour; 0 = disabled.
-            Optional(
-                "quick_title_delay_seconds"
-            ): int,  # Delay (3–5s) before quick AI title on live frame; 0 = disabled.
-            Optional(
-                "quick_title_enabled"
-            ): bool,  # When true (and Gemini enabled), run quick-title after delay.
-            Optional("ai_mode"): Any(
-                "frigate", "external_api"
-            ),  # frigate = Frigate MQTT AI; external_api = buffer Gemini/Quick Title.
-        },
-        # Home Assistant REST API; for stats page Gemini cost/token entities.
-        Optional("ha"): {
-            Optional(
-                "base_url"
-            ): str,  # HA API base URL (e.g. http://host:8123/api); preferred over url.
-            Optional("url"): str,  # Alternative to base_url for HA API endpoint.
-            Optional("token"): str,  # Long-lived access token for HA API.
-            Optional("gemini_cost_entity"): str,  # HA entity ID for Gemini cost.
-            Optional(
-                "gemini_tokens_entity"
-            ): str,  # HA entity ID for Gemini token count.
-        },
-        # Notifications: per-provider config. Absent = legacy (HA MQTT enabled).
-        Optional("notifications"): {
-            Optional("home_assistant"): {
-                # bool or str so "false" in YAML is accepted and coerced correctly.
-                Optional("enabled"): Any(bool, str),
-            },
-            Optional("pushover"): Any(
-                None,
-                Schema(
-                    {
-                        Optional("enabled"): Any(bool, str),
-                        Optional("pushover_user_key"): str,
-                        Optional("pushover_api_token"): str,
-                        Optional("device"): str,
-                        Optional("default_sound"): str,
-                        Optional("html"): int,
-                    }
-                ),
-            ),
-            Optional("mobile_app"): {
-                Optional("enabled"): Any(bool, str),
-                Optional("credentials_path"): str,
-                Optional("project_id"): str,
-            },
-        },
-        # Gemini proxy for main-app clip AI; API key often via env (GEMINI_API_KEY).
-        Optional("gemini"): {
-            Optional(
-                "proxy_url"
-            ): str,  # OpenAI-compatible proxy URL; no Google fallback if unset.
-            Optional(
-                "api_key"
-            ): str,  # API key for proxy (can override via GEMINI_API_KEY env).
-            Optional(
-                "model"
-            ): str,  # Model name sent to proxy (e.g. gemini-2.5-flash-lite).
-            Optional("enabled"): bool,  # Whether clip analysis via Gemini is enabled.
-        },
-        # Multi-cam frame extraction; frame limits and crop options.
-        Optional("multi_cam"): {
-            Optional(
-                "max_multi_cam_frames_min"
-            ): int,  # Maximum frames to extract per clip (cap).
-            Optional("max_multi_cam_frames_sec"): Any(
-                int, float
-            ),  # Target interval in seconds between frames (e.g. 1, 0.5).
-            Optional(
-                "crop_width"
-            ): int,  # Width of output crop for stitched/multi-cam frames.
-            Optional(
-                "crop_height"
-            ): int,  # Height of output crop for stitched/multi-cam frames.
-            Optional(
-                "multi_cam_system_prompt_file"
-            ): str,  # Path to system prompt for multi-cam Gemini; empty = built-in.
-            Optional("smart_crop_padding"): Any(
-                int, float
-            ),  # Padding fraction around motion-based crop (e.g. 0.15).
-            Optional(
-                "detection_model"
-            ): str,  # Ultralytics model for detection sidecar (e.g. yolov8n.pt).
-            Optional(
-                "detection_device"
-            ): str,  # Device for detection (e.g. cuda:0, cpu).
-            Optional(
-                "detection_frame_interval"
-            ): int,  # Run YOLO every N frames; default 5.
-            Optional(
-                "detection_imgsz"
-            ): int,  # YOLO inference size (higher = better small objects); default 640.
-            # Timeline / EMA (Phase 1 grid + EMA + hysteresis + merge)
-            Optional("camera_timeline_analysis_multiplier"): Any(
-                int, float
-            ),  # Denser analysis grid vs base step (2 or 3); default 2.
-            Optional("camera_timeline_ema_alpha"): Any(
-                int, float
-            ),  # EMA smoothing factor 0–1; default 0.4.
-            Optional("camera_timeline_primary_bias_multiplier"): Any(
-                int, float
-            ),  # Weight on primary camera area curve; default 1.2.
-            Optional(
-                "camera_switch_min_segment_frames"
-            ): int,  # Min frames per segment; short runs merged; default 5.
-            Optional("camera_switch_hysteresis_margin"): Any(
-                int, float
-            ),  # New camera must exceed current by this factor; default 1.15.
-            Optional(
-                "camera_timeline_final_yolo_drop_no_person"
-            ): bool,  # If true drop frames with no person after Phase 2 YOLO.
-            Optional(
-                "decode_second_camera_cpu_only"
-            ): bool,  # If true, use CPU decode for 2nd+ cams (contention workaround).
-            Optional(
-                "log_extraction_phase_timing"
-            ): bool,  # Log elapsed time per extraction phase for debugging.
-            Optional(
-                "merge_frame_timeout_sec"
-            ): int,  # Timeout (sec) when merge waits for camera frame; default 10.
-            Optional(
-                "tracking_target_frame_percent"
-            ): int,  # Person area >= this % => full-frame resize; default 40.
-            Optional(
-                "person_area_debug"
-            ): bool,  # Draw person area (px²) on frame bottom-right when true.
-            Optional("compilation_zoom_smooth_ema_alpha"): Any(
-                int, float
-            ),  # EMA alpha for compilation zoom smoothing (0–1); default 0.25.
-            # Intel QSV compilation encode tuning (gpu-02 Phase 7); optional.
-            Optional("intel"): {
-                Optional("qsv_encode_preset"): str,
-                Optional("qsv_encode_global_quality"): int,
-            },
-            # GPU backend (multi-vendor prep; registry uses these in gpu-01+).
-            Optional(
-                "gpu_vendor"
-            ): str,  # nvidia | intel | amd (see registry and native/*/).
-            Optional(
-                "gpu_device_index"
-            ): int,  # Adapter index for decode/runtime (default 0).
-            Optional(
-                "cuda_device_index"
-            ): int,  # Deprecated: use gpu_device_index; still accepted for legacy YAML.
-        },
-        # Extended Gemini proxy; single API key GEMINI_API_KEY, URL here or env.
-        Optional("gemini_proxy"): {
-            Optional(
-                "url"
-            ): str,  # Proxy URL (no Google fallback; or GEMINI_PROXY_URL env).
-            Optional("model"): str,  # Model name for proxy requests.
-            Optional("temperature"): Any(
-                int, float
-            ),  # Sampling temperature (0–2 typical).
-            Optional("top_p"): Any(int, float),  # Nucleus sampling parameter.
-            Optional("frequency_penalty"): Any(
-                int, float
-            ),  # Penalty for repeated tokens.
-            Optional("presence_penalty"): Any(
-                int, float
-            ),  # Penalty for token presence.
-        },
+        Optional("network"): NETWORK_SCHEMA,
+        Optional("settings"): SETTINGS_SCHEMA,
+        Optional("ha"): HA_SCHEMA,
+        Optional("notifications"): NOTIFICATIONS_SCHEMA,
+        Optional("gemini"): GEMINI_BLOCK_SCHEMA,
+        Optional("multi_cam"): MULTI_CAM_SCHEMA,
+        Optional("gemini_proxy"): GEMINI_PROXY_SCHEMA,
     },
     extra=ALLOW_EXTRA,
 )
@@ -339,7 +84,7 @@ def _coerce_bool(value: object, default: bool) -> bool:
     return bool(value)
 
 
-def load_config() -> dict:
+def load_config(*, yaml_path: str | None = None) -> dict:
     """Load configuration from config.yaml merged with environment variables.
 
     Priority (highest to lowest):
@@ -348,6 +93,10 @@ def load_config() -> dict:
     3. Default values
 
     Note: MQTT_BROKER, FRIGATE_URL, and BUFFER_IP are REQUIRED via config or env.
+
+    Args:
+        yaml_path: If set, only this path is tried for YAML (for tests and snapshot
+            tooling). If the file is missing, behaves like no YAML was loaded.
     """
     config = {
         # Network settings - NO DEFAULTS (required from config)
@@ -448,12 +197,15 @@ def load_config() -> dict:
     }
 
     # Load from config.yaml if exists
-    config_paths = [
-        "/app/config.yaml",
-        "/app/storage/config.yaml",
-        "./config.yaml",
-        "config.yaml",
-    ]
+    if yaml_path is not None:
+        config_paths = [yaml_path]
+    else:
+        config_paths = [
+            "/app/config.yaml",
+            "/app/storage/config.yaml",
+            "./config.yaml",
+            "config.yaml",
+        ]
     config_loaded = False
 
     for path in config_paths:

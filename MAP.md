@@ -111,24 +111,23 @@ frigate-event-buffer/
 │   └── maps/ (INGESTION, PROCESSING, WEB, LIFECYCLE, NOTIFICATIONS, AI, TESTING)
 ├── DIAGNOSTIC_SIDECAR_TIMELINE_COMPILATION.md
 ├── gpu_pipeline_audit_report.md
-├── GPU_ZEROCOPY_VENDOR_SCORECARD.md (NVIDIA/AMD/Intel decode zero-copy audit)
 ├── performance_final_verification.md
 ├── .cursor/rules/
 ├── .github/workflows/ci.yml (Ruff, pytest, docker build Dockerfile.intel + smoke --strict)
 ├── .github/workflows/intel_arc_smoke.yml (manual; self-hosted intel-arc + DRI)
 ├── .github/workflows/rocm_docker_build.yml (manual; Dockerfile.rocm; large base image)
 ├── .github/workflows/amd_rocm_smoke.yml (manual; self-hosted amd-rocm + kfd/DRI)
-├── scripts/ (build_*_decode.sh, docker_entrypoint_*.sh, smoke_* paths, run_intel_arc_docker_smoke.sh, run_amd_rocm_docker_smoke.sh)
+├── scripts/ (build_*_decode.sh, docker_entrypoint_*.sh, smoke_*, dump_merged_config_snapshot.py, run_*_docker_smoke.sh)
 ├── native/intel_decode/ (gpu-02: QSV-only FFmpeg + libtorch; GPU_VENDOR=intel)
 ├── native/amd_decode/ (gpu-03: VAAPI/SW FFmpeg + libtorch; GPU_VENDOR=amd)
 ├── src/frigate_buffer/
-│   ├── main.py, wsgi.py, config.py, models.py, logging_utils.py, constants.py
+│   ├── main.py, wsgi.py, config.py, config_schema/ (Voluptuous: cameras, network, settings, ha, notifications, gemini_block, multi_cam, gemini_proxy), models.py, logging_utils.py, constants.py
 │   ├── version.txt, orchestrator.py
 │   ├── event_test/
 │   ├── managers/ (file, state, consolidation, zone_filter, preferences, snooze)
-│   ├── services/ (see docs/maps/; gpu_backends/ nvidia, intel, amd decode+ffmpeg)
+│   ├── services/ (query/ fs_storage, parsing, query_cache, protocols, service; gpu_backends/ …; see docs/maps/)
 │   └── web/ (server, routes, templates, static; path_helpers, report_helpers, frigate_proxy)
-├── tests/ (test_*ffmpeg.py, test_amd_decode_spike, test_amd_decoder mock, test_smoke_amd_rocm_path.py)
+├── tests/ (pythonpath: src+tests; helpers/; video_compilation/; config_schema/; test_*.py)
 └── examples/
 
 ---
@@ -187,7 +186,7 @@ or changing core flows, update MAP.md and the affected branch under docs/maps/.
 | New **business logic / service** | `src/frigate_buffer/services/` (or `managers/` if it is state/aggregation). Register and call from `orchestrator.py` (or from an existing service) as appropriate. |
 | New **utility function** (generic, no I/O) | `src/frigate_buffer/services/` (e.g. `crop_utils.py`) or a new module under `services/` if it fits a clear domain. |
 | New **API route** (REST) | Add in the appropriate blueprint under `src/frigate_buffer/web/routes/` (e.g. api.py or daily_review.py); use EventQueryService or FileManager for data; never put business logic in route handlers beyond delegation. |
-| New **config key** | Add to **CONFIG_SCHEMA** in `src/frigate_buffer/config.py` first; then add flat key in config merge; use in code via `config.get('KEY', default)`. |
+| New **config key** | Extend **CONFIG_SCHEMA** in `config.py` / `config_schema/` fragments; then add flat key in config merge; use `config.get('KEY', default)`. |
 | New **notification provider** | Add provider under `src/frigate_buffer/services/notifications/providers/`; implement `BaseNotificationProvider`; register in config and `orchestrator._create_notifier()`. **See `services/notifications/ADDING_PROVIDERS.md`** for the provider contract, flow diagram, and mock examples. |
 | New **standalone script** | `scripts/` at repo root. |
 | **Tests** | `tests/test_<module_or_feature>.py`; mirror structure under `src/frigate_buffer/` where it helps. |

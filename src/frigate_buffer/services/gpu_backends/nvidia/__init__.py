@@ -1,5 +1,6 @@
 """NVIDIA backend: PyNvVideoCodec decode, NVENC compilation, CUDA GIF FFmpeg."""
 
+from frigate_buffer.constants import COMPILATION_OUTPUT_FPS
 from frigate_buffer.services.gpu_backends.nvidia.decoder import (
     DECODER_MAX_WIDTH,
     DecoderContext,
@@ -7,7 +8,6 @@ from frigate_buffer.services.gpu_backends.nvidia.decoder import (
     create_decoder,
 )
 from frigate_buffer.services.gpu_backends.nvidia.ffmpeg_encode import (
-    COMPILATION_OUTPUT_FPS,
     NvidiaFfmpegCompilationEncode,
     compilation_ffmpeg_cmd_and_log_path,
     nvidia_ffmpeg_compilation_encode,

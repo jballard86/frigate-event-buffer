@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from frigate_buffer.services.gpu_backends.gif_common import build_gif_ffmpeg_argv
+
 
 def gif_filter_complex(fps: int, preview_width: int) -> str:
     """
@@ -27,22 +29,13 @@ def gif_ffmpeg_argv(
     preview_width: int,
 ) -> list[str]:
     """Full argv for ffmpeg subprocess (CUDA decode/scale, no CPU fallback)."""
-    filter_str = gif_filter_complex(fps, preview_width)
-    return [
-        "ffmpeg",
-        "-y",
-        "-hwaccel",
-        "cuda",
-        "-hwaccel_output_format",
-        "cuda",
-        "-i",
+    return build_gif_ffmpeg_argv(
         clip_path,
-        "-t",
-        str(duration_sec),
-        "-filter_complex",
-        filter_str,
         output_path,
-    ]
+        duration_sec,
+        gif_filter_complex(fps, preview_width),
+        ["-hwaccel", "cuda", "-hwaccel_output_format", "cuda"],
+    )
 
 
 class NvidiaGifFfmpeg:

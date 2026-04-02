@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-import os
-
-from frigate_buffer.constants import COMPILATION_OUTPUT_FPS
+from frigate_buffer.services.gpu_backends.compilation_argv_common import (
+    compilation_log_path,
+    rawvideo_stdin_argv_fragment,
+)
 
 
 def compilation_ffmpeg_cmd_and_log_path(
@@ -21,22 +22,11 @@ def compilation_ffmpeg_cmd_and_log_path(
     deployments; requires FFmpeg built with AMF (typical on Windows, some Linux).
     """
     _ = config
-    log_file_path = os.path.join(os.path.dirname(tmp_output_path), "ffmpeg_compile.log")
+    log_file_path = compilation_log_path(tmp_output_path)
     cmd = [
         "ffmpeg",
         "-y",
-        "-f",
-        "rawvideo",
-        "-pix_fmt",
-        "rgb24",
-        "-s",
-        f"{target_w}x{target_h}",
-        "-r",
-        str(COMPILATION_OUTPUT_FPS),
-        "-thread_queue_size",
-        "512",
-        "-i",
-        "pipe:0",
+        *rawvideo_stdin_argv_fragment(target_w, target_h),
         "-c:v",
         "h264_amf",
         "-quality",

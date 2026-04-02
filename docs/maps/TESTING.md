@@ -1,8 +1,9 @@
 # TESTING — Test Suite (~10k lines), event_test (TEST button)
 
 Branch doc for pytest suite and event_test package. Tests run in CI/CD without
-live GPU or MQTT broker; see Mocking Strategy below. GPU-related config keys and
-env are documented in **docs/INSTALL.md** and **examples/config.example.yaml**.
+live GPU or MQTT broker; see Mocking Strategy below. **pytest** ``pythonpath`` includes
+``src`` and ``tests`` so ``helpers.video_compilation`` imports resolve. GPU-related
+config keys and env are documented in **docs/INSTALL.md** and **examples/config.example.yaml**.
 Manual workflows: **`.github/workflows/rocm_docker_build.yml`** (ROCm image build only),
 **`.github/workflows/amd_rocm_smoke.yml`** (self-hosted **`amd-rocm`** + **`run_amd_rocm_docker_smoke.sh`**).
 Scripts: bench/verify scripts live in scripts/; **`smoke_intel_gpu_path.py`** (Intel Docker /
@@ -29,7 +30,9 @@ MagicMock/patch.
 
 **Processing / GPU** — test_gpu_backends_registry.py (get_gpu_backend cache,
 vendor nvidia vs intel vs amd, shim identity vs gpu_decoder, blank GPU_VENDOR, concurrent
-init), test_intel_ffmpeg.py (QSV compilation argv + ``INTEL_QSV_*`` config + GIF
+init), test_gif_common.py (shared ``cpu_palette_gif_filter_complex`` + ``build_gif_ffmpeg_argv``),
+test_compilation_argv_common.py (``compilation_log_path`` + rawvideo stdin fragment),
+test_intel_ffmpeg.py (QSV compilation argv + ``INTEL_QSV_*`` config + GIF
 ``-hwaccel qsv`` / filter_complex snapshots), test_amd_ffmpeg.py (h264_amf compilation
 argv + VAAPI ``-hwaccel_device`` / GIF filter_complex), test_smoke_amd_rocm_path.py
 (``@pytest.mark.amd_gpu``; skipped unless ``RUN_AMD_GPU_TESTS=1``; ``conftest`` hook),
@@ -41,9 +44,10 @@ reload ``amd/decoder``), test_intel_decoder.py (mock ``frigate_intel_decode``
 gpu_backends.nvidia.decoder._create_simple_decoder / PyNv), test_video_service.py
 (patch ``VideoService._decoder_context``, fake DecoderContext with get_frames),
 test_multi_clip_extractor.py (patch ``get_gpu_backend``, backend ``create_decoder``
-side_effect), test_video_compilation.py (mock ``GpuBackend.create_decoder``, real
-NVENC argv + Intel QSV argv via ``_gpu_backend_for_compilation_tests_intel`` + AMD
-h264_amf via ``_gpu_backend_for_compilation_tests_amd``), test_crop_utils.py, test_timeline_ema.py.
+side_effect), ``tests/video_compilation/`` (``test_timeline_crop_math.py``,
+``test_generate_compilation_video.py``, ``test_encode_compile_gpu.py``; shared mocks in
+``helpers/video_compilation.py``; scoped fixtures in ``conftest.py``), test_crop_utils.py,
+test_timeline_ema.py.
 In: pytest. Out: patch ``VideoService._decoder_context`` (instance, two-arg
 fake) or nvidia.decoder._create_simple_decoder; ``clear_gpu_backend_cache`` in
 setUp when constructing VideoService with ``get_gpu_backend``; no real decode.
@@ -60,12 +64,16 @@ test_daily_reporter.py. In: pytest. Out: patch requests, proxy client, or
 multi_clip ``get_gpu_backend`` / analyzer stubs.
 
 **Web / config / misc** — test_frigate_proxy.py, test_path_helpers.py,
-test_report_helpers.py, test_web_server_path_safety.py, test_config_schema.py,
+test_report_helpers.py, test_web_server_path_safety.py,
+``tests/config_schema/`` (``test_config_schema_*``, ``test_config_dump_regression``
+vs ``tests/fixtures/config/merged_snapshot_minimal.json``; scoped ``conftest.py``),
 test_constants.py, test_logging_utils.py, test_main_version.py, test_event_test.py,
 test_url_masking.py. In: pytest. Out: Flask test client, patch as needed.
 
-**conftest.py** — Optional mocks; GPU decode mocked per-test where needed. No
-global GPU or MQTT mocks; each test module or test function patches as required.
+**conftest.py** — Root: optional mocks and ``amd_gpu`` skip hook only.
+Subpackages: ``tests/video_compilation/conftest.py``, ``tests/config_schema/conftest.py``
+for scoped fixtures (avoid loading them for the whole suite). GPU decode mocked per-test
+where needed.
 
 ---
 

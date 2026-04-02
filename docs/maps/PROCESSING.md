@@ -24,6 +24,12 @@ video_compilation); callers must hold it for create_decoder and get_frames.
 - **services/gpu_backends/nvidia/runtime.py** — nvidia-smi log at startup,
   empty_cache, memory_summary, tensor_device_for_decode, default_detection_device.
   In: nvidia.decoder, video.log_gpu_status delegate.
+- **services/gpu_backends/gif_common.py** — Shared CPU palette ``filter_complex``
+  and ``build_gif_ffmpeg_argv`` for preview GIF; Intel/AMD use the CPU palette
+  graph; NVIDIA uses CUDA ``scale_cuda`` but the same argv assembly helper.
+- **services/gpu_backends/compilation_argv_common.py** — ``compilation_log_path`` and
+  ``rawvideo_stdin_argv_fragment`` for compilation encode; NVENC/QSV/AMF modules
+  share the rawvideo stdin block then append codec-specific flags.
 - **services/gpu_backends/protocols.py**, **types.py** — DecoderContextProto,
   GpuBackend dataclass.
 - **native/intel_decode/** — C++ ``frigate_intel_decode``: ``IntelDecoderSession`` (**QSV
@@ -48,8 +54,9 @@ video_compilation); callers must hold it for create_decoder and get_frames.
   ``frigate_amd_decode`` / ``AmdDecoderSession``; build ``native/amd_decode/``),
   ``runtime`` (ROCm via ``cuda:`` torch API), ``ffmpeg_encode`` (h264_amf),
   ``gif_ffmpeg`` (VAAPI hwaccel, Linux-first). In: registry when ``GPU_VENDOR=amd``.
-  Contract tests: ``tests/test_amd_decoder.py`` (mock native), ``test_video_compilation``
-  AMD h264_amf argv via ``_gpu_backend_for_compilation_tests_amd``.
+  Contract tests: ``tests/test_amd_decoder.py`` (mock native),
+  ``tests/video_compilation/test_encode_compile_gpu.py`` AMD h264_amf argv via
+  ``gpu_backend_for_compilation_tests_amd``.
 - **services/gpu_backends/registry.py** — ``get_gpu_backend(config)`` returns a
   cached :class:`GpuBackend` per ``GPU_VENDOR`` (``nvidia`` | ``intel`` | ``amd``);
   ``clear_gpu_backend_cache()`` for tests. Builds via ``build_nvidia_backend`` /

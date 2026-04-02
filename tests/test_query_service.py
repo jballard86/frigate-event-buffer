@@ -7,6 +7,7 @@ import unittest
 from collections import OrderedDict
 
 from frigate_buffer.services.query import EventQueryService, read_timeline_merged
+from frigate_buffer.services.query.parsing import extract_end_timestamp_from_timeline
 
 
 class TestEventQueryService(unittest.TestCase):
@@ -101,8 +102,8 @@ class TestEventQueryService(unittest.TestCase):
         summary_basename = f"{self.ce_id}_summary.mp4"
         with open(os.path.join(self.ce_dir, summary_basename), "w") as f:
             f.write("dummy")
-        self.service._cache.clear()
-        self.service._event_cache.clear()
+        self.service._list_cache._cache.clear()
+        self.service._folder_cache._event_cache.clear()
         events = self.service.get_events("events")
         assert len(events) == 1
         ev = events[0]
@@ -333,26 +334,21 @@ class TestQueryCaching(unittest.TestCase):
             with open(os.path.join(d, "summary.txt"), "w") as f:
                 f.write("Event")
         svc = EventQueryService(storage, cache_ttl=5, event_cache_max=3)
-        assert isinstance(svc._event_cache, OrderedDict)
-        assert svc._event_cache_max == 3
+        assert isinstance(svc._folder_cache._event_cache, OrderedDict)
+        assert svc._folder_cache._max == 3
         for _ in range(5):
             svc.get_events("cam1")
-        assert len(svc._event_cache) <= 3, "event cache must not exceed max size"
+        assert len(svc._folder_cache._event_cache) <= 3, (
+            "event cache must not exceed max size"
+        )
 
 
 class TestExtractEndTimestampFromTimeline(unittest.TestCase):
-    """_extract_end_timestamp_from_timeline: Frigate payload.after.end_time
+    """extract_end_timestamp_from_timeline: Frigate payload.after.end_time
     and test_ai_prompt data.end_time (test events only)."""
 
-    def setUp(self):
-        self.tmp = tempfile.mkdtemp()
-        self.addCleanup(lambda: shutil.rmtree(self.tmp, ignore_errors=True))
-        self.service = EventQueryService(self.tmp)
-
     def test_returns_none_for_empty_timeline(self):
-        assert (
-            self.service._extract_end_timestamp_from_timeline({"entries": []}) is None
-        )
+        assert extract_end_timestamp_from_timeline({"entries": []}) is None
 
     def test_returns_none_when_no_entries_have_end_time(self):
         """Entries present but all end_time null or missing → None."""
@@ -365,7 +361,7 @@ class TestExtractEndTimestampFromTimeline(unittest.TestCase):
                 {"source": "frigate_mqtt", "data": {"payload": {"after": {}}}},
             ]
         }
-        assert self.service._extract_end_timestamp_from_timeline(timeline) is None
+        assert extract_end_timestamp_from_timeline(timeline) is None
 
     def test_returns_end_time_from_frigate_payload_after(self):
         """Regular events: end_time from payload.after (unchanged behavior)."""
@@ -377,9 +373,7 @@ class TestExtractEndTimestampFromTimeline(unittest.TestCase):
                 },
             ]
         }
-        assert (
-            self.service._extract_end_timestamp_from_timeline(timeline) == 1700000000.5
-        )
+        assert extract_end_timestamp_from_timeline(timeline) == 1700000000.5
 
     def test_returns_end_time_from_test_ai_prompt_entry(self):
         """Test events only: end_time from source=test_ai_prompt and data.end_time."""
@@ -391,9 +385,7 @@ class TestExtractEndTimestampFromTimeline(unittest.TestCase):
                 },
             ]
         }
-        assert (
-            self.service._extract_end_timestamp_from_timeline(timeline) == 1700000100.0
-        )
+        assert extract_end_timestamp_from_timeline(timeline) == 1700000100.0
 
     def test_returns_max_when_multiple_frigate_entries_have_different_end_times(self):
         """Multiple Frigate event-end entries: result is the latest (max) end_time."""
@@ -413,9 +405,7 @@ class TestExtractEndTimestampFromTimeline(unittest.TestCase):
                 },
             ]
         }
-        assert (
-            self.service._extract_end_timestamp_from_timeline(timeline) == 1700000050.0
-        )
+        assert extract_end_timestamp_from_timeline(timeline) == 1700000050.0
 
     def test_returns_max_when_frigate_and_test_ai_prompt_both_have_end_time(self):
         """When both Frigate and test_ai_prompt have end_time, result is
@@ -429,9 +419,7 @@ class TestExtractEndTimestampFromTimeline(unittest.TestCase):
                 {"source": "test_ai_prompt", "data": {"end_time": 1700000100.0}},
             ]
         }
-        assert (
-            self.service._extract_end_timestamp_from_timeline(timeline) == 1700000100.0
-        )
+        assert extract_end_timestamp_from_timeline(timeline) == 1700000100.0
 
 
 class TestEvictCache(unittest.TestCase):
@@ -442,10 +430,10 @@ class TestEvictCache(unittest.TestCase):
         storage = tempfile.mkdtemp()
         self.addCleanup(lambda: shutil.rmtree(storage, ignore_errors=True))
         svc = EventQueryService(storage, cache_ttl=60)
-        svc._set_cache("test_events", [{"id": "old"}])
-        assert svc._get_cached("test_events") is not None
+        svc._list_cache.set("test_events", [{"id": "old"}])
+        assert svc._list_cache.get("test_events") is not None
         svc.evict_cache("test_events")
-        assert svc._get_cached("test_events") is None
+        assert svc._list_cache.get("test_events") is None
 
 
 class TestGetTestEventsSortAndTimestamp(unittest.TestCase):

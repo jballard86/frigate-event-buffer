@@ -28,11 +28,14 @@ them. Orchestrator wires and schedules these components.
   write_canceled_summary, compute_storage_stats, resolve_clip_in_folder,
   write_stitched_frame (numpy or torch). In: orchestrator, lifecycle, query,
   download, timeline, event_test. Out: download_service, constants.
-- **services/query.py** — EventQueryService: read event data from filesystem,
-  TTL and per-folder cache; resolve_clip_in_folder; list events, timeline
-  merge; evict_cache(key); get_saved_events, get_test_events; NON_CAMERA_DIRS
-  excluded. In: Flask server (api, pages), orchestrator (cache eviction). Out:
-  file_manager (resolve_clip_in_folder), constants.
+- **services/query/** — Package: **EventQueryService** in `service.py` (orchestrates
+  **TtlListCache** + **FolderEventParseCache**); **fs_storage** (`parse_event_folder`,
+  `read_timeline_merged`, `resolve_clip_in_folder`); **parsing** (timeline-derived
+  fields); **protocols.EventQueryServiceProtocol** for structural typing; list events,
+  evict_cache, get_saved_events, get_test_events; NON_CAMERA_DIRS excluded. Public
+  imports unchanged: `from frigate_buffer.services.query import EventQueryService, …`.
+  In: Flask server (api, pages), orchestrator (cache eviction). Out: file_manager
+  (resolve_clip_in_folder), constants.
 - **services/timeline.py** — TimelineLogger: append HA/MQTT/Frigate API and
   notification_dispatch entries to notification_timeline.json via FileManager.
   log_dispatch_results(event, status, results) used by NotificationDispatcher.

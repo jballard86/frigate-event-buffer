@@ -38,7 +38,7 @@ where = ["src"]
 "frigate_buffer" = ["web/templates/*", "web/static/*", "version.txt", "services/*.txt"]
 
 [tool.pytest.ini_options]
-pythonpath = ["src"]
+pythonpath = ["src", "tests"]
 testpaths = ["tests"]
 addopts = "-v"
 asyncio_mode = "auto"  # <-- Add this line

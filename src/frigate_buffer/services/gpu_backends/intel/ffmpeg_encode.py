@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-import os
-
-from frigate_buffer.constants import COMPILATION_OUTPUT_FPS
+from frigate_buffer.services.gpu_backends.compilation_argv_common import (
+    compilation_log_path,
+    rawvideo_stdin_argv_fragment,
+)
 
 
 def intel_qsv_encode_preset(config: dict | None) -> str:
@@ -42,24 +43,13 @@ def compilation_ffmpeg_cmd_and_log_path(
     config: dict | None = None,
 ) -> tuple[list[str], str]:
     """Build FFmpeg h264_qsv command and log path (Intel Arc / QSV encode)."""
-    log_file_path = os.path.join(os.path.dirname(tmp_output_path), "ffmpeg_compile.log")
+    log_file_path = compilation_log_path(tmp_output_path)
     preset = intel_qsv_encode_preset(config)
     quality = intel_qsv_encode_global_quality(config)
     cmd = [
         "ffmpeg",
         "-y",
-        "-f",
-        "rawvideo",
-        "-pix_fmt",
-        "rgb24",
-        "-s",
-        f"{target_w}x{target_h}",
-        "-r",
-        str(COMPILATION_OUTPUT_FPS),
-        "-thread_queue_size",
-        "512",
-        "-i",
-        "pipe:0",
+        *rawvideo_stdin_argv_fragment(target_w, target_h),
         "-c:v",
         "h264_qsv",
         "-preset",

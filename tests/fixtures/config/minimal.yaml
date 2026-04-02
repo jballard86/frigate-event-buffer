@@ -1,0 +1,8 @@
+# Synthetic config for merged-config JSON regression (no secrets).
+cameras:
+  - name: cam1
+network:
+  mqtt_broker: localhost
+  frigate_url: http://frigate.test
+  buffer_ip: 127.0.0.1
+  storage_path: /tmp/frigate-buffer-storage

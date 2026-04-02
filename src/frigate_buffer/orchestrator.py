@@ -43,7 +43,7 @@ from frigate_buffer.services.notifications import (
     NotificationDispatcher,
     PushoverProvider,
 )
-from frigate_buffer.services.query import EventQueryService
+from frigate_buffer.services.query import EventQueryService, EventQueryServiceProtocol
 from frigate_buffer.services.quick_title_service import QuickTitleService
 from frigate_buffer.services.timeline import TimelineLogger
 from frigate_buffer.services.video import VideoService
@@ -227,7 +227,9 @@ class StateAwareOrchestrator:
             self.daily_reporter = None
 
         # Query service for event lists (shared so test_routes can evict test_events)
-        self.query_service = EventQueryService(config["STORAGE_PATH"])
+        self.query_service: EventQueryServiceProtocol = EventQueryService(
+            config["STORAGE_PATH"]
+        )
 
         # Flask app (lazy import to avoid circular deps)
         from frigate_buffer.web.server import create_app

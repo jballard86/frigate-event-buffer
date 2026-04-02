@@ -2,15 +2,15 @@
 
 from __future__ import annotations
 
+from frigate_buffer.services.gpu_backends.gif_common import (
+    build_gif_ffmpeg_argv,
+    cpu_palette_gif_filter_complex,
+)
+
 
 def gif_filter_complex(fps: int, preview_width: int) -> str:
     """scale + fps + palette after QSV decode (hw frames downloaded in graph)."""
-    return (
-        f"scale={preview_width}:-1:flags=bilinear,"
-        f"fps={fps},split[a][b];"
-        f"[a]palettegen=stats_mode=single[p];"
-        f"[b][p]paletteuse=dither=bayer"
-    )
+    return cpu_palette_gif_filter_complex(fps, preview_width)
 
 
 def gif_ffmpeg_argv(
@@ -21,20 +21,13 @@ def gif_ffmpeg_argv(
     preview_width: int,
 ) -> list[str]:
     """QSV hwaccel decode; CPU scale and palette for GIF."""
-    filter_str = gif_filter_complex(fps, preview_width)
-    return [
-        "ffmpeg",
-        "-y",
-        "-hwaccel",
-        "qsv",
-        "-i",
+    return build_gif_ffmpeg_argv(
         clip_path,
-        "-t",
-        str(duration_sec),
-        "-filter_complex",
-        filter_str,
         output_path,
-    ]
+        duration_sec,
+        gif_filter_complex(fps, preview_width),
+        ["-hwaccel", "qsv"],
+    )
 
 
 class IntelGifFfmpeg:
