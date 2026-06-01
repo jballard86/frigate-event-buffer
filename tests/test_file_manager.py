@@ -311,6 +311,8 @@ class TestFileManagerStorageStats(unittest.TestCase):
                 "STATS_REFRESH_SECONDS": 60,
                 "RETENTION_DAYS": 7,
                 "CLEANUP_INTERVAL_HOURS": 1,
+                "HA_URL": None,
+                "HA_TOKEN": None,
             },
             get_storage_stats=lambda: storage_stats,
             fetch_ha_state=lambda *args, **kwargs: None,
@@ -335,6 +337,7 @@ class TestFileManagerStorageStats(unittest.TestCase):
         r = client.get("/stats")
         assert r.status_code == 200, r.get_data(as_text=True)
         data = r.get_json()
+        assert "ha_helpers" not in data
         assert "storage" in data
         s = data["storage"]
         assert "total_display" in s

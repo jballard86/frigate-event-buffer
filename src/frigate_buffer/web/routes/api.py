@@ -598,8 +598,8 @@ def create_bp(orchestrator):
                 "deleted": orchestrator._last_cleanup_deleted,
             }
         ha_helpers = None
-        ha_url = orchestrator.config.get("HA_URL", "").rstrip("/")
-        ha_token = orchestrator.config.get("HA_TOKEN", "")
+        ha_url = (orchestrator.config.get("HA_URL") or "").rstrip("/")
+        ha_token = orchestrator.config.get("HA_TOKEN") or ""
         if ha_url and ha_token:
             try:
                 cost_entity = orchestrator.config.get(
