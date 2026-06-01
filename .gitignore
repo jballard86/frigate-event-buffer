@@ -5,6 +5,10 @@
 
 # Config file with real values (use examples/config.example.yaml as template)
 config.yaml
+config.yaml.backup
+config.yaml.bak*
+.env.backup
+docker-inspect.backup.txt
 docker-compose.yaml
 
 # Python
