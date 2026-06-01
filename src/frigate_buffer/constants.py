@@ -74,6 +74,10 @@ GIF_PREVIEW_WIDTH: int = 480
 COMPILATION_DEFAULT_NATIVE_WIDTH: int = 1920
 COMPILATION_DEFAULT_NATIVE_HEIGHT: int = 1080
 
+# Default summary output and startup NVENC preflight dimensions (config overrides).
+SUMMARY_TARGET_WIDTH_DEFAULT: int = 1440
+SUMMARY_TARGET_HEIGHT_DEFAULT: int = 1080
+
 # When nearest sidecar entry has no detections (e.g. person left frame), search
 # for nearest entry with detections within this many seconds; hold that crop.
 HOLD_CROP_MAX_DISTANCE_SEC: float = 5.0

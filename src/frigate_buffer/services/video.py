@@ -21,6 +21,8 @@ from typing import Any
 from frigate_buffer.constants import (
     GIF_PREVIEW_WIDTH,
     NVDEC_INIT_FAILURE_PREFIX,
+    SUMMARY_TARGET_HEIGHT_DEFAULT,
+    SUMMARY_TARGET_WIDTH_DEFAULT,
     is_tensor,
 )
 from frigate_buffer.services.gpu_decoder import create_decoder
@@ -63,11 +65,106 @@ _YOLO_INFERENCE_LOG_INTERVAL = 5.0
 _last_yolo_inference_log_time: float = 0.0
 
 
+def _classify_ffmpeg_nvenc_stderr(stderr: str) -> str:
+    """
+    Map FFmpeg h264_nvenc stderr to a short failure class for startup diagnostics.
+
+    Used by log_gpu_status preflight so operators can distinguish libcuda load
+    failures from dimension or permission errors without reading full stderr.
+    """
+    lower = stderr.lower()
+    if "cannot load libcuda" in lower:
+        return "libcuda_not_loaded"
+    if "frame dimension less than the minimum" in lower:
+        return "frame_below_nvenc_minimum"
+    if "operation not permitted" in lower:
+        return "operation_not_permitted"
+    return "encode_failed"
+
+
+def _probe_ffmpeg_nvenc_at_startup(
+    width: int = SUMMARY_TARGET_WIDTH_DEFAULT,
+    height: int = SUMMARY_TARGET_HEIGHT_DEFAULT,
+) -> None:
+    """
+    Run a short h264_nvenc encode at production summary dimensions.
+
+    Matches compilation encode flags so a passing probe implies summary video
+    encode should work in the same subprocess environment. Sub-minimum dimensions
+    (e.g. 64x64) are intentionally avoided — NVENC rejects them on many GPUs.
+    """
+    ffmpeg = __import__("shutil").which("ffmpeg")
+    if not ffmpeg:
+        logger.warning("ffmpeg not found; compilation encode (h264_nvenc) will fail.")
+        return
+    cmd = [
+        ffmpeg,
+        "-hide_banner",
+        "-f",
+        "lavfi",
+        "-i",
+        f"color=c=black:s={width}x{height}:d=0.1",
+        "-c:v",
+        "h264_nvenc",
+        "-preset",
+        "p1",
+        "-tune",
+        "hq",
+        "-rc",
+        "vbr",
+        "-cq",
+        "24",
+        "-f",
+        "null",
+        "-",
+    ]
+    try:
+        proc = subprocess.run(
+            cmd,
+            capture_output=True,
+            timeout=15,
+            text=True,
+        )
+    except (subprocess.TimeoutExpired, OSError) as e:
+        logger.warning("FFmpeg NVENC preflight failed to run: %s", e)
+        return
+    if proc.returncode == 0:
+        logger.info(
+            "GPU status: FFmpeg h264_nvenc preflight OK at %sx%s "
+            "(summary compilation encode)",
+            width,
+            height,
+        )
+        return
+    stderr = proc.stderr or ""
+    failure_class = _classify_ffmpeg_nvenc_stderr(stderr)
+    if failure_class == "libcuda_not_loaded":
+        logger.error(
+            "FFmpeg h264_nvenc preflight failed: cannot load libcuda.so.1 at %sx%s; "
+            "summary video and CUDA GIF will fail. Check NVIDIA Container Toolkit "
+            "and NVIDIA_DRIVER_CAPABILITIES=compute,video,utility.",
+            width,
+            height,
+        )
+        return
+    stderr_tail = stderr[-400:].strip() if stderr else "(empty)"
+    logger.error(
+        "FFmpeg h264_nvenc preflight failed (%s) at %sx%s; summary video may fail. "
+        "stderr tail: %s",
+        failure_class,
+        width,
+        height,
+        stderr_tail,
+    )
+
+
 def log_gpu_status() -> None:
     """
-    At startup: log GPU diagnostic info for decode (NVDEC) troubleshooting.
+    At startup: log GPU diagnostic info for decode (NVDEC) and encode (NVENC).
 
-    Runs nvidia-smi to confirm GPU visibility. PyNvVideoCodec uses NVDEC for decode.
+    Runs nvidia-smi to confirm GPU visibility, then a production-dimension
+    h264_nvenc probe (same subprocess env as compilation). PyNvVideoCodec uses
+    NVDEC for decode; FFmpeg uses host libcuda for NVENC encode and CUDA GIF.
     """
     nvidia_smi = __import__("shutil").which("nvidia-smi")
     if nvidia_smi:
@@ -98,6 +195,8 @@ def log_gpu_status() -> None:
             )
     else:
         logger.info("nvidia-smi not found; NVDEC decode requires GPU.")
+
+    _probe_ffmpeg_nvenc_at_startup()
 
 
 def get_detection_model_path(config: dict) -> str:

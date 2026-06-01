@@ -172,3 +172,22 @@ def test_create_decoder_logs_on_failure(monkeypatch):
             pass
     # Prefix is used in logger.error; we only verify the exception propagates.
     # Full log assertion would require caplog.
+
+
+def test_create_decoder_body_exception_not_logged_as_init_failure(mock_pynv, caplog):
+    """Exceptions in the with-block body must not be logged as decoder init failures."""
+    import logging
+
+    from frigate_buffer.constants import NVDEC_INIT_FAILURE_PREFIX
+    from frigate_buffer.services.gpu_decoder import create_decoder
+
+    caplog.set_level(logging.ERROR, logger="frigate-buffer")
+    with pytest.raises(BrokenPipeError, match="encode died"):
+        with create_decoder("/fake/path.mp4", gpu_id=0) as _ctx:
+            raise BrokenPipeError("encode died")
+    init_failures = [
+        r.message
+        for r in caplog.records
+        if NVDEC_INIT_FAILURE_PREFIX in r.message and "init failed" in r.message
+    ]
+    assert init_failures == []

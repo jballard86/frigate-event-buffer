@@ -151,11 +151,11 @@ def create_decoder(clip_path: str, gpu_id: int = 0) -> Iterator[DecoderContext]:
     decoder = None
     try:
         decoder = _create_simple_decoder(clip_path, gpu_id)
-        yield DecoderContext(decoder)
     except Exception as e:
         # PyNvVideoCodec may raise library-specific exceptions; we catch all and
         # log with NVDEC_INIT_FAILURE_PREFIX so crash-loop and support searches
-        # remain effective.
+        # remain effective. Do not wrap the yield body — exceptions from callers
+        # (e.g. BrokenPipeError on FFmpeg stdin) must not be logged as init failures.
         logger.error(
             "%s (PyNvVideoCodec decoder init failed). path=%s error=%s "
             "Check GPU, drivers, and container NVDEC access.",
@@ -165,6 +165,8 @@ def create_decoder(clip_path: str, gpu_id: int = 0) -> Iterator[DecoderContext]:
             exc_info=True,
         )
         raise
+    try:
+        yield DecoderContext(decoder)
     finally:
         if decoder is not None:
             try:

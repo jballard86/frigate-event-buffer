@@ -569,6 +569,8 @@ def _run_pynv_compilation(
                             batch_to_free = None
                             if torch.cuda.is_available():
                                 torch.cuda.empty_cache()
+            except BrokenPipeError:
+                raise
             except Exception as e:
                 logger.error(
                     "%s (decoder failed for slice %s). path=%s error=%s",

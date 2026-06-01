@@ -494,6 +494,14 @@ class EventLifecycleService:
             except Exception as e:
                 logger.error("Error executing compilation hook for %s: %s", ce_id, e)
 
+        if first_clip_path and not (
+            compilation_path and os.path.isfile(compilation_path)
+        ):
+            logger.info(
+                "Summary video not produced for %s; per-camera clips remain available.",
+                ce_id,
+            )
+
         gif_input_path = None
         if compilation_path and os.path.isfile(compilation_path):
             gif_input_path = compilation_path

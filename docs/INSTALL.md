@@ -154,6 +154,15 @@ From repo root: `git pull`, then rebuild (step 4), then `docker restart frigate_
 ## Troubleshooting
 
 - **FFmpeg / GPU decode issues** — Video decode is GPU-only (PyNvVideoCodec). Rebuild with `docker build -t frigate-buffer:latest .` and run with `--gpus all` and `NVIDIA_DRIVER_CAPABILITIES=compute,video,utility`. Check logs for `NVDEC hardware initialization failed`; inside the container run `nvidia-smi` to confirm the GPU is visible.
+- **Summary video / GIF encode failures** — Decode (NVDEC) and encode (FFmpeg NVENC/CUDA) use different CUDA paths. At startup, look for `FFmpeg h264_nvenc preflight OK at 1440x1080` or an ERROR with `cannot load libcuda.so.1`. Verify encode inside the container (use **1440×1080**, not 64×64 — NVENC rejects sub-minimum dimensions):
+
+  ```bash
+  docker exec frigate_buffer ffmpeg -hide_banner -f lavfi \
+    -i color=c=black:s=1440x1080:d=0.1 \
+    -c:v h264_nvenc -preset p1 -tune hq -rc vbr -cq 24 -f null -
+  ```
+
+  On compile failure, read `{ce_folder}/ffmpeg_compile.log` (encode stderr). `BrokenPipeError` during compilation means FFmpeg NVENC died, not NVDEC decode.
 - **Build fails with "frigate_buffer" or "examples/config.example.yaml" not found** — You are not in the repo root. The Dockerfile expects the repo root as build context (the directory that contains `Dockerfile` and `src/`). `cd` to that directory and run the build again.
 - **Decoder / get_frames errors** — Decode is GPU-only. Check GPU memory and driver; reduce concurrent load or clip length if needed. Ensure `NVIDIA_DRIVER_CAPABILITIES` includes `video`.
 

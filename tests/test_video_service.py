@@ -527,5 +527,78 @@ class TestRunDetectionOnBatch(unittest.TestCase):
         assert out[1] == []
 
 
+class TestLogGpuStatus(unittest.TestCase):
+    """Startup GPU / FFmpeg NVENC preflight."""
+
+    @patch("frigate_buffer.services.video._probe_ffmpeg_nvenc_at_startup")
+    @patch("frigate_buffer.services.video.subprocess.run")
+    @patch("shutil.which")
+    def test_log_gpu_status_calls_nvenc_preflight(
+        self, mock_which, mock_run, mock_probe
+    ):
+        mock_which.return_value = "/usr/bin/nvidia-smi"
+        mock_run.return_value = MagicMock(stdout=b"1\n", stderr=b"")
+        from frigate_buffer.services.video import log_gpu_status
+
+        log_gpu_status()
+        mock_probe.assert_called_once()
+
+    @patch("frigate_buffer.services.video.subprocess.run")
+    @patch("shutil.which")
+    def test_probe_ffmpeg_nvenc_uses_production_dimensions(self, mock_which, mock_run):
+        def which(name: str) -> str | None:
+            if name == "ffmpeg":
+                return "/usr/bin/ffmpeg"
+            return None
+
+        mock_which.side_effect = which
+        mock_run.return_value = MagicMock(returncode=0, stderr="")
+        from frigate_buffer.constants import (
+            SUMMARY_TARGET_HEIGHT_DEFAULT,
+            SUMMARY_TARGET_WIDTH_DEFAULT,
+        )
+        from frigate_buffer.services.video import _probe_ffmpeg_nvenc_at_startup
+
+        _probe_ffmpeg_nvenc_at_startup()
+        cmd = mock_run.call_args[0][0]
+        lavfi_input = cmd[cmd.index("-i") + 1]
+        assert (
+            lavfi_input == f"color=c=black:s={SUMMARY_TARGET_WIDTH_DEFAULT}x"
+            f"{SUMMARY_TARGET_HEIGHT_DEFAULT}:d=0.1"
+        )
+        assert "h264_nvenc" in cmd
+
+    @patch("frigate_buffer.services.video.subprocess.run")
+    @patch("shutil.which")
+    def test_probe_ffmpeg_nvenc_logs_libcuda_class_on_failure(
+        self, mock_which, mock_run
+    ):
+        mock_which.return_value = "/usr/bin/ffmpeg"
+        mock_run.return_value = MagicMock(
+            returncode=255,
+            stderr="[h264_nvenc] Cannot load libcuda.so.1",
+        )
+        from frigate_buffer.services.video import _probe_ffmpeg_nvenc_at_startup
+
+        with patch("frigate_buffer.services.video.logger") as mock_logger:
+            _probe_ffmpeg_nvenc_at_startup()
+        error_msg = mock_logger.error.call_args[0][0]
+        assert "cannot load libcuda.so.1" in error_msg.lower()
+
+    def test_classify_ffmpeg_nvenc_stderr(self):
+        from frigate_buffer.services.video import _classify_ffmpeg_nvenc_stderr
+
+        assert (
+            _classify_ffmpeg_nvenc_stderr("[h264_nvenc] Cannot load libcuda.so.1")
+            == "libcuda_not_loaded"
+        )
+        assert (
+            _classify_ffmpeg_nvenc_stderr(
+                "Frame Dimension less than the minimum supported value"
+            )
+            == "frame_below_nvenc_minimum"
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

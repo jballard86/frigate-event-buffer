@@ -78,6 +78,16 @@ under GPU_LOCK. timeline_ema drives slice building for extraction and
 compilation; compilation_math drives zoom/crop math for compilation. All
 production frame crops/resize use crop_utils (BCHW tensors).
 
+**Encode vs decode (different CUDA dependencies):** PyNv NVDEC and YOLO use
+CUDA libraries in the container image. FFmpeg **h264_nvenc** (compilation) and
+**-hwaccel cuda** (GIF) dynamically load host **libcuda.so.1** via the NVIDIA
+Container Toolkit. A passing `nvidia-smi` does not guarantee FFmpeg encode works.
+At startup, `log_gpu_status()` runs a **1440×1080 h264_nvenc preflight** (same
+subprocess env as compilation). Failures are classified in logs (`libcuda_not_loaded`
+vs other). `create_decoder` logs `NVDEC_INIT_FAILURE_PREFIX` only on **init**
+failure — not on `BrokenPipeError` from dead FFmpeg stdin. Compilation re-raises
+`BrokenPipeError` immediately (no per-slice retry against a dead encoder).
+
 ---
 
 ## 3. Explicit Prohibitions (mirror of root MAP)
@@ -97,7 +107,8 @@ Do not reintroduce in the processing pipeline:
 ## 4. Leaf Nodes
 
 - **constants.py** — ZOOM_MIN_FRAME_FRACTION, ZOOM_CONTENT_PADDING,
-  COMPILATION_DEFAULT_NATIVE_WIDTH/HEIGHT, HOLD_CROP_MAX_DISTANCE_SEC,
+  COMPILATION_DEFAULT_NATIVE_WIDTH/HEIGHT, SUMMARY_TARGET_WIDTH/HEIGHT_DEFAULT,
+  HOLD_CROP_MAX_DISTANCE_SEC,
   ACTION_PREROLL_SEC, ACTION_POSTROLL_SEC, GIF_PREVIEW_WIDTH;
   NVDEC_INIT_FAILURE_PREFIX. is_tensor() helper. Used by video,
   multi_clip_extractor, video_compilation, timeline_ema, compilation_math,

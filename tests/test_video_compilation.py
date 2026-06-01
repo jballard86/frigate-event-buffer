@@ -1139,6 +1139,83 @@ class TestGenerateCompilationVideo(unittest.TestCase):
     @patch("frigate_buffer.services.video_compilation.create_decoder")
     @patch("frigate_buffer.services.video_compilation.subprocess.Popen")
     @patch("builtins.open", new_callable=mock_open)
+    @patch("frigate_buffer.services.video_compilation.logger")
+    @patch("frigate_buffer.services.video_compilation._get_video_metadata")
+    @patch("frigate_buffer.services.video_compilation.os.path.isfile")
+    def test_run_pynv_compilation_broken_pipe_aborts_without_decoder_init_spam(
+        self,
+        mock_isfile,
+        mock_get_metadata,
+        mock_logger,
+        mock_open_fn,
+        mock_popen,
+        mock_create_decoder,
+    ):
+        """BrokenPipeError on stdin write aborts; no per-slice NVDEC init spam."""
+        import importlib.util
+
+        if importlib.util.find_spec("torch") is None:
+            self.skipTest("torch not available")
+        from frigate_buffer.constants import NVDEC_INIT_FAILURE_PREFIX
+
+        mock_isfile.return_value = True
+        mock_get_metadata.return_value = (640, 480, 20.0, 2.0)
+        mock_ctx = _fake_create_decoder_context(200, height=480, width=640)
+        if mock_ctx is None:
+            self.skipTest("torch not available")
+        mock_cm = MagicMock()
+        mock_cm.__enter__ = MagicMock(return_value=mock_ctx)
+        mock_cm.__exit__ = MagicMock(return_value=None)
+        mock_create_decoder.return_value = mock_cm
+        proc = MagicMock()
+        proc.stdin = MagicMock()
+        proc.stdin.write.side_effect = BrokenPipeError()
+        proc.returncode = 255
+        mock_popen.return_value = proc
+
+        slices = [
+            {
+                "camera": "doorbell",
+                "start_sec": 0.0,
+                "end_sec": 2.0,
+                "crop_start": (0, 0, 320, 240),
+                "crop_end": (0, 0, 320, 240),
+            },
+            {
+                "camera": "carport",
+                "start_sec": 2.0,
+                "end_sec": 4.0,
+                "crop_start": (0, 0, 320, 240),
+                "crop_end": (0, 0, 320, 240),
+            },
+        ]
+        resolve_clip = MagicMock(return_value="clip.mp4")
+
+        with pytest.raises(RuntimeError, match="broke pipe"):
+            _run_pynv_compilation(
+                slices=slices,
+                ce_dir="/ce",
+                tmp_output_path="/out.mp4.tmp",
+                target_w=1440,
+                target_h=1080,
+                resolve_clip_in_folder=resolve_clip,
+                cuda_device_index=0,
+            )
+
+        assert proc.stdin.write.call_count == 1
+        decoder_init_logs = [
+            c
+            for c in mock_logger.error.call_args_list
+            if c.args
+            and NVDEC_INIT_FAILURE_PREFIX in str(c.args[0])
+            and "init failed" in str(c.args[0])
+        ]
+        assert decoder_init_logs == []
+
+    @patch("frigate_buffer.services.video_compilation.GPU_LOCK", MagicMock())
+    @patch("frigate_buffer.services.video_compilation.create_decoder")
+    @patch("frigate_buffer.services.video_compilation.subprocess.Popen")
+    @patch("builtins.open", new_callable=mock_open)
     @patch("frigate_buffer.services.video_compilation._get_video_metadata")
     @patch("frigate_buffer.services.video_compilation.os.path.isfile")
     def test_run_pynv_compilation_skips_slice_on_decoder_failure(
